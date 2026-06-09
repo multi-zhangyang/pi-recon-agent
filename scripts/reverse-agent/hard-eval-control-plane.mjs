@@ -115,27 +115,58 @@ function buildContract(runId) {
 		contractVersion: CONTRACT_VERSION,
 		runId,
 		evidenceOrder: EVIDENCE_ORDER,
+		ledgerPolicy: {
+			appendOnly: true,
+			prevHash: "required",
+			eventHash: "required",
+			requiredEventTypes: ["artifact_handoff", "claim", "validation", "challenge", "resolution"],
+		},
+		conflictPolicy: {
+			tableRequired: true,
+			evidenceOrder: EVIDENCE_ORDER,
+			unresolvedBlocksFinal: true,
+		},
+		claimGatePolicy: {
+			provenRequiresArtifactSha256: true,
+			provenRequiresJsonQuery: true,
+			finalPassRequiresVerifier: true,
+			unresolvedChallengeBlocks: true,
+		},
 		roles: [
 			{
 				id: "mapper",
 				mustEmit: ["artifact_handoff", "claim"],
 				allowedClaimKinds: ["observed", "proven", "gap", "stale", "inferred"],
 				forbiddenClaimKinds: ["final_pass_without_validation"],
+				handoffTargets: ["verifier", "adversary", "synthesizer"],
+				evidenceContract: ["artifact_handoff sha256 is present", "claim evidenceRefs bind artifactId/query/op/value"],
 			},
 			{
 				id: "verifier",
 				mustEmit: ["validation"],
+				allowedClaimKinds: ["observed", "proven", "gap", "frontier_gap", "stale", "inferred", "final_pass"],
+				forbiddenClaimKinds: ["final_pass_without_artifact_validation"],
 				mustValidateClaimKinds: ["proven", "final_pass"],
+				handoffTargets: ["adversary", "synthesizer"],
+				evidenceContract: ["validation result is pass/fail", "checks preserve observed values"],
 			},
 			{
 				id: "adversary",
 				mustEmit: ["challenge"],
+				allowedClaimKinds: ["gap", "frontier_gap", "stale", "inferred"],
+				forbiddenClaimKinds: ["unresolved_final_pass"],
 				mustChallengeScopes: ["bilibili", "xiaohongshu", "douyin", "same-window", "orchestration-vs-platform"],
+				handoffTargets: ["synthesizer"],
+				evidenceContract: ["required gaps receive upheld challenge", "platform/orchestration conflation is challenged"],
 			},
 			{
 				id: "synthesizer",
 				mustEmit: ["resolution"],
+				allowedClaimKinds: ["observed", "proven", "gap", "frontier_gap", "stale", "inferred", "final_pass"],
+				forbiddenClaimKinds: ["platform_success_from_orchestration_only"],
 				mustResolve: ["all_required_gaps", "all_conflicts", "orchestration_platform_score_split"],
+				handoffTargets: [],
+				evidenceContract: ["resolution cites claimIds", "conflict policy preserves required platform gaps"],
 			},
 		],
 	};
@@ -234,6 +265,24 @@ function buildOrchestrationClaims({ agentParallel, artifactId, events }) {
 	for (const claim of claims) {
 		appendEvent(events, { type: "claim", ...claim });
 		appendEvent(events, { type: "validation", claimId: claim.claimId, role: "verifier", result: claim.kind === "proven" ? "pass" : "fail", checks: claim.evidenceRefs });
+		if (claim.kind !== "proven") {
+			appendEvent(events, {
+				type: "challenge",
+				claimId: claim.claimId,
+				role: "adversary",
+				result: "upheld",
+				reason: `${claim.scope} is not proven; orchestration gaps cannot be promoted by synthesizer narrative`,
+			});
+			appendEvent(events, {
+				type: "resolution",
+				role: "synthesizer",
+				claimIds: [claim.claimId],
+				decision: "downgrade",
+				winner: claim.claimId,
+				dominantTier: "runtime_artifact",
+				reason: "runtime artifact gate values overrule optimistic orchestration summary",
+			});
+		}
 	}
 	return claims;
 }
@@ -285,6 +334,16 @@ function repairAction(claim) {
 function buildFailures({ claims, sourceArtifact }) {
 	const failures = [];
 	const repairs = [];
+	const artifactRows = sourceArtifact?.path
+		? [
+				{
+					path: sourceArtifact.path,
+					sha256: sourceArtifact.sha256,
+					tier: "same_window_live",
+					bytes: sourceArtifact.bytes,
+				},
+			].filter((artifact) => artifact.path && artifact.sha256)
+		: [];
 	for (const claim of claims.filter((item) => item.kind !== "proven")) {
 		const signature = sha256Bytes(`${claim.scope}:${claim.gate}:${claim.kind}`).slice(0, 16);
 		const failureId = `fail:hard-eval:${signature}`;
@@ -295,19 +354,38 @@ function buildFailures({ claims, sourceArtifact }) {
 			source: "hard-eval-control-plane",
 			scope: claim.scope,
 			category: failureCategory(claim),
+			signature,
 			attempt: 0,
 			maxAttempts: 0,
 			status: "failed",
 			failedGates: [claim.gate],
-			artifacts: [sourceArtifact].filter(Boolean),
+			artifacts: artifactRows,
+			artifactHashes: artifactRows.map((artifact) => ({ path: artifact.path, sha256: artifact.sha256 })),
 			repairId,
-			rollback: { required: false, baseline: {}, restored: null },
+			budget: {
+				retryKey: signature,
+				remainingAttempts: 0,
+				exhaustedAction: "queue-paused-repair",
+			},
+			rollback: {
+				required: false,
+				baseline: "offline-existing-evidence-only",
+				allowlist: [],
+				criteria: [],
+				restored: null,
+			},
 		});
 		repairs.push({
 			repairId,
 			fromFailureId: failureId,
+			signature,
 			scope: claim.scope,
 			paused: true,
+			expectedGates: [claim.gate],
+			preconditions: { liveAllowed: false, providerAllowed: false, requiredSecrets: [] },
+			allowlist: [],
+			rollbackCriteria: { baseline: "offline-existing-evidence-only", mustRestore: [], verificationCommand: "" },
+			regressionGates: [claim.gate],
 			...repairAction(claim),
 		});
 	}
@@ -339,7 +417,7 @@ function buildResult(root) {
 	const orchestration = simplePercent(ORCHESTRATION_GATES, agentParallel?.gates ?? {});
 	const platformGaps = platformClaims.filter((claim) => claim.kind !== "proven");
 	const requiredPlatformGaps = platformGaps.filter((claim) => claim.required);
-	const { failures, repairs } = buildFailures({ claims: platformGaps, sourceArtifact: artifacts.sameWindow?.path });
+	const { failures, repairs } = buildFailures({ claims: platformGaps, sourceArtifact: artifacts.sameWindow });
 	const antiSelfDelusion = {
 		orchestrationScore: orchestration.score,
 		platformRequiredScore: platformRequired.score,

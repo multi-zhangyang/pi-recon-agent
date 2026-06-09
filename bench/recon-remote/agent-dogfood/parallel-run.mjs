@@ -6,8 +6,36 @@ import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 
 const repoRoot = resolve(process.env.RECON_REPO_ROOT || '.');
-const provider = process.env.RECON_AGENT_PROVIDER || process.argv[2] || 'aigateway';
-const model = process.env.RECON_AGENT_MODEL || process.argv[3] || process.env.ANTHROPIC_MODEL || '';
+const argv = process.argv.slice(2);
+function hasArgFlag(name) { return argv.includes(`--${name}`); }
+function optionArg(name, fallback = '') {
+  const prefix = `--${name}=`;
+  const inline = argv.find((item) => item.startsWith(prefix));
+  if (inline) return inline.slice(prefix.length);
+  const idx = argv.indexOf(`--${name}`);
+  if (idx >= 0 && argv[idx + 1] && !argv[idx + 1].startsWith('--')) return argv[idx + 1];
+  return fallback;
+}
+function positionalArgs() {
+  const out = [];
+  const optionsWithValues = new Set(['plan-json']);
+  for (let idx = 0; idx < argv.length; idx += 1) {
+    const item = argv[idx];
+    if (item.startsWith('--')) {
+      const optionName = item.slice(2);
+      if (optionsWithValues.has(optionName) && !item.includes('=') && argv[idx + 1] && !argv[idx + 1].startsWith('--')) idx += 1;
+      continue;
+    }
+    out.push(item);
+  }
+  return out;
+}
+function parseJsonOrNull(text) { try { return JSON.parse(text); } catch { return null; } }
+const planOnly = hasArgFlag('plan-only') || /^(1|true|yes|on)$/i.test(process.env.RECON_PARALLEL_PLAN_ONLY || '');
+const planJsonPath = optionArg('plan-json', process.env.RECON_PARALLEL_PLAN_JSON || '');
+const positionals = positionalArgs();
+const provider = process.env.RECON_AGENT_PROVIDER || positionals[0] || 'aigateway';
+const model = process.env.RECON_AGENT_MODEL || positionals[1] || process.env.ANTHROPIC_MODEL || '';
 const thinking = process.env.RECON_AGENT_THINKING || 'low';
 const tools = process.env.RECON_AGENT_TOOLS || 'read,grep,find,ls,bash';
 const timeoutMs = Number(process.env.RECON_AGENT_TIMEOUT_MS || process.env.RECON_PARALLEL_TIMEOUT_MS || 300000);
@@ -30,13 +58,74 @@ const authEnvKeys = [
   'OPENCODE_API_KEY',
 ];
 const endpointEnvKeys = ['ANTHROPIC_BASE_URL', 'OPENAI_BASE_URL', 'AI_GATEWAY_BASE_URL', 'OPENROUTER_BASE_URL'];
-
-if (process.argv.includes('--help') || process.argv.includes('-h') || !model) {
-  console.log(`Pi-RECON parallel agent dogfood benchmark\n\nUsage:\n  RECON_AGENT_PROVIDER=openai RECON_AGENT_MODEL=gpt-4.1 node bench/recon-remote/agent-dogfood/parallel-run.mjs\n  node bench/recon-remote/agent-dogfood/parallel-run.mjs <provider> <model>\n\nPurpose:\n  Launches multiple real Pi-RECON --recon agents in parallel against the latest real-platform evidence,\n  then runs a synthesizer agent that reconciles worker disagreements. The harness gates real model calls,\n  tool calls, parallel overlap, platform coverage, artifact paths, and anti-self-delusion review.\n\nEnvironment:\n  RECON_AGENT_PROVIDER=<provider>       default: aigateway\n  RECON_AGENT_MODEL=<model>             required unless argv[3] or ANTHROPIC_MODEL is set\n  RECON_AGENT_THINKING=low\n  RECON_AGENT_TOOLS=read,grep,find,ls,bash\n  RECON_AGENT_TIMEOUT_MS=300000\n  RECON_AGENT_CMD=./pi-test.sh\n  RECON_AGENT_EXTRA_ARGS='--offline'    optional extra Pi CLI args\n  RECON_PARALLEL_ROLES=a,b              optional subset: mapper,verifier,adversary,planner\n  RECON_PARALLEL_MAX_TOOL_CALLS=4        prompt-level cap to prevent runaway workers\n  RECON_PARALLEL_MAX_WORDS=500           prompt-level output cap per worker\n  RECON_SYNTHESIZER=1                    run the sequential conflict-synthesizer; set 0 to skip\n  RECON_ROLE_RETRIES=1                   retry failed/flaky role runs before judging the gate\n\nOutput:\n  .pi/evidence/remote/agent-parallel-dogfood/<timestamp>/\n`);
-  process.exit(model ? 0 : 2);
+const rawParallelPlan = planJsonPath
+  ? parseJsonOrNull(readFileSync(planJsonPath.startsWith('/') ? planJsonPath : join(repoRoot, planJsonPath), 'utf8'))
+  : null;
+const loadedParallelPlan = rawParallelPlan?.parallelPlan || rawParallelPlan;
+if (planJsonPath && !loadedParallelPlan) {
+  console.error(`Failed to read --plan-json ${planJsonPath}`);
+  process.exit(2);
 }
 
-const allRoles = [
+const PLAN_REQUIRED = ['planId', 'source', 'workers', 'merge'];
+const PLAN_WORKER_REQUIRED = ['id', 'role', 'objective', 'commands', 'evidenceContract', 'mergeKeys', 'dependencies', 'artifactGlobs', 'limits'];
+const PLAN_MERGE_REQUIRED = ['strategy', 'evidenceOrder', 'expectedArtifacts'];
+function missingFields(obj, fields) {
+  return fields.filter((field) => obj?.[field] === undefined || obj?.[field] === null);
+}
+function validateParallelPlan(plan) {
+  if (!plan) return { valid: true, mode: 'builtin-agent-dogfood' };
+  const missing = missingFields(plan, PLAN_REQUIRED);
+  const workerRows = Array.isArray(plan.workers)
+    ? plan.workers.map((worker) => ({ id: worker.id || '', missing: missingFields(worker, PLAN_WORKER_REQUIRED) }))
+    : [];
+  const mergeMissing = missingFields(plan.merge || {}, PLAN_MERGE_REQUIRED);
+  const duplicateWorkerIds = Array.isArray(plan.workers)
+    ? plan.workers.map((worker) => worker.id).filter((id, index, ids) => id && ids.indexOf(id) !== index)
+    : [];
+  const valid = missing.length === 0
+    && Array.isArray(plan.workers)
+    && plan.workers.length > 0
+    && workerRows.every((row) => row.id && row.missing.length === 0)
+    && mergeMissing.length === 0
+    && duplicateWorkerIds.length === 0;
+  return {
+    valid,
+    missing,
+    workerRows,
+    mergeMissing,
+    duplicateWorkerIds: [...new Set(duplicateWorkerIds)],
+    workerCount: plan?.workers?.length || 0,
+  };
+}
+const parallelPlanValidation = validateParallelPlan(loadedParallelPlan);
+if (planJsonPath && !parallelPlanValidation.valid) {
+  console.error(JSON.stringify({ error: 'invalid ReconParallelPlanV1', planJson: planJsonPath, validation: parallelPlanValidation }, null, 2));
+  process.exit(2);
+}
+
+
+if (argv.includes('--help') || argv.includes('-h') || (!model && !planOnly)) {
+  console.log(`Pi-RECON parallel agent dogfood benchmark\n\nUsage:\n  RECON_AGENT_PROVIDER=openai RECON_AGENT_MODEL=gpt-4.1 node bench/recon-remote/agent-dogfood/parallel-run.mjs\n  node bench/recon-remote/agent-dogfood/parallel-run.mjs <provider> <model>\n  node bench/recon-remote/agent-dogfood/parallel-run.mjs --plan-json plan.json --plan-only --json\n\nPurpose:\n  Launches multiple real Pi-RECON --recon agents in parallel against the latest real-platform evidence,\n  then runs a synthesizer agent that reconciles worker disagreements. The harness gates real model calls,\n  tool calls, parallel overlap, platform coverage, artifact paths, and anti-self-delusion review.\n\nEnvironment:\n  RECON_AGENT_PROVIDER=<provider>       default: aigateway\n  RECON_AGENT_MODEL=<model>             required unless argv[3] or ANTHROPIC_MODEL is set\n  RECON_AGENT_THINKING=low\n  RECON_AGENT_TOOLS=read,grep,find,ls,bash\n  RECON_AGENT_TIMEOUT_MS=300000\n  RECON_AGENT_CMD=./pi-test.sh\n  RECON_AGENT_EXTRA_ARGS='--offline'    optional extra Pi CLI args\n  RECON_PARALLEL_ROLES=a,b              optional subset: mapper,verifier,adversary,planner\n  RECON_PARALLEL_MAX_TOOL_CALLS=4        prompt-level cap to prevent runaway workers\n  RECON_PARALLEL_MAX_WORDS=500           prompt-level output cap per worker\n  RECON_SYNTHESIZER=1                    run the sequential conflict-synthesizer; set 0 to skip\n  RECON_ROLE_RETRIES=1                   retry failed/flaky role runs before judging the gate\n  RECON_PARALLEL_PLAN_JSON=<path>        optional ReconParallelPlanV1 manifest.\n  RECON_PARALLEL_PLAN_ONLY=1             print normalized plan without launching providers.\n\nOutput:\n  .pi/evidence/remote/agent-parallel-dogfood/<timestamp>/\n`);
+  process.exit(model || planOnly ? 0 : 2);
+}
+
+function roleFromPlanWorker(worker) {
+  const title = worker.title || `${worker.role || 'worker'} ${worker.id}`;
+  const commands = (worker.commands || []).map((command) => `- ${command}`).join('\n') || '- inspect artifacts only';
+  const evidence = (worker.evidenceContract || []).map((item) => `- ${item}`).join('\n') || '- cite concrete artifact-backed evidence';
+  const planPrompt = Array.isArray(worker.prompt) ? worker.prompt.join('\n') : (worker.prompt || '');
+  const merge = (worker.mergeKeys || []).join(', ') || 'none';
+  const artifacts = (worker.artifactGlobs || []).join(', ') || 'none';
+  return {
+    id: worker.id,
+    title,
+    planWorker: worker,
+    prompt: `${planPrompt ? `${planPrompt}\n\n` : ''}Role: ${title}. Execute or review a ReconParallelPlanV1 worker packet.\n\nObjective:\n${worker.objective || 'No objective supplied.'}\n\nCommands allowed by the plan:\n${commands}\n\nEvidence contract:\n${evidence}\n\nMerge keys: ${merge}\nExpected artifact globs: ${artifacts}\nLimits: ${JSON.stringify(worker.limits || {})}\n\nRequired actions:\n1. Use tools to inspect the supplied artifacts and commands before making claims.\n2. Keep orchestration success separate from target/platform claim success.\n3. If a command would require live testing and this run is only plan review, mark it as paused instead of claiming completion.\n4. Output exactly these sections: Outcome / Key Evidence / Verification / Next Step.\n5. Do not edit files.`,
+  };
+}
+
+const builtinRoles = [
   {
     id: 'mapper',
     title: 'Evidence Mapper',
@@ -58,8 +147,139 @@ const allRoles = [
     prompt: `Role: hard frontier planner. Design the next hardest benchmark step for a top-tier reverse/pentest agent.\n\nRequired actions:\n1. Use read/grep/ls tools to inspect current score/evidence before proposing work, including same-window-live.\n2. Propose a concrete multi-agent benchmark plan that raises difficulty without self-delusion.\n3. Include commands, pass/fail gates, artifact invariants, context/compact requirements, and rollback criteria.\n4. Cover same-window freshness, Bilibili WBI/per-page CID, Xiaohongshu x-s, Douyin a_bogus/no-watermark transform, and Pi-RECON agent orchestration.\n5. Output exactly these sections: Outcome / Key Evidence / Verification / Next Step.\n6. Do not edit files.`,
   },
 ];
+const allRoles = loadedParallelPlan?.workers?.length ? loadedParallelPlan.workers.map(roleFromPlanWorker) : builtinRoles;
 const roles = roleFilter.length ? allRoles.filter((role) => roleFilter.includes(role.id)) : allRoles;
 if (!roles.length) throw new Error(`No roles selected from RECON_PARALLEL_ROLES=${process.env.RECON_PARALLEL_ROLES || ''}`);
+const expectedWorkerRoleIds = roles.map((role) => role.id);
+function defaultMergeContract() {
+  return { strategy: 'synthesizer', evidenceOrder: ['same_window_live', 'runtime_artifact'], expectedArtifacts: ['.pi/evidence/remote/**/result.json'] };
+}
+function normalizedPlanSummary() {
+  return {
+    kind: 'pi-recon-parallel-plan-preview',
+    mode: planOnly ? 'plan-only' : 'run',
+    planOnly,
+    willLaunchProvider: !planOnly,
+    provider,
+    providerDefaulted: !process.env.RECON_AGENT_PROVIDER && !positionals[0],
+    modelConfigured: Boolean(model),
+    planJson: planJsonPath || '',
+    source: loadedParallelPlan?.source || 'builtin-agent-dogfood',
+    planId: loadedParallelPlan?.planId || '',
+    target: loadedParallelPlan?.target || 'Pi-RECON parallel dogfood',
+    validation: parallelPlanValidation,
+    workerCount: roles.length,
+    workers: roles.map((role) => ({
+      id: role.id,
+      title: role.title,
+      role: role.planWorker?.role || role.id,
+      objective: role.planWorker?.objective || role.prompt.split('\n')[0],
+      commands: role.planWorker?.commands || [],
+      evidenceContract: role.planWorker?.evidenceContract || [],
+      mergeKeys: role.planWorker?.mergeKeys || [],
+      dependencies: role.planWorker?.dependencies || [],
+      artifactGlobs: role.planWorker?.artifactGlobs || [],
+      limits: role.planWorker?.limits || {},
+    })),
+    merge: loadedParallelPlan?.merge || defaultMergeContract(),
+  };
+}
+function workerContract() {
+  return {
+    contractVersion: 1,
+    runId: loadedParallelPlan?.planId || `agent-dogfood/${new Date().toISOString()}`,
+    source: loadedParallelPlan?.source || 'builtin-agent-dogfood',
+    evidenceOrder: loadedParallelPlan?.merge?.evidenceOrder || defaultMergeContract().evidenceOrder,
+    ledgerPolicy: {
+      appendOnly: true,
+      prevHash: 'required',
+      eventHash: 'required',
+      requiredEventTypes: ['artifact_handoff', 'claim', 'validation', 'challenge', 'resolution'],
+    },
+    conflictPolicy: {
+      tableRequired: true,
+      evidenceOrder: loadedParallelPlan?.merge?.evidenceOrder || defaultMergeContract().evidenceOrder,
+      unresolvedBlocksFinal: true,
+    },
+    claimGatePolicy: {
+      provenRequiresArtifactSha256: true,
+      provenRequiresJsonQuery: true,
+      finalPassRequiresVerifier: true,
+      unresolvedChallengeBlocks: true,
+    },
+    roles: roles.map((role) => ({
+      id: role.id,
+      title: role.title,
+      mustEmit: ['Outcome', 'Key Evidence', 'Verification', 'Next Step'],
+      allowedClaimKinds: ['observed', 'proven', 'gap', 'frontier_gap', 'stale', 'inferred'],
+      forbiddenClaimKinds: ['unsupported_final_pass', 'platform_success_from_orchestration_only'],
+      handoffTargets: ['synthesizer'],
+      mergeKeys: role.planWorker?.mergeKeys || [],
+      evidenceContract: role.planWorker?.evidenceContract || [],
+      artifactGlobs: role.planWorker?.artifactGlobs || [],
+    })),
+    merge: loadedParallelPlan?.merge || defaultMergeContract(),
+  };
+}
+const planPreview = normalizedPlanSummary();
+const roleContract = workerContract();
+function platformPatternsFromText(text) {
+  const patterns = [];
+  if (/bilibili|platform=bilibili|WBI|B站/i.test(text)) patterns.push(/Bilibili|B站|WBI/i);
+  if (/xiaohongshu|platform=xiaohongshu|XHS|x-s|小红书/i.test(text)) patterns.push(/Xiaohongshu|小红书|XHS|x-s/i);
+  if (/douyin|platform=douyin|a_bogus|抖音/i.test(text)) patterns.push(/Douyin|抖音|a_bogus/i);
+  return patterns;
+}
+function platformPatternsForPlan() {
+  if (!loadedParallelPlan) {
+    return [/Bilibili|B站|WBI/i, /Xiaohongshu|小红书|XHS|x-s/i, /Douyin|抖音|a_bogus/i];
+  }
+  const workerText = JSON.stringify((loadedParallelPlan.workers || []).map((worker) => ({
+    id: worker.id,
+    caseIds: worker.caseIds,
+    evidenceContract: worker.evidenceContract,
+    mergeKeys: worker.mergeKeys,
+  })));
+  return platformPatternsFromText(workerText);
+}
+function platformPatternsForRole(role) {
+  if (!role?.planWorker) return platformRequirementPatterns;
+  const rolePatterns = platformPatternsFromText(JSON.stringify({
+    id: role.planWorker.id,
+    caseIds: role.planWorker.caseIds,
+    evidenceContract: role.planWorker.evidenceContract,
+    mergeKeys: role.planWorker.mergeKeys,
+    objective: role.planWorker.objective,
+  }));
+  return rolePatterns.length ? rolePatterns : platformRequirementPatterns;
+}
+function platformFocusForPlan() {
+  if (!loadedParallelPlan) return ['Bilibili', 'Xiaohongshu', 'Douyin'];
+  const planText = JSON.stringify((loadedParallelPlan.workers || []).map((worker) => ({
+    id: worker.id,
+    caseIds: worker.caseIds,
+    evidenceContract: worker.evidenceContract,
+    mergeKeys: worker.mergeKeys,
+  })));
+  const names = [];
+  if (/bilibili|platform=bilibili|WBI|B站/i.test(planText)) names.push('Bilibili/WBI');
+  if (/xiaohongshu|platform=xiaohongshu|XHS|x-s|小红书/i.test(planText)) names.push('Xiaohongshu/x-s');
+  if (/douyin|platform=douyin|a_bogus|抖音/i.test(planText)) names.push('Douyin/a_bogus');
+  return names.length ? names : ['plan-specific target'];
+}
+const platformRequirementPatterns = platformPatternsForPlan();
+const platformFocus = platformFocusForPlan();
+const requireSameWindowCoverage = !loadedParallelPlan || /same[-_ ]?window|same_window_live/i.test(JSON.stringify(loadedParallelPlan));
+const requireHardScoreCoverage = !loadedParallelPlan || /hard[-_ ]?score|scoreboard|hard-eval-control-plane|claim-ledger/i.test(JSON.stringify(loadedParallelPlan));
+if (planOnly) {
+  const summary = { ...planPreview, planOnly: true, willLaunchProvider: false };
+  if (hasArgFlag('json')) console.log(JSON.stringify(summary, null, 2));
+  else {
+    console.log(`# Pi-RECON Parallel Plan Only\n\n- source=${summary.source}\n- plan_id=${summary.planId || 'none'}\n- workers=${summary.workerCount}\n- merge=${summary.merge.strategy || 'none'}\n\n## Workers`);
+    for (const worker of summary.workers) console.log(`- ${worker.id}: ${worker.title} commands=${worker.commands.length} evidence=${worker.evidenceContract.length}`);
+  }
+  process.exit(0);
+}
 
 function timestamp() { return new Date().toISOString().replace(/[:.]/g, '-'); }
 function sha256(value) { return createHash('sha256').update(value).digest('hex'); }
@@ -319,12 +539,11 @@ async function parseSessions(jsonlPaths) {
 }
 function hasAll(text, patterns) { return patterns.every((re) => re.test(text)); }
 function hasAnyTool(session, names) { return names.some((name) => Number(session.toolNames?.[name] || 0) > 0); }
-function matchCount(text, patterns) { return patterns.filter((re) => re.test(text)).length; }
 function outputChecks(role, output, session, code) {
   const sectionsOk = hasAll(output, [/Outcome/i, /Key Evidence/i, /Verification/i, /Next Step/i]);
-  const platformsOk = hasAll(output, [/Bilibili|B站|WBI/i, /Xiaohongshu|小红书|XHS|x-s/i, /Douyin|抖音|a_bogus/i]);
-  const sameWindowMentioned = /same-window-live|same_window|spanMs|frontierGaps/i.test(output);
-  const hardScoreMentioned = /hard-score|scoreboard|bench\/recon-remote\/hard-score/i.test(output);
+  const platformsOk = platformPatternsForRole(role).every((pattern) => pattern.test(output));
+  const sameWindowMentioned = !requireSameWindowCoverage || /same-window-live|same_window|spanMs|frontierGaps/i.test(output);
+  const hardScoreMentioned = !requireHardScoreCoverage || /hard-score|scoreboard|bench\/recon-remote\/hard-score|hard-eval-control-plane|claim ledger|claim-ledger/i.test(output);
   const artifactPathsOk = /\.pi\/evidence\/remote\//.test(output);
   const modelCalled = session.modelCalls > 0;
   const toolUsed = session.toolCalls > 0;
@@ -335,7 +554,7 @@ function outputChecks(role, output, session, code) {
       : role.id === 'planner'
         ? /command|gate|invariant|pass\/fail|rollback|命令|门禁|不变量|回滚/i.test(output)
         : role.id === 'synthesizer'
-          ? matchCount(output, [/mapper/i, /verifier/i, /adversary/i, /planner/i]) >= 3 && /conflict|disagreement|reconcile|overrule|synthesi[sz]e|accepted|rejected|downgrad|冲突|分歧|调和|采纳|驳回|降级|综合/i.test(output)
+          ? expectedWorkerRoleIds.filter((id) => new RegExp(id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(output)).length >= Math.min(3, expectedWorkerRoleIds.length) && /conflict|disagreement|reconcile|overrule|synthesi[sz]e|accepted|rejected|downgrad|冲突|分歧|调和|采纳|驳回|降级|综合/i.test(output)
           : hasAnyTool(session, ['read', 'ls', 'grep', 'find', 'bash']);
   return { exitOk: code === 0, modelCalled, toolUsed, sectionsOk, platformsOk, sameWindowMentioned, hardScoreMentioned, artifactPathsOk, roleSpecific };
 }
@@ -367,6 +586,9 @@ const outDir = join(repoRoot, '.pi', 'evidence', 'remote', 'agent-parallel-dogfo
 await mkdir(outDir, { recursive: true });
 const sessionRoot = join(outDir, 'sessions');
 await mkdir(sessionRoot, { recursive: true });
+await writeFile(join(outDir, 'parallel-plan-preview.json'), `${JSON.stringify({ ...planPreview, artifactDir: rel(outDir), planOnly: false, willLaunchProvider: true }, null, 2)}\n`);
+await writeFile(join(outDir, 'role-contract.json'), `${JSON.stringify(roleContract, null, 2)}\n`);
+if (loadedParallelPlan) await writeFile(join(outDir, 'parallel-plan-source.json'), `${JSON.stringify(loadedParallelPlan, null, 2)}\n`);
 const audit = await runtimeAudit();
 
 const scoreRun = await run('node', ['bench/recon-remote/hard-score.mjs'], { timeoutMs: 60000 });
@@ -411,9 +633,19 @@ ${JSON.stringify({
 }, null, 2)}
 
 Evidence order: live same-window runtime behavior > platform runtime artifact fields > network traffic > actively served assets > process config > persisted artifacts/source/comments. Treat same-window-live as the current release frontier: if older platform artifacts conflict with it, explicitly classify the older artifact as stale instead of overuling the fresher same-window proof. Do not claim success unless the artifact fields prove it. If evidence is missing or indirect, say so. Treat orchestration success and platform claim success as separate states; if hard eval control reports required platform gaps, the worker must not summarize the platform as fully passed.
+
+Parallel plan contract:
+${JSON.stringify({
+  source: planPreview.source,
+  planId: planPreview.planId,
+  target: planPreview.target,
+  workers: planPreview.workers.map((worker) => ({ id: worker.id, role: worker.role, mergeKeys: worker.mergeKeys })),
+  merge: planPreview.merge,
+  validation: planPreview.validation,
+}, null, 2)}
 `;
 const boundedWork = `\n\nOperational bounds for this parallel worker:\n- Use at most ${maxToolCallsHint} tool calls unless a required command fails.\n- Keep the final answer under ${maxWordsHint} words.\n- Stop immediately after the Next Step section; do not continue exploring once the required gates are covered.\n- Prefer decisive jq/grep/read checks over broad recursive inspection.\n`;
-const requiredCitations = `\n\nRequired citations for every role:\n- Mention the hard-score or scoreboard artifact path explicitly.\n- Mention the same-window-live artifact path explicitly.\n- Mention at least one .pi/evidence/remote artifact path for each platform family: Bilibili, Xiaohongshu, and Douyin.\n`;
+const requiredCitations = `\n\nRequired citations for every role:\n- Mention the hard-score or scoreboard artifact path explicitly when the plan requires hard-score coverage.\n- Mention the same-window-live artifact path explicitly when the plan requires same-window coverage.\n- Mention at least one .pi/evidence/remote artifact path for each plan focus: ${platformFocus.join(', ')}.\n`;
 
 function strictRunPassed(runResult) {
   return Boolean(runResult?.checks?.exitOk && runResult?.checks?.modelCalled && runResult?.checks?.toolUsed && runResult?.checks?.sectionsOk && runResult?.checks?.platformsOk && runResult?.checks?.sameWindowMentioned && runResult?.checks?.hardScoreMentioned && runResult?.checks?.artifactPathsOk && runResult?.checks?.roleSpecific);
@@ -504,8 +736,9 @@ async function launchSynthesizer(workerSummaryPath, workerRuns, attempt = 0) {
     stdout: `${rel(outDir)}/${run.id}.stdout.txt`,
     stderr: `${rel(outDir)}/${run.id}.stderr.txt`,
   }]));
-  const retryHint = attempt ? `\n\nRetry attempt ${attempt}: the previous synthesizer attempt did not satisfy the harness gates. Mention at least three worker role names and explicitly accept/reject/downgrade disputed claims.\n` : '';
-  const prompt = `Role: conflict synthesizer. You are the sequential supervisor after the parallel Pi-RECON workers.\n\nRequired actions:\n1. Use tools to read ${workerSummaryPath} and inspect the worker outputs: ${JSON.stringify(workerOutputPaths)}.\n2. Reconcile mapper/verifier/adversary/planner disagreements. Explicitly say which claims are accepted, rejected, or downgraded.\n3. Use the evidence order to resolve conflicts: live same-window runtime > platform runtime artifacts > network traffic > served assets > config > persisted artifacts/source/comments.\n4. Cover same-window-live freshness/gaps, Bilibili WBI/per-page CID, Xiaohongshu x-s/signed replay, Douyin a_bogus/no-watermark transform, and Pi-RECON orchestration.\n5. Cite the hard-score/scoreboard artifact, same-window-live artifact, and at least one .pi/evidence/remote artifact path per platform.\n6. Output exactly these sections: Outcome / Key Evidence / Verification / Next Step.\n7. Do not edit files.${retryHint}${boundedWork}${requiredCitations}`;
+  const workerNames = expectedWorkerRoleIds.join(', ');
+  const retryHint = attempt ? `\n\nRetry attempt ${attempt}: the previous synthesizer attempt did not satisfy the harness gates. Mention these worker IDs (${workerNames}) and explicitly accept/reject/downgrade disputed claims.\n` : '';
+  const prompt = `Role: conflict synthesizer. You are the sequential supervisor after the parallel Pi-RECON workers.\n\nRequired actions:\n1. Use tools to read ${workerSummaryPath} and inspect the worker outputs: ${JSON.stringify(workerOutputPaths)}.\n2. Reconcile worker disagreements across: ${workerNames}. Explicitly say which claims are accepted, rejected, or downgraded.\n3. Use the evidence order to resolve conflicts: live same-window runtime > platform runtime artifacts > network traffic > served assets > config > persisted artifacts/source/comments.\n4. Cover plan focus (${platformFocus.join(', ')}), same-window freshness/gaps when applicable, and Pi-RECON orchestration.\n5. Cite the hard-score/scoreboard artifact when applicable, same-window-live artifact when applicable, and at least one .pi/evidence/remote artifact path per plan focus.\n6. Output exactly these sections: Outcome / Key Evidence / Verification / Next Step.\n7. Do not edit files.${retryHint}${boundedWork}${requiredCitations}`;
   const args = [
     '--recon',
     '--provider', provider,
@@ -559,6 +792,9 @@ const workersEndedAt = new Date().toISOString();
 const parallel = overlapStats(roleRuns);
 const workerSummaryPath = rel(join(outDir, 'worker-summary.json'));
 await writeFile(join(outDir, 'worker-summary.json'), `${JSON.stringify({
+  planPreview,
+  roleContractPath: `${rel(outDir)}/role-contract.json`,
+  parallelPlanSourcePath: loadedParallelPlan ? `${rel(outDir)}/parallel-plan-source.json` : '',
   evidencePaths,
   roles: roles.map(({ id, title }) => ({ id, title })),
   roleRuns: roleRuns.map((role) => ({
@@ -653,6 +889,22 @@ const result = {
   roles: roles.map(({ id, title }) => ({ id, title })),
   synthesizer: runSynthesizer ? { id: 'synthesizer', title: 'Conflict Synthesizer' } : null,
   evidencePaths,
+  parallelPlan: {
+    enabled: Boolean(loadedParallelPlan),
+    planJson: planJsonPath || '',
+    planId: loadedParallelPlan?.planId || '',
+    source: loadedParallelPlan?.source || 'builtin-agent-dogfood',
+    target: loadedParallelPlan?.target || 'Pi-RECON parallel dogfood',
+    workerCount: roles.length,
+    workerIds: roles.map((role) => role.id),
+    merge: loadedParallelPlan?.merge || defaultMergeContract(),
+    validation: parallelPlanValidation,
+    artifacts: {
+      preview: `${rel(outDir)}/parallel-plan-preview.json`,
+      source: loadedParallelPlan ? `${rel(outDir)}/parallel-plan-source.json` : '',
+      roleContract: `${rel(outDir)}/role-contract.json`,
+    },
+  },
   scoreRun: {
     code: scoreRun.code,
     pid: scoreRun.pid,
@@ -722,6 +974,7 @@ const md = [
   '## Key Evidence',
   `- hard_score_artifact=${evidencePaths.hardScore || 'none'} code=${scoreRun.code}`,
   `- hard_eval_control verdict=${hardEvalJson?.verdict || 'missing'} code=${hardEvalRun.code} orchestration_score=${hardEvalJson?.scores?.orchestration?.score ?? 'n/a'} platform_required_score=${hardEvalJson?.scores?.platformRequired?.score ?? 'n/a'} required_gaps=${hardEvalRequiredPlatformGaps.map((claim) => claim.gate).join(',') || 'none'}`,
+  `- parallel_plan source=${planPreview.source} plan_id=${planPreview.planId || 'builtin'} workers=${planPreview.workerCount} merge=${planPreview.merge?.strategy || 'none'} validation=${planPreview.validation?.valid}`,
   `- same_window_live=${evidencePaths.bestSameWindowLive || evidencePaths.latestSameWindowLive || 'none'}`,
   `- best_bilibili=${evidencePaths.bestBilibili || 'none'}`,
   `- best_xiaohongshu=${evidencePaths.bestXiaohongshu || 'none'}`,
@@ -752,10 +1005,17 @@ console.log(JSON.stringify({
     agentCmdSha256: audit.agentCmdDigest?.sha256 || '',
   },
   gates,
-  hardEvalControl: {
+	  hardEvalControl: {
     verdict: hardEvalJson?.verdict || 'missing',
     orchestrationScore: hardEvalJson?.scores?.orchestration?.score ?? null,
     platformRequiredScore: hardEvalJson?.scores?.platformRequired?.score ?? null,
     requiredPlatformGaps: hardEvalRequiredPlatformGaps.map((claim) => ({ scope: claim.scope, gate: claim.gate, kind: claim.kind })),
-  },
-}, null, 2));
+	  },
+	  parallelPlan: {
+	    source: planPreview.source,
+	    planId: planPreview.planId,
+	    workerCount: planPreview.workerCount,
+	    merge: planPreview.merge?.strategy || '',
+	    validation: planPreview.validation,
+	  },
+	}, null, 2));

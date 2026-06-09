@@ -33,8 +33,217 @@ const SELF_CHECK = {
 		"currentLevel",
 		"notYetTopAutonomousDefinition",
 		"hardeningNeeded",
+		"CONTROL_CONTRACTS",
+		"controlPlaneContractAudit",
+		"validateControlContractDefinitions",
 	],
 };
+
+const CONTROL_CONTRACTS = [
+	{
+		id: "ContextPackV2",
+		pillar: "long_context_compaction",
+		title: "exact context pack + scoped artifact index",
+		description: "长期上下文压缩必须能恢复同一个 context pack，而不是依赖 latest 重新生成。",
+		requiredFields: [
+			"contractId",
+			"schemaVersion",
+			"missionId",
+			"sessionId",
+			"cwd",
+			"workspaceRoot",
+			"target",
+			"createdAt",
+			"contextPath",
+			"contextSha256",
+			"scope",
+			"artifactIndex",
+			"resumeContract",
+			"compactionLedger",
+		],
+		nestedRequired: {
+			scope: ["missionId", "sessionId", "workspaceRoot", "target", "branchId"],
+			artifactIndex: ["artifactId", "kind", "path", "exists", "size", "mtime", "sha256", "evidenceRank", "sourceCommand"],
+			resumeContract: ["contractId", "contextPath", "contextSha256", "resumeQueueStatus", "idempotencyKey"],
+			compactionLedger: ["path", "appendOnly", "prevHash", "entryHash"],
+		},
+		enumFields: {
+			resumeQueueStatus: ["queued", "running", "done", "blocked", "exhausted"],
+			evidenceRank: ["same_window_live", "runtime_artifact", "network", "served_asset", "process_config", "persisted_state"],
+		},
+		invariants: [
+			"exact_context_load_by_contextPath_or_compactionEntryId",
+			"reject_contextSha256_or_artifact_sha256_drift",
+			"scope_filter_by_mission_session_workspace_target",
+			"append_only_compaction_resume_ledger",
+			"verified_resume_contract_must_close_or_block_completion",
+		],
+		schemaPath: "schemas/reverse-agent/context-resume-contract.schema.json",
+		runtimeIntegration: "pending-runtime-wiring",
+	},
+	{
+		id: "ResumeContractV2",
+		pillar: "long_context_compaction",
+		title: "bounded compact resume contract",
+		description: "compact 之后的自动恢复必须携带不可变上下文指针、hash、预算和闭合状态。",
+		requiredFields: [
+			"contractId",
+			"schemaVersion",
+			"compactionEntryId",
+			"contextPath",
+			"contextSha256",
+			"cwd",
+			"missionId",
+			"sessionId",
+			"target",
+			"artifactHashes",
+			"resumeQueueStatus",
+			"idempotencyKey",
+			"ledgerPath",
+			"budget",
+			"closure",
+		],
+		nestedRequired: {
+			artifactHashes: ["artifactId", "path", "sha256", "required"],
+			budget: ["maxResumeTurns", "maxOperatorDispatch", "maxProofLoops"],
+			closure: ["status", "closedAt", "reason", "verifiedBy"],
+		},
+		enumFields: {
+			resumeQueueStatus: ["queued", "running", "done", "blocked", "exhausted"],
+			"closure.status": ["open", "closed", "blocked", "exhausted"],
+		},
+		invariants: [
+			"contextSha256_must_match_before_resume",
+			"artifactHashes_required_items_must_exist",
+			"idempotencyKey_prevents_double_auto_resume",
+			"budget_exhaustion_sets_resumeQueueStatus_exhausted",
+			"completion_audit_blocks_verified_open_contracts",
+		],
+		schemaPath: "schemas/reverse-agent/context-resume-contract.schema.json",
+		runtimeIntegration: "pending-runtime-wiring",
+	},
+	{
+		id: "FailureLedgerEventV1",
+		pillar: "failure_self_repair",
+		title: "failure signature + bounded repair ledger",
+		description: "失败、重试和修复必须使用同一 signature 与预算，保留每次失败证据和 rollback 条件。",
+		requiredFields: [
+			"id",
+			"ts",
+			"source",
+			"scope",
+			"category",
+			"signature",
+			"attempt",
+			"maxAttempts",
+			"status",
+			"failedGates",
+			"artifacts",
+			"artifactHashes",
+			"repairId",
+			"budget",
+			"rollback",
+		],
+		nestedRequired: {
+			artifacts: ["path", "sha256", "tier"],
+			artifactHashes: ["path", "sha256"],
+			budget: ["retryKey", "remainingAttempts", "exhaustedAction"],
+			rollback: ["required", "baseline", "allowlist", "criteria", "restored"],
+		},
+		enumFields: {
+			status: ["failed", "retrying", "repair_queued", "repaired", "exhausted", "rolled_back", "escalated"],
+			category: [
+				"artifact_stale",
+				"runtime_failed",
+				"tool_missing",
+				"contract_gap",
+				"same_window_gap",
+				"same_window_xhs_gap",
+				"same_window_douyin_gap",
+				"same_window_bilibili_gap",
+				"platform_claim_gap",
+			],
+		},
+		invariants: [
+			"same_signature_shares_retry_budget",
+			"exhausted_status_stops_blind_retry",
+			"failedGates_map_to_repair_queue_item",
+			"per_attempt_stdout_stderr_or_artifact_hashes_preserved",
+			"autofix_requires_baseline_allowlist_regression_gate_and_rollback_criteria",
+		],
+		schemaPath: "schemas/reverse-agent/failure-repair-contract.schema.json",
+		runtimeIntegration: "offline-hard-eval-source-wired",
+	},
+	{
+		id: "RepairQueueItemV1",
+		pillar: "failure_self_repair",
+		title: "machine-actionable repair queue item",
+		description: "repair queue 只能表达可执行/可暂停的修复动作，不能用自然语言遮蔽失败。",
+		requiredFields: [
+			"repairId",
+			"fromFailureId",
+			"signature",
+			"scope",
+			"action",
+			"commands",
+			"expectedArtifacts",
+			"expectedGates",
+			"preconditions",
+			"paused",
+			"allowlist",
+			"rollbackCriteria",
+			"regressionGates",
+		],
+		nestedRequired: {
+			preconditions: ["liveAllowed", "providerAllowed", "requiredSecrets"],
+			rollbackCriteria: ["baseline", "mustRestore", "verificationCommand"],
+		},
+		enumFields: {
+			action: ["rerun", "replace-command", "recapture-evidence", "refresh-context", "escalate", "rollback"],
+		},
+		invariants: [
+			"paused_true_for_live_or_provider_dependent_repairs",
+			"commands_are_not_executed_by_static_gate",
+			"expectedGates_must_bind_to_failedGates",
+			"repair_completion_requires_regressionGates_pass",
+		],
+		schemaPath: "schemas/reverse-agent/failure-repair-contract.schema.json",
+		runtimeIntegration: "offline-hard-eval-source-wired",
+	},
+	{
+		id: "DivisionValidationContractV1",
+		pillar: "automatic_division_validation",
+		title: "role contract + claim ledger + conflict table",
+		description: "分工结果必须先落到 role contract、claim ledger、challenge/resolution 和 conflict table，再允许 synthesizer 汇总。",
+		requiredFields: [
+			"contractVersion",
+			"runId",
+			"evidenceOrder",
+			"roles",
+			"ledgerPolicy",
+			"conflictPolicy",
+			"claimGatePolicy",
+		],
+		nestedRequired: {
+			roles: ["id", "mustEmit", "allowedClaimKinds", "forbiddenClaimKinds", "handoffTargets", "evidenceContract"],
+			ledgerPolicy: ["appendOnly", "prevHash", "eventHash", "requiredEventTypes"],
+			conflictPolicy: ["tableRequired", "evidenceOrder", "unresolvedBlocksFinal"],
+			claimGatePolicy: ["provenRequiresArtifactSha256", "provenRequiresJsonQuery", "finalPassRequiresVerifier", "unresolvedChallengeBlocks"],
+		},
+		enumFields: {
+			requiredEventTypes: ["artifact_handoff", "claim", "validation", "challenge", "resolution"],
+		},
+		invariants: [
+			"proven_or_final_pass_claim_requires_artifact_sha256_and_json_query",
+			"verifier_pass_required_before_final_pass",
+			"unresolved_adversary_challenge_blocks_claim_promotion",
+			"synthesizer_must_emit_conflict_table",
+			"orchestration_score_must_not_imply_platform_claim_success",
+		],
+		schemaPath: "schemas/reverse-agent/division-validation-contract.schema.json",
+		runtimeIntegration: "offline-hard-eval-source-wired",
+	},
+];
 
 const REQUIREMENTS = [
 	{
@@ -62,15 +271,15 @@ const REQUIREMENTS = [
 			},
 		],
 		hardeningNeeded: [
-			"定义统一 ReconParallelPlan / ReconWorkItem / ReconShard manifest，把 re_swarm、frontier shard 和 dogfood role 统一到同一调度合同。",
+			"把已验证的 ReconParallelPlanV1 从 frontier/dogfood 扩展到 re_swarm、re_supervisor 和 release gate。",
 			"把 re_swarm 的 command-level worker packet 升级为可选独立 Pi agent/session runtime，并记录 PID、session dir、stdout/stderr hash、model/tool call digest。",
 			"让 shard plan 支持真实并发执行、依赖检查、timeout/cancel、资源配额和多 shard result merge。",
 			"把 worker merge 从文本摘要升级为 structured claim merge，并在 supervisor 前阻断缺证据或冲突 claim。",
 		],
 		recommendedWork: [
-			"新增 parallel_plan 区块，字段包含 planId/source/workers/merge/evidenceOrder。",
-			"先让 frontier-orchestrator --plan --json --shards=N 输出 machine-readable manifest，不立即恢复 live run。",
-			"再让 agent-dogfood runner 支持 --plan-json/--plan-only，保留当前固定角色作为 fallback。",
+			"保持 npm run audit:parallel-plan 作为 frontier --plan 与 dogfood --plan-only 的离线 smoke gate。",
+			"让 re_swarm plan 输出同一 parallelPlan 区块，并保留 planId/source/workers/merge/evidenceOrder。",
+			"让 agent-dogfood 执行态把 planId/source/worker merge keys 写入每个 worker runtime digest。",
 		],
 	},
 	{
@@ -196,6 +405,14 @@ function sha256(text) {
 	return createHash("sha256").update(text).digest("hex");
 }
 
+function safeJson(text, fallback = null) {
+	try {
+		return JSON.parse(text);
+	} catch {
+		return fallback;
+	}
+}
+
 function readProjectFile(root, relativePath) {
 	const path = join(root, relativePath);
 	if (!existsSync(path)) return { relativePath, path, exists: false, text: "", bytes: 0, sha256: null };
@@ -205,6 +422,99 @@ function readProjectFile(root, relativePath) {
 
 function markerRows(file, markers) {
 	return markers.map((marker) => ({ marker, present: file.exists && file.text.includes(marker) }));
+}
+
+function schemaDefinition(schema, contractId) {
+	return schema?.$defs?.[contractId] ?? schema?.definitions?.[contractId] ?? schema;
+}
+
+function validateControlContractDefinition(contract) {
+	const missingTop = ["id", "pillar", "requiredFields", "nestedRequired", "enumFields", "invariants", "schemaPath"].filter(
+		(field) => contract[field] === undefined || contract[field] === null,
+	);
+	const requiredOk = Array.isArray(contract.requiredFields) && contract.requiredFields.length >= 4;
+	const nestedOk = contract.nestedRequired && Object.values(contract.nestedRequired).every((fields) => Array.isArray(fields) && fields.length > 0);
+	const enumOk = contract.enumFields && Object.values(contract.enumFields).every((values) => Array.isArray(values) && values.length > 0);
+	const invariantOk = Array.isArray(contract.invariants) && contract.invariants.length >= 3;
+	const status = missingTop.length === 0 && requiredOk && nestedOk && enumOk && invariantOk ? "pass" : "fail";
+	return {
+		id: contract.id,
+		pillar: contract.pillar,
+		status,
+		missingTop,
+		requiredFields: contract.requiredFields?.length ?? 0,
+		nestedContracts: Object.keys(contract.nestedRequired ?? {}).length,
+		enumFields: Object.keys(contract.enumFields ?? {}).length,
+		invariants: contract.invariants?.length ?? 0,
+		schemaPath: contract.schemaPath,
+		runtimeIntegration: contract.runtimeIntegration,
+	};
+}
+
+function validateControlContractSchema(root, contract) {
+	const file = readProjectFile(root, contract.schemaPath);
+	const json = file.exists ? safeJson(file.text) : null;
+	const definition = json ? schemaDefinition(json, contract.id) : null;
+	const required = new Set(definition?.required ?? []);
+	const properties = new Set(Object.keys(definition?.properties ?? {}));
+	const schemaInvariants = new Set(json?.["x-piReconInvariants"] ?? definition?.["x-piReconInvariants"] ?? []);
+	const missingRequired = (contract.requiredFields ?? []).filter((field) => !required.has(field));
+	const missingProperties = (contract.requiredFields ?? []).filter((field) => !properties.has(field));
+	const missingInvariants = (contract.invariants ?? []).filter((invariant) => !schemaInvariants.has(invariant));
+	const schemaText = file.text ?? "";
+	const missingEnumValues = Object.values(contract.enumFields ?? {})
+		.flat()
+		.filter((value) => !schemaText.includes(`"${value}"`));
+	const status =
+		file.exists &&
+		Boolean(json) &&
+		missingRequired.length === 0 &&
+		missingProperties.length === 0 &&
+		missingInvariants.length === 0 &&
+		missingEnumValues.length === 0
+			? "pass"
+			: "fail";
+	return {
+		id: contract.id,
+		pillar: contract.pillar,
+		schemaPath: contract.schemaPath,
+		status,
+		exists: file.exists,
+		parseOk: Boolean(json),
+		bytes: file.bytes,
+		sha256: file.sha256,
+		missingRequired,
+		missingProperties,
+		missingInvariants,
+		missingEnumValues,
+	};
+}
+
+function validateControlContractDefinitions(root) {
+	const definitions = CONTROL_CONTRACTS.map((contract) => validateControlContractDefinition(contract));
+	const schemas = CONTROL_CONTRACTS.map((contract) => validateControlContractSchema(root, contract));
+	const pillars = [...new Set(CONTROL_CONTRACTS.map((contract) => contract.pillar))].map((pillar) => {
+		const definitionRows = definitions.filter((row) => row.pillar === pillar);
+		const schemaRows = schemas.filter((row) => row.pillar === pillar);
+		return {
+			pillar,
+			status: [...definitionRows, ...schemaRows].every((row) => row.status === "pass") ? "pass" : "fail",
+			contracts: definitionRows.map((row) => row.id),
+			runtimeIntegration: CONTROL_CONTRACTS.filter((contract) => contract.pillar === pillar).map((contract) => ({
+				id: contract.id,
+				status: contract.runtimeIntegration,
+			})),
+		};
+	});
+	const status = [...definitions, ...schemas].every((row) => row.status === "pass") ? "pass" : "fail";
+	return {
+		status,
+		mode: "static-contract-field-and-schema-validator",
+		description: "补齐长期上下文压缩、失败自修复、自动分工验证的控制面字段，并用 JSON schema + 本脚本 validator 静态校验。",
+		definitions,
+		schemas,
+		pillars,
+	};
 }
 
 function evaluateCheck(root, check) {
@@ -246,24 +556,27 @@ function evaluatePillar(root, requirement) {
 
 function buildManifest(root) {
 	const auditSelf = evaluateCheck(root, SELF_CHECK);
+	const controlPlaneContractAudit = validateControlContractDefinitions(root);
 	const pillars = REQUIREMENTS.map((requirement) => evaluatePillar(root, requirement));
-	const normalUseGuarantee = auditSelf.status === "pass" && pillars.every((pillar) => pillar.normalUse);
+	const normalUseGuarantee =
+		auditSelf.status === "pass" && controlPlaneContractAudit.status === "pass" && pillars.every((pillar) => pillar.normalUse);
 	const hardeningItems = pillars.flatMap((pillar) => pillar.hardeningNeeded.map((item) => `${pillar.id}: ${item}`));
 	return {
 		kind: "pi-recon-autonomy-control-plane",
-		version: 1,
+		version: 2,
 		generatedAt: new Date().toISOString(),
 		root,
 		auditMode: "static-source-and-harness-contract-only",
 		normalUseGuarantee,
 		currentLevel: normalUseGuarantee ? "professional reverse/pentest task organization agent" : "incomplete organization profile",
 		auditSelf,
+		controlPlaneContractAudit,
 		topAutonomousDefinition: false,
-		topAutonomousDefinitionReason: "核心组织链路可用，但独立子会话调度、精确 compact 恢复、统一失败账本、claim-level 验证仍需硬化。",
+		topAutonomousDefinitionReason: "核心组织链路和控制面字段/validator 可用，但独立子会话 runtime、精确 compact 恢复执行、统一失败账本运行时写入和 claim-level runtime 合成仍需硬化。",
 		pillars,
 		notYetTopAutonomousDefinition: hardeningItems,
 		recommendedNonTestWorkOrder: [
-			"固化 ReconParallelPlan / ReconWorkItem manifest，统一 re_swarm、frontier shard、dogfood role。",
+			"把已通过离线审计的 ReconParallelPlanV1 扩展到 re_swarm / re_supervisor / release gate。",
 			"固化 role contract + claim ledger + conflict table，先拦截 narrative-only merge。",
 			"固化 failure ledger + repair queue + bounded retry signature + rollback criteria。",
 			"设计 ContextPackV2 / ResumeContractV2，实现按 contextPath/compactionEntryId 的精确恢复不变量。",
@@ -296,6 +609,23 @@ function formatMarkdown(manifest) {
 		"",
 		`- ${manifest.auditSelf.id}: ${manifest.auditSelf.status} — ${manifest.auditSelf.description}`,
 		...manifest.auditSelf.files.map((file) => `  - ${file.path}: ${file.status}${file.exists ? ` bytes=${file.bytes} sha256=${file.sha256.slice(0, 16)}` : " missing"}`),
+		"",
+		"## Control contract validators",
+		"",
+		`status: ${manifest.controlPlaneContractAudit.status}`,
+		`mode: ${manifest.controlPlaneContractAudit.mode}`,
+		"",
+		"contracts:",
+		...manifest.controlPlaneContractAudit.definitions.map(
+			(row) =>
+				`- ${row.id}: ${row.status} pillar=${row.pillar} fields=${row.requiredFields} nested=${row.nestedContracts} enums=${row.enumFields} invariants=${row.invariants} runtime=${row.runtimeIntegration}`,
+		),
+		"",
+		"schemas:",
+		...manifest.controlPlaneContractAudit.schemas.map(
+			(row) =>
+				`- ${row.id}: ${row.status} ${row.schemaPath}${row.exists ? ` bytes=${row.bytes} sha256=${row.sha256.slice(0, 16)}` : " missing"}`,
+		),
 		"",
 		"## Pillars",
 		"",

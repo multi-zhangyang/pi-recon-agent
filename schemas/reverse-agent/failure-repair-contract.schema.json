@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pi-recon.local/schemas/reverse-agent/failure-repair-contract.schema.json",
+  "title": "Pi-RECON Failure and Repair Contracts",
+  "$defs": {
+    "FailureLedgerEventV1": {
+      "title": "Pi-RECON Failure Ledger Event V1",
+      "type": "object",
+      "required": [
+        "id",
+        "ts",
+        "source",
+        "scope",
+        "category",
+        "signature",
+        "attempt",
+        "maxAttempts",
+        "status",
+        "failedGates",
+        "artifacts",
+        "artifactHashes",
+        "repairId",
+        "budget",
+        "rollback"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "ts": { "type": "string" },
+        "source": { "type": "string" },
+        "scope": { "type": "string" },
+        "category": {
+          "enum": ["artifact_stale", "runtime_failed", "tool_missing", "contract_gap", "same_window_gap", "same_window_xhs_gap", "same_window_douyin_gap", "same_window_bilibili_gap", "platform_claim_gap"]
+        },
+        "signature": { "type": "string" },
+        "attempt": { "type": "integer", "minimum": 0 },
+        "maxAttempts": { "type": "integer", "minimum": 0 },
+        "status": { "enum": ["failed", "retrying", "repair_queued", "repaired", "exhausted", "rolled_back", "escalated"] },
+        "failedGates": { "type": "array", "items": { "type": "string" } },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "sha256", "tier"],
+            "properties": {
+              "path": { "type": "string" },
+              "sha256": { "type": "string" },
+              "tier": { "type": "string" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "artifactHashes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "sha256"],
+            "properties": {
+              "path": { "type": "string" },
+              "sha256": { "type": "string" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "repairId": { "type": "string" },
+        "budget": {
+          "type": "object",
+          "required": ["retryKey", "remainingAttempts", "exhaustedAction"],
+          "properties": {
+            "retryKey": { "type": "string" },
+            "remainingAttempts": { "type": "integer", "minimum": 0 },
+            "exhaustedAction": { "type": "string" }
+          },
+          "additionalProperties": true
+        },
+        "rollback": {
+          "type": "object",
+          "required": ["required", "baseline", "allowlist", "criteria", "restored"],
+          "properties": {
+            "required": { "type": "boolean" },
+            "baseline": { "type": "string" },
+            "allowlist": { "type": "array", "items": { "type": "string" } },
+            "criteria": { "type": "array", "items": { "type": "string" } },
+            "restored": { "type": "boolean" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true,
+      "x-piReconInvariants": [
+        "same_signature_shares_retry_budget",
+        "exhausted_status_stops_blind_retry",
+        "failedGates_map_to_repair_queue_item",
+        "per_attempt_stdout_stderr_or_artifact_hashes_preserved",
+        "autofix_requires_baseline_allowlist_regression_gate_and_rollback_criteria"
+      ]
+    },
+    "RepairQueueItemV1": {
+      "title": "Pi-RECON Repair Queue Item V1",
+      "type": "object",
+      "required": [
+        "repairId",
+        "fromFailureId",
+        "signature",
+        "scope",
+        "action",
+        "commands",
+        "expectedArtifacts",
+        "expectedGates",
+        "preconditions",
+        "paused",
+        "allowlist",
+        "rollbackCriteria",
+        "regressionGates"
+      ],
+      "properties": {
+        "repairId": { "type": "string", "minLength": 1 },
+        "fromFailureId": { "type": "string" },
+        "signature": { "type": "string" },
+        "scope": { "type": "string" },
+        "action": { "enum": ["rerun", "replace-command", "recapture-evidence", "refresh-context", "escalate", "rollback"] },
+        "commands": { "type": "array", "items": { "type": "string" } },
+        "expectedArtifacts": { "type": "array", "items": { "type": "string" } },
+        "expectedGates": { "type": "array", "items": { "type": "string" } },
+        "preconditions": {
+          "type": "object",
+          "required": ["liveAllowed", "providerAllowed", "requiredSecrets"],
+          "properties": {
+            "liveAllowed": { "type": "boolean" },
+            "providerAllowed": { "type": "boolean" },
+            "requiredSecrets": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": true
+        },
+        "paused": { "type": "boolean" },
+        "allowlist": { "type": "array", "items": { "type": "string" } },
+        "rollbackCriteria": {
+          "type": "object",
+          "required": ["baseline", "mustRestore", "verificationCommand"],
+          "properties": {
+            "baseline": { "type": "string" },
+            "mustRestore": { "type": "array", "items": { "type": "string" } },
+            "verificationCommand": { "type": "string" }
+          },
+          "additionalProperties": true
+        },
+        "regressionGates": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true,
+      "x-piReconInvariants": [
+        "paused_true_for_live_or_provider_dependent_repairs",
+        "commands_are_not_executed_by_static_gate",
+        "expectedGates_must_bind_to_failedGates",
+        "repair_completion_requires_regressionGates_pass"
+      ]
+    }
+  },
+  "oneOf": [{ "$ref": "#/$defs/FailureLedgerEventV1" }, { "$ref": "#/$defs/RepairQueueItemV1" }]
+}

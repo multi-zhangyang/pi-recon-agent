@@ -8,6 +8,9 @@ const DEFAULT_SCHEMA_FILES = [
   "schemas/reverse-agent/role-contract.schema.json",
   "schemas/reverse-agent/claim-ledger-event.schema.json",
   "schemas/reverse-agent/claim-gate.schema.json",
+  "schemas/reverse-agent/context-resume-contract.schema.json",
+  "schemas/reverse-agent/failure-repair-contract.schema.json",
+  "schemas/reverse-agent/division-validation-contract.schema.json",
 ];
 
 function sha256(value) {
@@ -69,13 +72,15 @@ function validateSchemaFiles(root) {
 }
 
 function validateRoleContract(contract) {
-  const missing = requiredMissing(contract, ["contractVersion", "runId", "evidenceOrder", "roles"]);
-  const roleRows = Array.isArray(contract?.roles) ? contract.roles.map((role) => ({ id: role.id, missing: requiredMissing(role, ["id", "mustEmit"]) })) : [];
+  const missing = requiredMissing(contract, ["contractVersion", "runId", "evidenceOrder", "roles", "ledgerPolicy", "conflictPolicy", "claimGatePolicy"]);
+  const roleRequired = ["id", "mustEmit", "allowedClaimKinds", "forbiddenClaimKinds", "handoffTargets", "evidenceContract"];
+  const roleRows = Array.isArray(contract?.roles) ? contract.roles.map((role) => ({ id: role.id, missing: requiredMissing(role, roleRequired) })) : [];
   const roleIds = new Set((contract?.roles || []).map((role) => role.id));
   const requiredRoles = ["mapper", "verifier", "adversary", "synthesizer"];
   const missingRoles = requiredRoles.filter((role) => !roleIds.has(role));
-  const ok = missing.length === 0 && missingRoles.length === 0 && roleRows.every((row) => row.missing.length === 0) && Array.isArray(contract.evidenceOrder) && contract.evidenceOrder.includes("same_window_live");
-  return { status: ok ? "pass" : "fail", missing, missingRoles, roleRows };
+  const policyOk = contract?.ledgerPolicy?.appendOnly === true && contract?.conflictPolicy?.unresolvedBlocksFinal === true && contract?.claimGatePolicy?.finalPassRequiresVerifier === true;
+  const ok = missing.length === 0 && missingRoles.length === 0 && roleRows.every((row) => row.missing.length === 0) && Array.isArray(contract.evidenceOrder) && contract.evidenceOrder.includes("same_window_live") && policyOk;
+  return { status: ok ? "pass" : "fail", missing, missingRoles, roleRows, policyOk };
 }
 
 function validateHashChain(ledger) {
@@ -129,7 +134,7 @@ function validateClaims(root, ledger) {
     const refRows = refs.map((ref) => {
       const artifact = artifacts.get(ref.artifactId);
       const observed = artifact?.json ? dotValue(artifact.json, ref.query) : undefined;
-      return { artifactId: ref.artifactId, query: ref.query, op: ref.op, expected: ref.value, observed, satisfied: compareValue(observed, ref.op, ref.value), artifactLoaded: Boolean(artifact?.json) };
+      return { artifactId: ref.artifactId, query: ref.query, op: ref.op, expected: ref.value, observed, satisfied: compareValue(observed, ref.op, ref.value), artifactLoaded: Boolean(artifact?.json), artifactHashBound: Boolean(artifact?.event?.sha256 && artifact?.shaOk) };
     });
     const highConfidence = ["proven", "final_pass"].includes(claim.kind);
     const validation = validations.get(claim.claimId);
@@ -144,7 +149,7 @@ function validateClaims(root, ledger) {
       missing,
       evidenceRefs: refs.length,
       refRows,
-      refsSatisfied: highConfidence ? refRows.length > 0 && refRows.every((row) => row.satisfied) : true,
+      refsSatisfied: highConfidence ? refRows.length > 0 && refRows.every((row) => row.satisfied && row.artifactHashBound && row.query) : true,
       validationResult: validation?.result || null,
       validated: highConfidence ? validation?.result === "pass" : Boolean(validation),
       challenged: !requiredGap || (challenges.get(claim.claimId) || []).length > 0,

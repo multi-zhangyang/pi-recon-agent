@@ -34,6 +34,45 @@ JSON output for another agent or CI wrapper:
 node bench/recon-remote/frontier-orchestrator/run.mjs --summarize-latest --json
 ```
 
+## ReconParallelPlanV1 integration
+
+`--plan --json --shards=N` emits a machine-readable `ReconParallelPlanV1`
+manifest alongside the legacy human plan. The manifest is intended for offline
+control-plane review and for downstream runners that need explicit worker
+contracts:
+
+```bash
+node bench/recon-remote/frontier-orchestrator/run.mjs \
+  --plan --json --strategy=balanced --shards=3 > /tmp/recon-parallel-plan.json
+```
+
+Important fields:
+
+| Field | Meaning |
+|---|---|
+| `planId` / `source` | Stable identity for this generated plan and its producer. |
+| `workers[]` | Parallel work packets. Each worker carries `id`, `role`, `objective`, `commands`, `evidenceContract`, `mergeKeys`, `dependencies`, `artifactGlobs`, and `limits`. |
+| `merge` | Structured merge policy, expected artifacts, and evidence ordering for the final summary. |
+| `parallelPlan` | The same manifest nested under a dedicated key for consumers that read an orchestrator JSON root. |
+| legacy fields | `mode`, `strategy`, `selectedCases`, `matrixCommand`, `shardCount`, `shards`, and `contextPolicy` remain for existing wrappers. |
+
+Downstream offline preview:
+
+```bash
+node bench/recon-remote/agent-dogfood/parallel-run.mjs \
+  --plan-json /tmp/recon-parallel-plan.json --plan-only --json
+```
+
+Boundary of this mode:
+
+- it plans case-to-worker assignment and evidence contracts; it does not launch
+  Pi agents, browsers, live platform probes, or model providers;
+- it does not create a new evidence tree in plan mode;
+- worker `commands[]` are executable intent for later review/execution, not proof
+  that the platform case has passed;
+- merge policy compacts existing `frontier-matrix/result.json` artifacts and
+  keeps positive cases separate from negative controls.
+
 ## Selection strategies
 
 | Strategy | Behavior |

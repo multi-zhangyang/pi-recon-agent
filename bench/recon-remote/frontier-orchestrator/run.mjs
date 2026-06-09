@@ -263,13 +263,68 @@ function summarizeMatrix(matrixPath, result, selectedCaseIds, runMeta = null) {
       : ['matrix clean: raise max-cases/live strict cadence, or shard by platform for parallel dogfood review'],
   };
 }
+function caseEvidenceContract(id) {
+  const meta = catalogById.get(id) || {};
+  const base = [`case=${id}`, `platform=${meta.platform || 'unknown'}`, `polarity=${meta.polarity || 'unknown'}`, `difficulty=${meta.difficulty || 0}`];
+  if (meta.platform === 'xiaohongshu') return [...base, 'require x-s/x-t signed trace or explicit challenge boundary', 'target note/feed/search structured 2xx must not be inferred from generic user endpoint'];
+  if (meta.platform === 'douyin') return [...base, 'require observed structured aweme API', 'require replay/cookie boundary split', 'no-watermark media byte proof must be hash/range backed'];
+  if (meta.platform === 'bilibili') return [...base, 'require WBI self-test and signed playurl', 'CID/page boundary must bind selected p/cid', 'media proof must include reachable CDN body/range or HEAD fallback'];
+  return base;
+}
+function caseMergeKeys(cases) {
+  return cases.flatMap((id) => {
+    const meta = catalogById.get(id) || {};
+    return [`case:${id}`, `platform:${meta.platform || 'unknown'}`, `polarity:${meta.polarity || 'unknown'}`];
+  });
+}
+function makeParallelPlan(selectedCases, options, latest, shards) {
+  const workers = shards.map((shard) => ({
+    id: shard.id,
+    role: 'frontier-shard-runner',
+    shardId: shard.id,
+    caseIds: shard.cases,
+    objective: `Run or review frontier matrix shard ${shard.id}: ${shard.cases.join(', ')}. Preserve positive/negative boundaries and emit only artifact-backed claims.`,
+    commands: [shard.command],
+    prompt: [
+      'Use live/runtime evidence before old scoreboards.',
+      'Do not convert generic 2xx or orchestration success into platform success.',
+      'Return Outcome / Key Evidence / Verification / Next Step with artifact paths.',
+    ],
+    evidenceContract: shard.cases.flatMap(caseEvidenceContract),
+    mergeKeys: caseMergeKeys(shard.cases),
+    dependencies: [],
+    artifactGlobs: ['.pi/evidence/remote/frontier-matrix/**/result.json', '.pi/evidence/remote/real-platform/**/result.json', '.pi/evidence/remote/douyin-nowatermark/**/result.json'],
+    limits: { timeoutMs: options.timeoutMs, maxCommands: 1 },
+  }));
+  return {
+    kind: 'ReconParallelPlanV1',
+    schemaVersion: 1,
+    planId: `frontier-orchestrator/${new Date().toISOString()}`,
+    target: 'Bilibili/Xiaohongshu/Douyin frontier matrix',
+    source: 'frontier-orchestrator',
+    strategy: options.strategy,
+    latestMatrixArtifact: latest?.path || '',
+    workers,
+    merge: {
+      strategy: 'frontier-summary',
+      evidenceOrder: ['same_window_live', 'runtime_artifact', 'network', 'served_asset', 'process_config', 'persisted_state'],
+      expectedArtifacts: ['.pi/evidence/remote/frontier-matrix/**/result.json'],
+      command: 'node bench/recon-remote/frontier-orchestrator/run.mjs --summarize-latest --json',
+      conflictPolicy: 'latest runtime evidence and negative controls overrule stale green platform rows',
+    },
+  };
+}
 function makePlan(selectedCases, options, latest) {
   const shards = shardCases(selectedCases, options.shards).map((cases, idx) => ({
     id: `agent-${idx + 1}`,
     cases,
     lane: cases.map((id) => `${id}:${catalogById.get(id)?.agentLane || 'unknown'}`),
     command: commandFor(cases, options).shell,
+    evidenceContract: cases.flatMap(caseEvidenceContract),
+    mergeKeys: caseMergeKeys(cases),
+    expectedArtifacts: ['.pi/evidence/remote/frontier-matrix/**/result.json'],
   }));
+  const parallelPlan = makeParallelPlan(selectedCases, options, latest, shards);
   return {
     mode: 'plan',
     strategy: options.strategy,
@@ -278,8 +333,17 @@ function makePlan(selectedCases, options, latest) {
     live: options.live,
     fresh: options.fresh,
     matrixCommand: commandFor(selectedCases, options).shell,
+    requestedShardCount: options.shards,
+    shardStrategy: 'round-robin',
     shardCount: shards.length,
     shards,
+    kind: parallelPlan.kind,
+    schemaVersion: parallelPlan.schemaVersion,
+    planId: parallelPlan.planId,
+    source: parallelPlan.source,
+    workers: parallelPlan.workers,
+    merge: parallelPlan.merge,
+    parallelPlan,
     latestMatrixArtifact: latest?.path || '',
     caseNotes: selectedCases.map((id) => ({ id, ...catalogById.get(id) })),
     contextPolicy: [
@@ -287,6 +351,7 @@ function makePlan(selectedCases, options, latest) {
       'Final merge reads frontier-matrix/result.json instead of replaying full stdout/stderr into context.',
       'Negative controls stay separate from positive replay cases to prevent generic 2xx inflation.',
       'Strict/fresh matrix runs reject stale latest-evidence artifacts instead of carrying old green results forward.',
+      'parallelPlan is machine-readable ReconParallelPlanV1 for agent-dogfood --plan-json / --plan-only.',
     ],
   };
 }
@@ -305,6 +370,11 @@ function printMarkdown(output) {
       '',
       '## Verification',
       ...output.shards.map((shard) => `- ${shard.id}: ${shard.cases.join(',')} -> \`${shard.command}\``),
+      '',
+      '## Parallel Plan',
+      `- plan_id=${output.parallelPlan?.planId || 'none'}`,
+      `- workers=${output.parallelPlan?.workers?.length || 0} merge=${output.parallelPlan?.merge?.strategy || 'none'}`,
+      '- JSON mode exposes this as `parallelPlan` for `agent-dogfood/parallel-run.mjs --plan-json`.',
       '',
       '## Next Step',
       '- Run the matrix command, or dispatch shard commands to parallel agents and merge with `--summarize-latest`.',

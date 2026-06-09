@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pi-recon.local/schemas/reverse-agent/context-resume-contract.schema.json",
+  "title": "Pi-RECON Context and Resume Contracts",
+  "$defs": {
+    "ContextPackV2": {
+      "title": "Pi-RECON Context Pack V2",
+      "type": "object",
+      "required": [
+        "contractId",
+        "schemaVersion",
+        "missionId",
+        "sessionId",
+        "cwd",
+        "workspaceRoot",
+        "target",
+        "createdAt",
+        "contextPath",
+        "contextSha256",
+        "scope",
+        "artifactIndex",
+        "resumeContract",
+        "compactionLedger"
+      ],
+      "properties": {
+        "contractId": { "type": "string", "minLength": 1 },
+        "schemaVersion": { "const": 2 },
+        "missionId": { "type": "string" },
+        "sessionId": { "type": "string" },
+        "cwd": { "type": "string" },
+        "workspaceRoot": { "type": "string" },
+        "target": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "contextPath": { "type": "string" },
+        "contextSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+        "scope": {
+          "type": "object",
+          "required": ["missionId", "sessionId", "workspaceRoot", "target", "branchId"],
+          "properties": {
+            "missionId": { "type": "string" },
+            "sessionId": { "type": "string" },
+            "workspaceRoot": { "type": "string" },
+            "target": { "type": "string" },
+            "branchId": { "type": "string" }
+          },
+          "additionalProperties": true
+        },
+        "artifactIndex": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["artifactId", "kind", "path", "exists", "size", "mtime", "sha256", "evidenceRank", "sourceCommand"],
+            "properties": {
+              "artifactId": { "type": "string" },
+              "kind": { "type": "string" },
+              "path": { "type": "string" },
+              "exists": { "type": "boolean" },
+              "size": { "type": "integer", "minimum": 0 },
+              "mtime": { "type": "string" },
+              "sha256": { "type": ["string", "null"] },
+              "evidenceRank": {
+                "enum": ["same_window_live", "runtime_artifact", "network", "served_asset", "process_config", "persisted_state"]
+              },
+              "sourceCommand": { "type": "string" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "resumeContract": { "$ref": "#/$defs/ResumeContractV2" },
+        "compactionLedger": {
+          "type": "object",
+          "required": ["path", "appendOnly", "prevHash", "entryHash"],
+          "properties": {
+            "path": { "type": "string" },
+            "appendOnly": { "const": true },
+            "prevHash": { "type": "string" },
+            "entryHash": { "type": "string" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true,
+      "x-piReconInvariants": [
+        "exact_context_load_by_contextPath_or_compactionEntryId",
+        "reject_contextSha256_or_artifact_sha256_drift",
+        "scope_filter_by_mission_session_workspace_target",
+        "append_only_compaction_resume_ledger",
+        "verified_resume_contract_must_close_or_block_completion"
+      ]
+    },
+    "ResumeContractV2": {
+      "title": "Pi-RECON Resume Contract V2",
+      "type": "object",
+      "required": [
+        "contractId",
+        "schemaVersion",
+        "compactionEntryId",
+        "contextPath",
+        "contextSha256",
+        "cwd",
+        "missionId",
+        "sessionId",
+        "target",
+        "artifactHashes",
+        "resumeQueueStatus",
+        "idempotencyKey",
+        "ledgerPath",
+        "budget",
+        "closure"
+      ],
+      "properties": {
+        "contractId": { "type": "string", "minLength": 1 },
+        "schemaVersion": { "const": 2 },
+        "compactionEntryId": { "type": "string" },
+        "contextPath": { "type": "string" },
+        "contextSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+        "cwd": { "type": "string" },
+        "missionId": { "type": "string" },
+        "sessionId": { "type": "string" },
+        "target": { "type": "string" },
+        "artifactHashes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["artifactId", "path", "sha256", "required"],
+            "properties": {
+              "artifactId": { "type": "string" },
+              "path": { "type": "string" },
+              "sha256": { "type": "string" },
+              "required": { "type": "boolean" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "resumeQueueStatus": { "enum": ["queued", "running", "done", "blocked", "exhausted"] },
+        "idempotencyKey": { "type": "string" },
+        "ledgerPath": { "type": "string" },
+        "budget": {
+          "type": "object",
+          "required": ["maxResumeTurns", "maxOperatorDispatch", "maxProofLoops"],
+          "properties": {
+            "maxResumeTurns": { "type": "integer", "minimum": 0 },
+            "maxOperatorDispatch": { "type": "integer", "minimum": 0 },
+            "maxProofLoops": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": true
+        },
+        "closure": {
+          "type": "object",
+          "required": ["status", "closedAt", "reason", "verifiedBy"],
+          "properties": {
+            "status": { "enum": ["open", "closed", "blocked", "exhausted"] },
+            "closedAt": { "type": ["string", "null"] },
+            "reason": { "type": "string" },
+            "verifiedBy": { "type": "string" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true,
+      "x-piReconInvariants": [
+        "contextSha256_must_match_before_resume",
+        "artifactHashes_required_items_must_exist",
+        "idempotencyKey_prevents_double_auto_resume",
+        "budget_exhaustion_sets_resumeQueueStatus_exhausted",
+        "completion_audit_blocks_verified_open_contracts"
+      ]
+    }
+  },
+  "oneOf": [{ "$ref": "#/$defs/ContextPackV2" }, { "$ref": "#/$defs/ResumeContractV2" }]
+}

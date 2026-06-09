@@ -19,21 +19,37 @@ const SCHEMAS = {
 		},
 	},
 	ResumeContractV2: {
-		required: ["contractId", "contextPath", "contextSha256", "cwd", "artifactHashes", "resumeQueueStatus"],
-		optional: ["missionId", "sessionId", "branchId", "target", "createdAt", "resumeCommands", "budget", "closedAt"],
+		required: [
+			"contractId",
+			"schemaVersion",
+			"compactionEntryId",
+			"contextPath",
+			"contextSha256",
+			"cwd",
+			"missionId",
+			"sessionId",
+			"target",
+			"artifactHashes",
+			"resumeQueueStatus",
+			"idempotencyKey",
+			"ledgerPath",
+			"budget",
+			"closure",
+		],
+		optional: ["branchId", "createdAt", "resumeCommands"],
 		enums: { resumeQueueStatus: ["queued", "running", "done", "blocked", "exhausted"] },
 	},
 	FailureLedgerEventV1: {
-		required: ["id", "ts", "source", "scope", "category", "attempt", "maxAttempts", "status", "artifacts", "repairId", "rollback"],
-		enums: { status: ["failed", "retrying", "repaired", "exhausted", "rolled_back"] },
+		required: ["id", "ts", "source", "scope", "category", "signature", "attempt", "maxAttempts", "status", "failedGates", "artifacts", "artifactHashes", "repairId", "budget", "rollback"],
+		enums: { status: ["failed", "retrying", "repair_queued", "repaired", "exhausted", "rolled_back", "escalated"] },
 	},
 	RepairQueueItemV1: {
-		required: ["repairId", "fromFailureId", "scope", "action", "commands", "expectedArtifacts", "paused"],
-		enums: { action: ["rerun", "replace-command", "recapture-evidence", "refresh-context", "escalate"] },
+		required: ["repairId", "fromFailureId", "signature", "scope", "action", "commands", "expectedArtifacts", "expectedGates", "preconditions", "paused", "allowlist", "rollbackCriteria", "regressionGates"],
+		enums: { action: ["rerun", "replace-command", "recapture-evidence", "refresh-context", "escalate", "rollback"] },
 	},
 	RoleContractV1: {
-		required: ["contractVersion", "runId", "evidenceOrder", "roles"],
-		roleRequired: ["id", "mustEmit"],
+		required: ["contractVersion", "runId", "evidenceOrder", "roles", "ledgerPolicy", "conflictPolicy", "claimGatePolicy"],
+		roleRequired: ["id", "mustEmit", "allowedClaimKinds", "forbiddenClaimKinds", "handoffTargets", "evidenceContract"],
 	},
 	ClaimLedgerEventV1: {
 		eventTypes: ["artifact_handoff", "claim", "validation", "challenge", "resolution"],
@@ -91,7 +107,17 @@ function validateResumeContractSchema() {
 	const schema = SCHEMAS.ResumeContractV2;
 	const required = schema.required;
 	const enumOk = schema.enums.resumeQueueStatus.includes("queued") && schema.enums.resumeQueueStatus.includes("blocked") && schema.enums.resumeQueueStatus.includes("exhausted");
-	return passFail(required.includes("contextSha256") && required.includes("artifactHashes") && required.includes("resumeQueueStatus") && enumOk, { required, enumValues: schema.enums.resumeQueueStatus });
+	return passFail(
+		required.includes("contextSha256") &&
+			required.includes("compactionEntryId") &&
+			required.includes("artifactHashes") &&
+			required.includes("idempotencyKey") &&
+			required.includes("ledgerPath") &&
+			required.includes("closure") &&
+			required.includes("resumeQueueStatus") &&
+			enumOk,
+		{ required, enumValues: schema.enums.resumeQueueStatus },
+	);
 }
 
 function validateRoleContract(contract) {
@@ -100,8 +126,9 @@ function validateRoleContract(contract) {
 	const roleRows = Array.isArray(contract?.roles)
 		? contract.roles.map((role) => ({ id: role.id, missing: fieldMissing(role, schema.roleRequired) }))
 		: [];
-	const ok = missing.length === 0 && Array.isArray(contract.roles) && contract.roles.length >= 4 && roleRows.every((row) => row.missing.length === 0) && Array.isArray(contract.evidenceOrder) && contract.evidenceOrder.includes("same_window_live");
-	return passFail(ok, { missing, roleRows, roleCount: contract?.roles?.length ?? 0 });
+	const policyOk = contract?.ledgerPolicy?.appendOnly === true && contract?.conflictPolicy?.unresolvedBlocksFinal === true && contract?.claimGatePolicy?.finalPassRequiresVerifier === true;
+	const ok = missing.length === 0 && Array.isArray(contract.roles) && contract.roles.length >= 4 && roleRows.every((row) => row.missing.length === 0) && Array.isArray(contract.evidenceOrder) && contract.evidenceOrder.includes("same_window_live") && policyOk;
+	return passFail(ok, { missing, roleRows, roleCount: contract?.roles?.length ?? 0, policyOk });
 }
 
 function validateLedgerHashChain(events) {
@@ -140,15 +167,32 @@ function validateFailureRepair(failures, repairs) {
 		statusOk: failureSchema.enums.status.includes(failure.status),
 		attemptOk: Number(failure.attempt) <= Number(failure.maxAttempts),
 		repairLinked: repairIds.has(failure.repairId),
+		signatureOk: typeof failure.signature === "string" && failure.signature.length >= 8,
+		artifactHashesOk: Array.isArray(failure.artifactHashes) && failure.artifactHashes.every((artifact) => artifact?.path && artifact?.sha256),
+		budgetOk: Boolean(failure.budget?.retryKey && Number.isFinite(Number(failure.budget?.remainingAttempts)) && failure.budget?.exhaustedAction),
+		rollbackOk: failure.rollback?.required === true || failure.rollback?.required === false,
 	}));
 	const repairRows = (repairs || []).map((repair) => ({
 		repairId: repair.repairId,
 		missing: fieldMissing(repair, repairSchema.required),
 		actionOk: repairSchema.enums.action.includes(repair.action),
 		paused: repair.paused === true || repair.paused === false,
+		signatureOk: typeof repair.signature === "string" && repair.signature.length >= 8,
+		expectedGatesOk: Array.isArray(repair.expectedGates) && repair.expectedGates.length > 0,
+		preconditionsOk: repair.preconditions?.liveAllowed === false || repair.preconditions?.liveAllowed === true,
+		rollbackCriteriaOk: typeof repair.rollbackCriteria === "object" && repair.rollbackCriteria !== null,
 	}));
-	const ok = failureRows.length > 0 && failureRows.every((row) => row.missing.length === 0 && row.statusOk && row.attemptOk && row.repairLinked) && repairRows.length >= failureRows.length && repairRows.every((row) => row.missing.length === 0 && row.actionOk && row.paused);
-	return passFail(ok, { failureCount: failureRows.length, repairCount: repairRows.length, badFailures: failureRows.filter((row) => row.missing.length || !row.statusOk || !row.attemptOk || !row.repairLinked), badRepairs: repairRows.filter((row) => row.missing.length || !row.actionOk || !row.paused) });
+	const ok =
+		failureRows.length > 0 &&
+		failureRows.every((row) => row.missing.length === 0 && row.statusOk && row.attemptOk && row.repairLinked && row.signatureOk && row.artifactHashesOk && row.budgetOk && row.rollbackOk) &&
+		repairRows.length >= failureRows.length &&
+		repairRows.every((row) => row.missing.length === 0 && row.actionOk && row.paused && row.signatureOk && row.expectedGatesOk && row.preconditionsOk && row.rollbackCriteriaOk);
+	return passFail(ok, {
+		failureCount: failureRows.length,
+		repairCount: repairRows.length,
+		badFailures: failureRows.filter((row) => row.missing.length || !row.statusOk || !row.attemptOk || !row.repairLinked || !row.signatureOk || !row.artifactHashesOk || !row.budgetOk || !row.rollbackOk),
+		badRepairs: repairRows.filter((row) => row.missing.length || !row.actionOk || !row.paused || !row.signatureOk || !row.expectedGatesOk || !row.preconditionsOk || !row.rollbackCriteriaOk),
+	});
 }
 
 function buildParallelPlan(hardEval) {
@@ -198,11 +242,21 @@ function readMarkers(root, relativePath, markers) {
 function buildResult(root) {
 	const hardEvalRun = runJson(root, ["scripts/reverse-agent/hard-eval-control-plane.mjs", ".", "--json"]);
 	const contextAuditRun = runJson(root, ["scripts/reverse-agent/context-compact-audit.mjs", ".", "--json"]);
+	const parallelPlanAuditRun = runJson(root, ["scripts/reverse-agent/audit-parallel-plan.mjs", ".", "--json", "--strict"]);
 	const hardEval = hardEvalRun.json;
 	const contextAudit = contextAuditRun.json;
+	const parallelPlanAudit = parallelPlanAuditRun.json;
 	const parallelPlan = buildParallelPlan(hardEval);
 	const checks = {
 		parallelPlan: validateParallelPlan(parallelPlan),
+		parallelPlanAudit: passFail(Boolean(parallelPlanAudit?.ok) && parallelPlanAuditRun.code === 0, {
+			code: parallelPlanAuditRun.code,
+			frontierPlan: parallelPlanAudit?.checks?.frontierPlan?.status ?? "missing",
+			planOnlyOutput: parallelPlanAudit?.checks?.planOnlyOutput?.status ?? "missing",
+			planOnlyNoProvider: parallelPlanAudit?.checks?.planOnlyNoProvider?.status ?? "missing",
+			planOnlyNoEvidenceDir: parallelPlanAudit?.checks?.planOnlyNoEvidenceDir?.status ?? "missing",
+			stdoutSha256: parallelPlanAuditRun.stdoutSha256,
+		}),
 		resumeContractV2Schema: validateResumeContractSchema(),
 		roleContract: validateRoleContract(hardEval?.contract ?? {}),
 		claimLedger: validateClaimLedger(hardEval?.ledger ?? []),
@@ -244,8 +298,15 @@ function buildResult(root) {
 			summary: contextAudit?.summary ?? null,
 			stdoutSha256: contextAuditRun.stdoutSha256,
 		},
+		parallelPlanAudit: {
+			code: parallelPlanAuditRun.code,
+			ok: Boolean(parallelPlanAudit?.ok),
+			frontierPlan: parallelPlanAudit?.frontierPlan ?? null,
+			planOnlyPreview: parallelPlanAudit?.planOnlyPreview ?? null,
+			stdoutSha256: parallelPlanAuditRun.stdoutSha256,
+		},
 		nextNonTestWork: [
-			"Wire ReconParallelPlanV1 into re_swarm plan output and agent-dogfood --plan-json input.",
+			"Extend the verified ReconParallelPlanV1 ingestion path into re_swarm plan output and release-gate metadata.",
 			"Persist ResumeContractV2 as append-only compaction-resume-ledger.jsonl and make re_context resume load exact contextPath.",
 			"Promote FailureLedgerEventV1 / RepairQueueItemV1 into re_replayer, re_autofix, re_operator, and compound-frontier outputs.",
 			"Promote ClaimLedgerEventV1 into re_supervisor and re_compiler so final reports require validated claim IDs.",
@@ -269,6 +330,7 @@ function formatMarkdown(result) {
 	for (const [name, check] of Object.entries(result.checks)) lines.push(`- ${name}: ${check.status}`);
 	lines.push("", "## Hard eval binding", "", `- verdict: ${result.hardEval.verdict}`, `- orchestration: ${result.hardEval.scores?.orchestration?.score ?? "n/a"}`, `- platform_required: ${result.hardEval.scores?.platformRequired?.score ?? "n/a"}`, `- failures: ${result.hardEval.failures}`, `- repairs: ${result.hardEval.repairs}`);
 	lines.push("", "## Parallel plan", "", `- plan_id: ${result.parallelPlan.planId}`, `- workers: ${result.parallelPlan.workers.length}`, `- merge_strategy: ${result.parallelPlan.merge.strategy}`);
+	lines.push("", "## Plan-only audit", "", `- ok: ${result.parallelPlanAudit.ok}`, `- frontier_workers: ${result.parallelPlanAudit.frontierPlan?.workerCount ?? "n/a"}`, `- preview_workers: ${result.parallelPlanAudit.planOnlyPreview?.workerCount ?? "n/a"}`, `- preview_kind: ${result.parallelPlanAudit.planOnlyPreview?.kind ?? "n/a"}`);
 	lines.push("", "## Next non-test work");
 	for (const item of result.nextNonTestWork) lines.push(`- ${item}`);
 	return `${lines.join("\n")}\n`;
