@@ -213,6 +213,13 @@ export function parseArgs(args: string[]): Args {
 }
 
 export function printHelp(extensionFlags?: ExtensionFlag[]): void {
+	const isReconPrimary = process.env.PI_RECON_PRIMARY === "1";
+	const description = isReconPrimary
+		? "Pi-RECON reverse/pentest autonomous agent with read, bash, edit, write tools"
+		: "AI coding assistant with read, bash, edit, write tools";
+	const reconBanner = isReconPrimary
+		? `${chalk.bold("Pi-RECON:")} built-in reverse/pentest kernel is enabled by this launcher. Runtime storage: ~/${CONFIG_DIR_NAME}/agent.\n\n`
+		: "";
 	const extensionFlagsText =
 		extensionFlags && extensionFlags.length > 0
 			? `\n${chalk.bold("Extension CLI Flags:")}\n${extensionFlags
@@ -223,7 +230,9 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
 					})
 					.join("\n")}\n`
 			: "";
-	console.log(`${chalk.bold(APP_NAME)} - AI coding assistant with read, bash, edit, write tools
+	console.log(`${chalk.bold(APP_NAME)} - ${description}
+
+${reconBanner}
 
 ${chalk.bold("Usage:")}
   ${APP_NAME} [options] [@files...] [messages...]

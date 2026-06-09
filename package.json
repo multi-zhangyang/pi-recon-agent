@@ -46,7 +46,9 @@
 		"release:major": "node scripts/release.mjs major",
 		"prepare": "husky",
 		"gate:autonomous-runtime": "node scripts/reverse-agent/autonomous-runtime-contracts.mjs . --strict",
-		"gate:repi-isolation": "node scripts/reverse-agent/assert-repi-isolated.mjs ."
+		"gate:repi-isolation": "node scripts/reverse-agent/assert-repi-isolated.mjs .",
+		"install:recon-pi": "bash scripts/reverse-agent/install-recon-pi.sh .",
+		"gate:pi-recon-primary": "node scripts/reverse-agent/assert-pi-recon-primary.mjs ."
 	},
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "0.0.26",

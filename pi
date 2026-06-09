@@ -9,10 +9,14 @@ while [ -L "$SOURCE" ]; do
 done
 ROOT="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 
-export PI_CODING_AGENT_APP_NAME="repi"
+# Pi-RECON primary launcher. This intentionally makes the command name `pi`
+# start the reverse/pentest agent while storing all runtime state in ~/.repi/agent.
+export PI_CODING_AGENT_APP_NAME="pi"
 export PI_CODING_AGENT_CONFIG_DIR=".repi"
-export REPI_CODING_AGENT_DIR="${REPI_CODING_AGENT_DIR:-${REPI_AGENT_DIR:-$HOME/.repi/agent}}"
-export REPI_CODING_AGENT_SESSION_DIR="${REPI_CODING_AGENT_SESSION_DIR:-$REPI_CODING_AGENT_DIR/sessions}"
+export PI_CODING_AGENT_DIR="${PI_RECON_AGENT_DIR:-${PI_CODING_AGENT_DIR:-${REPI_CODING_AGENT_DIR:-${REPI_AGENT_DIR:-$HOME/.repi/agent}}}}"
+export PI_CODING_AGENT_SESSION_DIR="${PI_RECON_SESSION_DIR:-${PI_CODING_AGENT_SESSION_DIR:-$PI_CODING_AGENT_DIR/sessions}}"
+export REPI_CODING_AGENT_DIR="$PI_CODING_AGENT_DIR"
+export REPI_CODING_AGENT_SESSION_DIR="$PI_CODING_AGENT_SESSION_DIR"
 export PI_RECON_PRIMARY=1
 
 ARGS=(--recon --no-extensions --no-skills --no-prompt-templates --no-approve --no-context-files)
@@ -20,16 +24,13 @@ USER_ARGS=()
 for arg in "$@"; do
   case "$arg" in
     --import-pi-auth|--import-pi-profile)
-      # One-way, opt-in bootstrap from ~/.pi/agent/{auth,models}.json into ~/.repi/agent.
-      # Default repi startup never reads/copies normal pi credentials or model scopes.
+      # One-way, opt-in bootstrap from the backed-up/upstream pi profile into Pi-RECON storage.
       export REPI_IMPORT_PI_PROFILE=1
       ;;
     --project-context)
-      # Opt in to project AGENTS/CLAUDE and project .pi settings/resources.
       ARGS=(--recon --no-extensions --no-skills --no-prompt-templates)
       ;;
     --with-project-resources)
-      # Opt in to project/global resource discovery as normal pi would do. Not recommended for clean-room runs.
       ARGS=(--recon)
       ;;
     *) USER_ARGS+=("$arg") ;;

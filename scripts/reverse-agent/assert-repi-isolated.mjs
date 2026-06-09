@@ -129,7 +129,7 @@ write(join(fakePiAgent, "models.json"), JSON.stringify({ models: [{ provider: "f
 const beforePiHash = treeHash(fakePiAgent);
 const help = run(["--offline", "--help"], cleanEnv({ REPI_INIT_VERBOSE: "1" }));
 if (help.code !== 0) fail("repi --offline --help failed", { code: help.code, stderr: help.stderr.slice(-4000) });
-if (!help.combined.includes("repi - AI coding assistant")) {
+if (!help.combined.includes("repi - Pi-RECON reverse/pentest autonomous agent")) {
 	fail("help output did not use repi app name", { combined: help.combined.slice(0, 2000) });
 }
 

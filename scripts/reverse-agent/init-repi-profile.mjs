@@ -111,8 +111,9 @@ for (const [rel, body] of [
 }
 
 const manifestPath = join(agentDir, "recon", "profile.json");
+const profileName = process.env.PI_CODING_AGENT_APP_NAME === "pi" ? "pi-recon" : "repi";
 writeJson(manifestPath, {
-	name: "repi",
+	name: profileName,
 	kind: "isolated-pi-recon-profile",
 	repoRoot,
 	agentDir,
