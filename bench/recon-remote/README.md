@@ -7,6 +7,7 @@ Reproducible public-network benchmark harnesses for Pi-RECON. Runtime evidence i
 | `douyin-nowatermark/` | Short-video media URL reverse analysis: redirect/CDP/state extraction, `playwm -> play` no-watermark candidate transform, `a_bogus`/`msToken`/webid anti-bot surface inventory, signer-bundle hints, HEAD/range verification. |
 | `public-webapp/` | Public webapp surface mapping and replay-safe vulnerability confirmation for profiles such as OWASP Juice Shop and Altoro Mutual/TestFire. |
 | `real-platform/` | Hard-mode real-platform reverse benchmark for Bilibili WBI/media APIs/CDN probes/self-test/browser signer trace and Xiaohongshu CDP anti-bot/API signed replay, runtime signer hooks, signer-bundle trace, replay-divergence capture. |
+| `agent-dogfood/` | Runs the Pi-RECON agent itself through `./pi-test.sh --recon` against latest remote evidence, requiring a real provider/model call, tool execution, platform coverage, and reproducible dogfood artifacts. |
 
 Run each benchmark with `node <benchmark>/run.mjs --help` for usage.
 
@@ -23,3 +24,14 @@ The evaluator scores latest artifacts across `signature_rebuild`, `signed_replay
 ```text
 .pi/evidence/remote/hard-score/<timestamp>/scoreboard.{json,md}
 ```
+
+## Agent dogfood
+
+Run the actual Pi-RECON agent against the latest remote evidence:
+
+```bash
+RECON_AGENT_PROVIDER=openai RECON_AGENT_MODEL=gpt-4.1 \
+  node bench/recon-remote/agent-dogfood/run.mjs
+```
+
+The dogfood harness records stdout/stderr, session metadata, model/tool evidence, hard-score linkage, and whether the agent covered Bilibili WBI, Xiaohongshu x-s, and Douyin `a_bogus`.

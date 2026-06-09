@@ -38,6 +38,7 @@ function inferFamily(path, obj) {
   if (obj.profile) return obj.profile;
   if (obj.family) return obj.family;
   if (path.includes('/douyin-nowatermark/')) return 'douyin-nowatermark';
+  if (path.includes('/agent-dogfood/')) return 'agent-dogfood';
   if (path.includes('/public-webapp/')) return obj.profile || 'public-webapp';
   return obj.profile || 'unknown';
 }
@@ -159,6 +160,18 @@ function scoreArtifact(path, obj) {
     dimensions.runtime_capture_depth = Math.max(dimensions.runtime_capture_depth, clamp(probeStatusCount(obj) * 2, 8));
     dimensions.regression_readiness = sqli || xss ? 6 : 0;
     evidence.push(`testfire xss=${xss} sqli=${sqli} high=${severityCount(obj, ['high', 'critical'])}`);
+  } else if (family === 'agent-dogfood') {
+    const checks = obj.checks || {};
+    const modelCalls = safeNum(obj.session?.modelCalls);
+    const toolCalls = safeNum(obj.session?.toolCalls);
+    if (checks.reconProfile || /--recon/.test(obj.command || '')) dimensions.signature_rebuild = 10;
+    if (checks.modelCalled || modelCalls) dimensions.signed_replay = 15;
+    if (checks.platformsOk) dimensions.anti_bot_challenge = 5;
+    if (checks.toolUsed || toolCalls) dimensions.runtime_capture_depth = 12;
+    if (checks.sectionsOk && checks.platformsOk) dimensions.exploit_chain = 12;
+    if (checks.hardScoreMentioned && obj.scoreRun?.artifactDir) dimensions.regression_readiness = 15;
+    dimensions.bundle_trace = clamp(toolCalls * 2, 8);
+    evidence.push(`agent model_calls=${modelCalls} tool_calls=${toolCalls} checks=${Object.entries(checks).filter(([, v]) => v).map(([k]) => k).join(',')}`);
   } else if ((obj.findings || []).length) {
     dimensions.exploit_chain = clamp((obj.findings || []).length * 2, 10);
   }

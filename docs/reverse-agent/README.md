@@ -58,6 +58,7 @@ Pi-RECON 在 `packages/coding-agent/src/core/recon-profile.ts`、`.pi/SYSTEM.md`
 | `bench/recon-remote/douyin-nowatermark/` | 真实网络 benchmark：对短视频分享页做 redirect、Chrome/CDP、状态 JSON、媒体 URL、无水印候选变换、`a_bogus`/`msToken`/webid 反爬面、signer bundle hints 与 HEAD/range 验证 |
 | `bench/recon-remote/public-webapp/` | 公网 Web 应用 benchmark：对 OWASP Juice Shop、Altoro Mutual/TestFire 等公开测试站做 surface map、API/敏感暴露、XSS/SQLi replay-safe 验证；hard profile 覆盖 SQLi 登录绕过→JWT→认证 API 访问链 |
 | `bench/recon-remote/real-platform/` | 真实平台 hard benchmark：B站 BV/cid/playurl/WBI `w_rid` 重建/DASH/CDN HEAD 验证/签名 self-test/可选浏览器 signer trace，小红书 Chrome/CDP、`/api/sns/web/*`、xsec/signature/反爬面、runtime signer hook、signer bundle trace、只读 signed replay/461 challenge 与 replay divergence 复现 |
+| `bench/recon-remote/agent-dogfood/` | 智能体自举 dogfood benchmark：实际运行 `./pi-test.sh --recon` 接入 provider/model，要求模型调用、工具调用、hard-score 复盘和 B站/小红书/抖音三平台覆盖 |
 | `bench/recon-remote/hard-score.mjs` | 跨平台 hard-score 评测器：按 signature_rebuild、signed_replay、anti_bot_challenge、cdn_media_probe、runtime_capture_depth、exploit_chain、bundle_trace、regression_readiness 对最新公网证据打分 |
 | `scripts/reverse-agent/refresh-tool-index.sh` | 离线刷新工具索引脚本 |
 | `scripts/reverse-agent/verify-profile.mjs` | 配置完整性验证脚本 |
