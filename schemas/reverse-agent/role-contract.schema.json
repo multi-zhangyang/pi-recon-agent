@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pi-recon.local/schemas/reverse-agent/role-contract.schema.json",
+  "title": "Pi-RECON Role Contract",
+  "type": "object",
+  "required": ["contractVersion", "runId", "evidenceOrder", "roles"],
+  "properties": {
+    "contractVersion": { "type": "integer", "minimum": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "evidenceOrder": {
+      "type": "array",
+      "items": { "type": "string" },
+      "contains": { "const": "same_window_live" }
+    },
+    "roles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "mustEmit"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "mustEmit": { "type": "array", "items": { "type": "string" } },
+          "allowedClaimKinds": { "type": "array", "items": { "type": "string" } },
+          "forbiddenClaimKinds": { "type": "array", "items": { "type": "string" } },
+          "mustValidateClaimKinds": { "type": "array", "items": { "type": "string" } },
+          "mustChallengeScopes": { "type": "array", "items": { "type": "string" } },
+          "mustResolve": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

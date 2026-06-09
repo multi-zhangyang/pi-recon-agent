@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pi-recon.local/schemas/reverse-agent/claim-gate.schema.json",
+  "title": "Pi-RECON Claim Gate",
+  "type": "object",
+  "required": [
+    "artifactPathsExist",
+    "artifactHashesBound",
+    "claimLedgerPresent",
+    "requiredPlatformClaimsValidated",
+    "orchestrationSeparatedFromPlatform",
+    "antiSelfDelusion"
+  ],
+  "properties": {
+    "artifactPathsExist": { "type": "boolean" },
+    "artifactHashesBound": { "type": "boolean" },
+    "claimLedgerPresent": { "type": "boolean" },
+    "requiredPlatformClaimsValidated": { "type": "boolean" },
+    "orchestrationClaimsValidated": { "type": "boolean" },
+    "orchestrationSeparatedFromPlatform": { "type": "boolean" },
+    "antiSelfDelusion": { "type": "boolean" }
+  },
+  "additionalProperties": true
+}

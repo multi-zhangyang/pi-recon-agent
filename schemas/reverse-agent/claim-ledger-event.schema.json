@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pi-recon.local/schemas/reverse-agent/claim-ledger-event.schema.json",
+  "title": "Pi-RECON Claim Ledger Event",
+  "type": "object",
+  "required": ["seq", "type", "prevHash", "eventHash"],
+  "properties": {
+    "seq": { "type": "integer", "minimum": 1 },
+    "prevHash": { "type": "string", "minLength": 64, "maxLength": 64 },
+    "eventHash": { "type": "string", "minLength": 64, "maxLength": 64 },
+    "type": { "enum": ["artifact_handoff", "claim", "validation", "challenge", "resolution"] },
+    "artifactId": { "type": "string" },
+    "path": { "type": ["string", "null"] },
+    "sha256": { "type": ["string", "null"] },
+    "claimId": { "type": "string" },
+    "role": { "type": "string" },
+    "scope": { "type": "string" },
+    "kind": { "enum": ["observed", "proven", "gap", "frontier_gap", "stale", "inferred", "final_pass"] },
+    "statement": { "type": "string" },
+    "evidenceRefs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["artifactId", "query", "op", "value"],
+        "properties": {
+          "artifactId": { "type": "string" },
+          "query": { "type": "string" },
+          "op": { "enum": ["==", ">", "exists"] },
+          "value": {}
+        },
+        "additionalProperties": true
+      }
+    },
+    "result": { "type": "string" },
+    "checks": { "type": "array" },
+    "decision": { "type": "string" },
+    "reason": { "type": "string" }
+  },
+  "additionalProperties": true
+}

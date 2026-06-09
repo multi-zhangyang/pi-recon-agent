@@ -163,3 +163,29 @@ That verdict means:
 - latest same-window required platform claims still contain gaps;
 - the result must not be reported as platform success;
 - `hardEvalControl.repairQueue` is the next live-testing plan when testing resumes.
+
+## Claim ledger validator
+
+`validate-claim-ledger.mjs` is the hard gate for the automatic division-validation layer:
+
+```bash
+node scripts/reverse-agent/hard-eval-control-plane.mjs . --json \
+  | node scripts/reverse-agent/validate-claim-ledger.mjs --stdin --allow-platform-gaps
+```
+
+It checks:
+
+- role contract contains mapper / verifier / adversary / synthesizer;
+- ledger `prevHash/eventHash` chain is intact;
+- artifact handoff paths exist and sha256 matches;
+- every `proven` / `final_pass` claim has evidence refs that evaluate against the artifact JSON;
+- required gaps have challenge and resolution events;
+- orchestration score and platform claim score are separated;
+- strict platform success fails while required live same-window gaps remain.
+
+The strict form is intentionally expected to fail on the current evidence until the repair queue closes XHS and Douyin required gaps:
+
+```bash
+node scripts/reverse-agent/hard-eval-control-plane.mjs . --json \
+  | node scripts/reverse-agent/validate-claim-ledger.mjs --stdin --strict-claims
+```

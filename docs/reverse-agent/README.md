@@ -57,6 +57,7 @@ Pi-RECON 在 `packages/coding-agent/src/core/recon-profile.ts`、`.pi/SYSTEM.md`
 | `docs/reverse-agent/model-provider-formats.md` | 主流模型/API/provider 格式模板：OpenAI-compatible、Anthropic-compatible、Gemini、OpenRouter、local runtime、Azure、Bedrock、Vertex、Cloudflare/Vercel 等 |
 | `docs/reverse-agent/autonomous-control-plane.md` | Autonomous control plane 工程说明：并行调度、长期上下文、失败自修复、自动分工验证的当前状态、硬化缺口和非测试路线 |
 | `docs/reverse-agent/hard-eval-control-plane.md` | Hard eval control plane：从已有 same-window/agent/hard-score 证据生成 claim ledger、failure ledger、repair queue，并拆分 orchestration/platform claim 分数 |
+| `schemas/reverse-agent/*.schema.json` | Role contract、claim ledger event、claim gate 的可机读 schema，用于把分工验证从文本要求升级为结构化门禁 |
 | `bench/recon-remote/douyin-nowatermark/` | 真实网络 benchmark：对短视频分享页做 redirect、Chrome/CDP、状态 JSON、媒体 URL、无水印候选变换、`a_bogus`/`msToken`/webid 反爬面、signer bundle hints 与 HEAD/range 验证 |
 | `bench/recon-remote/public-webapp/` | 公网 Web 应用 benchmark：对 OWASP Juice Shop、Altoro Mutual/TestFire 等公开测试站做 surface map、API/敏感暴露、XSS/SQLi replay-safe 验证；hard profile 覆盖 SQLi 登录绕过→JWT→认证 API 访问链 |
 | `bench/recon-remote/real-platform/` | 真实平台 hard benchmark：B站 BV/cid/playurl/WBI `w_rid` 重建/DASH/CDN HEAD 验证/签名 self-test/可选浏览器 signer trace，小红书 Chrome/CDP、`/api/sns/web/*`、xsec/signature/反爬面、runtime signer hook、signer bundle trace、只读 signed replay/461 challenge 与 replay divergence 复现 |
@@ -389,6 +390,29 @@ node scripts/reverse-agent/hard-eval-control-plane.mjs . --json
 ```
 
 详细说明见 `docs/reverse-agent/hard-eval-control-plane.md`。
+
+## Claim ledger / autonomous contracts 静态门禁
+
+`scripts/reverse-agent/validate-claim-ledger.mjs` 读取 hard-eval 输出，验证 role contract、append-only claim ledger hash chain、artifact handoff sha256、proven claim 的 evidenceRef、required gap 的 challenge/resolution，以及 orchestration/platform score split。当前允许真实平台 gap 的入口是：
+
+```bash
+npm run audit:claim-ledger
+```
+
+严格平台 claim 门禁可用：
+
+```bash
+node scripts/reverse-agent/hard-eval-control-plane.mjs . --json \
+  | node scripts/reverse-agent/validate-claim-ledger.mjs --stdin --strict-claims
+```
+
+在当前 evidence 下 strict-claims 应失败，因为最新 same-window 仍有小红书/抖音 required gaps；这正是反自嗨边界。
+
+`scripts/reverse-agent/autonomous-contracts.mjs . --strict` 聚合四类控制合同：`ReconParallelPlanV1`、`ResumeContractV2`、`FailureLedgerEventV1/RepairQueueItemV1`、`RoleContractV1/ClaimLedgerEventV1`，并确认 context compact audit 仍全绿。常用入口：
+
+```bash
+npm run gate:autonomous-contracts
+```
 
 ## Harness 自检层
 

@@ -127,3 +127,20 @@ node scripts/reverse-agent/autonomy-control-plane.mjs . --write
 - 用单次 benchmark 分数证明 agent 已达到完整 autonomous。
 
 控制面完成标准不是“某次测试通过”，而是：并行计划可机读、上下文恢复可校验、失败修复有账本、分工结论可追溯到 artifact 和 claim。
+
+## Machine-readable contracts update
+
+The control plane now has a static contract audit:
+
+```bash
+npm run gate:autonomous-contracts
+```
+
+It validates these contract families without running live benchmarks or providers:
+
+- `ReconParallelPlanV1`: worker IDs, roles, objectives, commands, evidence contracts, merge keys, dependencies, artifact globs, limits, merge strategy.
+- `ResumeContractV2`: exact context path/hash fields, cwd/session/mission/target scope fields, artifact hash policy, resume queue status values.
+- `FailureLedgerEventV1` and `RepairQueueItemV1`: failure signature, bounded attempts, exhausted/repair status, linked paused repair action.
+- `RoleContractV1` and `ClaimLedgerEventV1`: mapper/verifier/adversary/synthesizer contract, claim ledger hash chain, evidence refs, challenge/resolution for required gaps.
+
+This does not mean Pi-RECON is already a complete autonomous red-team agent. It means the remaining hardening work is now represented as machine-readable schemas and validators instead of only prose.
