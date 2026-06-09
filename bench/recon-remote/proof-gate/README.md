@@ -36,6 +36,8 @@ In live mode, Bilibili/Xiaohongshu/Douyin gates are bound to the artifact paths 
 | `RECON_GATE_LATEST` | unset | Set `1` to score latest artifacts only. |
 | `RECON_GATE_BILI_URL` | sample BV URL | Bilibili target. |
 | `RECON_GATE_XHS_URL` | sample note URL | Xiaohongshu target. |
+| `RECON_GATE_XHS_TIMEOUT_MS` | `45000` | Xiaohongshu CDP wait budget; higher default reduces shallow captures. |
+| `RECON_GATE_XHS_QUIET_MS` | `5000` | Xiaohongshu network quiet window before stopping capture. |
 | `RECON_GATE_DOUYIN_URL` | sample video URL | Douyin target. |
 
 ## Output

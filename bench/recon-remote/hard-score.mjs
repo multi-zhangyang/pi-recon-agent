@@ -39,6 +39,7 @@ function inferFamily(path, obj) {
   if (obj.family) return obj.family;
   if (path.includes('/douyin-nowatermark/')) return 'douyin-nowatermark';
   if (path.includes('/agent-dogfood/')) return 'agent-dogfood';
+  if (path.includes('/frontier-gate/')) return 'frontier-gate';
   if (path.includes('/proof-gate/')) return 'proof-gate';
   if (path.includes('/public-webapp/')) return obj.profile || 'public-webapp';
   return obj.profile || 'unknown';
@@ -178,15 +179,27 @@ function scoreArtifact(path, obj) {
     const passed = gates.filter((item) => item.passed).length;
     const total = gates.length || 1;
     const allPassed = obj.verdict === 'proof-gate-passed' && passed === total;
-    dimensions.signature_rebuild = allPassed ? 20 : clamp(passed * 4, 16);
-    dimensions.signed_replay = gates.some((item) => /bilibili|agent/.test(item.name) && item.passed) ? 15 : 0;
-    dimensions.anti_bot_challenge = gates.some((item) => /xiaohongshu|douyin/.test(item.name) && item.passed) ? 15 : 0;
-    dimensions.cdn_media_probe = gates.some((item) => /bilibili|douyin/.test(item.name) && item.passed) ? 15 : 0;
-    dimensions.runtime_capture_depth = allPassed ? 12 : clamp(passed * 3, 10);
-    dimensions.exploit_chain = allPassed ? 10 : clamp(passed * 2, 8);
-    dimensions.bundle_trace = gates.some((item) => /xiaohongshu|douyin|bilibili/.test(item.name) && item.passed) ? 8 : 0;
+    const liveBound = obj.mode === 'live-rerun' && ['bilibili', 'xhs', 'douyin'].every((name) => {
+      const liveArtifact = String(obj.liveArtifacts?.[name] || '');
+      const rowArtifact = String(obj.rows?.[name]?.artifact || '');
+      return liveArtifact && rowArtifact && liveArtifact === rowArtifact;
+    });
+    dimensions.signature_rebuild = allPassed ? 16 : clamp(passed * 3, 12);
+    dimensions.signed_replay = gates.some((item) => /bilibili|agent/.test(item.name) && item.passed) ? 13 : 0;
+    dimensions.anti_bot_challenge = gates.some((item) => /xiaohongshu|douyin/.test(item.name) && item.passed) ? 13 : 0;
+    dimensions.cdn_media_probe = gates.some((item) => /bilibili|douyin/.test(item.name) && item.passed) ? 13 : 0;
+    dimensions.runtime_capture_depth = allPassed ? (liveBound ? 10 : 8) : clamp(passed * 2, 8);
+    dimensions.exploit_chain = allPassed ? (liveBound ? 8 : 6) : clamp(passed * 2, 6);
+    dimensions.bundle_trace = gates.some((item) => /xiaohongshu|douyin|bilibili/.test(item.name) && item.passed) ? 7 : 0;
     dimensions.regression_readiness = obj.scoreboardArtifact ? 5 : 0;
-    evidence.push(`proof gates=${passed}/${total} mode=${obj.mode || 'unknown'} agent=${Boolean(obj.runAgent)}`);
+    evidence.push(`proof gates=${passed}/${total} mode=${obj.mode || 'unknown'} live_bound=${liveBound} agent=${Boolean(obj.runAgent)}`);
+  } else if (family === 'frontier-gate') {
+    Object.assign(dimensions, obj.dimensions || {});
+    const gates = obj.gates || [];
+    const passed = gates.filter((item) => item.passed).length;
+    const total = gates.length || 1;
+    const failed = gates.filter((item) => !item.passed).map((item) => item.name).join(',');
+    evidence.push(`frontier score=${obj.frontierScore || 0}/${obj.frontierMaxScore || 100} gates=${passed}/${total} failed=${failed || 'none'}`);
   } else if ((obj.findings || []).length) {
     dimensions.exploit_chain = clamp((obj.findings || []).length * 2, 10);
   }

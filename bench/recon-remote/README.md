@@ -9,6 +9,7 @@ Reproducible public-network benchmark harnesses for Pi-RECON. Runtime evidence i
 | `real-platform/` | Hard-mode real-platform reverse benchmark for Bilibili WBI/media APIs/CDN probes/self-test/browser signer trace and Xiaohongshu CDP anti-bot/API signed replay, runtime signer hooks, signer-bundle trace, replay-divergence capture. |
 | `agent-dogfood/` | Runs the Pi-RECON agent itself through `./pi-test.sh --recon` against latest remote evidence, requiring a real provider/model call, tool execution, platform coverage, and reproducible dogfood artifacts. |
 | `proof-gate/` | Cross-platform live proof gate: reruns Bilibili WBI, Xiaohongshu x-s, Douyin `a_bogus`/no-watermark, optional agent dogfood, then enforces hard-score gates. |
+| `frontier-gate/` | Stricter frontier tracker for Bili runtime WBI bundle trace, XHS 2xx signed replay, Douyin `a_bogus` structured API replay, and dogfood frontier reasoning. |
 
 Run each benchmark with `node <benchmark>/run.mjs --help` for usage.
 
@@ -46,3 +47,13 @@ node bench/recon-remote/proof-gate/run.mjs
 ```
 
 Use `--use-latest` for a fast gate over existing evidence.
+
+## Frontier gate
+
+Track the next unsolved real-platform frontier without pretending it already passes:
+
+```bash
+node bench/recon-remote/frontier-gate/run.mjs
+```
+
+Use `--live` to refresh proof-gate first and `--strict` when frontier completion should block release.

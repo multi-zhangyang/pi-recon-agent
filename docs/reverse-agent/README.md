@@ -60,6 +60,7 @@ Pi-RECON 在 `packages/coding-agent/src/core/recon-profile.ts`、`.pi/SYSTEM.md`
 | `bench/recon-remote/real-platform/` | 真实平台 hard benchmark：B站 BV/cid/playurl/WBI `w_rid` 重建/DASH/CDN HEAD 验证/签名 self-test/可选浏览器 signer trace，小红书 Chrome/CDP、`/api/sns/web/*`、xsec/signature/反爬面、runtime signer hook、signer bundle trace、只读 signed replay/461 challenge 与 replay divergence 复现 |
 | `bench/recon-remote/agent-dogfood/` | 智能体自举 dogfood benchmark：实际运行 `./pi-test.sh --recon` 接入 provider/model，要求模型调用、工具调用、hard-score 复盘和 B站/小红书/抖音三平台覆盖 |
 | `bench/recon-remote/proof-gate/` | 跨平台 live proof gate：串联 B站 WBI、小红书 x-s、抖音 `a_bogus`/无水印和可选 agent dogfood，并用 hard-score gate 判定真实平台能力是否达标 |
+| `bench/recon-remote/frontier-gate/` | 更严格的 frontier tracker：专门衡量 B站 runtime WBI signer bundle trace、小红书 x-s 2xx signed replay、抖音 `a_bogus` structured API replay 和 agent 对这些缺口的自举规划，避免 proof-gate 通过后自嗨 |
 | `bench/recon-remote/hard-score.mjs` | 跨平台 hard-score 评测器：按 signature_rebuild、signed_replay、anti_bot_challenge、cdn_media_probe、runtime_capture_depth、exploit_chain、bundle_trace、regression_readiness 对最新公网证据打分 |
 | `scripts/reverse-agent/refresh-tool-index.sh` | 离线刷新工具索引脚本 |
 | `scripts/reverse-agent/verify-profile.mjs` | 配置完整性验证脚本 |
