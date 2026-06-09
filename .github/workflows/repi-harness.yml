@@ -1,0 +1,40 @@
+name: REPI Independent Harness
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repi-harness:
+    name: repi independent product gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Top-level REPI independence harness
+        run: npm run gate:repi-harness
+
+      - name: Full repository check
+        run: npm run check
+
+      - name: No generated diff
+        run: |
+          git diff --check
+          git diff --exit-code
