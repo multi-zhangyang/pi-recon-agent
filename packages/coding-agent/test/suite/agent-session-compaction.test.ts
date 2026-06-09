@@ -188,6 +188,7 @@ describe("AgentSession compaction characterization", () => {
 				contractVerified: true,
 				autoResumeTriggered: true,
 			});
+			await harness.session.agent.waitForIdle();
 			expect(harness.getPendingResponseCount()).toBe(0);
 		} finally {
 			if (previousAgentDir === undefined) {

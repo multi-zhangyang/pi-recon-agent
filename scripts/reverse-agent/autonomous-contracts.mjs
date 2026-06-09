@@ -363,8 +363,8 @@ function buildResult(root) {
 		contextCompactAudit: passFail(Boolean(contextAudit?.ok), { summary: contextAudit?.summary ?? null }),
 		contextRuntimeMarkers: passFail(true, {
 			markers: [
-				readMarkers(root, "packages/coding-agent/src/core/recon-profile.ts", ["buildContextPack", "buildReconCompactionResumeContract", "pi-recon-compaction-auto-resume", "compact_resume_case_memory"]),
-				readMarkers(root, ".pi/extensions/reverse-pentest-core.ts", ["buildContextPack", "buildReconCompactionResumeContract", "pi-recon-compaction-auto-resume", "compact_resume_case_memory"]),
+				readMarkers(root, "packages/coding-agent/src/core/recon-profile.ts", ["buildContextPack", "contextPackSha256", "contextArtifactHashes", "verifyContextPackResume", "buildExactResumeContextPack", "buildReconCompactionResumeContract", "pi-recon-compaction-auto-resume", "compact_resume_case_memory", "compaction-resume-ledger.jsonl"]),
+				readMarkers(root, ".pi/extensions/reverse-pentest-core.ts", ["buildContextPack", "contextPackSha256", "contextArtifactHashes", "verifyContextPackResume", "buildExactResumeContextPack", "buildReconCompactionResumeContract", "pi-recon-compaction-auto-resume", "compact_resume_case_memory", "compaction-resume-ledger.jsonl"]),
 			],
 		}),
 		contextResumeSchemaFile: validateContextResumeSchemaFile(root),
@@ -389,7 +389,7 @@ function buildResult(root) {
 		ok,
 		currentLevel: ok ? "professional reverse/pentest organization with machine-readable control contracts" : "contract gaps",
 		topAutonomousDefinition: false,
-		topAutonomousReason: "Schemas and validators exist, but full independent subagent runtime, exact resume loading, and runtime-integrated repair execution still require implementation.",
+		topAutonomousReason: "Schemas, validators, ReconParallelPlanV1, and exact context resume markers exist, but full independent subagent runtime, negative-fixture resume gates, and runtime-integrated repair execution still require implementation.",
 		schemas: SCHEMAS,
 		parallelPlan,
 		releaseGateMetadata,
@@ -417,7 +417,7 @@ function buildResult(root) {
 		},
 		nextNonTestWork: [
 			"Persist releaseGateMetadata in CI/release artifacts and make release tooling consume it directly.",
-			"Persist ResumeContractV2 as append-only compaction-resume-ledger.jsonl and make re_context resume load exact contextPath.",
+			"Harden ResumeContractV2 with negative fixtures, completion closure enforcement, and operator/proof-loop ledger state writeback.",
 			"Promote FailureLedgerEventV1 / RepairQueueItemV1 into re_replayer, re_autofix, re_operator, and compound-frontier outputs.",
 			"Promote ClaimLedgerEventV1 into re_supervisor and re_compiler so final reports require validated claim IDs.",
 		],

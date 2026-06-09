@@ -1247,7 +1247,9 @@ describe("Pi-RECON kernel profile", () => {
 		const missionAfterSupervisor = JSON.parse(
 			readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8"),
 		) as { gates: Array<{ name: string; status: string }> };
-		expect(missionAfterSupervisor.gates.find((gate) => gate.name === "supervisor_review_ready")?.status).toBe("done");
+		expect(missionAfterSupervisor.gates.find((gate) => gate.name === "supervisor_review_ready")?.status).toBe(
+			"blocked",
+		);
 
 		const reflectTool = tools.get("re_reflect") as {
 			execute: (
