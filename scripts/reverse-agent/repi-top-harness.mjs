@@ -102,8 +102,9 @@ function staticContractChecks() {
 	checks.push(markerCheck("code:repi-product-switch", "packages/coding-agent/src/config.ts", ["IS_REPI_PRODUCT", "PI_RECON_PRODUCT", "APP_NAME === \"repi\"", "https://gist.github.com/"], []));
 	checks.push(markerCheck("code:update-branding-disabled", "packages/coding-agent/src/modes/interactive/interactive-mode.ts", ["if (!IS_REPI_PRODUCT)", "PI_SKIP_PACKAGE_UPDATE_CHECK", "if (IS_REPI_PRODUCT) return;", "Pi-RECON Changelog"], []));
 	checks.push(markerCheck("code:provider-attribution-rebranded", "packages/coding-agent/src/core/provider-attribution.ts", ["IS_REPI_PRODUCT", "X-OpenRouter-Title", "repi-coding-agent", "x-opencode-client"], []));
-	checks.push(markerCheck("npm:top-harness-script", "package.json", ["gate:repi-product", "gate:repi-isolation", "install:repi"], []));
-	checks.push(markerCheck("docs:independent-entry", "README.md", ["repi  -> Pi-RECON", "pi    -> 你本机安装的原版 Pi", "npm run install:repi", "npm run gate:repi-product"], ["npm run install:recon-pi\n", "npm run gate:pi-recon-primary\n"]));
+	checks.push(markerCheck("npm:top-harness-script", "package.json", ["gate:repi-harness", "gate:repi-product", "gate:repi-isolation", "install:repi"], []));
+	checks.push(markerCheck("ci:repi-harness-template", "docs/reverse-agent/repi-harness.github-actions.yml", ["REPI Independent Harness", "npm ci --ignore-scripts", "npm run gate:repi-harness", "npm run check", "git diff --exit-code"], []));
+	checks.push(markerCheck("docs:independent-entry", "README.md", ["repi  -> Pi-RECON", "pi    -> 你本机安装的原版 Pi", "npm run install:repi", "npm run gate:repi-harness"], ["npm run install:recon-pi\n", "npm run gate:pi-recon-primary\n"]));
 	return checks;
 }
 
@@ -269,7 +270,7 @@ function main() {
 			tempRoot,
 			ok: summary.ok,
 			currentLevel: summary.ok ? "independent professional reverse/pentest organization agent harness" : "independence/capability harness gaps",
-			independenceVerdict: checks.filter((row) => ["launcher", "installer", "runtime", "code", "docs", "npm"].includes(row.id.split(":")[0])).every((row) => row.status === "pass") ? "pass" : "fail",
+			independenceVerdict: checks.filter((row) => ["launcher", "installer", "runtime", "code", "docs", "npm", "ci"].includes(row.id.split(":")[0])).every((row) => row.status === "pass") ? "pass" : "fail",
 			abilityVerdict: checks.filter((row) => row.id.startsWith("child:gate:autonomy") || row.id.startsWith("child:gate:autonomous") || row.id.startsWith("child:gate:context")).every((row) => row.status === "pass") ? "pass" : "fail",
 			summary,
 			checks,

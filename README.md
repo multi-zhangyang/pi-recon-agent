@@ -520,6 +520,21 @@ npm run gate:repi-harness
 - `repi --help` / `repi update --help` 不泄漏 `pi update`、`Update Available`、`pi.dev/changelog` 等 upstream Pi 文案。
 - 串联 `gate:repi-product`、`gate:repi-isolation`、`gate:context-compact`、`gate:autonomous-runtime`、`gate:autonomy-control`，确认安装独立性和逆向/渗透控制面能力同时成立。
 
+
+### CI 自动验收模板
+
+仓库提供 GitHub Actions 模板：`docs/reverse-agent/repi-harness.github-actions.yml`。启用时复制到 `.github/workflows/repi-harness.yml`，push / PR 会自动执行：
+
+```bash
+npm ci --ignore-scripts
+npm run gate:repi-harness
+npm run check
+git diff --check
+git diff --exit-code
+```
+
+这保证安装独立性、能力控制面和格式/类型检查都在 CI 中阻断回归。
+
 修改 profile / harness 后至少运行：
 
 ```bash
