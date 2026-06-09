@@ -122,3 +122,44 @@ orchestration success cannot be reported as platform success
 - `re_proof_loop`
 
 完成后，Pi-RECON 的评测结果才能从“文本复盘”升级为“artifact-backed claim verification”。
+
+## Hard-score integration
+
+`bench/recon-remote/hard-score.mjs` now carries the same split into the normal scoreboard:
+
+```json
+{
+  "scoreSeparation": {
+    "topScore": 100,
+    "topOrchestrationScore": 100,
+    "topPlatformClaimScore": 50,
+    "orchestrationPlatformWarnings": []
+  }
+}
+```
+
+For `agent-parallel-dogfood` rows, `score` remains the orchestration score, but the row also includes:
+
+- `scoreType: "orchestration"`
+- `orchestrationScore`
+- `platformClaimScore`
+- `platformAllClaimScore`
+- `platformClaimGaps[]`
+- `scoreWarning`
+
+For `same-window-live` rows, the row includes platform claim fields directly. This keeps historical scoring compatible while making the self-delusion boundary explicit in JSON and Markdown output.
+
+## Parallel dogfood integration
+
+`bench/recon-remote/agent-dogfood/parallel-run.mjs` now runs the hard eval control plane after hard-score and passes the score split into every worker's shared context. A confirmed orchestration run with required platform gaps becomes:
+
+```text
+agent-parallel-dogfood-confirmed-platform-gaps
+```
+
+That verdict means:
+
+- multi-agent orchestration, model/tool calls, process proof and synthesizer reconciliation passed;
+- latest same-window required platform claims still contain gaps;
+- the result must not be reported as platform success;
+- `hardEvalControl.repairQueue` is the next live-testing plan when testing resumes.

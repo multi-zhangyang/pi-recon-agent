@@ -34,6 +34,14 @@ RECON_AGENT_PROVIDER=openai RECON_AGENT_MODEL=gpt-4.1 \
 
 The parallel gate is intentionally stricter than the single-agent run: every role must call the model, use tools, cite `.pi/evidence/remote/...` artifacts, cover `same-window-live`, Bilibili WBI, Xiaohongshu `x-s`, and Douyin `a_bogus`, emit the standard report sections, overlap in wall-clock time for the worker phase, and pass synthesizer conflict reconciliation.
 
+The parallel runner also executes `scripts/reverse-agent/hard-eval-control-plane.mjs . --json` after hard-score. This injects a claim-level score split into the shared worker context and final artifact:
+
+- `hardEvalControl.scores.orchestration.score` for multi-agent runtime/coordination proof.
+- `hardEvalControl.scores.platformRequired.score` for latest same-window required B站/小红书/抖音 claims.
+- `hardEvalControl.platformGaps[]`, `failures[]`, and `repairQueue[]` for gaps that must not be hidden behind a successful orchestration run.
+
+If orchestration passes but required platform claims still have gaps, the parallel verdict becomes `agent-parallel-dogfood-confirmed-platform-gaps`; this is a successful orchestration artifact, not a platform-success claim.
+
 The parallel result also records a runtime audit so the dogfood proof is not just text:
 
 - child PID and `/proc/<pid>` command-line digest per worker/synthesizer;
@@ -99,6 +107,9 @@ Important `result.json` fields:
 | `gates.childPidsCaptured` | Every role/synthesizer had process evidence. |
 | `gates.toolResultsCaptured` | Tool calls have corresponding tool-result evidence. |
 | `gates.nonMockRuntimeExpected` | No explicit offline/no-env/mock/fake/stub mode was detected. |
+| `gates.orchestrationPlatformScoreSplit` | Hard eval control separated orchestration score from platform claim score. |
+| `gates.platformClaimGapsCaptured` | Required platform claim gaps were either absent or captured as failure/repair rows. |
+| `hardEvalControl` | Inline hard-eval verdict, score split, platform gaps, failure ledger summary, and paused repair queue. |
 
 The result classifies the run as:
 
@@ -108,5 +119,6 @@ The result classifies the run as:
 | `agent-dogfood-partial` | Agent produced model output but missed one or more gates. |
 | `agent-dogfood-failed` | Agent/model run failed or produced no usable model evidence. |
 | `agent-parallel-dogfood-confirmed` | All parallel workers plus synthesizer exited, called the model, used tools, overlapped in the worker phase, cited artifacts, covered same-window plus all three platforms, and passed role-specific/conflict-reconciliation/process/tool-result gates. |
+| `agent-parallel-dogfood-confirmed-platform-gaps` | The parallel orchestration gate passed, but hard-eval found required latest same-window platform claim gaps; do not report this as platform success. |
 | `agent-parallel-dogfood-partial` | At least one parallel role called the model and used tools, but one or more strict gates failed. |
 | `agent-parallel-dogfood-failed` | The parallel run produced no usable model/tool evidence. |

@@ -371,6 +371,10 @@ const audit = await runtimeAudit();
 
 const scoreRun = await run('node', ['bench/recon-remote/hard-score.mjs'], { timeoutMs: 60000 });
 const scoreJson = safeJson(scoreRun.stdout);
+const hardEvalRun = await run('node', ['scripts/reverse-agent/hard-eval-control-plane.mjs', '.', '--json'], { timeoutMs: 60000 });
+const hardEvalJson = safeJson(hardEvalRun.stdout);
+const hardEvalPlatformGaps = (hardEvalJson?.claims?.platform || []).filter((claim) => claim.kind !== 'proven');
+const hardEvalRequiredPlatformGaps = hardEvalPlatformGaps.filter((claim) => claim.required);
 const scoreArtifactDir = scoreJson?.artifactDir || '';
 const scoreboard = safeJson(await readFile(join(repoRoot, scoreArtifactDir, 'scoreboard.json'), 'utf8').catch(() => ''), {});
 function bestFamilyArtifact(family) {
@@ -392,7 +396,22 @@ const evidencePaths = {
   frontierMatrix: rel(await latestResultPath((path) => path.includes('/frontier-matrix/'))),
   latestAgentDogfood: rel(await latestResultPath((path) => path.includes('/agent-dogfood/'))),
 };
-const sharedContext = `\n\nShared authoritative evidence paths:\n${JSON.stringify(evidencePaths, null, 2)}\n\nEvidence order: live same-window runtime behavior > platform runtime artifact fields > network traffic > actively served assets > process config > persisted artifacts/source/comments. Treat same-window-live as the current release frontier: if older platform artifacts conflict with it, explicitly classify the older artifact as stale instead of overuling the fresher same-window proof. Do not claim success unless the artifact fields prove it. If evidence is missing or indirect, say so.\n`;
+const sharedContext = `
+
+Shared authoritative evidence paths:
+${JSON.stringify(evidencePaths, null, 2)}
+
+Hard eval control split:
+${JSON.stringify({
+  verdict: hardEvalJson?.verdict || 'missing',
+  orchestrationScore: hardEvalJson?.scores?.orchestration?.score ?? null,
+  platformRequiredScore: hardEvalJson?.scores?.platformRequired?.score ?? null,
+  platformAllScore: hardEvalJson?.scores?.platformAll?.score ?? null,
+  requiredPlatformGaps: hardEvalRequiredPlatformGaps.map((claim) => ({ scope: claim.scope, gate: claim.gate, kind: claim.kind })),
+}, null, 2)}
+
+Evidence order: live same-window runtime behavior > platform runtime artifact fields > network traffic > actively served assets > process config > persisted artifacts/source/comments. Treat same-window-live as the current release frontier: if older platform artifacts conflict with it, explicitly classify the older artifact as stale instead of overuling the fresher same-window proof. Do not claim success unless the artifact fields prove it. If evidence is missing or indirect, say so. Treat orchestration success and platform claim success as separate states; if hard eval control reports required platform gaps, the worker must not summarize the platform as fully passed.
+`;
 const boundedWork = `\n\nOperational bounds for this parallel worker:\n- Use at most ${maxToolCallsHint} tool calls unless a required command fails.\n- Keep the final answer under ${maxWordsHint} words.\n- Stop immediately after the Next Step section; do not continue exploring once the required gates are covered.\n- Prefer decisive jq/grep/read checks over broad recursive inspection.\n`;
 const requiredCitations = `\n\nRequired citations for every role:\n- Mention the hard-score or scoreboard artifact path explicitly.\n- Mention the same-window-live artifact path explicitly.\n- Mention at least one .pi/evidence/remote artifact path for each platform family: Bilibili, Xiaohongshu, and Douyin.\n`;
 
@@ -602,10 +621,20 @@ const gates = {
   toolResultsCaptured: totals.toolCalls > 0 && totals.toolResults >= totals.toolCalls && allRuns.every((role) => role.session.toolCalls === 0 || role.session.toolResults >= role.session.toolCalls),
   sessionDigestsCaptured: allRuns.every((role) => (role.session.fileDigests || []).length > 0 && (role.session.fileDigests || []).every((item) => item.sha256 && item.bytes > 0)),
   nonMockRuntimeExpected: audit.nonMockRuntimeExpected,
+  hardEvalControlRun: hardEvalRun.code === 0 && hardEvalJson?.kind === 'pi-recon-hard-eval-control-plane',
+  orchestrationPlatformScoreSplit: Boolean(hardEvalJson?.antiSelfDelusion?.orchestrationPlatformSplit),
+  platformClaimGapsCaptured: hardEvalRequiredPlatformGaps.length ? (hardEvalJson?.failures || []).length >= hardEvalPlatformGaps.length : Boolean(hardEvalJson?.gate?.requiredPlatformClaimsValidated),
 };
 const confirmed = Object.values(gates).every(Boolean);
 const partial = totals.modelCalls > 0 && allRuns.some((role) => role.checks.toolUsed);
-const verdict = confirmed ? 'agent-parallel-dogfood-confirmed' : partial ? 'agent-parallel-dogfood-partial' : 'agent-parallel-dogfood-failed';
+const platformRequiredClaimsValidated = Boolean(hardEvalJson?.gate?.requiredPlatformClaimsValidated);
+const verdict = confirmed
+  ? platformRequiredClaimsValidated
+    ? 'agent-parallel-dogfood-confirmed'
+    : 'agent-parallel-dogfood-confirmed-platform-gaps'
+  : partial
+    ? 'agent-parallel-dogfood-partial'
+    : 'agent-parallel-dogfood-failed';
 const result = {
   target: 'Pi-RECON multi-agent parallel dogfood against hardest real-platform evidence',
   profile: 'agent-parallel-dogfood',
@@ -634,6 +663,22 @@ const result = {
     artifactDir: scoreJson?.artifactDir || '',
     stdoutSha256: sha256(scoreRun.stdout).slice(0, 24),
   },
+  hardEvalControl: {
+    code: hardEvalRun.code,
+    pid: hardEvalRun.pid,
+    argvSha256: hardEvalRun.argvSha256,
+    processAtSpawn: hardEvalRun.processAtSpawn,
+    monotonic: hardEvalRun.monotonic,
+    elapsedMs: hardEvalRun.elapsedMs,
+    stdoutSha256: sha256(hardEvalRun.stdout).slice(0, 24),
+    verdict: hardEvalJson?.verdict || 'missing',
+    scores: hardEvalJson?.scores || null,
+    gate: hardEvalJson?.gate || null,
+    antiSelfDelusion: hardEvalJson?.antiSelfDelusion || null,
+    platformGaps: hardEvalPlatformGaps.map((claim) => ({ scope: claim.scope, gate: claim.gate, kind: claim.kind, required: claim.required })),
+    failures: (hardEvalJson?.failures || []).map((failure) => ({ id: failure.id, scope: failure.scope, category: failure.category, failedGates: failure.failedGates })),
+    repairQueue: (hardEvalJson?.repairQueue || []).map((repair) => ({ repairId: repair.repairId, scope: repair.scope, action: repair.action, paused: repair.paused })),
+  },
   parallel,
   totals,
   gates,
@@ -641,11 +686,17 @@ const result = {
   roleRuns,
   synthesizerRun,
   nextActions: confirmed
-    ? [
-        'make this parallel+synthesizer dogfood gate part of release gating',
-        'raise the next gate to a live same-window Bilibili/Xiaohongshu/Douyin run',
-        'optionally run live frontier-matrix before the parallel agents when budget allows',
-      ]
+    ? platformRequiredClaimsValidated
+      ? [
+          'make this parallel+synthesizer dogfood gate part of release gating',
+          'raise the next gate to a live same-window Bilibili/Xiaohongshu/Douyin run',
+          'optionally run live frontier-matrix before the parallel agents when budget allows',
+        ]
+      : [
+          'do not report platform success: hard-eval-control-plane captured required platform gaps',
+          'consume hardEvalControl.repairQueue when live testing is explicitly resumed',
+          'keep orchestration score and platform claim score separate in hard-score and release notes',
+        ]
     : [
         'inspect each role stdout/stderr and session jsonl for the failed gates',
         'rerun with a longer timeout or smaller RECON_PARALLEL_ROLES subset',
@@ -670,6 +721,7 @@ const md = [
   '',
   '## Key Evidence',
   `- hard_score_artifact=${evidencePaths.hardScore || 'none'} code=${scoreRun.code}`,
+  `- hard_eval_control verdict=${hardEvalJson?.verdict || 'missing'} code=${hardEvalRun.code} orchestration_score=${hardEvalJson?.scores?.orchestration?.score ?? 'n/a'} platform_required_score=${hardEvalJson?.scores?.platformRequired?.score ?? 'n/a'} required_gaps=${hardEvalRequiredPlatformGaps.map((claim) => claim.gate).join(',') || 'none'}`,
   `- same_window_live=${evidencePaths.bestSameWindowLive || evidencePaths.latestSameWindowLive || 'none'}`,
   `- best_bilibili=${evidencePaths.bestBilibili || 'none'}`,
   `- best_xiaohongshu=${evidencePaths.bestXiaohongshu || 'none'}`,
@@ -700,4 +752,10 @@ console.log(JSON.stringify({
     agentCmdSha256: audit.agentCmdDigest?.sha256 || '',
   },
   gates,
+  hardEvalControl: {
+    verdict: hardEvalJson?.verdict || 'missing',
+    orchestrationScore: hardEvalJson?.scores?.orchestration?.score ?? null,
+    platformRequiredScore: hardEvalJson?.scores?.platformRequired?.score ?? null,
+    requiredPlatformGaps: hardEvalRequiredPlatformGaps.map((claim) => ({ scope: claim.scope, gate: claim.gate, kind: claim.kind })),
+  },
 }, null, 2));

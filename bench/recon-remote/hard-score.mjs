@@ -1,11 +1,23 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
 const evidenceRoot = process.argv[2] || '.pi/evidence/remote';
 const includeAll = process.argv.includes('--all');
 const maxPossibleScore = 100;
+const PLATFORM_CLAIM_GATES = [
+  { scope: 'bilibili.same_window_artifacts', gate: 'same_window_artifacts_exist', required: true, weight: 1 },
+  { scope: 'bilibili.wbi_per_page_cid', gate: 'bilibili_wbi_per_page_cid', required: true, weight: 3 },
+  { scope: 'bilibili.cdn_range_or_body_proof', gate: 'bilibili_cdn_range_or_body_proof', required: false, weight: 1 },
+  { scope: 'xiaohongshu.xs_signed_trace', gate: 'xiaohongshu_xs_signed_trace', required: true, weight: 3 },
+  { scope: 'xiaohongshu.target_note_2xx', gate: 'xiaohongshu_target_note_2xx', required: false, weight: 2 },
+  { scope: 'douyin.abogus_structured_replay', gate: 'douyin_abogus_structured_replay', required: true, weight: 3 },
+  { scope: 'douyin.cookie_boundary', gate: 'douyin_cookie_boundary', required: true, weight: 2 },
+  { scope: 'douyin.nowatermark_byte_proof', gate: 'douyin_nowatermark_byte_proof', required: false, weight: 1 },
+];
+let latestSameWindowCache = undefined;
+
 
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
   console.log(`Pi-RECON remote hard-score evaluator\n\nUsage:\n  node bench/recon-remote/hard-score.mjs [.pi/evidence/remote] [--all]\n\nScores latest remote benchmark artifacts across:\n  - signature_rebuild\n  - signed_replay\n  - anti_bot_challenge\n  - cdn_media_probe\n  - runtime_capture_depth\n  - exploit_chain\n  - bundle_trace\n  - regression_readiness\n\nOutput:\n  .pi/evidence/remote/hard-score/<timestamp>/scoreboard.json\n  .pi/evidence/remote/hard-score/<timestamp>/scoreboard.md\n`);
@@ -26,6 +38,54 @@ function walk(dir, out = []) {
   return out;
 }
 function safeJson(text) { try { return JSON.parse(text); } catch { return null; } }
+function resolveMaybe(path = '') {
+  if (!path) return '';
+  if (existsSync(path)) return path;
+  const fromCwd = join(process.cwd(), path);
+  return existsSync(fromCwd) ? fromCwd : path;
+}
+function latestSameWindowResultPath() {
+  if (latestSameWindowCache !== undefined) return latestSameWindowCache;
+  latestSameWindowCache = walk(evidenceRoot)
+    .filter((path) => path.includes('/same-window-live/') && path.endsWith('/result.json'))
+    .sort()
+    .at(-1) || '';
+  return latestSameWindowCache;
+}
+function gateByName(obj, name) {
+  return (obj?.gates || []).find((gate) => gate?.name === name) || null;
+}
+function weightedClaimScore(claims, predicate) {
+  const selected = claims.filter(predicate);
+  const max = selected.reduce((sum, claim) => sum + claim.weight, 0);
+  const got = selected.filter((claim) => claim.passed).reduce((sum, claim) => sum + claim.weight, 0);
+  return { score: max ? Math.round((got / max) * 100) : 0, passedWeight: got, maxWeight: max, passed: selected.filter((claim) => claim.passed).length, total: selected.length };
+}
+function sameWindowClaimSnapshot(pathOrObj = '') {
+  let artifact = '';
+  let obj = null;
+  if (typeof pathOrObj === 'string') {
+    artifact = pathOrObj || latestSameWindowResultPath();
+    const resolved = resolveMaybe(artifact);
+    if (artifact && existsSync(resolved)) obj = safeJson(readFileSync(resolved, 'utf8'));
+  } else {
+    obj = pathOrObj;
+  }
+  const claims = PLATFORM_CLAIM_GATES.map((spec) => {
+    const gate = gateByName(obj, spec.gate);
+    const passed = Boolean(gate?.passed);
+    return { ...spec, passed, kind: passed ? 'proven' : spec.required ? 'gap' : 'frontier_gap', severity: gate?.severity || (spec.required ? 'required' : 'frontier') };
+  });
+  const required = weightedClaimScore(claims, (claim) => claim.required);
+  const all = weightedClaimScore(claims, () => true);
+  const gaps = claims.filter((claim) => !claim.passed).map((claim) => ({ scope: claim.scope, gate: claim.gate, required: claim.required, kind: claim.kind, severity: claim.severity }));
+  return { artifact, verdict: obj?.verdict || null, requiredScore: required.score, allScore: all.score, required, all, gaps, requiredGaps: gaps.filter((gap) => gap.required), claims };
+}
+function claimSplitText(snapshot) {
+  if (!snapshot) return 'platform_claim=none';
+  return `platform_required=${snapshot.requiredScore} platform_all=${snapshot.allScore} required_gaps=${snapshot.requiredGaps.map((gap) => gap.gate).join(',') || 'none'}`;
+}
+
 function hostOf(target = '') { try { return new URL(target).hostname; } catch { return 'unknown'; } }
 function clamp(n, max) { return Math.max(0, Math.min(max, n)); }
 function grade(score) {
@@ -87,6 +147,7 @@ function scoreArtifact(path, obj) {
     regression_readiness: 0,
   };
   const evidence = [];
+  const scoreMeta = {};
 
   const browser = obj.browser || {};
   const requests = safeNum(browser.requests);
@@ -199,6 +260,16 @@ function scoreArtifact(path, obj) {
     const toolNames = totals.toolNames || {};
     const evidencePaths = obj.evidencePaths || {};
     const sameWindowPath = evidencePaths.sameWindowLive || evidencePaths.bestSameWindowLive || evidencePaths.latestSameWindowLive;
+    const platformClaimSnapshot = sameWindowClaimSnapshot(sameWindowPath);
+    const embeddedHardEval = obj.hardEvalControl || {};
+    scoreMeta.scoreType = 'orchestration';
+    scoreMeta.platformClaimScore = embeddedHardEval.scores?.platformRequired?.score ?? platformClaimSnapshot.requiredScore;
+    scoreMeta.platformAllClaimScore = embeddedHardEval.scores?.platformAll?.score ?? platformClaimSnapshot.allScore;
+    scoreMeta.platformClaimGaps = embeddedHardEval.claims?.platform
+      ? embeddedHardEval.claims.platform.filter((claim) => claim.kind !== 'proven').map((claim) => ({ scope: claim.scope, gate: claim.gate, required: claim.required, kind: claim.kind }))
+      : platformClaimSnapshot.gaps;
+    scoreMeta.boundSameWindowArtifact = sameWindowPath || platformClaimSnapshot.artifact || '';
+    scoreMeta.scoreWarning = scoreMeta.platformClaimScore < 100 ? 'orchestration score is not platform claim success' : '';
     const platformPaths = [
       evidencePaths.bilibili || evidencePaths.bestBilibili || evidencePaths.latestBilibili,
       evidencePaths.xiaohongshu || evidencePaths.bestXiaohongshu || evidencePaths.latestXiaohongshu,
@@ -216,12 +287,13 @@ function scoreArtifact(path, obj) {
     else if (platformPaths >= 2) dimensions.cdn_media_probe = 9;
     if (gates.allRolesUsedTools && gates.commandToolPresent && gates.readToolPresent && gates.childPidsCaptured && gates.monotonicClockCaptured && gates.toolResultsCaptured && toolCalls >= roleCount * 2) dimensions.runtime_capture_depth = 15;
     else if (toolCalls) dimensions.runtime_capture_depth = 8;
-    if (obj.verdict === 'agent-parallel-dogfood-confirmed' && gates.strongParallelOverlap && synthOk) dimensions.exploit_chain = 15;
+    if (/^agent-parallel-dogfood-confirmed/.test(obj.verdict || '') && gates.strongParallelOverlap && synthOk) dimensions.exploit_chain = 15;
     else if (gates.parallelOverlap) dimensions.exploit_chain = 10;
     dimensions.bundle_trace = clamp(Object.keys(toolNames).length * 2 + roleRuns.filter((role) => role.session?.files?.length).length + roleRuns.filter((role) => role.session?.fileDigests?.length).length + (synthTools ? 2 : 0), 10);
     if (gates.hardScoreCovered && gates.sameWindowCovered && gates.allRolesCiteArtifacts && gates.roleSpecificPassed && gates.sessionDigestsCaptured && gates.nonMockRuntimeExpected && synthOk) dimensions.regression_readiness = 12;
     else if (obj.scoreRun?.artifactDir || evidencePaths.hardScore) dimensions.regression_readiness = 7;
     evidence.push(`parallel roles=${roleCount} synth=${synthOk} retries=${retryCount} model_calls=${modelCalls} tool_calls=${toolCalls} tool_results=${toolResults} tool_result_bytes=${toolResultBytes} overlap=${parallel.overlapPairs || 0}/${parallel.maxPairs || 0} speedup=${parallel.speedup || 0} same_window=${sameWindowPath || 'none'} process=${Boolean(gates.childPidsCaptured && gates.monotonicClockCaptured)} nonmock=${Boolean(gates.nonMockRuntimeExpected)} gates=${Object.entries(gates).filter(([, v]) => v).map(([k]) => k).join(',')}`);
+    evidence.push(`score_split orchestration=true ${claimSplitText({ requiredScore: scoreMeta.platformClaimScore, allScore: scoreMeta.platformAllClaimScore, requiredGaps: (scoreMeta.platformClaimGaps || []).filter((gap) => gap.required) })}`);
   } else if (family === 'compound-frontier') {
     const gates = obj.gates || [];
     const gateMap = Object.fromEntries(gates.map((item) => [item.name, item]));
@@ -280,7 +352,14 @@ function scoreArtifact(path, obj) {
     if (obj.mode === 'live-rerun') dimensions.regression_readiness += 3;
     if (Array.isArray(frontierGaps)) dimensions.regression_readiness += 2;
     dimensions.regression_readiness = clamp(dimensions.regression_readiness, 10);
+    const platformClaimSnapshot = sameWindowClaimSnapshot(obj);
+    scoreMeta.scoreType = 'platform-claims';
+    scoreMeta.platformClaimScore = platformClaimSnapshot.requiredScore;
+    scoreMeta.platformAllClaimScore = platformClaimSnapshot.allScore;
+    scoreMeta.platformClaimGaps = platformClaimSnapshot.gaps;
+    scoreMeta.scoreWarning = platformClaimSnapshot.requiredScore < 100 ? 'latest same-window required platform claims are incomplete' : '';
     evidence.push(`same-window mode=${obj.mode || 'unknown'} span_ms=${spanMs} passed=${gates.filter((item) => item.passed).length}/${gates.length} gaps=${frontierGaps.map((gap) => gap.name).join(',') || 'none'}`);
+    evidence.push(`score_split ${claimSplitText(platformClaimSnapshot)}`);
   } else if (family === 'agent-dogfood') {
     const checks = obj.checks || {};
     const modelCalls = safeNum(obj.session?.modelCalls);
@@ -331,6 +410,7 @@ function scoreArtifact(path, obj) {
   if (family === 'compound-frontier' && obj.verdict !== 'compound-frontier-passed') {
     score = Math.min(score, 89);
   }
+  if (scoreMeta.scoreType === 'orchestration') scoreMeta.orchestrationScore = score;
   return {
     artifact: path,
     time: evidenceTime(path),
@@ -343,6 +423,7 @@ function scoreArtifact(path, obj) {
     grade: grade(score),
     dimensions,
     evidence,
+    ...scoreMeta,
   };
 }
 
@@ -367,6 +448,14 @@ for (const row of rows) {
   if (!prev || row.time > prev.time) latest.set(key, row);
 }
 const selected = (includeAll ? rows : [...latest.values()]).sort((a, b) => b.score - a.score || b.rawScore - a.rawScore || a.family.localeCompare(b.family));
+const scoreSeparation = {
+  topScore: selected[0]?.score || 0,
+  topOrchestrationScore: selected.filter((row) => row.scoreType === 'orchestration').sort((a, b) => (b.orchestrationScore || 0) - (a.orchestrationScore || 0))[0]?.orchestrationScore || 0,
+  topPlatformClaimScore: selected.filter((row) => Number.isFinite(row.platformClaimScore)).sort((a, b) => (b.platformClaimScore || 0) - (a.platformClaimScore || 0))[0]?.platformClaimScore || 0,
+  orchestrationPlatformWarnings: selected
+    .filter((row) => row.scoreType === 'orchestration' && Number(row.platformClaimScore) < 100)
+    .map((row) => ({ artifact: row.artifact, family: row.family, orchestrationScore: row.orchestrationScore, platformClaimScore: row.platformClaimScore, gaps: row.platformClaimGaps || [] })),
+};
 const summary = {
   generatedAt: new Date().toISOString(),
   sourceRoot: evidenceRoot,
@@ -374,6 +463,7 @@ const summary = {
   count: selected.length,
   maxPossibleScore,
   topScore: selected[0]?.score || 0,
+  scoreSeparation,
   rows: selected,
 };
 const outDir = join('.pi', 'evidence', 'remote', 'hard-score', timestamp());
@@ -388,9 +478,16 @@ const md = [
   `artifact_dir: ${outDir}`,
   `max_possible_score: ${maxPossibleScore}`,
   '',
-  '| Score | Grade | Family | Verdict | Target | Key evidence |',
-  '|---:|---|---|---|---|---|',
-  ...selected.map((row) => `| ${row.score} | ${row.grade} | ${row.family} | ${row.verdict} | ${row.target} | ${row.evidence.join('; ')} |`),
+  '| Score | Claim split | Grade | Family | Verdict | Target | Key evidence |',
+  '|---:|---|---|---|---|---|---|',
+  ...selected.map((row) => `| ${row.score} | ${row.scoreType === 'orchestration' ? `orch=${row.orchestrationScore ?? row.score}; platform=${row.platformClaimScore ?? 'n/a'}` : Number.isFinite(row.platformClaimScore) ? `platform=${row.platformClaimScore}; all=${row.platformAllClaimScore}` : 'n/a'} | ${row.grade} | ${row.family} | ${row.verdict} | ${row.target} | ${row.evidence.join('; ')} |`),
+  '',
+  '## Score separation',
+  '',
+  `- top_score: ${summary.scoreSeparation.topScore}`,
+  `- top_orchestration_score: ${summary.scoreSeparation.topOrchestrationScore}`,
+  `- top_platform_claim_score: ${summary.scoreSeparation.topPlatformClaimScore}`,
+  ...(summary.scoreSeparation.orchestrationPlatformWarnings.length ? summary.scoreSeparation.orchestrationPlatformWarnings.map((row) => `- warning: ${row.family} orchestration=${row.orchestrationScore} platform_claim=${row.platformClaimScore} gaps=${row.gaps.map((gap) => gap.gate).join(',') || 'none'}`) : ['- warning: none']),
   '',
   '## Dimensions',
   '',
@@ -405,4 +502,17 @@ const md = [
   '',
 ].join('\n');
 await writeFile(join(outDir, 'scoreboard.md'), md);
-console.log(JSON.stringify({ artifactDir: outDir, count: selected.length, top: selected.slice(0, 5).map((row) => ({ family: row.family, score: row.score, grade: row.grade, verdict: row.verdict })) }, null, 2));
+console.log(JSON.stringify({
+  artifactDir: outDir,
+  count: selected.length,
+  scoreSeparation: summary.scoreSeparation,
+  top: selected.slice(0, 5).map((row) => ({
+    family: row.family,
+    score: row.score,
+    scoreType: row.scoreType || 'platform-or-target',
+    orchestrationScore: row.orchestrationScore ?? null,
+    platformClaimScore: row.platformClaimScore ?? null,
+    grade: row.grade,
+    verdict: row.verdict,
+  })),
+}, null, 2));
