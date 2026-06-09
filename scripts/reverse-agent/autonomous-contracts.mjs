@@ -396,7 +396,8 @@ function buildResult(root) {
 		ok,
 		currentLevel: ok ? "professional reverse/pentest organization with machine-readable control contracts" : "contract gaps",
 		topAutonomousDefinition: false,
-		topAutonomousReason: "Schemas, validators, ReconParallelPlanV1, exact context resume markers, and runtime failure/repair ledger hooks exist, but full independent subagent runtime, negative-fixture resume gates, and claim-level runtime synthesis still require implementation.",
+		topAutonomousReason:
+			"Schemas, validators, ReconParallelPlanV1, exact context resume markers, runtime failure/repair ledger hooks, and strict claim final-path gates exist; full independent subagent runtime, negative-fixture resume gates, and compound/role retry outputs remain optional hardening.",
 		schemas: SCHEMAS,
 		parallelPlan,
 		releaseGateMetadata,
@@ -423,10 +424,10 @@ function buildResult(root) {
 			stdoutSha256: parallelPlanAuditRun.stdoutSha256,
 		},
 		nextNonTestWork: [
-			"Persist releaseGateMetadata in CI/release artifacts and make release tooling consume it directly.",
+			"Keep gate:claim-release marker consumption wired through supervisor/compiler/complete and promote pass markers only after required gaps close.",
 			"Harden ResumeContractV2 with negative fixtures, completion closure enforcement, and operator/proof-loop ledger state writeback.",
 			"Extend FailureLedgerEventV1 / RepairQueueItemV1 runtime hooks with strict schema fixtures and compound-frontier/agent role retry outputs.",
-			"Promote ClaimLedgerEventV1 into re_supervisor and re_compiler so final reports require validated claim IDs.",
+			"Extend ClaimLedgerEventV1 from offline hard-eval into independent sub-agent/session runtime outputs.",
 		],
 	};
 }

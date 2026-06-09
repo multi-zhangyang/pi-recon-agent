@@ -28,7 +28,7 @@
 		"gate:autonomy-control": "node scripts/reverse-agent/autonomy-control-plane.mjs . --strict",
 		"audit:hard-eval-control": "node scripts/reverse-agent/hard-eval-control-plane.mjs .",
 		"audit:claim-ledger": "node scripts/reverse-agent/hard-eval-control-plane.mjs . --json | node scripts/reverse-agent/validate-claim-ledger.mjs --stdin --allow-platform-gaps",
-		"gate:claim-release": "node scripts/reverse-agent/hard-eval-control-plane.mjs . --json | node scripts/reverse-agent/validate-claim-ledger.mjs --stdin --strict-claims",
+		"gate:claim-release": "node scripts/reverse-agent/hard-eval-control-plane.mjs . --json | node scripts/reverse-agent/validate-claim-ledger.mjs --stdin --strict-claims --write-marker",
 		"audit:parallel-plan": "node scripts/reverse-agent/audit-parallel-plan.mjs . --strict",
 		"gate:autonomous-contracts": "node scripts/reverse-agent/autonomous-contracts.mjs . --strict",
 		"test": "npm run test --workspaces --if-present",

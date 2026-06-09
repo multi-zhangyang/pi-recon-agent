@@ -42,3 +42,6 @@ collect.sh
 
 # Local live benchmark evidence
 .pi/evidence/remote/
+.pi/evidence/claim-release/
+.pi/evidence/failures/
+.pi/evidence/repairs/

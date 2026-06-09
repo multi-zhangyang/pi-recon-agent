@@ -1228,6 +1228,9 @@ describe("Pi-RECON kernel profile", () => {
 		expect(supervisorReview.content[0]?.text).toContain("commander_merge_budget:");
 		expect(supervisorReview.content[0]?.text).toContain("worker_scoreboard:");
 		expect(supervisorReview.content[0]?.text).toContain("priority_queue:");
+		expect(supervisorReview.content[0]?.text).toContain("release_gate_metadata:");
+		expect(supervisorReview.content[0]?.text).toContain("strict_claim_gate:");
+		expect(supervisorReview.content[0]?.text).toContain("claim_gate_result:");
 		expect(supervisorReview.content[0]?.text).toContain("next_supervisor_command:");
 		const supervisorPath = /supervisor_artifact: (.+)/.exec(supervisorReview.content[0]?.text ?? "")?.[1]?.trim();
 		expect(supervisorPath).toBeDefined();
@@ -1418,6 +1421,10 @@ describe("Pi-RECON kernel profile", () => {
 		expect(compilerDraft.content[0]?.text).toContain("compiler_artifact:");
 		expect(compilerDraft.content[0]?.text).toContain("operator_feedback:");
 		expect(compilerDraft.content[0]?.text).toContain("category=swarm_retry_queue");
+		expect(compilerDraft.content[0]?.text).toContain("supervisor_artifact:");
+		expect(compilerDraft.content[0]?.text).toContain("release_gate_metadata:");
+		expect(compilerDraft.content[0]?.text).toContain("strict_claim_gate:");
+		expect(compilerDraft.content[0]?.text).toContain("claim_gate_result:");
 		expect(compilerDraft.content[0]?.text).toContain("key_evidence_block:");
 		expect(compilerDraft.content[0]?.text).toContain("repro_commands:");
 		expect(compilerDraft.content[0]?.text).toContain("contradictions:");

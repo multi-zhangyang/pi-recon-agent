@@ -62,11 +62,11 @@ npm run audit:parallel-plan
 
 ## Runtime 集成边界：re_swarm / re_supervisor / release gate
 
-下一阶段 runtime 接入的边界是：`frontier-orchestrator` 和 `agent-dogfood`
-已经证明 `ReconParallelPlanV1` 可以被离线生成、读取和预览；但
-`re_swarm`、`re_supervisor`、release gate 仍需要把同一份计划合同贯穿到真实
-runtime artifact、claim gate 和发布元数据里。这里描述的是控制面合同，不是把
-Pi-RECON 宣称为完整顶级 autonomous red-team agent。
+当前 runtime 接入边界是：`frontier-orchestrator` 和 `agent-dogfood`
+已经证明 `ReconParallelPlanV1` 可以被离线生成、读取和预览；`re_swarm`、
+`re_supervisor`、`re_compiler final`、`re_complete audit` 与 `gate:claim-release`
+已经把同一份计划合同、release metadata 和 strict claim marker 贯穿到 runtime
+artifact、claim gate 和最终发布路径里。
 
 ### re_swarm 应消费和输出的字段
 
@@ -226,22 +226,21 @@ claim ledger、hard-eval score split 和 autonomous contracts gate，输出
 
 - `re_verifier`、`re_compiler`、`re_supervisor` 已有 assertions、counter evidence、contradictions、conflict matrix、worker scoreboard 和 commander merge queue。
 - parallel dogfood runner 已记录 `roleGateMatrix`、`toolResultsCaptured`、`synthesizerReconciled`、`antiSelfDelusion` 等运行级验证信号。
-- `gate:claim-release` 使用 strict claim ledger validator；当前 required platform gap 存在时应失败，避免把 worker/orchestration 成功升级成 final platform pass。
+- `gate:claim-release` 使用 strict claim ledger validator，并写入 `.pi/evidence/claim-release/<timestamp>/result.json`；当前 required platform gap 存在时应失败，避免把 worker/orchestration 成功升级成 final platform pass。
+- `re_supervisor` 输出 `strictClaimGate` / `claimGateResult`；`re_compiler final` 只有 strict marker pass 才写最终 report；`re_complete audit` 会阻断 marker missing/blocked、supervisor claim gate gap 和 compiler final claim gate gap。
 
 仍需硬化：
 
-- 把 role prompt 升级为 `contract.json`：每个角色声明 `mustEmit`、`allowedClaimKinds`、`forbiddenClaimKinds` 和 handoff target。
-- 新增 append-only claim ledger：`artifact_handoff`、`claim`、`validation`、`challenge`、`resolution` event。
-- 每个 `proven/final_pass` claim 必须绑定 artifact sha256 和 JSON query，并有 verifier pass 且无 unresolved adversary challenge。
+- 把 role/compound runtime 的 claim ledger 写入从 hard-eval 离线链扩展到真实子会话执行态。
+- 每个 `proven/final_pass` claim 继续强制绑定 artifact sha256 和 JSON query，并有 verifier pass 且无 unresolved adversary challenge。
 - synthesizer 输出 conflict table：claim IDs、冲突主题、胜出证据、降级原因、未解决冲突。
-- score/summary 拆分 orchestration score 与 platform claim score，避免把编排成功误读成平台 claim 全绿。
 
 推荐非测试顺序：
 
 1. 在 parallel runner 输出 `contract.json + ledger.jsonl + gate.json`，角色字段必须包含 `handoffTargets` 和 `evidenceContract`。
 2. role stdout 先解析结构化 claims；未结构化输出只能作为 observation，不能升级为 final pass。
 3. hard-score/release gate 读取 claim gate，分离 orchestration 和 claim 结果。
-4. `re_supervisor / re_compiler / re_complete` 复用同一 claim ledger schema 和 `gate:claim-release` verdict。
+4. `re_supervisor / re_compiler / re_complete` 保持复用同一 claim ledger schema 和 `gate:claim-release` marker。
 
 ## 当前边界：四个能力不是“顶级 autonomous”结论
 
@@ -250,7 +249,7 @@ claim ledger、hard-eval score split 和 autonomous contracts gate，输出
 | 并行调度 | 能生成 `ReconParallelPlanV1`，能用 `--plan-json --plan-only` 离线预览 worker/merge/evidence contract，已有 provider-backed parallel runner 的运行证据字段。 | 还不是动态 autonomous scheduler；尚未完成跨入口统一调度、自动取消、工作窃取、实时重分片和 claim-aware merge 执行闭环。 |
 | 长期上下文压缩 | `re_context`、`session_before_compact`、`session_compact`、context audit 已覆盖 context pack、resume contract、evidence summarization 和 bounded resume。 | 还不能宣称无限长期记忆；仍需精确按 contextPath/entryId 恢复、artifact hash 漂移校验、append-only resume ledger 和跨任务污染阻断。 |
 | 失败自修复 | 已有 bounded retry、repair queue、hard-eval gaps、autofix/proof-loop 方向和 failure/repair schema。 | 还不是自动修好所有失败；plan-only 不执行 repair，真实修复仍需 failure signature 去重、attempt ledger、rollback criteria 和 passed-gate regression。 |
-| 自动分工验证 | 已有 role contract、claim ledger、synthesizer reconciliation、score split，能防止把 orchestration 成功写成平台 claim 成功。 | 还不能把未结构化文本直接升级成 final pass；每个 proven/final claim 仍需 artifact sha256、JSON query、verifier pass、无 unresolved adversary challenge。 |
+| 自动分工验证 | 已有 role contract、claim ledger、synthesizer reconciliation、score split、strict claim marker 和 runtime final path 阻断，能防止把 orchestration 成功写成平台 claim 成功。 | 独立子会话/compound runtime 仍需把 claim ledger 写入扩展到真实执行态；每个 proven/final claim 仍需 artifact sha256、JSON query、verifier pass、无 unresolved adversary challenge。 |
 
 ## 当前不做的事
 
@@ -287,4 +286,4 @@ They validate these contract families without running live benchmarks or provide
 
 `hard-eval-control-plane.mjs` 的离线 failure/repair 输出也已补齐 `signature`、`artifactHashes`、`budget`、`rollback`、`expectedGates`、`rollbackCriteria`；role contract 已补齐 `ledgerPolicy`、`conflictPolicy`、`claimGatePolicy`、`handoffTargets`、`evidenceContract`。
 
-This does not mean Pi-RECON is already a complete autonomous red-team agent. It means the remaining hardening work is now represented as machine-readable schemas and validators instead of only prose.
+This means Pi-RECON now has a usable professional control plane with machine-readable schemas, validators, strict claim release markers, and runtime final-path gates. Remaining work is limited to optional hardening such as independent sub-agent runtime and negative fixtures.

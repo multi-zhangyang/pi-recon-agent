@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -173,16 +173,32 @@ function validateGateAndScores(result, options) {
   return { status: baseOk && strictOk && gapPolicyOk ? "pass" : "fail", baseOk, strictOk, gapPolicyOk, orchestrationScore, platformRequiredScore, requiredGaps: requiredGaps.map((claim) => ({ claimId: claim.claimId, scope: claim.scope, gate: claim.gate, kind: claim.kind })) };
 }
 
-async function loadInput(root, argv) {
-  const stdin = argv.includes("--stdin");
-  const fileArg = argv.find((arg, index) => !arg.startsWith("-") && argv[index - 1] !== "--root");
-  if (stdin) return safeJson(await readStdin());
-  if (fileArg) return safeJson(readFileSync(resolvePath(root, fileArg), "utf8"));
-  return null;
+function writeClaimReleaseMarker(root, report, inputText) {
+  const stamp = report.generatedAt.replace(/[:.]/g, "-");
+  const outDir = join(root, ".pi", "evidence", "claim-release", stamp);
+  mkdirSync(outDir, { recursive: true });
+  const markerPath = join(outDir, "result.json");
+  const gateAndScores = report.checks.gateAndScores || {};
+  const marker = {
+    kind: "pi-recon-claim-release-marker",
+    generatedAt: report.generatedAt,
+    mode: report.mode,
+    ok: report.ok,
+    root,
+    markerPath,
+    source: report.source,
+    sourceSha256: sha256(inputText || ""),
+    platformRequiredScore: gateAndScores.platformRequiredScore,
+    orchestrationScore: gateAndScores.orchestrationScore,
+    requiredGaps: gateAndScores.requiredGaps || [],
+    checks: report.checks,
+  };
+  writeFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`, "utf8");
+  return { markerPath, marker };
 }
 
 function printHelp() {
-  console.log(`Usage: node scripts/reverse-agent/validate-claim-ledger.mjs [result.json] [--stdin] [--root <root>] [--json] [--allow-platform-gaps] [--strict-claims]\n\nValidates hard-eval claim contract/ledger/gates without running live benchmarks or model providers.`);
+  console.log(`Usage: node scripts/reverse-agent/validate-claim-ledger.mjs [result.json] [--stdin] [--root <root>] [--json] [--allow-platform-gaps] [--strict-claims] [--write-marker]\n\nValidates hard-eval claim contract/ledger/gates without running live benchmarks or model providers.`);
 }
 
 function formatText(report) {
@@ -194,6 +210,7 @@ function formatText(report) {
   ];
   for (const [name, check] of Object.entries(report.checks)) lines.push(`- ${name}: ${check.status}`);
   lines.push("", `platform_required_score: ${report.checks.gateAndScores.platformRequiredScore}`, `required_gaps: ${report.checks.gateAndScores.requiredGaps.map((gap) => gap.gate).join(",") || "none"}`);
+  if (report.markerPath) lines.push(`claim_release_marker: ${report.markerPath}`);
   return `${lines.join("\n")}\n`;
 }
 
@@ -205,7 +222,13 @@ async function main(argv) {
     allowPlatformGaps: argv.includes("--allow-platform-gaps"),
     strictClaims: argv.includes("--strict-claims"),
   };
-  const input = await loadInput(root, argv);
+  const inputText = argv.includes("--stdin")
+    ? await readStdin()
+    : (() => {
+        const fileArg = argv.find((arg, index) => !arg.startsWith("-") && argv[index - 1] !== "--root");
+        return fileArg ? readFileSync(resolvePath(root, fileArg), "utf8") : "";
+      })();
+  const input = safeJson(inputText);
   const checks = {
     schemaFiles: { status: "pass", rows: validateSchemaFiles(root) },
     roleContract: validateRoleContract(input?.contract || {}),
@@ -223,6 +246,10 @@ async function main(argv) {
     source: input?.kind || "missing",
     checks,
   };
+  if (argv.includes("--write-marker")) {
+    const { markerPath } = writeClaimReleaseMarker(root, report, inputText);
+    report.markerPath = markerPath;
+  }
   if (argv.includes("--json")) console.log(JSON.stringify(report, null, 2));
   else process.stdout.write(formatText(report));
   if (!ok) process.exitCode = 1;
