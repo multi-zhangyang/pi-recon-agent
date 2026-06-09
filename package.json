@@ -51,7 +51,9 @@
 		"install:recon-pi": "bash scripts/reverse-agent/install-recon-pi.sh .",
 		"gate:pi-recon-primary": "node scripts/reverse-agent/assert-repi-product.mjs .",
 		"install:repi": "bash scripts/reverse-agent/install-repi.sh .",
-		"gate:repi-product": "node scripts/reverse-agent/assert-repi-product.mjs ."
+		"gate:repi-product": "node scripts/reverse-agent/assert-repi-product.mjs .",
+		"gate:repi-harness": "node scripts/reverse-agent/repi-top-harness.mjs . --strict",
+		"gate:repi-top-harness": "node scripts/reverse-agent/repi-top-harness.mjs . --strict"
 	},
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "0.0.26",

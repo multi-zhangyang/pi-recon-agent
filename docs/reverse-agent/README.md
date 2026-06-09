@@ -79,6 +79,7 @@ Pi-RECON 在 `packages/coding-agent/src/core/recon-profile.ts`、`.pi/SYSTEM.md`
 | `scripts/reverse-agent/install-repi.sh` | 安装 `/usr/local/bin/repi`，初始化 `~/.repi/agent`，不会覆盖/删除普通 `pi` |
 | `scripts/reverse-agent/install-recon-pi.sh` | 兼容旧命令名；已废弃，现在只会转而安装 `repi`，不会接管 `pi` |
 | `scripts/reverse-agent/assert-repi-product.mjs` | 验证 `repi` 是产品入口、`pi` 未被本仓库声明、repi help 不泄漏 upstream Pi update/pi.dev changelog 文案 |
+| `scripts/reverse-agent/repi-top-harness.mjs` | 顶级独立 harness：临时 HOME/bin 端到端验证安装、命令归属、profile 隔离、update/branding 去 Pi 化和能力 gates |
 | `scripts/reverse-agent/assert-pi-recon-primary.mjs` | 兼容旧 gate 名；实际转到 `assert-repi-product.mjs` |
 | `scripts/reverse-agent/clean-global-pi-recon.sh` | 清理旧版写入 `~/.pi/agent` 的 Pi-RECON 文件型 profile，移动到备份目录 |
 | `scripts/reverse-agent/install-global-profile.sh` | 兼容旧命令名；现在默认写入 `~/.repi/agent` |
@@ -228,6 +229,7 @@ hash -r
 scripts/reverse-agent/clean-global-pi-recon.sh
 
 # 验证 repi 已经可用，不应再出现 model pattern、API key、collision、Global tools 报错
+npm run gate:repi-harness
 npm run gate:repi-product
 npm run gate:repi-isolation
 
@@ -556,6 +558,7 @@ Failure/repair 合同现在同时保留机器字段和人类可读别名：
 
 ## Harness 自检层
 
+- `gate:repi-harness` 是外层顶级独立 harness：用临时 HOME/bin 模拟安装，证明 `pi` stub 不被覆盖、旧 Pi-RECON stale shim 被清掉、`~/.pi/agent` 不被默认读取/改写、`repi` help/update help 去掉 upstream update/branding，并串联 product/isolation/context/autonomous runtime/control gates。
 - `re_harness` / `/re-harness quick|full|install|show` 生成 `harness_artifact`，聚合 `install_readiness`、`reverse_capability_guards`、`regression_guards`、注册工具/命令矩阵和 evidence/memory/tool-index 可写性。
-- 开发或魔改后执行 `re_harness full`；运行 `npm run install:repi` 后，只安装/刷新 `repi`，普通 `pi` 仍归 upstream Pi；随后执行 `hash -r`、`repi --offline --help`、`npm run gate:repi-product` 与 `/re-harness install`。
+- 开发或魔改后执行 `re_harness full`；运行 `npm run install:repi` 后，只安装/刷新 `repi`，普通 `pi` 仍归 upstream Pi；随后执行 `hash -r`、`repi --offline --help`、`npm run gate:repi-harness` 与 `/re-harness install`。
 - `reverse_capability_guards` 会守住 re_native_runtime、re_web_authz_state、re_mobile_runtime、re_exploit_lab、re_proof_loop、re_autopilot、re_knowledge_graph、compact_resume_case_memory、compact_resume_repair_from_case_memory、compact_resume_success_skip_low_value_lane、operator_command_floor、proof_exit_criteria、specialist_runtime_planner，避免安装/自检优化削弱逆向渗透能力。

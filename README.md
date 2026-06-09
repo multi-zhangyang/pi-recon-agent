@@ -233,6 +233,7 @@ command -v repi
 readlink -f "$(command -v repi)"
 repi --offline --help
 repi --offline --list-models
+npm run gate:repi-harness
 npm run gate:repi-product
 npm run gate:repi-isolation
 ```
@@ -502,6 +503,23 @@ docs/reverse-agent/model-provider-formats.md
 
 ## 离线验证与 gates
 
+
+### 顶级独立 harness
+
+发布或大改后优先跑：
+
+```bash
+npm run gate:repi-harness
+```
+
+它会用临时 HOME / 临时 bin 做端到端审查：
+
+- `pi` 命令仍归 upstream Pi，安装脚本不会覆盖它。
+- `repi` 独立安装、独立 profile、独立 session/storage。
+- 旧 `~/.pi/agent` 污染样本不会被默认读取或改写；auth/models 只有 `--import-pi-auth` 才单向导入。
+- `repi --help` / `repi update --help` 不泄漏 `pi update`、`Update Available`、`pi.dev/changelog` 等 upstream Pi 文案。
+- 串联 `gate:repi-product`、`gate:repi-isolation`、`gate:context-compact`、`gate:autonomous-runtime`、`gate:autonomy-control`，确认安装独立性和逆向/渗透控制面能力同时成立。
+
 修改 profile / harness 后至少运行：
 
 ```bash
@@ -515,6 +533,7 @@ env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY -u OPENAI_API_KEY \
     ./node_modules/.bin/tsgo --noEmit --pretty false
 
 npm run gate:context-compact
+npm run gate:repi-harness
 npm run gate:repi-product
 npm run gate:repi-isolation
 npm run gate:autonomy-control
@@ -564,6 +583,7 @@ node node_modules/vitest/dist/cli.js --run \
   packages/coding-agent/test/recon-context-compact-audit.test.ts
 
 npm run gate:context-compact
+npm run gate:repi-harness
 npm run gate:repi-product
 npm run gate:repi-isolation
 npm run gate:autonomy-control
