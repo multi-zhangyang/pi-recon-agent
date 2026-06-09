@@ -103,7 +103,12 @@ pi --offline --help
 pi --offline --list-models
 ```
 
-安装后，`pi` 就是 Pi-RECON 逆向 / 渗透 agent；旧 upstream `pi` 会从命令路径移开；全局 npm 包会移动到 `pi-coding-agent.upstream-backup.<timestamp>`，bin 入口记录为 `pi-upstream.<timestamp>` 备份。运行态仍放在 `~/.repi/agent`，避免旧 `~/.pi/agent` 的 2go model scope、prompt collision、Global tools 报错继续污染启动。
+安装后，`pi` 就是 Pi-RECON 逆向 / 渗透 agent；旧 upstream `pi` 不再共存：全局
+`@earendil-works/pi-coding-agent*` 包目录会删除，PATH 里的 `pi` 与 npm-global
+`bin/pi` 都会强制指向本仓库启动器，旧 `~/.pi` profile 也会删除。Pi-RECON
+运行态只放在 `~/.repi/agent`，避免旧 `~/.pi/agent` 的 2go model scope、prompt
+collision、Global tools 报错继续污染启动。若你确实要保留旧 profile，执行安装前设置
+`PI_RECON_KEEP_UPSTREAM_PROFILE=1`。
 
 如果还想保留一个显式别名，也可以安装 `repi`：
 
