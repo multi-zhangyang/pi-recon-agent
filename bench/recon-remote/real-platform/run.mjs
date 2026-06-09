@@ -12,12 +12,13 @@ const probeLimit = Number(process.env.RECON_PROBE_LIMIT || 16);
 const timeoutMs = Number(process.env.RECON_TIMEOUT_MS || 35000);
 const quietMs = Number(process.env.RECON_QUIET_MS || 2500);
 const maxBodyBytes = Number(process.env.RECON_MAX_BODY_BYTES || 500000);
+const probeBodyBytes = Number(process.env.RECON_PROBE_BODY_BYTES || 4096);
 const browserMode = String(process.env.RECON_BROWSER || 'auto').toLowerCase();
 const chromeBin = process.env.RECON_CHROME_BIN || process.env.CHROME_BIN || '';
 const userAgent = process.env.RECON_USER_AGENT || 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36 Pi-RECON-real-platform';
 
 if (!selfTestOnly && (!target || target === '--help' || target === '-h')) {
-  console.log(`Pi-RECON real platform hard benchmark\n\nUsage:\n  node bench/recon-remote/real-platform/run.mjs <url> [auto|bilibili-video|xiaohongshu-note|generic-cdp]\n  node bench/recon-remote/real-platform/run.mjs --self-test\n\nExamples:\n  node bench/recon-remote/real-platform/run.mjs https://www.bilibili.com/video/BV1odL76QE6B bilibili-video\n  node bench/recon-remote/real-platform/run.mjs 'https://www.xiaohongshu.com/explore/66237c6e000000001c00893f' xiaohongshu-note\n  RECON_XHS_AUTO_DISCOVER=1 node bench/recon-remote/real-platform/run.mjs https://www.xhs-download.org/zh xiaohongshu-note\n\nEnvironment:\n  RECON_BROWSER=auto|1|0\n  RECON_PROBE_LIMIT=16\n  RECON_TIMEOUT_MS=35000\n  RECON_QUIET_MS=2500\n  RECON_MAX_BODY_BYTES=500000\n  RECON_CHROME_BIN=<path>\n  RECON_XHS_AUTO_DISCOVER=1\n  RECON_XHS_DISCOVERY_LIMIT=3\n\nOutput:\n  .pi/evidence/remote/real-platform/<profile>/<host>/<timestamp>/\n`);
+  console.log(`Pi-RECON real platform hard benchmark\n\nUsage:\n  node bench/recon-remote/real-platform/run.mjs <url> [auto|bilibili-video|xiaohongshu-note|generic-cdp]\n  node bench/recon-remote/real-platform/run.mjs --self-test\n\nExamples:\n  node bench/recon-remote/real-platform/run.mjs https://www.bilibili.com/video/BV1odL76QE6B bilibili-video\n  node bench/recon-remote/real-platform/run.mjs 'https://www.xiaohongshu.com/explore/66237c6e000000001c00893f' xiaohongshu-note\n  RECON_XHS_AUTO_DISCOVER=1 node bench/recon-remote/real-platform/run.mjs https://www.xhs-download.org/zh xiaohongshu-note\n\nEnvironment:\n  RECON_BROWSER=auto|1|0\n  RECON_PROBE_LIMIT=16\n  RECON_TIMEOUT_MS=35000\n  RECON_QUIET_MS=2500\n  RECON_MAX_BODY_BYTES=500000\n  RECON_PROBE_BODY_BYTES=4096\n  RECON_CHROME_BIN=<path>\n  RECON_XHS_AUTO_DISCOVER=1\n  RECON_XHS_DISCOVERY_LIMIT=3\n\nOutput:\n  .pi/evidence/remote/real-platform/<profile>/<host>/<timestamp>/\n`);
   process.exit(target ? 0 : 2);
 }
 
@@ -109,22 +110,81 @@ async function fetchJson(url, options = {}) {
   return { ...item, json: safeJsonParse(item.text) };
 }
 
+async function readResponsePrefix(res, maxBytes = probeBodyBytes) {
+  const chunks = [];
+  let bytes = 0;
+  let truncated = false;
+  const reader = res.body?.getReader?.();
+  if (!reader) return { bytes: 0, sha256: sha256(Buffer.alloc(0)).slice(0, 24), truncated };
+  try {
+    while (bytes < maxBytes) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      const remaining = maxBytes - bytes;
+      if (chunk.length > remaining) {
+        chunks.push(chunk.subarray(0, remaining));
+        bytes += remaining;
+        truncated = true;
+        break;
+      }
+      chunks.push(chunk);
+      bytes += chunk.length;
+    }
+    if (bytes >= maxBytes) truncated = true;
+  } finally {
+    try { await reader.cancel(); } catch {}
+  }
+  const buffer = Buffer.concat(chunks, bytes);
+  return { bytes, sha256: sha256(buffer).slice(0, 24), truncated };
+}
+
+function shouldProbeRange(url, headAttempt = {}) {
+  const hay = `${url || ''} ${headAttempt.headers?.['content-type'] || ''} ${headAttempt.headers?.['accept-ranges'] || ''}`.toLowerCase();
+  return /video|audio|mp4|m4s|mpegurl|octet-stream|bytes|\.m4s|\.mp4|\.m3u8/.test(hay);
+}
+
 async function probeUrl(url, headers = {}) {
   const attempts = [];
   let current = url;
+  let bodyProof = null;
   for (let i = 0; i < 4; i++) {
     try {
       const res = await fetch(current, { method: 'HEAD', redirect: 'manual', headers: requestHeaders(headers) });
       const h = sanitizeHeaders(Object.fromEntries(res.headers.entries()));
-      attempts.push({ method: 'HEAD', url: redactUrl(current), status: res.status, headers: h });
+      const headAttempt = { method: 'HEAD', url: redactUrl(current), status: res.status, headers: h };
+      attempts.push(headAttempt);
       if ([301, 302, 303, 307, 308].includes(res.status) && res.headers.get('location')) {
         current = new URL(res.headers.get('location'), current).toString();
         continue;
       }
-      if (![200, 206].includes(res.status)) {
-        const gr = await fetch(current, { method: 'GET', redirect: 'manual', headers: requestHeaders({ ...headers, range: 'bytes=0-0' }) });
-        const buf = Buffer.from(await gr.arrayBuffer());
-        attempts.push({ method: 'GET bytes=0-0', url: redactUrl(current), status: gr.status, headers: sanitizeHeaders(Object.fromEntries(gr.headers.entries())), bytes: buf.length, sha256: sha256(buf).slice(0, 24) });
+      if (![200, 206].includes(res.status) || shouldProbeRange(current, headAttempt)) {
+        const rangeEnd = Math.max(0, probeBodyBytes - 1);
+        const gr = await fetch(current, { method: 'GET', redirect: 'manual', headers: requestHeaders({ ...headers, range: `bytes=0-${rangeEnd}` }) });
+        const prefix = await readResponsePrefix(gr, probeBodyBytes);
+        const getAttempt = {
+          method: `GET bytes=0-${rangeEnd}`,
+          url: redactUrl(current),
+          status: gr.status,
+          headers: sanitizeHeaders(Object.fromEntries(gr.headers.entries())),
+          bytes: prefix.bytes,
+          sha256: prefix.sha256,
+          truncated: prefix.truncated,
+          bounded: true,
+          maxBytes: probeBodyBytes,
+        };
+        attempts.push(getAttempt);
+        if (prefix.bytes > 0) {
+          bodyProof = {
+            method: getAttempt.method,
+            status: getAttempt.status,
+            bytes: prefix.bytes,
+            sha256: prefix.sha256,
+            truncated: prefix.truncated,
+            contentRange: getAttempt.headers?.['content-range'] || '',
+            contentType: getAttempt.headers?.['content-type'] || '',
+          };
+        }
       }
       break;
     } catch (error) {
@@ -135,7 +195,8 @@ async function probeUrl(url, headers = {}) {
   const hay = attempts.map((a) => `${a.url} ${a.headers?.['content-type'] || ''} ${a.headers?.location || ''}`).join(' ').toLowerCase();
   const media = /video|audio|mp4|m4s|mpegurl|octet-stream|\.m4s|\.mp4|\.m3u8/.test(hay);
   const reachable = attempts.some((a) => [200, 206, 301, 302, 303, 307, 308].includes(Number(a.status)));
-  return { originalUrl: redactUrl(url), attempts, classification: { media, reachable } };
+  const range206 = attempts.some((a) => Number(a.status) === 206 || /bytes/i.test(a.headers?.['content-range'] || ''));
+  return { originalUrl: redactUrl(url), attempts, bodyProof, bodySha256: bodyProof?.sha256 || '', bodyBytes: bodyProof?.bytes || 0, classification: { media, reachable, bodyProof: Boolean(bodyProof), range206 } };
 }
 
 function extractBvid(text) {
@@ -247,9 +308,11 @@ function summarizeMediaProbeMatrix(probes = []) {
   const hostClasses = {};
   let reachableMedia = 0;
   let range206 = 0;
+  let bodyProofs = 0;
   for (const probe of probes || []) {
     byKind[probe.kind || 'unknown'] = (byKind[probe.kind || 'unknown'] || 0) + 1;
     if (probe.probe?.classification?.media && probe.probe?.classification?.reachable) reachableMedia += 1;
+    if (probe.probe?.classification?.bodyProof || probe.probe?.bodySha256 || probe.probe?.bodyProof?.sha256) bodyProofs += 1;
     for (const attempt of probe.probe?.attempts || []) {
       byStatus[String(attempt.status)] = (byStatus[String(attempt.status)] || 0) + 1;
       if (Number(attempt.status) === 206 || /bytes/i.test(attempt.headers?.['content-range'] || '')) range206 += 1;
@@ -260,7 +323,7 @@ function summarizeMediaProbeMatrix(probes = []) {
       hostClasses[key] = (hostClasses[key] || 0) + 1;
     } catch {}
   }
-  return { total: probes.length, reachableMedia, range206, byKind, byStatus, hostClasses };
+  return { total: probes.length, reachableMedia, range206, bodyProofs, byKind, byStatus, hostClasses };
 }
 
 async function runBilibili(url, outDir) {

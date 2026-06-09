@@ -28,6 +28,10 @@ RECON_BROWSER=1 RECON_PROBE_LIMIT=4 \
   node bench/recon-remote/real-platform/run.mjs https://www.bilibili.com/video/BV1odL76QE6B bilibili-video
 ```
 
+Media probes use `HEAD` plus a bounded `Range: bytes=0-N` GET for media-like
+responses. `RECON_PROBE_BODY_BYTES` controls the byte cap (default `4096`) and
+the artifact records `bodySha256`/`bodyBytes` without downloading full media.
+
 ## Output
 
 ```text
