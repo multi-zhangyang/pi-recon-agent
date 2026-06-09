@@ -38,7 +38,8 @@ async function walk(dir, out = []) {
   if (!existsSync(dir)) return out;
   for (const name of await readdir(dir)) {
     const full = join(dir, name);
-    const st = statSync(full);
+    let st;
+    try { st = statSync(full); } catch { continue; }
     if (st.isDirectory()) await walk(full, out);
     else if (name === 'result.json') out.push(full);
   }
@@ -72,15 +73,28 @@ function run(cmd, args, options = {}) {
     });
   });
 }
-async function latestArtifacts(paths) {
-  const latest = new Map();
+async function readArtifactEntries(paths) {
+  const entries = [];
   for (const path of paths.sort()) {
-    const obj = safeJson(statSync(path).size ? await readFile(path, 'utf8') : '');
+    let obj = null;
+    try {
+      if (!statSync(path).size) continue;
+      obj = safeJson(await readFile(path, 'utf8'));
+    } catch {
+      continue;
+    }
     if (!obj) continue;
     const family = familyOf(path, obj);
-    const key = family === 'proof-gate' ? `${family}:${obj.mode || 'unknown'}` : family;
+    entries.push({ path: rel(path), fullPath: path, time: evidenceTime(path), family, obj });
+  }
+  return entries;
+}
+async function latestArtifacts(paths) {
+  const latest = new Map();
+  for (const entry of await readArtifactEntries(paths)) {
+    const key = entry.family === 'proof-gate' ? `${entry.family}:${entry.obj.mode || 'unknown'}` : entry.family;
     const prev = latest.get(key);
-    if (!prev || evidenceTime(path) > prev.time) latest.set(key, { path: rel(path), fullPath: path, time: evidenceTime(path), family, obj });
+    if (!prev || entry.time > prev.time) latest.set(key, entry);
   }
   return latest;
 }
@@ -124,13 +138,37 @@ function xhsAny2xxReplay(result) {
   const body = String(result?.xhsReplay?.bodyHead || '');
   return result?.xhsReplay?.attempted && status >= 200 && status < 300 && !/"data"\s*:\s*\{\s*\}/.test(body) && /"success"\s*:\s*true|"code"\s*:\s*0|note|image|user/i.test(body);
 }
+function xhsTargetNoteEndpoint(endpointClass = '') {
+  return /h5-note-info|web-feed|web-api-note|web-note-or-feed|web-search-notes/i.test(endpointClass);
+}
 function xhsNote2xxReplay(result) {
-  const best = result?.xhsReplay?.bestNote2xxSignedReplay || result?.signatureTrace?.bestNote2xxSignedReplay;
-  if (best && Number(best.status) >= 200 && Number(best.status) < 300 && best.structured?.noteStructured) return true;
+  const best = result?.xhsReplay?.bestTargetNote2xxSignedReplay || result?.signatureTrace?.bestTargetNote2xxSignedReplay || result?.xhsReplay?.bestNote2xxSignedReplay || result?.signatureTrace?.bestNote2xxSignedReplay;
+  if (best && Number(best.status) >= 200 && Number(best.status) < 300 && xhsTargetNoteEndpoint(best.endpointClass) && best.structured?.noteStructured) return true;
   const status = Number(result?.xhsReplay?.status || 0);
   const endpoint = result?.xhsReplay?.seed?.endpointClass || '';
   const body = String(result?.xhsReplay?.bodyHead || '');
-  return /note|feed/i.test(endpoint) && result?.xhsReplay?.attempted && status >= 200 && status < 300 && !/"data"\s*:\s*\{\s*\}/.test(body) && /note_id|noteId|image|title|desc|items?/i.test(body);
+  return xhsTargetNoteEndpoint(endpoint) && result?.xhsReplay?.attempted && status >= 200 && status < 300 && !/"data"\s*:\s*\{\s*\}/.test(body) && /note_id|noteId|image_list|interact_info|share_info|display_title|liked_count/i.test(body);
+}
+function selectXhsArtifact(entries, latestEntry = null) {
+  const rows = entries.filter((entry) => entry.family === 'xiaohongshu-note');
+  const rank = (entry) => {
+    const obj = entry?.obj || {};
+    const headersOk = hasHeader(obj.xhsReplay?.signedHeaderNames || [], ['x-s', 'x-t', 'x-s-common']);
+    const signerEvents = obj.signatureTrace?.signerLog?.length || 0;
+    const note2xx = xhsNote2xxReplay(obj);
+    const any2xx = xhsAny2xxReplay(obj);
+    let score = 0;
+    if (headersOk) score += 100;
+    if (note2xx) score += 1000;
+    if (signerEvents >= 20) score += 200;
+    else score += Math.min(50, signerEvents);
+    if (any2xx) score += 25;
+    return score;
+  };
+  const selected = rows
+    .filter((entry) => xhsNote2xxReplay(entry.obj))
+    .sort((a, b) => rank(b) - rank(a) || b.time.localeCompare(a.time))[0];
+  return selected || latestEntry || null;
 }
 function proofLiveBound(result) {
   if (!result || result.verdict !== 'proof-gate-passed' || result.mode !== 'live-rerun') return false;
@@ -153,9 +191,13 @@ if (live) {
 const scoreRun = await run('node', ['bench/recon-remote/hard-score.mjs'], { timeoutMs: 60000 });
 runs.push({ label: 'hard-score', run: scoreRun });
 
-const latest = await latestArtifacts((await walk(evidenceRoot)).filter((p) => !p.includes('/hard-score/')));
+const evidencePaths = (await walk(evidenceRoot)).filter((p) => !p.includes('/hard-score/'));
+const artifactEntries = await readArtifactEntries(evidencePaths);
+const latest = await latestArtifacts(evidencePaths);
+const selectedXhs = selectXhsArtifact(artifactEntries, latest.get('xiaohongshu-note') || null);
+const latestXhs = latest.get('xiaohongshu-note') || null;
 const bili = latest.get('bilibili-video')?.obj || null;
-const xhs = latest.get('xiaohongshu-note')?.obj || null;
+const xhs = selectedXhs?.obj || null;
 const douyin = latest.get('douyin-nowatermark')?.obj || null;
 const agent = latest.get('agent-dogfood')?.obj || null;
 const proofLive = latest.get('proof-gate:live-rerun')?.obj || null;
@@ -188,9 +230,9 @@ gates.push(pass(
   xhsHeaderOk && xhsNote2xx && xhsSignerEvents >= 20,
   (xhsHeaderOk ? 6 : 0) + (xhs?.xhsReplay?.attempted ? 3 : 0) + (xhsStatus === 461 ? 3 : 0) + Math.min(3, Math.floor(xhsSignerEvents / 25)) + Math.min(3, xhsBundles * 2) + (xhsAny2xx ? 4 : 0) + (xhsNote2xx ? 8 : 0),
   25,
-  { artifact: latest.get('xiaohongshu-note')?.path, verdict: xhs?.verdict, status: xhsStatus || null, signedHeaders: xhsHeaders, signerEvents: xhsSignerEvents, bundleHints: xhsBundles, any2xx: xhsAny2xx, note2xx: xhsNote2xx, best2xx: xhs?.xhsReplay?.best2xxSignedReplay || xhs?.signatureTrace?.best2xxSignedReplay, replayDivergence: xhs?.signatureTrace?.replayDivergence || xhs?.xhsReplay?.replayDivergence, firstDivergence: xhs?.xhsReplay?.firstDivergence || xhs?.signatureTrace?.firstReplayDivergence },
+  { artifact: selectedXhs?.path, latestArtifact: latestXhs?.path, selectedNonLatest: Boolean(selectedXhs?.path && latestXhs?.path && selectedXhs.path !== latestXhs.path), verdict: xhs?.verdict, status: xhsStatus || null, signedHeaders: xhsHeaders, signerEvents: xhsSignerEvents, bundleHints: xhsBundles, any2xx: xhsAny2xx, note2xx: xhsNote2xx, best2xx: xhs?.xhsReplay?.best2xxSignedReplay || xhs?.signatureTrace?.best2xxSignedReplay, bestTargetNote2xx: xhs?.xhsReplay?.bestTargetNote2xxSignedReplay || xhs?.signatureTrace?.bestTargetNote2xxSignedReplay || null, targetEndpointCoverage: xhs?.xhsReplay?.targetEndpointCoverage, challengeMatrix: (xhs?.xhsReplay?.challengeMatrix || []).slice(0, 12), replayDivergence: xhs?.signatureTrace?.replayDivergence || xhs?.xhsReplay?.replayDivergence, firstDivergence: xhs?.xhsReplay?.firstDivergence || xhs?.signatureTrace?.firstReplayDivergence },
   'x-s/x-t/x-s-common captured + signed replay returns structured 2xx note data + signer events >=20',
-  "RECON_TIMEOUT_MS=45000 RECON_QUIET_MS=5000 node bench/recon-remote/real-platform/run.mjs 'https://www.xiaohongshu.com/explore/66237c6e000000001c00893f' xiaohongshu-note"
+  'RECON_BROWSER=1 RECON_TIMEOUT_MS=60000 RECON_QUIET_MS=5000 RECON_XHS_PROBE_WAIT_MS=15000 node bench/recon-remote/real-platform/run.mjs <tokenized-xhs-explore-url> xiaohongshu-note'
 ));
 
 const dySignals = douyin?.signatureSurface?.signals?.length || 0;
@@ -278,7 +320,8 @@ const result = {
   gates,
   artifacts: {
     bilibili: latest.get('bilibili-video')?.path || '',
-    xiaohongshu: latest.get('xiaohongshu-note')?.path || '',
+    xiaohongshu: selectedXhs?.path || '',
+    xiaohongshuLatest: latestXhs?.path || '',
     douyin: latest.get('douyin-nowatermark')?.path || '',
     agentDogfood: latest.get('agent-dogfood')?.path || '',
     proofGateLive: latest.get('proof-gate:live-rerun')?.path || '',

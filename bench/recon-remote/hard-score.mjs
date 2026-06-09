@@ -18,7 +18,8 @@ function walk(dir, out = []) {
   if (!existsSync(dir)) return out;
   for (const name of readdirSync(dir)) {
     const full = join(dir, name);
-    const st = statSync(full);
+    let st;
+    try { st = statSync(full); } catch { continue; }
     if (st.isDirectory()) walk(full, out);
     else if (name === 'result.json') out.push(full);
   }
@@ -62,6 +63,9 @@ function countStrongDouyin(obj) {
 function findingIds(obj) { return (obj.findings || []).map((f) => typeof f === 'string' ? f : `${f.id || ''}`); }
 function hasFinding(obj, re) {
   return (obj.findings || []).some((f) => re.test(typeof f === 'string' ? f : `${f.id || ''} ${f.evidence || ''}`));
+}
+function xhsTargetNoteEndpoint(endpointClass = '') {
+  return /h5-note-info|web-feed|web-api-note|web-note-or-feed|web-search-notes/i.test(endpointClass);
 }
 function severityCount(obj, levels) {
   const wanted = new Set(levels);
@@ -118,11 +122,12 @@ function scoreArtifact(path, obj) {
     const signedReqs = obj.signatureTrace?.signedRequestCount || 0;
     const signerEvents = obj.signatureTrace?.signerLog?.length || 0;
     const best2xx = obj.xhsReplay?.best2xxSignedReplay || obj.signatureTrace?.best2xxSignedReplay;
-    const bestNote2xx = obj.xhsReplay?.bestNote2xxSignedReplay || obj.signatureTrace?.bestNote2xxSignedReplay;
+    const bestNote2xx = obj.xhsReplay?.bestTargetNote2xxSignedReplay || obj.signatureTrace?.bestTargetNote2xxSignedReplay || obj.xhsReplay?.bestNote2xxSignedReplay || obj.signatureTrace?.bestNote2xxSignedReplay;
+    const targetNoteOk = Boolean(bestNote2xx?.structured?.noteStructured && xhsTargetNoteEndpoint(bestNote2xx.endpointClass));
     if (signedHeaders >= 4 || signedReqs >= 2 || signerEvents >= 10) dimensions.signature_rebuild = 16;
     else if (signedHeaders >= 3) dimensions.signature_rebuild = 14;
     else if (antiSignals.size >= 4) dimensions.signature_rebuild = 8;
-    if (bestNote2xx?.structured?.noteStructured) dimensions.signed_replay = 15;
+    if (targetNoteOk) dimensions.signed_replay = 15;
     else if (best2xx?.structured?.anyStructured) dimensions.signed_replay = 13;
     else if (obj.xhsReplay?.attempted && safeNum(obj.xhsReplay.status) >= 200 && safeNum(obj.xhsReplay.status) < 300) dimensions.signed_replay = 12;
     else if (obj.xhsReplay?.attempted) dimensions.signed_replay = 11;
@@ -133,7 +138,8 @@ function scoreArtifact(path, obj) {
     dimensions.exploit_chain = obj.xhsReplay?.attempted ? 8 : 4;
     if (obj.signatureTrace?.replayDivergence) dimensions.regression_readiness = 6;
     if (signerEvents >= 10) dimensions.regression_readiness = Math.max(dimensions.regression_readiness, 8);
-    evidence.push(`xhs signed_headers=${signedHeaders} signed_reqs=${signedReqs} replay=${obj.xhsReplay?.status || 'none'} best2xx=${best2xx?.endpointClass || 'none'} best_note_2xx=${Boolean(bestNote2xx)} bundles=${bundleHints} signer_events=${signerEvents}`);
+    evidence.push(`xhs signed_headers=${signedHeaders} signed_reqs=${signedReqs} replay=${obj.xhsReplay?.status || 'none'} best2xx=${best2xx?.endpointClass || 'none'} best_target_note_2xx=${targetNoteOk} bundles=${bundleHints} signer_events=${signerEvents}`);
+    if (/xhs-note-signed-api-replay-confirmed/.test(obj.verdict || '') && !targetNoteOk) evidence.push('stale_verdict_note_confirmed_without_target_note=true');
   } else if (family === 'douyin-nowatermark') {
     const strong = countStrongDouyin(obj);
     const transform = (obj.transformHypotheses || []).some((h) => /playwm|watermark/i.test(`${h.source} ${h.hypothesis} ${h.reason}`));
@@ -239,7 +245,12 @@ const paths = walk(evidenceRoot)
   .sort();
 const rows = [];
 for (const path of paths) {
-  const obj = safeJson(await readFile(path, 'utf8'));
+  let obj = null;
+  try {
+    obj = safeJson(await readFile(path, 'utf8'));
+  } catch {
+    continue;
+  }
   if (!obj) continue;
   rows.push(scoreArtifact(path, obj));
 }

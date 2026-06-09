@@ -15,7 +15,7 @@ Profiles:
 | Profile | Chain |
 |---|---|
 | `bilibili-video` | Extract BV/cid, call view/pagelist/playurl, rebuild WBI `w_rid` from `nav.wbi_img`, call signed `x/player/wbi/playurl`, classify DASH/durl candidates, probe CDN media URLs with HEAD/range, emit media probe matrix and deterministic WBI signer self-test. With `RECON_BROWSER=1` or `RECON_BILI_CDP=1`, also captures Chrome/CDP runtime, browser-emitted WBI signed requests, signer stack events, external JS bundle hints, and buvid/media URL runtime drift. |
-| `xiaohongshu-note` | Chrome/CDP runtime capture, extract note IDs, `/api/sns/web/*` hints, xsec/signature/anti-bot signals, rendered state/response bodies, signer bundle snippets, signed request timeline, runtime signer events, replay a ranked ladder of captured read-only signed API requests with no-cookie and exact-cookie variants, classify signed 2xx web replay vs note 461 verification challenge, and emit first-divergence evidence. |
+| `xiaohongshu-note` | Chrome/CDP runtime capture, extract note IDs, `/api/sns/web/*` hints, xsec/signature/anti-bot signals, rendered state/response bodies, signer bundle snippets, signed request timeline, runtime signer events, trigger bounded runtime probes for note/feed/search modules, replay a ranked ladder of captured signed GET/POST API requests with no-cookie and exact-cookie variants, classify generic signed 2xx web replay separately from eligible target note/feed/search-notes 2xx vs 461 verification/risk challenges, and emit first-divergence evidence. |
 | `generic-cdp` | Chrome/CDP request/response/body/storage baseline and generic signature/header bundle trace for unknown platforms. |
 
 `--self-test` validates the embedded Bilibili WBI mixin table, signing normalizer, query ordering and deterministic `w_rid` hash without network access.
@@ -45,4 +45,13 @@ The Bilibili profile does not stop at offline `w_rid` reconstruction. In browser
 
 ## Xiaohongshu replay ladder
 
-The Xiaohongshu profile ranks captured read-only `/api/sns/web/*` and `/api/sns/h5/*` GET requests by endpoint class, signed header coverage, observed status, and response shape. For each selected seed it replays both `no-cookie` and `exact-cookie` variants, using CDP `Network.getAllCookies` internally while redacting cookie values in artifacts. The output records `best2xxSignedReplay`, `bestNote2xxSignedReplay`, and `firstDivergence` so frontier-gate can distinguish generic signed 2xx web replay from the harder note-data 2xx requirement.
+The Xiaohongshu profile ranks captured `/api/sns/web/*`, `/api/sns/h5/*`, and `/web_api/sns/*` GET/POST requests by endpoint class, method/body hash, signed header coverage, observed status, and response shape. POST seeds keep distinct body variants in the replay ladder instead of deduping by URL alone. For each selected seed it replays both `no-cookie` and `exact-cookie` variants, using CDP `Network.getAllCookies` internally while redacting cookie values in artifacts.
+
+The output separates:
+
+- `best2xxSignedReplay`: any structured signed 2xx replay, including generic endpoints such as `user/me`; this is not enough to pass the Xiaohongshu frontier.
+- `bestTargetNote2xxSignedReplay`: strict target note/feed/search-notes structured 2xx replay from eligible endpoint classes (`h5-note-info`, `web-feed`, `web-api-note`, `web-note-or-feed`, or `web-search-notes`); this is the only Xiaohongshu frontier-pass replay signal.
+- `challengeMatrix` / `targetEndpointCoverage`: status/body/header taxonomy for `verify302`, `riskPolicy400`, login-missing, permission, unavailable, empty-data, and structured 2xx boundaries.
+- `seedInventory` / `dedupeCollisions`: selected and dropped seeds with method, body hash, endpoint class, and rank evidence.
+
+Search recommendation endpoints are treated as generic structured replay and cannot satisfy the note/feed frontier by themselves.
