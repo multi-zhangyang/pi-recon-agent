@@ -91,7 +91,7 @@ function hasHeader(headers, wanted) {
   const lower = new Set((headers || []).map((h) => String(h).toLowerCase()));
   return wanted.every((h) => lower.has(h));
 }
-function structuredDouyinApi(result) {
+function apiProbeStructuredDouyin(result) {
   return (result?.apiProbeResults || []).some((probe) => {
     const status = Number(probe.status || 0);
     const head = String(probe.bodyHead || '');
@@ -99,6 +99,15 @@ function structuredDouyinApi(result) {
     if (!head || /encrypt_data_miss|verify|captcha|login|forbid|blocked/i.test(head)) return false;
     return /aweme|desc|video|play_addr|status_code"?\s*:\s*0|item_list|aweme_detail/i.test(head);
   });
+}
+function observedStructuredDouyinApi(result) {
+  const observed = result?.runtimeApiReplay?.observedStructuredApi || result?.signatureSurface?.runtimeObservedStructuredApi;
+  if (observed && Number(observed.status || 0) >= 200 && Number(observed.status || 0) < 300 && observed.structured?.structured) return true;
+  return apiProbeStructuredDouyin(result);
+}
+function replayedStructuredDouyinApi(result) {
+  const replayed = result?.runtimeApiReplay?.bestReplayedStructuredApi || result?.signatureSurface?.runtimeReplayedStructuredApi;
+  return Boolean(replayed && Number(replayed.status || 0) >= 200 && Number(replayed.status || 0) < 300 && replayed.structured?.structured);
 }
 function observedParam(result, name) {
   const matrix = result?.signatureSurface?.urlParamMatrix || result?.signatureSurface?.endpointParamMatrix || [];
@@ -190,13 +199,28 @@ const dyStrong = (douyin?.probes || []).filter((probe) => probe.classification?.
 const dyABogus = observedParam(douyin, 'a_bogus');
 const dyMsToken = observedParam(douyin, 'msToken');
 const dyRuntimeSigned = runtimeSignedDouyin(douyin);
-const dyStructured = structuredDouyinApi(douyin);
+const dyObservedStructured = observedStructuredDouyinApi(douyin);
+const dyStructured = replayedStructuredDouyinApi(douyin);
 gates.push(pass(
   'douyin_abogus_rebuild_structured_api',
   dyABogus && dyMsToken && dyRuntimeSigned && dyStructured,
-  (dyABogus ? 5 : 0) + (dyMsToken ? 3 : 0) + (dyRuntimeSigned ? 3 : 0) + Math.min(4, Math.floor(dySignals / 4) + Math.floor(dyBundles / 8)) + (dyStrong ? 2 : 0) + (dyStructured ? 13 : 0),
+  (dyABogus ? 5 : 0) + (dyMsToken ? 3 : 0) + (dyRuntimeSigned ? 3 : 0) + Math.min(4, Math.floor(dySignals / 4) + Math.floor(dyBundles / 8)) + (dyStrong ? 2 : 0) + (dyObservedStructured ? 5 : 0) + (dyStructured ? 8 : 0),
   30,
-  { artifact: latest.get('douyin-nowatermark')?.path, verdict: douyin?.verdict, aBogusObserved: dyABogus, msTokenObserved: dyMsToken, runtimeSignedFetch: dyRuntimeSigned, structuredApi2xx: dyStructured, signatureSignals: dySignals, bundleHints: dyBundles, strongMediaCandidates: dyStrong },
+  {
+    artifact: latest.get('douyin-nowatermark')?.path,
+    verdict: douyin?.verdict,
+    aBogusObserved: dyABogus,
+    msTokenObserved: dyMsToken,
+    runtimeSignedFetch: dyRuntimeSigned,
+    observedStructuredApi2xx: dyObservedStructured,
+    replayedStructuredApi2xx: dyStructured,
+    observedStructuredApi: douyin?.runtimeApiReplay?.observedStructuredApi || douyin?.signatureSurface?.runtimeObservedStructuredApi,
+    bestReplayedStructuredApi: douyin?.runtimeApiReplay?.bestReplayedStructuredApi || douyin?.signatureSurface?.runtimeReplayedStructuredApi,
+    firstDivergence: douyin?.runtimeApiReplay?.firstDivergence,
+    signatureSignals: dySignals,
+    bundleHints: dyBundles,
+    strongMediaCandidates: dyStrong,
+  },
   'a_bogus/msToken observed + runtime signed fetch anchored + independently replayed structured 2xx aweme API',
   'RECON_BROWSER=1 RECON_API_PROBE=1 RECON_PROBE_LIMIT=16 node bench/recon-remote/douyin-nowatermark/run.mjs https://www.douyin.com/video/7636072173723945829'
 ));

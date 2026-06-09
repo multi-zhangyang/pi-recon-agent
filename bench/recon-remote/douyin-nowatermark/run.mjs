@@ -456,6 +456,7 @@ function handleCdpEvent(message, artifact) {
       method: p.request?.method,
       url: p.request?.url,
       headers: sanitizeHeaders(p.request?.headers || {}),
+      replayHeaders: p.request?.headers || {},
       postData: p.request?.postData ? '<captured-post-data>' : undefined,
       initiator: p.initiator?.type,
     });
@@ -584,6 +585,17 @@ async function captureChromeCdp(url, outDir) {
     }
     await captureResponseBodies(client, artifact);
     artifact.storage = safeJsonParse(await runtimeEvaluate(client, `JSON.stringify((() => {\n      const selected = {};\n      for (const key of Object.keys(window)) {\n        if (/INITIAL|RENDER|SIGI|STATE|DATA|aweme|video|douyin|item/i.test(key)) {\n          try { selected[key] = JSON.stringify(window[key]).slice(0, 200000); } catch (e) { selected[key] = String(window[key]).slice(0, 2000); }\n        }\n      }\n      const scripts = Array.from(document.querySelectorAll('script')).map((script, index) => ({ index, id: script.id || '', type: script.type || '', text: script.textContent || '' }))\n        .filter(script => /json|ld\+json|SIGI|RENDER|NEXT|INITIAL|STATE/i.test(script.id + ' ' + script.type + ' ' + script.text.slice(0, 120)))\n        .slice(0, 25)\n        .map(script => ({ ...script, sha256: '', text: script.text.slice(0, 200000) }));\n      return {\n        href: location.href,\n        title: document.title,\n        localStorage: { ...localStorage },\n        sessionStorage: { ...sessionStorage },\n        piReconFetchLog: window.__PI_RECON_FETCH_LOG__ || [],\n        selectedWindowState: selected,\n        scripts,\n      };\n    })())`), {});
+    try {
+      const allCookies = await client.send('Network.getAllCookies');
+      const scopedCookies = (allCookies.cookies || []).filter((cookie) => {
+        const domain = String(cookie.domain || '').replace(/^\./, '');
+        return domain && /douyin|bytedance|zijieapi|mssdk|snssdk|iesdouyin/i.test(domain);
+      });
+      artifact.storage.cookieNames = scopedCookies.map((cookie) => cookie.name).slice(0, 80);
+      artifact.storage.cookieHeader = scopedCookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ');
+    } catch (error) {
+      artifact.errors.push({ type: 'cookies', message: error instanceof Error ? error.message : String(error) });
+    }
     artifact.finalUrl = artifact.storage.href;
     artifact.html = String(await runtimeEvaluate(client, 'document.documentElement ? document.documentElement.outerHTML : document.body.innerHTML')).slice(0, maxBodyBytes);
     await client.close();
@@ -679,6 +691,179 @@ function analyzeSignatureSurface(sources, urls, browserArtifact, apiHypotheses) 
   };
 }
 
+function douyinApiShape(text = '') {
+  const parsed = safeJsonParse(text, null);
+  const awemeList = Array.isArray(parsed?.aweme_list) ? parsed.aweme_list : [];
+  const itemList = Array.isArray(parsed?.item_list) ? parsed.item_list : [];
+  const awemeDetail = parsed?.aweme_detail || parsed?.item || null;
+  const statusCode = parsed?.status_code ?? parsed?.statusCode ?? parsed?.code;
+  const awemeIds = unique([
+    ...awemeList.map((item) => item?.aweme_id || item?.item_id).filter(Boolean),
+    ...itemList.map((item) => item?.aweme_id || item?.item_id).filter(Boolean),
+    awemeDetail?.aweme_id || awemeDetail?.item_id,
+  ].filter(Boolean).map(String));
+  const body = JSON.stringify(parsed || {}).slice(0, 200_000);
+  const mediaUrlCount = (body.match(/https?:\/\/[^"'\\]+(?:douyinpic|douyinvod|byteimg|ixigua|pstatp|snssdk)[^"'\\]*/gi) || []).length;
+  const challengeText = String(parsed?.status_msg || parsed?.msg || parsed?.message || '');
+  const structured = Boolean(
+    parsed &&
+    (awemeList.length || itemList.length || awemeDetail || /aweme_id|play_addr|download_addr|video|desc|sec_uid/i.test(body)) &&
+    !/encrypt_data_miss|captcha|verify|forbid|blocked/i.test(challengeText)
+  );
+  return {
+    structured,
+    statusCode,
+    awemeCount: awemeIds.length || awemeList.length || itemList.length || (awemeDetail ? 1 : 0),
+    awemeIds: awemeIds.slice(0, 20),
+    mediaUrlCount,
+  };
+}
+
+function isDouyinRuntimeApi(request) {
+  const url = request?.url || '';
+  if (String(request?.method || 'GET').toUpperCase() !== 'GET') return false;
+  return /\/web\/api\/v2\/aweme\/post\/|\/aweme\/v1\/web\/aweme\/detail\/|\/web\/api\/v2\/aweme\/iteminfo\//i.test(url)
+    || (/aweme|iteminfo|detail|post/i.test(url) && /a_bogus|msToken|web_id|webid|device_id/i.test(url));
+}
+
+function douyinReplayHeaders(seed, variant, browser) {
+  const headers = { ...(seed.replayHeaders || seed.headers || {}) };
+  for (const key of Object.keys(headers)) {
+    if (/^(host|content-length|accept-encoding|connection|cookie)$/i.test(key) || /^:/.test(key) || /^sec-fetch-/i.test(key)) delete headers[key];
+    else if (String(headers[key]).includes('<redacted>')) delete headers[key];
+  }
+  headers['user-agent'] = headers['user-agent'] || headers['User-Agent'] || userAgent;
+  headers.accept = headers.accept || headers.Accept || 'application/json,text/plain,*/*';
+  headers.referer = headers.referer || headers.Referer || browser?.finalUrl || browser?.target || 'https://www.douyin.com/';
+  if (variant === 'exact-cookie' && browser?.storage?.cookieHeader) headers.cookie = browser.storage.cookieHeader;
+  return headers;
+}
+
+async function replayDouyinRuntimeApis(browser) {
+  if (!browser || browser.skipped) return { attempted: false, reason: 'browser not captured' };
+
+  const seeds = unique((browser.requests || []).filter(isDouyinRuntimeApi).map((request) => request.id))
+    .map((id) => {
+      const request = (browser.requests || []).find((item) => item.id === id);
+      const response = (browser.responses || []).find((item) => item.id === id);
+      const body = (browser.bodies || []).find((item) => item.id === id);
+      return { request, response, body, observedShape: douyinApiShape(body?.text || '') };
+    })
+    .filter((item) => item.request)
+    .sort((a, b) =>
+      (b.observedShape.structured ? 1 : 0) - (a.observedShape.structured ? 1 : 0) ||
+      (b.body?.length || 0) - (a.body?.length || 0) ||
+      Number(b.response?.status || 0) - Number(a.response?.status || 0)
+    )
+    .slice(0, Number(process.env.RECON_DOUYIN_RUNTIME_API_LIMIT || 4));
+
+  if (!seeds.length) return { attempted: false, reason: 'no runtime signed API seed captured' };
+
+  const attempts = [];
+  for (const seed of seeds) {
+    for (const variant of ['no-cookie', 'exact-cookie']) {
+      const headers = douyinReplayHeaders(seed.request, variant, browser);
+      try {
+        const response = await fetch(seed.request.url, { method: 'GET', redirect: 'manual', headers });
+        const buffer = Buffer.from(await response.arrayBuffer());
+        const fullText = buffer.subarray(0, 500_000).toString('utf8');
+        const text = fullText.slice(0, 3000);
+        const bodySha256 = sha256(buffer);
+        const shape = douyinApiShape(fullText);
+        attempts.push({
+          variant,
+          url: redactUrlParams(seed.request.url),
+          status: response.status,
+          headers: responseHeaders(response),
+          bytes: buffer.length,
+          sha256: bodySha256.slice(0, 24),
+          structured: shape,
+          observed: {
+            status: seed.response?.status,
+            mimeType: seed.response?.mimeType,
+            bodySha256: seed.body?.sha256,
+            structured: seed.observedShape,
+          },
+          divergence: seed.response ? {
+            statusChanged: Number(seed.response.status) !== Number(response.status),
+            observedStatus: seed.response.status,
+            replayStatus: response.status,
+            observedBodySha256: seed.body?.sha256,
+            replayBodySha256: bodySha256.slice(0, 24),
+          } : undefined,
+          bodyHead: redactSnippet(text).slice(0, 800),
+        });
+      } catch (error) {
+        attempts.push({
+          variant,
+          url: redactUrlParams(seed.request.url),
+          status: 'error',
+          error: error instanceof Error ? error.message : String(error),
+          observed: {
+            status: seed.response?.status,
+            bodySha256: seed.body?.sha256,
+            structured: seed.observedShape,
+          },
+        });
+      }
+    }
+  }
+
+  const observedStructured = seeds.find((seed) =>
+    Number(seed.response?.status || 0) >= 200 && Number(seed.response?.status || 0) < 300 && seed.observedShape.structured
+  ) || null;
+  const bestReplay = attempts.find((item) =>
+    Number(item.status) >= 200 && Number(item.status) < 300 && item.structured?.structured
+  ) || null;
+  const firstDivergence = attempts.find((item) =>
+    item.divergence?.statusChanged ||
+    (item.divergence?.observedBodySha256 && item.divergence.observedBodySha256 !== item.divergence.replayBodySha256)
+  ) || null;
+
+  return {
+    attempted: true,
+    seedCount: seeds.length,
+    attemptCount: attempts.length,
+    cookieNames: (browser.storage?.cookieNames || []).slice(0, 30),
+    observedStructuredApi: observedStructured ? {
+      url: redactUrlParams(observedStructured.request.url),
+      status: observedStructured.response?.status,
+      bodySha256: observedStructured.body?.sha256,
+      structured: observedStructured.observedShape,
+      bodyHead: redactSnippet(observedStructured.body?.text || '').slice(0, 800),
+    } : null,
+    bestReplayedStructuredApi: bestReplay ? {
+      variant: bestReplay.variant,
+      url: bestReplay.url,
+      status: bestReplay.status,
+      structured: bestReplay.structured,
+      bodyHead: bestReplay.bodyHead,
+    } : null,
+    firstDivergence: firstDivergence ? {
+      variant: firstDivergence.variant,
+      url: firstDivergence.url,
+      status: firstDivergence.status,
+      structured: firstDivergence.structured,
+      observed: firstDivergence.observed,
+      divergence: firstDivergence.divergence,
+      bodyHead: firstDivergence.bodyHead,
+      error: firstDivergence.error,
+    } : null,
+    attempts: attempts.map((item) => ({
+      variant: item.variant,
+      url: item.url,
+      status: item.status,
+      bytes: item.bytes,
+      sha256: item.sha256,
+      structured: item.structured,
+      observed: item.observed,
+      divergence: item.divergence,
+      bodyHead: item.bodyHead,
+      error: item.error,
+    })),
+  };
+}
+
 function sanitizeBrowserArtifactForDisk(browser) {
   if (!browser) return browser;
   const redactObject = (value) => {
@@ -690,7 +875,10 @@ function sanitizeBrowserArtifactForDisk(browser) {
     ...browser,
     target: redactUrlParams(browser.target),
     finalUrl: redactUrlParams(browser.finalUrl),
-    requests: (browser.requests || []).map((request) => ({ ...request, url: redactUrlParams(request.url), documentURL: redactUrlParams(request.documentURL), headers: sanitizeHeaders(request.headers || {}) })),
+    requests: (browser.requests || []).map((request) => {
+      const { replayHeaders, ...safeRequest } = request;
+      return { ...safeRequest, url: redactUrlParams(request.url), documentURL: redactUrlParams(request.documentURL), headers: sanitizeHeaders(request.headers || {}) };
+    }),
     responses: (browser.responses || []).map((response) => ({ ...response, url: redactUrlParams(response.url), headers: sanitizeHeaders(response.headers || {}) })),
     websockets: (browser.websockets || []).map((ws) => ({ ...ws, url: redactUrlParams(ws.url) })),
     bodies: (browser.bodies || []).map((body) => ({ ...body, url: redactUrlParams(body.url), text: redactSnippet(body.text || '').slice(0, 500000) })),
@@ -768,6 +956,9 @@ const mediaCandidates = urls
   .sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
 const hypotheses = buildTransformHypotheses(urls);
 const signatureSurface = analyzeSignatureSurface(sources, urls, browserArtifact, apiHypotheses);
+const runtimeApiReplay = await replayDouyinRuntimeApis(browserArtifact);
+if (runtimeApiReplay.observedStructuredApi) signatureSurface.runtimeObservedStructuredApi = runtimeApiReplay.observedStructuredApi;
+if (runtimeApiReplay.bestReplayedStructuredApi) signatureSurface.runtimeReplayedStructuredApi = runtimeApiReplay.bestReplayedStructuredApi;
 const primaryProbeBudget = Math.max(4, Math.ceil(probeLimit / 2));
 const probeTargets = unique([
   ...mediaCandidates.slice(0, primaryProbeBudget).map((x) => x.url),
@@ -817,6 +1008,7 @@ const json = {
   apiHypotheses: apiHypotheses.slice(0, 20),
   apiProbeResults: apiProbeResults.map((item) => ({ ...item, bodyHead: item.bodyHead ? item.bodyHead.slice(0, 500) : item.bodyHead })),
   signatureSurface,
+  runtimeApiReplay,
   mediaCandidates: mediaCandidates.slice(0, 100),
   transformHypotheses: hypotheses.slice(0, 60),
   probes: classified,
@@ -863,6 +1055,18 @@ const md = [
   ...(signatureSurface.urlParamMatrix.slice(0, 15).map((item) => `- params=${item.params.join(',')} url=${item.url}`) || ['- no signed query params observed']),
   ...(signatureSurface.bundleHints.slice(0, 10).map((hint) => `- bundle hits=${hint.hits.join(',')} len=${hint.length} sha=${hint.sha256} source=${hint.source}`) || ['- no signer bundle hints']),
   '',
+  '## Runtime signed API replay',
+  `attempted: ${Boolean(runtimeApiReplay.attempted)} seeds=${runtimeApiReplay.seedCount || 0} attempts=${runtimeApiReplay.attemptCount || 0}`,
+  runtimeApiReplay.observedStructuredApi
+    ? `- observed_structured status=${runtimeApiReplay.observedStructuredApi.status} aweme_count=${runtimeApiReplay.observedStructuredApi.structured?.awemeCount || 0} url=${runtimeApiReplay.observedStructuredApi.url}`
+    : `- observed_structured: none${runtimeApiReplay.reason ? ` (${runtimeApiReplay.reason})` : ''}`,
+  runtimeApiReplay.bestReplayedStructuredApi
+    ? `- replay_structured variant=${runtimeApiReplay.bestReplayedStructuredApi.variant} status=${runtimeApiReplay.bestReplayedStructuredApi.status} aweme_count=${runtimeApiReplay.bestReplayedStructuredApi.structured?.awemeCount || 0} url=${runtimeApiReplay.bestReplayedStructuredApi.url}`
+    : '- replay_structured: none',
+  runtimeApiReplay.firstDivergence
+    ? `- first_divergence variant=${runtimeApiReplay.firstDivergence.variant} status=${runtimeApiReplay.firstDivergence.status} url=${runtimeApiReplay.firstDivergence.url}`
+    : '- first_divergence: none',
+  '',
   '## Top media candidates',
   ...(mediaCandidates.slice(0, 25).map((item) => `- score=${item.score} ${item.url}`) || ['- none']),
   '',
@@ -893,4 +1097,9 @@ console.log(JSON.stringify({
   strongCandidates: strong.length,
   browserRequests: browserArtifact?.requests?.length || 0,
   browserResponses: browserArtifact?.responses?.length || 0,
+  runtimeApiReplay: {
+    attempted: runtimeApiReplay.attempted,
+    observedStructured: Boolean(runtimeApiReplay.observedStructuredApi),
+    replayedStructured: Boolean(runtimeApiReplay.bestReplayedStructuredApi),
+  },
 }, null, 2));
