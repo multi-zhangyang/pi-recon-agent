@@ -1420,6 +1420,79 @@ type ProofLoopArtifact = {
 	sourceArtifacts: string[];
 };
 
+type RuntimeFailureSource = "re_replayer" | "re_autofix" | "re_operator" | "re_proof_loop";
+type RuntimeFailureCategory = "artifact_stale" | "runtime_failed" | "tool_missing" | "contract_gap";
+type RuntimeFailureStatus = "failed" | "repair_queued" | "exhausted" | "blocked";
+type RuntimeRepairAction = "rerun" | "replace-command" | "recapture-evidence" | "refresh-context" | "escalate";
+
+type FailureRepairEvidenceWriteback = {
+	failureLedgerPath: string;
+	repairQueuePath: string;
+	appendOnly: true;
+	mode: "runtime";
+};
+
+type FailureRepairArtifactHash = {
+	path: string;
+	sha256: string;
+	tier: string;
+};
+
+type FailureLedgerEventV1 = {
+	id: string;
+	ts: string;
+	source: RuntimeFailureSource;
+	scope: string;
+	category: RuntimeFailureCategory;
+	signature: string;
+	attempt: number;
+	maxAttempts: number;
+	status: RuntimeFailureStatus;
+	failedGates: string[];
+	artifacts: FailureRepairArtifactHash[];
+	artifactHashes: Array<{ path: string; sha256: string }>;
+	repairId: string;
+	budget: { retryKey: string; remainingAttempts: number; exhaustedAction: string };
+	retryBudget: { retryKey: string; remainingAttempts: number; exhaustedAction: string };
+	evidenceWriteback: FailureRepairEvidenceWriteback;
+	blockedConditions: Array<{ reason: string; unblock: string }>;
+	rollback: { required: boolean; baseline: string; allowlist: string[]; criteria: string[]; restored: boolean };
+};
+
+type RepairQueueItemV1 = {
+	repairId: string;
+	fromFailureId: string;
+	signature: string;
+	scope: string;
+	action: RuntimeRepairAction;
+	repairAction: RuntimeRepairAction;
+	commands: string[];
+	expectedArtifacts: string[];
+	expectedGates: string[];
+	preconditions: { liveAllowed: boolean; providerAllowed: boolean; requiredSecrets: string[] };
+	paused: boolean;
+	allowlist: string[];
+	rollbackCriteria: { baseline: string; mustRestore: string[]; verificationCommand: string };
+	blockedConditions: Array<{ reason: string; unblock: string }>;
+	evidenceWriteback: FailureRepairEvidenceWriteback;
+	regressionGates: string[];
+};
+
+type RuntimeFailureRepairInput = {
+	source: RuntimeFailureSource;
+	scope: string;
+	target?: string;
+	reason: string;
+	category?: RuntimeFailureCategory;
+	status?: RuntimeFailureStatus;
+	commands?: string[];
+	failedGates: string[];
+	sourceArtifacts: string[];
+	expectedArtifacts?: string[];
+	maxAttempts?: number;
+	unblock?: string;
+};
+
 type KnowledgeNode = {
 	id: string;
 	kind: string;
@@ -2067,6 +2140,14 @@ function evidenceAutofixDir(): string {
 	return join(reconDir(), "evidence", "autofix");
 }
 
+function evidenceFailuresDir(): string {
+	return join(reconDir(), "evidence", "failures");
+}
+
+function evidenceRepairsDir(): string {
+	return join(reconDir(), "evidence", "repairs");
+}
+
 function evidenceProofLoopsDir(): string {
 	return join(reconDir(), "evidence", "proof-loops");
 }
@@ -2124,6 +2205,8 @@ function ensureReconStorage(): void {
 	mkdirSync(evidenceCompilersDir(), { recursive: true });
 	mkdirSync(evidenceReplayersDir(), { recursive: true });
 	mkdirSync(evidenceAutofixDir(), { recursive: true });
+	mkdirSync(evidenceFailuresDir(), { recursive: true });
+	mkdirSync(evidenceRepairsDir(), { recursive: true });
 	mkdirSync(evidenceProofLoopsDir(), { recursive: true });
 	mkdirSync(evidenceKnowledgeDir(), { recursive: true });
 	mkdirSync(evidenceHarnessDir(), { recursive: true });
@@ -2172,6 +2255,425 @@ function readText(path: string, fallback = ""): string {
 function appendText(path: string, text: string): void {
 	const current = readText(path);
 	writeFileSync(path, `${current}${current.endsWith("\n") ? "" : "\n"}${text}`, "utf-8");
+}
+
+function runtimeFailureLedgerPath(): string {
+	return join(evidenceFailuresDir(), "ledger.jsonl");
+}
+
+function runtimeRepairQueuePath(): string {
+	return join(evidenceRepairsDir(), "queue.jsonl");
+}
+
+function failureRepairEvidenceWriteback(): FailureRepairEvidenceWriteback {
+	return {
+		failureLedgerPath: runtimeFailureLedgerPath(),
+		repairQueuePath: runtimeRepairQueuePath(),
+		appendOnly: true,
+		mode: "runtime",
+	};
+}
+
+function runtimeArtifactHashes(paths: Array<string | undefined>): FailureRepairArtifactHash[] {
+	return Array.from(new Set(paths.filter((path): path is string => Boolean(path))))
+		.filter((path) => existsSync(path))
+		.slice(0, 24)
+		.map((path) => ({
+			path,
+			sha256: createHash("sha256").update(readFileSync(path)).digest("hex"),
+			tier: contextEvidenceRank(/evidence\/([^/]+)/.exec(path)?.[1] ?? "runtime"),
+		}));
+}
+
+function runtimeFailureSignature(input: {
+	scope: string;
+	category: RuntimeFailureCategory;
+	command?: string;
+	reason?: string;
+}): string {
+	const normalized = [input.scope, input.category, input.command ?? "", input.reason ?? ""]
+		.join("\n")
+		.replace(/\b20\d{2}-\d{2}-\d{2}T[0-9:.+-]+Z\b/g, "<timestamp>")
+		.replace(/\s+/g, " ")
+		.trim();
+	return createHash("sha256").update(normalized).digest("hex");
+}
+
+function runtimeFailureAttempt(signature: string): number {
+	const rows = readText(runtimeFailureLedgerPath())
+		.split(/\r?\n/)
+		.filter(Boolean)
+		.map((line) => {
+			try {
+				return JSON.parse(line) as { signature?: string };
+			} catch {
+				return undefined;
+			}
+		})
+		.filter((row) => row?.signature === signature);
+	return rows.length + 1;
+}
+
+function runtimeFailureCategory(reason: string): RuntimeFailureCategory {
+	if (/command not found|not found|No such file|cannot stat|ModuleNotFoundError|ImportError|missing tool|dependency/i.test(reason))
+		return "tool_missing";
+	if (/artifact missing|no .*artifact|stale|hash drift/i.test(reason)) return "artifact_stale";
+	if (/blocked|unresolved|placeholder|gate|claim|contract|budget|coverage|supervisor|verifier|compiler/i.test(reason))
+		return "contract_gap";
+	return "runtime_failed";
+}
+
+function runtimeRepairAction(category: RuntimeFailureCategory, reason: string): RuntimeRepairAction {
+	if (category === "tool_missing") return "refresh-context";
+	if (category === "artifact_stale" || /unresolved|placeholder|recapture|map/i.test(reason)) return "recapture-evidence";
+	if (/budget|coverage|claim|supervisor|escalat/i.test(reason)) return "escalate";
+	if (category === "contract_gap") return "replace-command";
+	return "rerun";
+}
+
+function runtimeFailureCommandTarget(target?: string): string {
+	return target?.trim() || "<target>";
+}
+
+function buildRuntimeFailureRepair(input: RuntimeFailureRepairInput): {
+	failure: FailureLedgerEventV1;
+	repair: RepairQueueItemV1;
+} {
+	const category = input.category ?? runtimeFailureCategory(input.reason);
+	const action = runtimeRepairAction(category, input.reason);
+	const command = input.commands?.[0];
+	const signature = runtimeFailureSignature({ scope: input.scope, category, command, reason: input.reason });
+	const attempt = runtimeFailureAttempt(signature);
+	const maxAttempts = Math.max(1, input.maxAttempts ?? 3);
+	const exhausted = attempt >= maxAttempts && input.status !== "blocked";
+	const status: RuntimeFailureStatus = exhausted ? "exhausted" : (input.status ?? "repair_queued");
+	const artifacts = runtimeArtifactHashes(input.sourceArtifacts);
+	const artifactHashes = artifacts.map((artifact) => ({ path: artifact.path, sha256: artifact.sha256 }));
+	const repairId = `repair:runtime:${signature.slice(0, 16)}`;
+	const id = `fail:runtime:${signature.slice(0, 16)}:${attempt}`;
+	const exhaustedAction = `re_operator escalate ${runtimeFailureCommandTarget(input.target)}`;
+	const budget = {
+		retryKey: signature,
+		remainingAttempts: Math.max(0, maxAttempts - attempt),
+		exhaustedAction,
+	};
+	const evidenceWriteback = failureRepairEvidenceWriteback();
+	const blockedConditions = [{ reason: input.reason, unblock: input.unblock ?? (input.commands?.[0] || exhaustedAction) }];
+	const rollback = {
+		required: false,
+		baseline: artifactHashes[0]?.sha256 ?? "none",
+		allowlist: input.sourceArtifacts.filter(Boolean).slice(0, 12),
+		criteria: input.failedGates,
+		restored: false,
+	};
+	const failure: FailureLedgerEventV1 = {
+		id,
+		ts: new Date().toISOString(),
+		source: input.source,
+		scope: input.scope,
+		category,
+		signature,
+		attempt,
+		maxAttempts,
+		status,
+		failedGates: input.failedGates,
+		artifacts,
+		artifactHashes,
+		repairId,
+		budget,
+		retryBudget: budget,
+		evidenceWriteback,
+		blockedConditions,
+		rollback,
+	};
+	const commands = Array.from(new Set(input.commands?.filter(Boolean) ?? [exhaustedAction])).slice(0, 12);
+	const repair: RepairQueueItemV1 = failureToRepair(
+		failure,
+		commands.length ? commands : [exhaustedAction],
+		action,
+		input.failedGates,
+		input.expectedArtifacts ?? input.sourceArtifacts.filter(Boolean),
+	);
+	return { failure, repair };
+}
+
+function failureToRepair(
+	failure: FailureLedgerEventV1,
+	commands: string[],
+	action: RuntimeRepairAction,
+	expectedGates: string[],
+	expectedArtifacts: string[],
+): RepairQueueItemV1 {
+	const paused = commands.some((command) => /\b(?:live|provider|model|api[_-]?key|secret|token)\b/i.test(command));
+	return {
+		repairId: failure.repairId,
+		fromFailureId: failure.id,
+		signature: failure.signature,
+		scope: failure.scope,
+		action,
+		repairAction: action,
+		commands: Array.from(new Set(commands)).slice(0, 12),
+		expectedArtifacts: Array.from(new Set(expectedArtifacts.filter(Boolean))).slice(0, 24),
+		expectedGates,
+		preconditions: {
+			liveAllowed: false,
+			providerAllowed: false,
+			requiredSecrets: [],
+		},
+		paused,
+		allowlist: failure.rollback.allowlist,
+		rollbackCriteria: {
+			baseline: failure.rollback.baseline,
+			mustRestore: failure.rollback.allowlist,
+			verificationCommand: "re_proof_loop run <target> 4 2",
+		},
+		blockedConditions: failure.blockedConditions,
+		evidenceWriteback: failure.evidenceWriteback,
+		regressionGates: Array.from(new Set(["verifier_matrix_ready", ...expectedGates])).slice(0, 8),
+	};
+}
+
+function appendFailureRepairLedger(params: { failures: FailureLedgerEventV1[]; repairs: RepairQueueItemV1[] }): void {
+	if (!params.failures.length && !params.repairs.length) return;
+	ensureReconStorage();
+	if (params.failures.length) appendText(runtimeFailureLedgerPath(), params.failures.map((item) => JSON.stringify(item)).join("\n") + "\n");
+	if (params.repairs.length) appendText(runtimeRepairQueuePath(), params.repairs.map((item) => JSON.stringify(item)).join("\n") + "\n");
+}
+
+function appendRuntimeFailureInputs(inputs: RuntimeFailureRepairInput[]): void {
+	const failures: FailureLedgerEventV1[] = [];
+	const repairs: RepairQueueItemV1[] = [];
+	const seen = new Set<string>();
+	for (const input of inputs.slice(0, 32)) {
+		const category = input.category ?? runtimeFailureCategory(input.reason);
+		const signature = runtimeFailureSignature({
+			scope: input.scope,
+			category,
+			command: input.commands?.[0],
+			reason: input.reason,
+		});
+		if (seen.has(signature)) continue;
+		seen.add(signature);
+		const { failure, repair } = buildRuntimeFailureRepair(input);
+		failures.push(failure);
+		repairs.push(repair);
+	}
+	appendFailureRepairLedger({ failures, repairs });
+}
+
+function appendRuntimeFailureRepairFromReplay(replay: ReplayArtifact, path: string): void {
+	if (replay.mode !== "run" || (replay.failed === 0 && replay.blocked.length === 0)) return;
+	const targetRef = runtimeFailureCommandTarget(replay.target);
+	const sourceArtifacts = [path, replay.compilerArtifact, ...replay.sourceArtifacts].filter(Boolean) as string[];
+	const inputs: RuntimeFailureRepairInput[] = [];
+	for (const execution of replay.executions.filter((item) => item.status === "failed").slice(0, 16)) {
+		const reason = `replay failed: ${execution.stepId} exit=${execution.exit} killed=${execution.killed === true} command=${execution.command} stdout_sha256=${execution.stdoutHash} stderr_sha256=${execution.stderrHash} stderr=${truncateMiddle(execution.stderrHead, 260)}`;
+		inputs.push({
+			source: "re_replayer",
+			scope: `${replay.target ?? replay.route ?? replay.missionId ?? "replay"}:${execution.stepId}`,
+			target: replay.target,
+			reason,
+			category: runtimeFailureCategory(reason),
+			status: "failed",
+			commands: [`re_autofix plan ${targetRef}`, `re_replayer run ${targetRef} 1`, `re_operator escalate ${targetRef}`],
+			failedGates: ["replay_ready", "autofix_ready"],
+			sourceArtifacts,
+			expectedArtifacts: [path, latestAutofixArtifactPath()].filter(Boolean) as string[],
+		});
+	}
+	for (const blocked of replay.blocked.slice(0, 16)) {
+		const command = /::\s*(.+)$/.exec(blocked)?.[1]?.trim();
+		inputs.push({
+			source: "re_replayer",
+			scope: `${replay.target ?? replay.route ?? replay.missionId ?? "replay"}:blocked:${slug(blocked).slice(0, 24)}`,
+			target: replay.target,
+			reason: `replay blocked: ${blocked}`,
+			category: runtimeFailureCategory(blocked),
+			status: "blocked",
+			commands: [`re_autofix plan ${targetRef}`, command ? `re_operator plan ${targetRef}` : `re_operator escalate ${targetRef}`],
+			failedGates: ["replay_ready", "operator_queue_ready"],
+			sourceArtifacts,
+			expectedArtifacts: [path, latestAutofixArtifactPath()].filter(Boolean) as string[],
+			unblock: command ?? `re_autofix plan ${targetRef}`,
+		});
+	}
+	appendRuntimeFailureInputs(inputs);
+}
+
+function appendRuntimeFailureRepairFromAutofix(autofix: AutofixArtifact, path: string): void {
+	const targetRef = runtimeFailureCommandTarget(autofix.target);
+	const sourceArtifacts = [path, autofix.replayArtifact, autofix.compilerArtifact, ...autofix.sourceArtifacts].filter(Boolean) as string[];
+	const queuedCommands = [
+		...autofix.patchQueue,
+		...autofix.commandSubstitutions,
+		...autofix.bootstrapQueue,
+		...autofix.evidenceRecaptureQueue,
+	].map((item) => item.command);
+	const inputs: RuntimeFailureRepairInput[] = [];
+	for (const failure of autofix.failures.slice(0, 16)) {
+		inputs.push({
+			source: "re_autofix",
+			scope: `${autofix.target ?? autofix.route ?? autofix.missionId ?? "autofix"}:failure:${slug(failure).slice(0, 24)}`,
+			target: autofix.target,
+			reason: `autofix queued repair for replay/compiler failure: ${failure}`,
+			category: runtimeFailureCategory(failure),
+			status: "repair_queued",
+			commands: queuedCommands.length ? queuedCommands.slice(0, 8) : [`re_operator escalate ${targetRef}`],
+			failedGates: ["autofix_ready", "replay_ready"],
+			sourceArtifacts,
+			expectedArtifacts: [path, autofix.replayArtifact].filter(Boolean) as string[],
+		});
+	}
+	for (const item of [
+		...autofix.patchQueue,
+		...autofix.commandSubstitutions,
+		...autofix.bootstrapQueue,
+		...autofix.evidenceRecaptureQueue,
+	]
+		.filter((entry) => entry.status === "blocked")
+		.slice(0, 16)) {
+		inputs.push({
+			source: "re_autofix",
+			scope: `${autofix.target ?? autofix.route ?? autofix.missionId ?? "autofix"}:${item.id}`,
+			target: autofix.target,
+			reason: `autofix item blocked: ${item.kind} ${item.reason}; command=${item.command}`,
+			category: runtimeFailureCategory(`${item.reason} ${item.command}`),
+			status: "blocked",
+			commands: [item.command, `re_operator escalate ${targetRef}`],
+			failedGates: ["autofix_ready", "operator_queue_ready"],
+			sourceArtifacts: [path, ...item.sourceArtifacts, ...sourceArtifacts],
+			expectedArtifacts: [path, autofix.replayArtifact].filter(Boolean) as string[],
+		});
+	}
+	appendRuntimeFailureInputs(inputs);
+}
+
+function appendRuntimeFailureRepairFromOperator(operator: OperatorArtifact, path: string): void {
+	if (operator.mode !== "dispatch") return;
+	const targetRef = runtimeFailureCommandTarget(operator.target);
+	const sourceArtifacts = [path, operator.contextArtifact, ...operator.sourceArtifacts].filter(Boolean) as string[];
+	const inputs: RuntimeFailureRepairInput[] = [];
+	for (const execution of operator.executed.filter((item) => item.status === "blocked").slice(0, 16)) {
+		inputs.push({
+			source: "re_operator",
+			scope: `${operator.target ?? operator.route ?? operator.missionId ?? "operator"}:${execution.stepId}`,
+			target: operator.target,
+			reason: `operator execution blocked: command=${execution.command}; output=${truncateMiddle(execution.output, 360)}`,
+			category: runtimeFailureCategory(execution.output),
+			status: "blocked",
+			commands: [`re_autofix plan ${targetRef}`, `re_proof_loop run ${targetRef} 4 2`, `re_operator escalate ${targetRef}`],
+			failedGates: ["operator_queue_ready", "proof_loop_ready"],
+			sourceArtifacts,
+			expectedArtifacts: [path, latestProofLoopArtifactPath()].filter(Boolean) as string[],
+		});
+	}
+	for (const step of operator.steps.filter((item) => item.status === "blocked").slice(0, 16)) {
+		inputs.push({
+			source: "re_operator",
+			scope: `${operator.target ?? operator.route ?? operator.missionId ?? "operator"}:${step.id}`,
+			target: operator.target,
+			reason: `operator step blocked: ${step.reason ?? "blocked"}; command=${step.command}`,
+			category: runtimeFailureCategory(`${step.reason ?? ""} ${step.command}`),
+			status: "blocked",
+			commands: [`re_autofix plan ${targetRef}`, `re_operator escalate ${targetRef}`],
+			failedGates: ["operator_queue_ready"],
+			sourceArtifacts: [path, ...step.sourceArtifacts, ...sourceArtifacts],
+			expectedArtifacts: [path].filter(Boolean),
+		});
+	}
+	for (const row of operator.operatorFeedback
+		.filter((item) => /(missing_tool_or_dependency|unresolved_target|runtime_failure|dispatcher_gap|failure_budget_exhausted|swarm_retry_queue|worker_retry_blocked)/i.test(item))
+		.slice(0, 16)) {
+		const category = operatorFeedbackCategory(row);
+		const commands = operatorFeedbackFallbackCommands(row, operator.target);
+		inputs.push({
+			source: "re_operator",
+			scope: `${operator.target ?? operator.route ?? operator.missionId ?? "operator"}:feedback:${slug(row).slice(0, 24)}`,
+			target: operator.target,
+			reason: `operator feedback ${category}: ${row}`,
+			category: runtimeFailureCategory(row),
+			status: /failure_budget_exhausted/i.test(row) ? "exhausted" : "repair_queued",
+			commands: commands.length ? commands : [`re_operator escalate ${targetRef}`],
+			failedGates: ["operator_queue_ready", "autofix_ready"],
+			sourceArtifacts,
+			expectedArtifacts: [path, latestAutofixArtifactPath()].filter(Boolean) as string[],
+		});
+	}
+	for (const report of operator.commanderDispatchReport.filter((item) => /failure_budget_exhausted/i.test(item)).slice(0, 4)) {
+		inputs.push({
+			source: "re_operator",
+			scope: `${operator.target ?? operator.route ?? operator.missionId ?? "operator"}:failure_budget`,
+			target: operator.target,
+			reason: report,
+			category: "contract_gap",
+			status: "exhausted",
+			commands: [`re_proof_loop run ${targetRef} 4 2`, `re_operator escalate ${targetRef}`],
+			failedGates: ["operator_queue_ready", "proof_loop_ready"],
+			sourceArtifacts,
+			expectedArtifacts: [path, latestProofLoopArtifactPath()].filter(Boolean) as string[],
+		});
+	}
+	appendRuntimeFailureInputs(inputs);
+}
+
+function appendRuntimeFailureRepairFromProofLoop(proof: ProofLoopArtifact, path: string): void {
+	if (
+		proof.mode !== "run" ||
+		(!["needs_repair", "blocked"].includes(proof.verdict) &&
+			!proof.steps.some((step) => step.status === "blocked") &&
+			!proof.executed.some((execution) => execution.status === "blocked"))
+	)
+		return;
+	const targetRef = runtimeFailureCommandTarget(proof.target);
+	const sourceArtifacts = [path, ...proof.bridgeArtifacts, ...proof.sourceArtifacts].filter(Boolean) as string[];
+	const repairCommands = proof.nextActions.length
+		? proof.nextActions.slice(0, 10)
+		: [`re_autofix plan ${targetRef}`, `re_delegate plan ${targetRef}`, `re_swarm run ${targetRef}`];
+	const inputs: RuntimeFailureRepairInput[] = [];
+	if (proof.verdict === "needs_repair" || proof.verdict === "blocked") {
+		const reason = `proof loop verdict=${proof.verdict}; specialist=${proof.specialistQueue.length}; swarm_bridge=${proof.swarmBridge.length}; operator_feedback=${proof.operatorFeedback.length}`;
+		inputs.push({
+			source: "re_proof_loop",
+			scope: `${proof.target ?? proof.route ?? proof.missionId ?? "proof"}:verdict`,
+			target: proof.target,
+			reason,
+			category: "contract_gap",
+			status: proof.verdict === "blocked" ? "blocked" : "repair_queued",
+			commands: repairCommands,
+			failedGates: ["proof_loop_ready", "verifier_matrix_ready", "compiler_ready", "replay_ready", "autofix_ready"],
+			sourceArtifacts,
+			expectedArtifacts: [path, latestSupervisorArtifactPath(), latestAutofixArtifactPath()].filter(Boolean) as string[],
+		});
+	}
+	for (const step of proof.steps.filter((item) => item.status === "blocked").slice(0, 16)) {
+		inputs.push({
+			source: "re_proof_loop",
+			scope: `${proof.target ?? proof.route ?? proof.missionId ?? "proof"}:${step.id}`,
+			target: proof.target,
+			reason: `proof-loop step blocked: ${step.reason ?? "blocked"}; command=${step.command}`,
+			category: runtimeFailureCategory(`${step.reason ?? ""} ${step.command}`),
+			status: "blocked",
+			commands: [step.command, ...repairCommands].slice(0, 8),
+			failedGates: ["proof_loop_ready"],
+			sourceArtifacts: [path, ...step.sourceArtifacts, ...sourceArtifacts],
+			expectedArtifacts: [path].filter(Boolean),
+		});
+	}
+	for (const execution of proof.executed.filter((item) => item.status === "blocked").slice(0, 16)) {
+		inputs.push({
+			source: "re_proof_loop",
+			scope: `${proof.target ?? proof.route ?? proof.missionId ?? "proof"}:${execution.stepId}`,
+			target: proof.target,
+			reason: `proof-loop execution blocked: command=${execution.command}; output=${truncateMiddle(execution.output, 360)}`,
+			category: runtimeFailureCategory(execution.output),
+			status: "blocked",
+			commands: repairCommands,
+			failedGates: ["proof_loop_ready", "operator_queue_ready"],
+			sourceArtifacts,
+			expectedArtifacts: [path, latestAutofixArtifactPath()].filter(Boolean) as string[],
+		});
+	}
+	appendRuntimeFailureInputs(inputs);
 }
 
 function truncateMiddle(text: string, limit: number): string {
@@ -16363,6 +16865,7 @@ function writeOperatorArtifact(operator: OperatorArtifact): string {
 		confidence: "context-pack/operator dispatcher",
 	});
 	updateMissionGate("operator_queue_ready", "done", path);
+	appendRuntimeFailureRepairFromOperator(operator, path);
 	return path;
 }
 
@@ -17717,6 +18220,7 @@ function writeReplayerArtifact(replay: ReplayArtifact): string {
 		confidence: "compiler repro command replay matrix",
 	});
 	if (replay.mode === "run") updateMissionGate("replay_ready", replay.executions.length ? "done" : "blocked", path);
+	appendRuntimeFailureRepairFromReplay(replay, path);
 	return path;
 }
 
@@ -18083,6 +18587,7 @@ function writeAutofixArtifact(autofix: AutofixArtifact): string {
 		confidence: "replay/compile repair queue",
 	});
 	updateMissionGate("autofix_ready", "done", path);
+	appendRuntimeFailureRepairFromAutofix(autofix, path);
 	return path;
 }
 
@@ -18741,6 +19246,7 @@ function writeProofLoopArtifact(proof: ProofLoopArtifact): string {
 		confidence: "verifier/compiler/replayer/autofix bounded proof loop",
 	});
 	updateMissionGate("proof_loop_ready", proof.verdict === "blocked" ? "blocked" : "done", path);
+	appendRuntimeFailureRepairFromProofLoop(proof, path);
 	return path;
 }
 

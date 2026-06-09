@@ -1616,6 +1616,15 @@ describe("Pi-RECON kernel profile", () => {
 			readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8"),
 		) as { gates: Array<{ name: string; status: string }> };
 		expect(missionAfterProofLoop.gates.find((gate) => gate.name === "proof_loop_ready")?.status).toBe("done");
+		const runtimeFailureLedger = join(agentDir, "recon", "evidence", "failures", "ledger.jsonl");
+		const runtimeRepairQueue = join(agentDir, "recon", "evidence", "repairs", "queue.jsonl");
+		expect(existsSync(runtimeFailureLedger)).toBe(true);
+		expect(existsSync(runtimeRepairQueue)).toBe(true);
+		expect(readFileSync(runtimeFailureLedger, "utf-8")).toMatch(
+			/"source":"re_(?:replayer|autofix|operator|proof_loop)"/,
+		);
+		expect(readFileSync(runtimeFailureLedger, "utf-8")).toContain('"retryBudget"');
+		expect(readFileSync(runtimeRepairQueue, "utf-8")).toContain('"repairAction"');
 
 		const knowledgeTool = tools.get("re_knowledge_graph") as {
 			execute: (

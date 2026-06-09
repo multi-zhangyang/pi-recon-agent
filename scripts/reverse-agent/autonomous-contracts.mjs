@@ -360,6 +360,12 @@ function buildResult(root) {
 		roleContract: validateRoleContract(hardEval?.contract ?? {}),
 		claimLedger: validateClaimLedger(hardEval?.ledger ?? []),
 		failureRepair: validateFailureRepair(hardEval?.failures ?? [], hardEval?.repairQueue ?? []),
+		runtimeFailureRepairMarkers: passFail(true, {
+			markers: [
+				readMarkers(root, "packages/coding-agent/src/core/recon-profile.ts", ["type FailureLedgerEventV1", "type RepairQueueItemV1", "function runtimeFailureSignature", "function failureToRepair", "function appendFailureRepairLedger", "appendRuntimeFailureRepairFromReplay", "appendRuntimeFailureRepairFromAutofix", "appendRuntimeFailureRepairFromOperator", "appendRuntimeFailureRepairFromProofLoop", "runtimeFailureLedgerPath", "runtimeRepairQueuePath"]),
+				readMarkers(root, ".pi/extensions/reverse-pentest-core.ts", ["type FailureLedgerEventV1", "type RepairQueueItemV1", "function runtimeFailureSignature", "function failureToRepair", "function appendFailureRepairLedger", "appendRuntimeFailureRepairFromReplay", "appendRuntimeFailureRepairFromAutofix", "appendRuntimeFailureRepairFromOperator", "appendRuntimeFailureRepairFromProofLoop", "runtimeFailureLedgerPath", "runtimeRepairQueuePath"]),
+			],
+		}),
 		contextCompactAudit: passFail(Boolean(contextAudit?.ok), { summary: contextAudit?.summary ?? null }),
 		contextRuntimeMarkers: passFail(true, {
 			markers: [
@@ -377,6 +383,7 @@ function buildResult(root) {
 	};
 	checks.contextRuntimeMarkers.status = checks.contextRuntimeMarkers.markers.every((file) => file.exists && file.markers.every((marker) => marker.present)) ? "pass" : "fail";
 	checks.runtimeParallelPlanMarkers.status = checks.runtimeParallelPlanMarkers.markers.every((file) => file.exists && file.markers.every((marker) => marker.present)) ? "pass" : "fail";
+	checks.runtimeFailureRepairMarkers.status = checks.runtimeFailureRepairMarkers.markers.every((file) => file.exists && file.markers.every((marker) => marker.present)) ? "pass" : "fail";
 	const releaseGateMetadata = buildReleaseGateMetadata({ checks, hardEval, contextAudit, parallelPlan, parallelPlanAudit });
 	checks.releaseGateMetadata = validateReleaseGateMetadata(releaseGateMetadata);
 	const ok = Object.values(checks).every((check) => check.status === "pass");
@@ -389,7 +396,7 @@ function buildResult(root) {
 		ok,
 		currentLevel: ok ? "professional reverse/pentest organization with machine-readable control contracts" : "contract gaps",
 		topAutonomousDefinition: false,
-		topAutonomousReason: "Schemas, validators, ReconParallelPlanV1, and exact context resume markers exist, but full independent subagent runtime, negative-fixture resume gates, and runtime-integrated repair execution still require implementation.",
+		topAutonomousReason: "Schemas, validators, ReconParallelPlanV1, exact context resume markers, and runtime failure/repair ledger hooks exist, but full independent subagent runtime, negative-fixture resume gates, and claim-level runtime synthesis still require implementation.",
 		schemas: SCHEMAS,
 		parallelPlan,
 		releaseGateMetadata,
@@ -418,7 +425,7 @@ function buildResult(root) {
 		nextNonTestWork: [
 			"Persist releaseGateMetadata in CI/release artifacts and make release tooling consume it directly.",
 			"Harden ResumeContractV2 with negative fixtures, completion closure enforcement, and operator/proof-loop ledger state writeback.",
-			"Promote FailureLedgerEventV1 / RepairQueueItemV1 into re_replayer, re_autofix, re_operator, and compound-frontier outputs.",
+			"Extend FailureLedgerEventV1 / RepairQueueItemV1 runtime hooks with strict schema fixtures and compound-frontier/agent role retry outputs.",
 			"Promote ClaimLedgerEventV1 into re_supervisor and re_compiler so final reports require validated claim IDs.",
 		],
 	};

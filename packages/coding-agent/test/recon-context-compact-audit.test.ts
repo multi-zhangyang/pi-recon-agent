@@ -17,7 +17,9 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const auditScript = join(repoRoot, "scripts/reverse-agent/context-compact-audit.mjs");
 
 function runAudit(): ContextCompactAudit {
-	return JSON.parse(execFileSync("node", [auditScript, repoRoot, "--json"], { encoding: "utf-8" })) as ContextCompactAudit;
+	return JSON.parse(
+		execFileSync("node", [auditScript, repoRoot, "--json"], { encoding: "utf-8" }),
+	) as ContextCompactAudit;
 }
 
 describe("Pi-RECON context compact audit harness", () => {
