@@ -1,0 +1,54 @@
+{
+  "defaultThinkingLevel": "high",
+  "steeringMode": "all",
+  "followUpMode": "all",
+  "enableSkillCommands": true,
+  "quietStartup": false,
+  "hideThinkingBlock": false,
+  "collapseChangelog": true,
+  "transport": "auto",
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 32768,
+    "keepRecentTokens": 36000
+  },
+  "branchSummary": {
+    "reserveTokens": 24576,
+    "skipPrompt": true
+  },
+  "retry": {
+    "enabled": true,
+    "maxRetries": 3,
+    "baseDelayMs": 1500,
+    "provider": {
+      "timeoutMs": 240000,
+      "maxRetries": 2,
+      "maxRetryDelayMs": 30000
+    }
+  },
+  "terminal": {
+    "showImages": true,
+    "imageWidthCells": 72,
+    "clearOnShrink": true,
+    "showTerminalProgress": true
+  },
+  "images": {
+    "autoResize": true,
+    "blockImages": false
+  },
+  "markdown": {
+    "codeBlockIndent": "  "
+  },
+  "warnings": {
+    "anthropicExtraUsage": false
+  },
+  "extensions": [
+    "extensions/reverse-pentest-core.ts"
+  ],
+  "skills": [
+    "skills/reverse-pentest-orchestrator/SKILL.md"
+  ],
+  "prompts": [
+    "prompts"
+  ]
+}
