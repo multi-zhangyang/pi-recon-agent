@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { validateAutonomousRuntimeContracts } from "./autonomous-runtime-contracts.mjs";
 import { FAILURE_REPAIR_CONTRACT_SCHEMA_PATH, FAILURE_REPAIR_DEDUP_WINDOW, FAILURE_REPAIR_STRICT_FIXTURE_PATH, validateFailureRepairBatch, validateFailureRepairStrictFixture } from "./failure-repair-ledger.mjs";
 
 const CONTRACT_VERSION = 1;
@@ -56,6 +57,11 @@ const SCHEMAS = {
 		eventTypes: ["artifact_handoff", "claim", "validation", "challenge", "resolution"],
 		claimRequired: ["seq", "type", "claimId", "role", "scope", "kind", "statement", "evidenceRefs", "prevHash", "eventHash"],
 		validationRequired: ["seq", "type", "claimId", "role", "result", "checks", "prevHash", "eventHash"],
+	},
+	AutonomousRuntimeBatchV1: {
+		required: ["subagentRuntimeManifests", "parallelShardStates", "compactResumeStates", "repairBudgetStates", "claimPromotionGates"],
+		schemaPath: "schemas/reverse-agent/autonomous-runtime-contract.schema.json",
+		fixturePath: "fixtures/reverse-agent/autonomous-runtime-contract.fixture.json",
 	},
 };
 
@@ -256,6 +262,22 @@ function validateFailureRepairStrictFixtureFile(root) {
 	});
 }
 
+function validateAutonomousRuntimeContractGate(root) {
+	const result = validateAutonomousRuntimeContracts(root);
+	return passFail(result.ok, {
+		schemaPath: SCHEMAS.AutonomousRuntimeBatchV1.schemaPath,
+		fixturePath: SCHEMAS.AutonomousRuntimeBatchV1.fixturePath,
+		schema: result.schema?.ok ? "pass" : "fail",
+		fixture: result.fixture?.ok ? "pass" : "fail",
+		validFixture: result.fixture?.validOk ? "pass" : "fail",
+		negativeFixtures: (result.fixture?.negatives ?? []).map((negative) => ({
+			name: negative.name,
+			expected: negative.expected,
+			rejected: negative.rejected,
+		})),
+	});
+}
+
 function buildReleaseGateMetadata({ checks, hardEval, contextAudit, parallelPlan, parallelPlanAudit }) {
 	const failedChecks = Object.entries(checks)
 		.filter(([, check]) => check.status !== "pass")
@@ -287,6 +309,7 @@ function buildReleaseGateMetadata({ checks, hardEval, contextAudit, parallelPlan
 		`release_gate.failure_repair=${checks.failureRepair?.status ?? "missing"}`,
 		`release_gate.failure_repair_schema=${checks.failureRepairSchemaFile?.status ?? "missing"}`,
 		`release_gate.failure_repair_fixture=${checks.failureRepairStrictFixture?.status ?? "missing"}`,
+		`release_gate.autonomous_runtime_contract=${checks.autonomousRuntimeContract?.status ?? "missing"}`,
 		`release_gate.role_contract=${checks.roleContract?.status ?? "missing"}`,
 		`release_gate.claim_ledger=${checks.claimLedger?.status ?? "missing"}`,
 		`release_gate.runtime_claim_ledger=${checks.runtimeClaimLedgerMarkers?.status ?? "missing"}`,
@@ -317,6 +340,7 @@ function validateReleaseGateMetadata(rows) {
 		"release_gate.claim_gate_verdict=",
 		"release_gate.failure_repair_schema=",
 		"release_gate.failure_repair_fixture=",
+		"release_gate.autonomous_runtime_contract=",
 		"release_gate.runtime_claim_ledger=",
 		"release_gate.runtime_claim_ledger_sources=",
 		"release_gate.runtime_claim_ledger_re_swarm=",
@@ -404,6 +428,7 @@ function buildResult(root) {
 		failureRepair: validateFailureRepair(hardEval?.failures ?? [], hardEval?.repairQueue ?? []),
 		failureRepairSchemaFile: validateFailureRepairSchemaFile(root),
 		failureRepairStrictFixture: validateFailureRepairStrictFixtureFile(root),
+		autonomousRuntimeContract: validateAutonomousRuntimeContractGate(root),
 		runtimeFailureRepairMarkers: passFail(true, {
 			markers: [
 				readMarkers(root, "packages/coding-agent/src/core/recon-profile.ts", ["type FailureLedgerEventV1", "type RepairQueueItemV1", "function runtimeFailureSignature", "function failureToRepair", "function appendFailureRepairLedger", "appendRuntimeFailureRepairFromReplay", "appendRuntimeFailureRepairFromAutofix", "appendRuntimeFailureRepairFromOperator", "appendRuntimeFailureRepairFromProofLoop", "runtimeFailureLedgerPath", "runtimeRepairQueuePath"]),
@@ -464,7 +489,7 @@ function buildResult(root) {
 		currentLevel: ok ? "professional reverse/pentest organization with machine-readable control contracts" : "contract gaps",
 		topAutonomousDefinition: false,
 		topAutonomousReason:
-			"Schemas, validators, ReconParallelPlanV1, agent-dogfood subagent runtime manifests plus agent-dogfood / re_swarm / compound runtime ClaimLedgerEventV1 rows, exact context resume markers/negative fixtures, strict FailureLedgerEventV1/RepairQueueItemV1 fixture + deterministic duplicate rejection, runtime failure/repair ledger hooks, compound/role retry failure-repair outputs, and strict claim final-path gates exist; generic re_swarm independent subagent runtime and cross-session resume fixtures remain optional hardening.",
+			"Schemas, validators, ReconParallelPlanV1, agent-dogfood subagent runtime manifests plus strict AutonomousRuntimeBatchV1 fixture/gate, agent-dogfood / re_swarm / compound runtime ClaimLedgerEventV1 rows, exact context resume markers/negative fixtures, strict FailureLedgerEventV1/RepairQueueItemV1 fixture + deterministic duplicate rejection, runtime failure/repair ledger hooks, compound/role retry failure-repair outputs, and strict claim final-path gates exist; generic re_swarm independent subagent runtime and live cross-session resume regression remain optional hardening.",
 		schemas: SCHEMAS,
 		parallelPlan,
 		releaseGateMetadata,
@@ -492,9 +517,9 @@ function buildResult(root) {
 		},
 		nextNonTestWork: [
 			"Keep gate:claim-release marker consumption wired through supervisor/compiler/complete and promote pass markers only after required gaps close.",
-			"Harden ResumeContractV2 with cross-session/multi-compact negative fixtures and operator/proof-loop ledger state writeback.",
-			"Promote FailureLedgerEventV1 / RepairQueueItemV1 strict validator into independent sub-agent/session runtime regression gates.",
+			"Keep AutonomousRuntimeBatchV1 as the strict regression gate for sub-agent manifests, shard state, compact resume transitions, repair budgets, and runtime claim promotion.",
 			"Wire re_swarm/compound runtime ClaimLedgerEventV1 rows into strict validator regression gates and supervisor/compiler/complete claim-promotion coverage.",
+			"Promote optional re_swarm independent sub-agent/session runtime from contract fixture to live runtime mode when provider budget is available.",
 		],
 	};
 }

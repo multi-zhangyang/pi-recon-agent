@@ -16,6 +16,12 @@ Installed repi launcher:
 Isolated profile:
   ${REPI_CODING_AGENT_DIR:-${REPI_AGENT_DIR:-$HOME/.repi/agent}}
 
+Normal pi profile:
+  $HOME/.pi/agent (not modified by install-repi.sh)
+
+Optional one-way credential/model bootstrap:
+  repi --import-pi-auth --offline --list-models
+
 Smoke test:
   repi --offline --help
   repi --offline --list-models

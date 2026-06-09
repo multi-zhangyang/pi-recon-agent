@@ -59,8 +59,22 @@ for name in agentsec audit-agent chain cl cloud decision exploit firmware identi
   move_if_exists "$AGENT_DIR/prompts/$name.md" "prompts/$name.md"
 done
 
+for name in recon evidence memory mission reports vendor; do
+  move_if_exists "$AGENT_DIR/$name" "$name"
+done
+
+if [ -L "$AGENT_DIR/node_modules" ]; then
+  move_if_exists "$AGENT_DIR/node_modules" "node_modules"
+fi
+
 move_if_contains_recon "$AGENT_DIR/SYSTEM.md" "SYSTEM.md"
 move_if_contains_recon "$AGENT_DIR/APPEND_SYSTEM.md" "APPEND_SYSTEM.md"
+
+for f in "$AGENT_DIR"/SYSTEM.md.bak.* "$AGENT_DIR"/APPEND_SYSTEM.md.bak.* "$AGENT_DIR"/settings.json.bak.*; do
+  [ -e "$f" ] || continue
+  base="$(basename "$f")"
+  move_if_contains_recon "$f" "legacy-backups/$base"
+done
 
 if [ -d "$AGENT_DIR/tools" ]; then
   mkdir -p "$BACKUP/tools"

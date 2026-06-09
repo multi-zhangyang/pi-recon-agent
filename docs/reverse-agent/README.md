@@ -4,16 +4,20 @@
 
 ## 两层形态
 
-本仓库现在有两种 Pi-RECON 形态：
+本仓库现在有两种 Pi-RECON 形态，默认只启用独立 `repi`：
 
-1. **源码内核入口**：`packages/coding-agent/src/core/recon-profile.ts` + CLI `--recon` / `--reverse-pentest`。这是内置 profile：直接接入 resource loader、inline extension factory、system prompt、append prompt、skill/prompt 注入、记忆和工具索引。
-2. **文件型 profile**：`.pi/SYSTEM.md`、`.pi/APPEND_SYSTEM.md`、`.pi/extensions/reverse-pentest-core.ts`、`.pi/skills/*`、`.pi/prompts/*`。这是项目/全局部署形态，方便迁移和外部分发。
+1. **源码内核入口**：`packages/coding-agent/src/core/recon-profile.ts` + CLI `--recon` / `--reverse-pentest`。这是内置 profile：直接接入 resource loader、inline extension factory、system prompt、append prompt、skill/prompt 注入、记忆和工具索引；`repi` 默认使用这一层。
+2. **文件型 profile 镜像**：`.pi/SYSTEM.md`、`.pi/APPEND_SYSTEM.md`、`.pi/extensions/reverse-pentest-core.ts`、`.pi/skills/*`、`.pi/prompts/*`。这是兼容/迁移材料，不再默认塞进普通 `pi` 的 `~/.pi/agent`。
 
-优先使用源码入口：
+优先使用独立入口：
 
 ```bash
+scripts/reverse-agent/install-repi.sh /root/pi-diy/pi
+repi
+repi -p "分析这个 ELF 的许可证校验逻辑"
+
+# 开发调试才直接使用源码 pi-test 入口
 ./pi-test.sh --recon
-./pi-test.sh --reverse-pentest -p "分析这个 ELF 的许可证校验逻辑"
 ```
 
 如果已经安装了旧的全局 `.pi/extensions/reverse-pentest-core.ts`，`--recon` 会保留内置 inline kernel profile，并抑制同名 `re_route` / `re_memory` / `re_tool_index` 工具冲突。
@@ -75,13 +79,14 @@ Pi-RECON 在 `packages/coding-agent/src/core/recon-profile.ts`、`.pi/SYSTEM.md`
 
 ## 独立启动器 repi
 
-`repi` 是推荐入口：它不是把 Pi-RECON 继续塞进普通 `pi` 的 `~/.pi/agent`，而是设置独立运行时：
+`repi` 是推荐入口：它不是把 Pi-RECON 继续塞进普通 `pi` 的 `~/.pi/agent`，而是设置独立运行时；默认也不会复制普通 `pi` 的 auth/models：
 
 ```text
 command: repi
 agent dir: ~/.repi/agent
 storage: ~/.repi/agent/recon/
 normal pi dir: ~/.pi/agent
+legacy import: disabled by default
 ```
 
 安装：
@@ -90,6 +95,7 @@ normal pi dir: ~/.pi/agent
 scripts/reverse-agent/install-repi.sh /root/pi-diy/pi
 repi --offline --help
 repi --offline --list-models
+npm run gate:repi-isolation
 ```
 
 默认隔离参数：
@@ -98,7 +104,13 @@ repi --offline --list-models
 --recon --no-extensions --no-skills --no-prompt-templates --no-approve --no-context-files
 ```
 
-需要加载项目 AGENTS/CLAUDE 和项目 `.pi/settings.json` 时使用：
+如需把已有普通 `pi` 的登录态一次性复制到 `repi`，显式执行：
+
+```bash
+repi --import-pi-auth --offline --list-models
+```
+
+这是单向复制到 `~/.repi/agent`，不会修改 `~/.pi/agent`。需要加载项目 AGENTS/CLAUDE 和项目 `.pi/settings.json` 时使用：
 
 ```bash
 repi --project-context
@@ -203,6 +215,9 @@ scripts/reverse-agent/install-repi.sh /root/pi-diy/pi
 
 # 如以前装过旧全局 profile，清理旧污染到备份目录
 scripts/reverse-agent/clean-global-pi-recon.sh
+
+# 验证 repi/pi 隔离，不应再出现 model pattern、API key、collision、Global tools 报错
+npm run gate:repi-isolation
 
 # 启动 Pi-RECON（交互模式）
 repi
@@ -326,7 +341,7 @@ agent-dogfood 以 `--plan-json --plan-only` 预览；runtime 层已经让 `re_sw
 当前状态：`re_swarm` 已写入 `planCoverage` / `releaseGateMetadata` / runtime ClaimLedgerEventV1，`re_supervisor`
 已把 `claimGatePolicy` / `claimGateResult` 变成硬门禁，`gate:claim-release` 已生成机器可读
 strict marker，failure/repair ledger 已接收 runtime failed|blocked rows 并回流 operator /
-proof-loop；agent-dogfood 已写 per-attempt subagent runtime manifest 和 runtime claim-ledger hash chain；re_swarm 与 compound-frontier 也已输出 runtime ClaimLedgerEventV1 hash chain；compound/role retry 已输出 canonical failure/repair rows。通用 re_swarm 独立子会话 runtime、更多 cross-session/multi-compact 负例和 runtime ledger regression wiring 属于继续硬化项，不影响当前专业组织 agent 使用。
+proof-loop；agent-dogfood 已写 per-attempt subagent runtime manifest 和 runtime claim-ledger hash chain；AutonomousRuntimeBatchV1 strict gate 已覆盖 subagent manifest、shard state、compact resume transition、repair budget 和 runtime claim promotion；re_swarm 与 compound-frontier 也已输出 runtime ClaimLedgerEventV1 hash chain；compound/role retry 已输出 canonical failure/repair rows。通用 re_swarm 独立子会话 runtime、更多 cross-session/multi-compact 负例和 runtime ledger regression wiring 属于继续硬化项，不影响当前专业组织 agent 使用。
 
 ## Reflection/evolution 闭环
 
@@ -501,9 +516,10 @@ npm run gate:claim-release
 marker 会被 `re_supervisor`、`re_compiler final` 和 `re_complete audit` 读取。只要
 marker 缺失、blocked，或者存在 required platform gaps，最终报告 gate 必须 blocked。
 
-`scripts/reverse-agent/autonomous-contracts.mjs . --strict` 聚合四类控制合同：`ReconParallelPlanV1`、`ResumeContractV2`、`FailureLedgerEventV1/RepairQueueItemV1`、`RoleContractV1/ClaimLedgerEventV1`，并确认 context compact audit 仍全绿。常用入口：
+`scripts/reverse-agent/autonomous-runtime-contracts.mjs . --strict` 验证 autonomous runtime strict fixture：subagent manifest、parallel shard state、compact resume transition、repair budget 与 runtime claim promotion gate。`scripts/reverse-agent/autonomous-contracts.mjs . --strict` 会把该 gate 纳入总控制合同，并继续聚合 `ReconParallelPlanV1`、`ResumeContractV2`、`FailureLedgerEventV1/RepairQueueItemV1`、`RoleContractV1/ClaimLedgerEventV1`。常用入口：
 
 ```bash
+npm run gate:autonomous-runtime
 npm run gate:autonomous-contracts
 ```
 
@@ -513,11 +529,13 @@ Failure/repair 合同现在同时保留机器字段和人类可读别名：
 - repair item：`action/repairAction/commands/expectedArtifacts/expectedGates/preconditions/paused/rollbackCriteria/regressionGates/blockedConditions/evidenceWriteback`。
 - `--write` 仍写 per-run 目录，同时追加 canonical append-only 路径：
   `.pi/evidence/failures/ledger.jsonl` 与 `.pi/evidence/repairs/queue.jsonl`。
-- `gate:autonomous-contracts` 会读取 strict fixture，验证 valid batch 通过、duplicate signature/attempt 被拒绝、loose extra field 被拒绝。
+- `gate:repi-isolation` 会用临时 HOME 构造旧 `~/.pi/agent` 污染样本，验证 `repi` 默认只用 `~/.repi/agent`，不会触发 2go model scope、API key、collision 或 Global tools 报错，也不会改写普通 `pi` profile。
+- `gate:autonomous-runtime` 会读取 autonomous runtime strict fixture，验证 valid batch 通过、duplicate subagent attempt、非法 resume transition、loose claim-gate field 都被拒绝。
+- `gate:autonomous-contracts` 会读取 failure/repair strict fixture 与 autonomous runtime gate，验证 valid batch 通过、duplicate signature/attempt 被拒绝、loose extra field 被拒绝。
 - release 级 claim 不走 `audit:claim-ledger --allow-platform-gaps`，而走 `gate:claim-release`；当前 required platform gaps 存在时它应该阻断，并把 blocked marker 写给 runtime final path 使用。
 
 ## Harness 自检层
 
 - `re_harness` / `/re-harness quick|full|install|show` 生成 `harness_artifact`，聚合 `install_readiness`、`reverse_capability_guards`、`regression_guards`、注册工具/命令矩阵和 evidence/memory/tool-index 可写性。
-- 开发或魔改后执行 `re_harness full`；运行 `scripts/reverse-agent/install-repi.sh` 后执行 `repi --offline --help` 与 `/re-harness install`。
+- 开发或魔改后执行 `re_harness full`；运行 `scripts/reverse-agent/install-repi.sh` 后执行 `repi --offline --help`、`npm run gate:repi-isolation` 与 `/re-harness install`。
 - `reverse_capability_guards` 会守住 re_native_runtime、re_web_authz_state、re_mobile_runtime、re_exploit_lab、re_proof_loop、re_autopilot、re_knowledge_graph、compact_resume_case_memory、compact_resume_repair_from_case_memory、compact_resume_success_skip_low_value_lane、operator_command_floor、proof_exit_criteria、specialist_runtime_planner，避免安装/自检优化削弱逆向渗透能力。

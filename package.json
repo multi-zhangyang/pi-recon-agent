@@ -44,7 +44,9 @@
 		"release:patch": "node scripts/release.mjs patch",
 		"release:minor": "node scripts/release.mjs minor",
 		"release:major": "node scripts/release.mjs major",
-		"prepare": "husky"
+		"prepare": "husky",
+		"gate:autonomous-runtime": "node scripts/reverse-agent/autonomous-runtime-contracts.mjs . --strict",
+		"gate:repi-isolation": "node scripts/reverse-agent/assert-repi-isolated.mjs ."
 	},
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "0.0.26",

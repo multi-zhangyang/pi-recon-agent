@@ -7,6 +7,11 @@ const repoRoot = process.argv[2] || process.cwd();
 const agentDir =
 	process.env.REPI_CODING_AGENT_DIR || process.env.REPI_AGENT_DIR || join(homedir(), ".repi", "agent");
 const legacyPiAgentDir = process.env.PI_AGENT_IMPORT_DIR || join(homedir(), ".pi", "agent");
+const importLegacyPiProfile =
+	process.env.REPI_IMPORT_PI_PROFILE === "1" ||
+	process.env.REPI_IMPORT_PI_PROFILE === "true" ||
+	process.env.REPI_IMPORT_PI_AUTH === "1" ||
+	process.env.REPI_IMPORT_PI_AUTH === "true";
 
 const mkdir = (path) => mkdirSync(path, { recursive: true });
 const readJson = (path) => {
@@ -63,8 +68,12 @@ for (const sub of [
 	mkdir(join(agentDir, "recon", "evidence", sub));
 }
 
-const copiedModels = copyIfMissing(join(legacyPiAgentDir, "models.json"), join(agentDir, "models.json"), 0o600);
-const copiedAuth = copyIfMissing(join(legacyPiAgentDir, "auth.json"), join(agentDir, "auth.json"), 0o600);
+const copiedModels = importLegacyPiProfile
+	? copyIfMissing(join(legacyPiAgentDir, "models.json"), join(agentDir, "models.json"), 0o600)
+	: false;
+const copiedAuth = importLegacyPiProfile
+	? copyIfMissing(join(legacyPiAgentDir, "auth.json"), join(agentDir, "auth.json"), 0o600)
+	: false;
 
 const settingsPath = join(agentDir, "settings.json");
 const settings = readJson(settingsPath) || {};
@@ -107,7 +116,7 @@ writeJson(manifestPath, {
 	kind: "isolated-pi-recon-profile",
 	repoRoot,
 	agentDir,
-	legacyPiImported: { models: copiedModels, auth: copiedAuth },
+	legacyPiImported: { requested: importLegacyPiProfile, source: legacyPiAgentDir, models: copiedModels, auth: copiedAuth },
 	resources: {
 		storage: "recon/",
 		settings: "settings.json",
@@ -118,6 +127,7 @@ writeJson(manifestPath, {
 
 if (process.env.REPI_INIT_VERBOSE === "1") {
 	console.error(`[repi:init] agentDir=${agentDir}`);
+	if (!importLegacyPiProfile) console.error("[repi:init] legacy pi import skipped (default isolated mode)");
 	if (copiedModels) console.error(`[repi:init] copied models.json from ${legacyPiAgentDir}`);
 	if (copiedAuth) console.error(`[repi:init] copied auth.json from ${legacyPiAgentDir}`);
 }

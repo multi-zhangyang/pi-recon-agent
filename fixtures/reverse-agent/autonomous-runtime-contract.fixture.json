@@ -1,0 +1,517 @@
+{
+  "kind": "pi-recon-autonomous-runtime-contract-fixture",
+  "schemaPath": "schemas/reverse-agent/autonomous-runtime-contract.schema.json",
+  "validBatch": {
+    "kind": "PiReconAutonomousRuntimeBatchV1",
+    "schemaVersion": 1,
+    "runId": "fixture-run-001",
+    "subagentRuntimeManifests": [
+      {
+        "kind": "SubagentRuntimeManifestV1",
+        "schemaVersion": 1,
+        "runId": "fixture-run-001",
+        "roleId": "mapper",
+        "workerId": "worker-web-map",
+        "attempt": 1,
+        "status": "done",
+        "pid": 4242,
+        "parentPid": 3131,
+        "sessionDir": ".repi/agent/sessions/fixture/mapper",
+        "stdoutPath": ".pi/evidence/fixture/stdout.log",
+        "stderrPath": ".pi/evidence/fixture/stderr.log",
+        "stdoutSha256": "111111111111111111111111",
+        "stderrSha256": "222222222222222222222222",
+        "startedAt": "2026-06-09T00:00:00.000Z",
+        "endedAt": "2026-06-09T00:00:02.000Z",
+        "elapsedMs": 2000,
+        "exitCode": 0,
+        "signal": null,
+        "model": {
+          "provider": "aigateway",
+          "modelId": "moonshot/kimi-k2.6",
+          "modelCalls": 1,
+          "toolCalls": 3,
+          "toolResults": 3
+        },
+        "toolCallDigest": "333333333333333333333333",
+        "claimLedgerPath": ".pi/evidence/fixture/claim-ledger.jsonl",
+        "failureLedgerPath": ".pi/evidence/failures/ledger.jsonl",
+        "repairQueuePath": ".pi/evidence/repairs/queue.jsonl",
+        "resourceLimits": {
+          "timeoutMs": 60000,
+          "maxCommands": 8,
+          "maxOutputBytes": 2000000,
+          "cancelOnTimeout": true
+        },
+        "retryBudget": {
+          "signature": "mapper:web-map:fixture",
+          "attempt": 1,
+          "maxAttempts": 3,
+          "remaining": 2,
+          "exhausted": false
+        },
+        "mergeKeys": [
+          "route",
+          "artifact",
+          "claimId"
+        ],
+        "evidenceRefs": [
+          ".pi/evidence/maps/fixture.md"
+        ]
+      }
+    ],
+    "parallelShardStates": [
+      {
+        "shardId": "shard-web-map-001",
+        "source": "agent-dogfood",
+        "state": "done",
+        "dependencies": [],
+        "dependents": [
+          "shard-verifier-001"
+        ],
+        "leaseId": "lease-fixture-001",
+        "resourceLimits": {
+          "timeoutMs": 60000,
+          "maxCommands": 8,
+          "maxOutputBytes": 2000000,
+          "cancelOnTimeout": true
+        },
+        "startedAt": "2026-06-09T00:00:00.000Z",
+        "endedAt": "2026-06-09T00:00:02.000Z",
+        "resultManifestPath": ".pi/evidence/fixture/worker-web-map.runtime-manifest.json",
+        "stdoutSha256": "111111111111111111111111",
+        "stderrSha256": "222222222222222222222222",
+        "mergeKeys": [
+          "route",
+          "artifact",
+          "claimId"
+        ],
+        "blockedReason": null
+      }
+    ],
+    "compactResumeStates": [
+      {
+        "contractId": "resume-fixture-001",
+        "compactionEntryId": "entry-fixture-001",
+        "contextPath": ".repi/agent/recon/evidence/contexts/fixture.md",
+        "contextSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "queueState": "done",
+        "idempotencyKey": "entry-fixture-001:aaaaaaaaaaaaaaaa",
+        "transitionLog": [
+          {
+            "from": null,
+            "to": "queued",
+            "at": "2026-06-09T00:00:00.000Z",
+            "reason": "context pack generated"
+          },
+          {
+            "from": "queued",
+            "to": "running",
+            "at": "2026-06-09T00:00:01.000Z",
+            "reason": "auto resume turn started"
+          },
+          {
+            "from": "running",
+            "to": "done",
+            "at": "2026-06-09T00:00:02.000Z",
+            "reason": "operator/proof-loop resume command accepted"
+          }
+        ],
+        "resumeBudget": {
+          "signature": "resume:entry-fixture-001",
+          "attempt": 1,
+          "maxAttempts": 3,
+          "remaining": 2,
+          "exhausted": false
+        },
+        "operatorQueueRef": ".repi/agent/recon/evidence/operators/fixture.md",
+        "proofLoopEntry": ".repi/agent/recon/evidence/proof-loops/fixture.md",
+        "blockedReason": null
+      }
+    ],
+    "repairBudgetStates": [
+      {
+        "signature": "mapper:web-map:fixture",
+        "failureId": "failure-fixture-001",
+        "repairId": "repair-fixture-001",
+        "state": "done",
+        "retryBudget": {
+          "signature": "mapper:web-map:fixture",
+          "attempt": 1,
+          "maxAttempts": 3,
+          "remaining": 2,
+          "exhausted": false
+        },
+        "allowlist": [
+          "re_map",
+          "re_swarm",
+          "re_supervisor"
+        ],
+        "rollbackCriteria": [
+          "artifact hash drift"
+        ],
+        "regressionGates": [
+          "gate:autonomous-runtime",
+          "gate:claim-release"
+        ],
+        "evidenceWriteback": [
+          ".pi/evidence/failures/ledger.jsonl"
+        ]
+      }
+    ],
+    "claimPromotionGates": [
+      {
+        "source": "agent-dogfood",
+        "ledgerPath": ".pi/evidence/fixture/claim-ledger.jsonl",
+        "hashChainOk": true,
+        "eventTypes": [
+          "artifact_handoff",
+          "claim",
+          "validation",
+          "challenge",
+          "resolution"
+        ],
+        "strictValidator": "validate-claim-ledger.mjs",
+        "finalPromotionBlocked": true,
+        "unresolvedChallenges": [
+          "platform proof intentionally not promoted by orchestration-only fixture"
+        ],
+        "artifactRefs": [
+          ".pi/evidence/fixture/result.json"
+        ],
+        "claimIds": [
+          "fixture-run-001:worker-web-map"
+        ],
+        "validatorCommand": "node scripts/reverse-agent/validate-claim-ledger.mjs --stdin --strict-claims"
+      }
+    ]
+  },
+  "negativeBatches": {
+    "duplicateSubagentAttempt": {
+      "expectError": "duplicate_subagent_runtime_attempt",
+      "batch": {
+        "kind": "PiReconAutonomousRuntimeBatchV1",
+        "schemaVersion": 1,
+        "runId": "fixture-run-duplicate",
+        "subagentRuntimeManifests": [
+          {
+            "kind": "SubagentRuntimeManifestV1",
+            "schemaVersion": 1,
+            "runId": "fixture-run-duplicate",
+            "roleId": "mapper",
+            "workerId": "worker-web-map",
+            "attempt": 1,
+            "status": "done",
+            "pid": 4242,
+            "parentPid": 3131,
+            "sessionDir": ".repi/agent/sessions/fixture/mapper",
+            "stdoutPath": ".pi/evidence/fixture/stdout.log",
+            "stderrPath": ".pi/evidence/fixture/stderr.log",
+            "stdoutSha256": "111111111111111111111111",
+            "stderrSha256": "222222222222222222222222",
+            "startedAt": "2026-06-09T00:00:00.000Z",
+            "endedAt": "2026-06-09T00:00:02.000Z",
+            "elapsedMs": 2000,
+            "exitCode": 0,
+            "signal": null,
+            "model": {
+              "provider": "aigateway",
+              "modelId": "moonshot/kimi-k2.6",
+              "modelCalls": 1,
+              "toolCalls": 3,
+              "toolResults": 3
+            },
+            "toolCallDigest": "333333333333333333333333",
+            "claimLedgerPath": ".pi/evidence/fixture/claim-ledger.jsonl",
+            "failureLedgerPath": ".pi/evidence/failures/ledger.jsonl",
+            "repairQueuePath": ".pi/evidence/repairs/queue.jsonl",
+            "resourceLimits": {
+              "timeoutMs": 60000,
+              "maxCommands": 8,
+              "maxOutputBytes": 2000000,
+              "cancelOnTimeout": true
+            },
+            "retryBudget": {
+              "signature": "mapper:web-map:fixture",
+              "attempt": 1,
+              "maxAttempts": 3,
+              "remaining": 2,
+              "exhausted": false
+            },
+            "mergeKeys": [
+              "route",
+              "artifact",
+              "claimId"
+            ],
+            "evidenceRefs": [
+              ".pi/evidence/maps/fixture.md"
+            ]
+          },
+          {
+            "kind": "SubagentRuntimeManifestV1",
+            "schemaVersion": 1,
+            "runId": "fixture-run-duplicate",
+            "roleId": "mapper",
+            "workerId": "worker-web-map",
+            "attempt": 1,
+            "status": "done",
+            "pid": 4243,
+            "parentPid": 3131,
+            "sessionDir": ".repi/agent/sessions/fixture/mapper",
+            "stdoutPath": ".pi/evidence/fixture/stdout.log",
+            "stderrPath": ".pi/evidence/fixture/stderr.log",
+            "stdoutSha256": "111111111111111111111111",
+            "stderrSha256": "222222222222222222222222",
+            "startedAt": "2026-06-09T00:00:00.000Z",
+            "endedAt": "2026-06-09T00:00:02.000Z",
+            "elapsedMs": 2000,
+            "exitCode": 0,
+            "signal": null,
+            "model": {
+              "provider": "aigateway",
+              "modelId": "moonshot/kimi-k2.6",
+              "modelCalls": 1,
+              "toolCalls": 3,
+              "toolResults": 3
+            },
+            "toolCallDigest": "333333333333333333333333",
+            "claimLedgerPath": ".pi/evidence/fixture/claim-ledger.jsonl",
+            "failureLedgerPath": ".pi/evidence/failures/ledger.jsonl",
+            "repairQueuePath": ".pi/evidence/repairs/queue.jsonl",
+            "resourceLimits": {
+              "timeoutMs": 60000,
+              "maxCommands": 8,
+              "maxOutputBytes": 2000000,
+              "cancelOnTimeout": true
+            },
+            "retryBudget": {
+              "signature": "mapper:web-map:fixture",
+              "attempt": 1,
+              "maxAttempts": 3,
+              "remaining": 2,
+              "exhausted": false
+            },
+            "mergeKeys": [
+              "route",
+              "artifact",
+              "claimId"
+            ],
+            "evidenceRefs": [
+              ".pi/evidence/maps/fixture.md"
+            ]
+          }
+        ],
+        "parallelShardStates": [
+          {
+            "shardId": "shard-web-map-001",
+            "source": "agent-dogfood",
+            "state": "done",
+            "dependencies": [],
+            "dependents": [
+              "shard-verifier-001"
+            ],
+            "leaseId": "lease-fixture-001",
+            "resourceLimits": {
+              "timeoutMs": 60000,
+              "maxCommands": 8,
+              "maxOutputBytes": 2000000,
+              "cancelOnTimeout": true
+            },
+            "startedAt": "2026-06-09T00:00:00.000Z",
+            "endedAt": "2026-06-09T00:00:02.000Z",
+            "resultManifestPath": ".pi/evidence/fixture/worker-web-map.runtime-manifest.json",
+            "stdoutSha256": "111111111111111111111111",
+            "stderrSha256": "222222222222222222222222",
+            "mergeKeys": [
+              "route",
+              "artifact",
+              "claimId"
+            ],
+            "blockedReason": null
+          }
+        ],
+        "compactResumeStates": [
+          {
+            "contractId": "resume-fixture-001",
+            "compactionEntryId": "entry-fixture-001",
+            "contextPath": ".repi/agent/recon/evidence/contexts/fixture.md",
+            "contextSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "queueState": "done",
+            "idempotencyKey": "entry-fixture-001:aaaaaaaaaaaaaaaa",
+            "transitionLog": [
+              {
+                "from": null,
+                "to": "queued",
+                "at": "2026-06-09T00:00:00.000Z",
+                "reason": "context pack generated"
+              },
+              {
+                "from": "queued",
+                "to": "running",
+                "at": "2026-06-09T00:00:01.000Z",
+                "reason": "auto resume turn started"
+              },
+              {
+                "from": "running",
+                "to": "done",
+                "at": "2026-06-09T00:00:02.000Z",
+                "reason": "operator/proof-loop resume command accepted"
+              }
+            ],
+            "resumeBudget": {
+              "signature": "resume:entry-fixture-001",
+              "attempt": 1,
+              "maxAttempts": 3,
+              "remaining": 2,
+              "exhausted": false
+            },
+            "operatorQueueRef": ".repi/agent/recon/evidence/operators/fixture.md",
+            "proofLoopEntry": ".repi/agent/recon/evidence/proof-loops/fixture.md",
+            "blockedReason": null
+          }
+        ],
+        "repairBudgetStates": [
+          {
+            "signature": "mapper:web-map:fixture",
+            "failureId": "failure-fixture-001",
+            "repairId": "repair-fixture-001",
+            "state": "done",
+            "retryBudget": {
+              "signature": "mapper:web-map:fixture",
+              "attempt": 1,
+              "maxAttempts": 3,
+              "remaining": 2,
+              "exhausted": false
+            },
+            "allowlist": [
+              "re_map",
+              "re_swarm",
+              "re_supervisor"
+            ],
+            "rollbackCriteria": [
+              "artifact hash drift"
+            ],
+            "regressionGates": [
+              "gate:autonomous-runtime",
+              "gate:claim-release"
+            ],
+            "evidenceWriteback": [
+              ".pi/evidence/failures/ledger.jsonl"
+            ]
+          }
+        ],
+        "claimPromotionGates": [
+          {
+            "source": "agent-dogfood",
+            "ledgerPath": ".pi/evidence/fixture/claim-ledger.jsonl",
+            "hashChainOk": true,
+            "eventTypes": [
+              "artifact_handoff",
+              "claim",
+              "validation",
+              "challenge",
+              "resolution"
+            ],
+            "strictValidator": "validate-claim-ledger.mjs",
+            "finalPromotionBlocked": true,
+            "unresolvedChallenges": [
+              "platform proof intentionally not promoted by orchestration-only fixture"
+            ],
+            "artifactRefs": [
+              ".pi/evidence/fixture/result.json"
+            ],
+            "claimIds": [
+              "fixture-run-001:worker-web-map"
+            ],
+            "validatorCommand": "node scripts/reverse-agent/validate-claim-ledger.mjs --stdin --strict-claims"
+          }
+        ]
+      }
+    },
+    "invalidResumeTransition": {
+      "expectError": "invalid_resume_transition",
+      "batch": {
+        "kind": "PiReconAutonomousRuntimeBatchV1",
+        "schemaVersion": 1,
+        "runId": "fixture-run-invalid-resume",
+        "subagentRuntimeManifests": [],
+        "parallelShardStates": [],
+        "compactResumeStates": [
+          {
+            "contractId": "resume-fixture-001",
+            "compactionEntryId": "entry-fixture-001",
+            "contextPath": ".repi/agent/recon/evidence/contexts/fixture.md",
+            "contextSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "queueState": "done",
+            "idempotencyKey": "entry-fixture-001:aaaaaaaaaaaaaaaa",
+            "transitionLog": [
+              {
+                "from": null,
+                "to": "queued",
+                "at": "2026-06-09T00:00:00.000Z",
+                "reason": "queued"
+              },
+              {
+                "from": "queued",
+                "to": "done",
+                "at": "2026-06-09T00:00:01.000Z",
+                "reason": "skipped running"
+              }
+            ],
+            "resumeBudget": {
+              "signature": "resume:entry-fixture-001",
+              "attempt": 1,
+              "maxAttempts": 3,
+              "remaining": 2,
+              "exhausted": false
+            },
+            "operatorQueueRef": ".repi/agent/recon/evidence/operators/fixture.md",
+            "proofLoopEntry": ".repi/agent/recon/evidence/proof-loops/fixture.md",
+            "blockedReason": null
+          }
+        ],
+        "repairBudgetStates": [],
+        "claimPromotionGates": []
+      }
+    },
+    "looseClaimGate": {
+      "expectError": "additionalProperties",
+      "batch": {
+        "kind": "PiReconAutonomousRuntimeBatchV1",
+        "schemaVersion": 1,
+        "runId": "fixture-run-loose",
+        "subagentRuntimeManifests": [],
+        "parallelShardStates": [],
+        "compactResumeStates": [],
+        "repairBudgetStates": [],
+        "claimPromotionGates": [
+          {
+            "source": "agent-dogfood",
+            "ledgerPath": ".pi/evidence/fixture/claim-ledger.jsonl",
+            "hashChainOk": true,
+            "eventTypes": [
+              "artifact_handoff",
+              "claim",
+              "validation",
+              "challenge",
+              "resolution"
+            ],
+            "strictValidator": "validate-claim-ledger.mjs",
+            "finalPromotionBlocked": true,
+            "unresolvedChallenges": [
+              "platform proof intentionally not promoted by orchestration-only fixture"
+            ],
+            "artifactRefs": [
+              ".pi/evidence/fixture/result.json"
+            ],
+            "claimIds": [
+              "fixture-run-001:worker-web-map"
+            ],
+            "validatorCommand": "node scripts/reverse-agent/validate-claim-ledger.mjs --stdin --strict-claims",
+            "unexpectedField": "must be rejected"
+          }
+        ]
+      }
+    }
+  }
+}

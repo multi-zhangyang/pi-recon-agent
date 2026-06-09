@@ -14,12 +14,15 @@ export PI_CODING_AGENT_CONFIG_DIR=".repi"
 export REPI_CODING_AGENT_DIR="${REPI_CODING_AGENT_DIR:-${REPI_AGENT_DIR:-$HOME/.repi/agent}}"
 export REPI_CODING_AGENT_SESSION_DIR="${REPI_CODING_AGENT_SESSION_DIR:-$REPI_CODING_AGENT_DIR/sessions}"
 
-node "$ROOT/scripts/reverse-agent/init-repi-profile.mjs" "$ROOT"
-
 ARGS=(--recon --no-extensions --no-skills --no-prompt-templates --no-approve --no-context-files)
 USER_ARGS=()
 for arg in "$@"; do
   case "$arg" in
+    --import-pi-auth|--import-pi-profile)
+      # One-way, opt-in bootstrap from ~/.pi/agent/{auth,models}.json into ~/.repi/agent.
+      # Default repi startup never reads/copies normal pi credentials or model scopes.
+      export REPI_IMPORT_PI_PROFILE=1
+      ;;
     --project-context)
       # Opt in to project AGENTS/CLAUDE and project .pi settings/resources.
       ARGS=(--recon --no-extensions --no-skills --no-prompt-templates)
@@ -31,5 +34,7 @@ for arg in "$@"; do
     *) USER_ARGS+=("$arg") ;;
   esac
 done
+
+node "$ROOT/scripts/reverse-agent/init-repi-profile.mjs" "$ROOT"
 
 exec "$ROOT/node_modules/.bin/tsx" --tsconfig "$ROOT/tsconfig.json" "$ROOT/packages/coding-agent/src/cli.ts" "${ARGS[@]}" "${USER_ARGS[@]}"
