@@ -10,6 +10,7 @@ const maxRedirects = Number(process.env.RECON_MAX_REDIRECTS || 10);
 const maxProbeRedirects = Number(process.env.RECON_MAX_PROBE_REDIRECTS || 5);
 const maxBodyBytes = Number(process.env.RECON_MAX_BODY_BYTES || 5_000_000);
 const probeLimit = Number(process.env.RECON_PROBE_LIMIT || 28);
+const probeBodyBytes = Number(process.env.RECON_PROBE_BODY_BYTES || 4096);
 const browserMode = String(process.env.RECON_BROWSER || 'auto').toLowerCase(); // auto|1|0
 const browserTimeoutMs = Number(process.env.RECON_BROWSER_TIMEOUT_MS || 45_000);
 const browserQuietMs = Number(process.env.RECON_BROWSER_QUIET_MS || 2_500);
@@ -20,7 +21,7 @@ const userAgent = process.env.RECON_USER_AGENT ||
   'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Mobile Safari/537.36';
 
 if (!targetUrl || targetUrl === '--help' || targetUrl === '-h') {
-  console.log(`Pi-RECON Douyin no-watermark live benchmark\n\nUsage:\n  DOUYIN_SHARE_URL=<share-url> node bench/recon-remote/douyin-nowatermark/run.mjs\n  node bench/recon-remote/douyin-nowatermark/run.mjs <share-url>\n\nEnvironment:\n  RECON_BROWSER=auto|1|0        CDP capture through local Chrome; auto runs when static extraction is weak\n  RECON_BROWSER_TIMEOUT_MS=45000\n  RECON_BROWSER_QUIET_MS=2500\n  RECON_PROBE_LIMIT=28          Probe top media candidates with HEAD/range requests\n  RECON_API_PROBE=1             Probe generated aweme detail endpoint hypotheses\n  RECON_MAX_REDIRECTS=10        Manual redirect chain limit\n  RECON_MAX_BODY_BYTES=5000000\n  RECON_USER_AGENT=<ua>\n  RECON_COOKIE=<cookie>         Optional runtime cookie, redacted in artifacts by default\n  RECON_EXTRA_HEADERS_JSON='{"x-foo":"bar"}'\n  RECON_CHROME_BIN=<path>\n\nOutput:\n  .pi/evidence/remote/douyin-nowatermark/<timestamp>/\n`);
+  console.log(`Pi-RECON Douyin no-watermark live benchmark\n\nUsage:\n  DOUYIN_SHARE_URL=<share-url> node bench/recon-remote/douyin-nowatermark/run.mjs\n  node bench/recon-remote/douyin-nowatermark/run.mjs <share-url>\n\nEnvironment:\n  RECON_BROWSER=auto|1|0        CDP capture through local Chrome; auto runs when static extraction is weak\n  RECON_BROWSER_TIMEOUT_MS=45000\n  RECON_BROWSER_QUIET_MS=2500\n  RECON_PROBE_LIMIT=28          Probe top media candidates with HEAD/range requests\n  RECON_PROBE_BODY_BYTES=4096   Bounded prefix bytes to hash for media Range probes\n  RECON_API_PROBE=1             Probe generated aweme detail endpoint hypotheses\n  RECON_MAX_REDIRECTS=10        Manual redirect chain limit\n  RECON_MAX_BODY_BYTES=5000000\n  RECON_USER_AGENT=<ua>\n  RECON_COOKIE=<cookie>         Optional runtime cookie, redacted in artifacts by default\n  RECON_EXTRA_HEADERS_JSON='{"x-foo":"bar"}'\n  RECON_CHROME_BIN=<path>\n\nOutput:\n  .pi/evidence/remote/douyin-nowatermark/<timestamp>/\n`);
   process.exit(targetUrl ? 0 : 2);
 }
 
@@ -135,6 +136,33 @@ async function readTextBody(res) {
   if (!/text|json|javascript|html|xml|x-www-form-urlencoded/i.test(type)) return '';
   const buffer = Buffer.from(await res.arrayBuffer());
   return buffer.subarray(0, maxBodyBytes).toString('utf8');
+}
+
+async function readResponsePrefix(res, maxBytes) {
+  const limit = Math.max(0, Number(maxBytes) || 0);
+  if (!limit) return Buffer.alloc(0);
+  const reader = res.body?.getReader?.();
+  if (!reader) {
+    const buffer = Buffer.from(await res.arrayBuffer());
+    return buffer.subarray(0, limit);
+  }
+  const chunks = [];
+  let total = 0;
+  while (total < limit) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = Buffer.from(value);
+    const take = Math.min(chunk.length, limit - total);
+    if (take > 0) {
+      chunks.push(chunk.subarray(0, take));
+      total += take;
+    }
+    if (total >= limit) {
+      try { await reader.cancel(); } catch {}
+      break;
+    }
+  }
+  return Buffer.concat(chunks, total);
 }
 
 async function fetchRedirectChain(url) {
@@ -285,11 +313,34 @@ async function probeOnce(url, method, headers = {}) {
     headers: responseHeaders(res),
   };
   if (method === 'GET') {
-    const buffer = Buffer.from(await res.arrayBuffer());
+    const buffer = await readResponsePrefix(res, probeBodyBytes);
     attempt.bytes = buffer.length;
     attempt.bodySha256 = sha256(buffer).slice(0, 24);
   }
   return attempt;
+}
+
+function isProbeMediaLike(attempt) {
+  const headers = attempt?.headers || {};
+  const status = Number(attempt?.status);
+  const type = String(headers['content-type'] || '').toLowerCase();
+  const text = `${attempt?.url || ''} ${headers.location || ''} ${type}`.toLowerCase();
+  const staticAsset = /javascript|text\/css|image\/|font\/|\.(?:js|css|png|jpe?g|webp|svg|gif|woff2?)(?:\?|$)/i.test(text);
+  return !staticAsset && [200, 206].includes(status) && (
+    /video\//.test(type) ||
+    /octet-stream|mpegurl|application\/vnd\.apple\.mpegurl|mp4/.test(type) ||
+    /\.mp4(?:\?|$)|\.m3u8(?:\?|$)|mime_type=video|mime_type=video_mp4|\/video\/tos\//i.test(text)
+  );
+}
+
+function summarizeProbeBytes(attempts) {
+  const bodyAttempt = (attempts || []).find((attempt) => Number(attempt.bytes || 0) > 0 && (attempt.bodySha256 || attempt.sha256));
+  return {
+    bodyProof: Boolean(bodyAttempt),
+    bodySha256: bodyAttempt?.bodySha256 || bodyAttempt?.sha256 || '',
+    bodyBytes: Number(bodyAttempt?.bytes || 0),
+    range206: (attempts || []).some((attempt) => Number(attempt.status) === 206 || /bytes/i.test(attempt.headers?.['content-range'] || '')),
+  };
 }
 
 async function probeUrl(url) {
@@ -304,8 +355,14 @@ async function probeUrl(url) {
         current = new URL(location, current).toString();
         continue;
       }
-      const type = `${head.headers?.['content-type'] || ''}`.toLowerCase();
-      if (![200, 206].includes(Number(head.status)) || !/video|octet-stream|mpegurl|mp4|application\/vnd\.apple\.mpegurl/i.test(type)) {
+      if (isProbeMediaLike(head)) {
+        try {
+          const ranged = await probeOnce(current, 'GET', { range: `bytes=0-${Math.max(0, probeBodyBytes - 1)}` });
+          attempts.push(ranged);
+        } catch (error) {
+          attempts.push({ url: current, method: `GET bytes=0-${Math.max(0, probeBodyBytes - 1)}`, status: 'error', error: error instanceof Error ? error.message : String(error) });
+        }
+      } else {
         try {
           const ranged = await probeOnce(current, 'GET', { range: 'bytes=0-0' });
           attempts.push(ranged);
@@ -324,7 +381,7 @@ async function probeUrl(url) {
       break;
     }
   }
-  return { url, attempts, finalAttempt: attempts.at(-1) || null };
+  return { url, attempts, finalAttempt: attempts.at(-1) || null, ...summarizeProbeBytes(attempts) };
 }
 
 function classifyProbe(probe) {
@@ -344,7 +401,8 @@ function classifyProbe(probe) {
   );
   const noWatermarkLikely = video && !/watermark|playwm|watermarked/.test(text);
   const reachable = attempts.some((attempt) => [200, 206, 301, 302, 303, 307, 308].includes(Number(attempt.status)));
-  return { video, noWatermarkLikely, reachable };
+  const bytes = summarizeProbeBytes(attempts);
+  return { video, noWatermarkLikely, reachable, byteProof: bytes.bodyProof, range206: bytes.range206 };
 }
 
 async function which(command) {

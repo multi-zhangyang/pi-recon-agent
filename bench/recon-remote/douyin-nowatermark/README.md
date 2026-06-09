@@ -1,6 +1,6 @@
 # Douyin no-watermark live benchmark
 
-A live Pi-RECON benchmark for short-video media URL reverse analysis. Given a Douyin share/video URL, the harness records redirect behavior, captures browser/CDP runtime traffic when static extraction is weak, extracts `aweme_id` / media IDs / state JSON hints, inventories `a_bogus` / `msToken` / webid / `X-Bogus` style anti-bot parameters, records signer-bundle hints, ranks media URL candidates, builds `playwm -> play` style no-watermark hypotheses, verifies candidates with `HEAD` or `Range: bytes=0-0` probes, and attempts exact replay of browser-observed signed aweme APIs.
+A live Pi-RECON benchmark for short-video media URL reverse analysis. Given a Douyin share/video URL, the harness records redirect behavior, captures browser/CDP runtime traffic when static extraction is weak, extracts `aweme_id` / media IDs / state JSON hints, inventories `a_bogus` / `msToken` / webid / `X-Bogus` style anti-bot parameters, records signer-bundle hints, ranks media URL candidates, builds `playwm -> play` style no-watermark hypotheses, verifies candidates with `HEAD` plus bounded `Range` body-hash probes, and attempts exact replay of browser-observed signed aweme APIs.
 
 It writes evidence only under `.pi/evidence/remote/douyin-nowatermark/`; those runtime artifacts are git-ignored.
 
@@ -46,6 +46,7 @@ RECON_BROWSER=1 RECON_API_PROBE=1 RECON_DOUYIN_RUNTIME_API_LIMIT=4 \
 | `RECON_BROWSER_TIMEOUT_MS` | `45000` | Max browser capture time. |
 | `RECON_BROWSER_QUIET_MS` | `2500` | Network quiet window before ending capture. |
 | `RECON_PROBE_LIMIT` | `28` | Number of ranked media candidates / transform hypotheses to probe. |
+| `RECON_PROBE_BODY_BYTES` | `4096` | Bounded media prefix bytes to read and hash for byte-proof probes. |
 | `RECON_API_PROBE` | unset | Set `1` to request generated aweme detail endpoint hypotheses. |
 | `RECON_DOUYIN_RUNTIME_API_LIMIT` | `4` | Max browser-observed signed aweme API seeds to replay with no-cookie and exact-cookie variants. |
 | `RECON_MAX_REDIRECTS` | `10` | Share URL redirect limit. |

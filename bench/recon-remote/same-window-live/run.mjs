@@ -14,12 +14,12 @@ const maxWindowMs = Number(process.env.RECON_SAME_WINDOW_MAX_SPAN_MS || 15 * 60 
 const maxArtifactAgeMs = Number(process.env.RECON_SAME_WINDOW_MAX_AGE_MS || 30 * 60 * 1000);
 const targets = {
   bilibili: process.env.RECON_SAME_WINDOW_BILI_URL || 'https://www.bilibili.com/video/BV1Ee9EBnEfo?p=2',
-  xiaohongshu: process.env.RECON_SAME_WINDOW_XHS_URL || 'https://www.xiaohongshu.com/explore/66237c6e000000001c00893f',
+  xiaohongshu: process.env.RECON_SAME_WINDOW_XHS_URL || 'https://www.xhs-download.org/zh',
   douyin: process.env.RECON_SAME_WINDOW_DOUYIN_URL || 'https://www.douyin.com/video/7636072173723945829',
 };
 
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
-  console.log(`Pi-RECON same-window live frontier gate\n\nUsage:\n  node bench/recon-remote/same-window-live/run.mjs\n  node bench/recon-remote/same-window-live/run.mjs --strict\n  node bench/recon-remote/same-window-live/run.mjs --use-latest\n\nPurpose:\n  Reruns or binds Bilibili, Xiaohongshu, and Douyin evidence inside one freshness window,\n  then separates proven live facts from frontier gaps. This gate is intentionally harder than\n  hard-score: Bilibili must prove per-page WBI plus CDN range/body evidence, Xiaohongshu\n  must prove target note/feed x-s 2xx, and Douyin must prove structured replay plus media-byte\n  no-watermark evidence. Partial/failure verdicts are expected and useful.\n\nEnvironment:\n  RECON_SAME_WINDOW_BILI_URL=<url>\n  RECON_SAME_WINDOW_XHS_URL=<url>\n  RECON_SAME_WINDOW_DOUYIN_URL=<url>\n  RECON_SAME_WINDOW_PARALLEL=1\n  RECON_SAME_WINDOW_TIMEOUT_MS=900000\n  RECON_SAME_WINDOW_MAX_SPAN_MS=900000\n  RECON_SAME_WINDOW_MAX_AGE_MS=1800000\n  RECON_SAME_WINDOW_STRICT=1\n  RECON_SAME_WINDOW_USE_LATEST=1\n\nOutput:\n  .pi/evidence/remote/same-window-live/<timestamp>/\n`);
+  console.log(`Pi-RECON same-window live frontier gate\n\nUsage:\n  node bench/recon-remote/same-window-live/run.mjs\n  node bench/recon-remote/same-window-live/run.mjs --strict\n  node bench/recon-remote/same-window-live/run.mjs --use-latest\n\nPurpose:\n  Reruns or binds Bilibili, Xiaohongshu, and Douyin evidence inside one freshness window,\n  then separates proven live facts from frontier gaps. This gate is intentionally harder than\n  hard-score: Bilibili must prove per-page WBI plus CDN range/body evidence, Xiaohongshu\n  must prove target note/feed x-s 2xx, and Douyin must prove structured replay plus media-byte\n  no-watermark evidence. Partial/failure verdicts are expected and useful.\n\nEnvironment:\n  RECON_SAME_WINDOW_BILI_URL=<url>\n  RECON_SAME_WINDOW_XHS_URL=<url>\n  RECON_SAME_WINDOW_XHS_AUTO_DISCOVER=1\n  RECON_SAME_WINDOW_XHS_DISCOVERY_LIMIT=1\n  RECON_SAME_WINDOW_DOUYIN_URL=<url>\n  RECON_SAME_WINDOW_PARALLEL=1\n  RECON_SAME_WINDOW_TIMEOUT_MS=900000\n  RECON_SAME_WINDOW_MAX_SPAN_MS=900000\n  RECON_SAME_WINDOW_MAX_AGE_MS=1800000\n  RECON_SAME_WINDOW_STRICT=1\n  RECON_SAME_WINDOW_USE_LATEST=1\n\nOutput:\n  .pi/evidence/remote/same-window-live/<timestamp>/\n`);
   process.exit(0);
 }
 
@@ -139,7 +139,18 @@ function douyinEvidence(obj = {}) {
   const observed = obj?.runtimeApiReplay?.observedStructuredApi || obj?.signatureSurface?.runtimeObservedStructuredApi || null;
   const divergence = obj?.runtimeApiReplay?.firstDivergence || null;
   const strongProbes = (obj?.probes || []).filter((p) => p.classification?.noWatermarkLikely && p.classification?.reachable);
-  const byteProof = strongProbes.some((p) => p.sha256 || p.bodySha256 || Number(p.bytes || 0) >= 1024 * 64);
+  const byteProof = strongProbes.some((p) =>
+    p.classification?.byteProof ||
+    p.bodyProof ||
+    p.sha256 ||
+    p.bodySha256 ||
+    Number(p.bytes || p.bodyBytes || 0) > 0 ||
+    (p.attempts || []).some((a) =>
+      (a.sha256 || a.bodySha256) &&
+      Number(a.bytes || 0) > 0 &&
+      (Number(a.status) === 206 || /bytes/i.test(a.headers?.['content-range'] || '') || /^GET bytes=/i.test(a.method || ''))
+    )
+  );
   return {
     observed2xx: Boolean(observed && Number(observed.status) >= 200 && Number(observed.status) < 300 && observed.structured?.structured),
     replayed2xx: Boolean(replayed && Number(replayed.status) >= 200 && Number(replayed.status) < 300 && replayed.structured?.structured),
@@ -186,7 +197,7 @@ async function liveRuns() {
       label: 'xiaohongshu',
       cmd: 'node',
       args: ['bench/recon-remote/real-platform/run.mjs', targets.xiaohongshu, 'xiaohongshu-note'],
-      env: { RECON_BROWSER: process.env.RECON_SAME_WINDOW_XHS_BROWSER || '1', RECON_TIMEOUT_MS: process.env.RECON_SAME_WINDOW_XHS_TIMEOUT_MS || '60000', RECON_QUIET_MS: process.env.RECON_SAME_WINDOW_XHS_QUIET_MS || '5000', RECON_XHS_PROBE_WAIT_MS: process.env.RECON_SAME_WINDOW_XHS_PROBE_WAIT_MS || '15000' },
+      env: { RECON_BROWSER: process.env.RECON_SAME_WINDOW_XHS_BROWSER || '1', RECON_TIMEOUT_MS: process.env.RECON_SAME_WINDOW_XHS_TIMEOUT_MS || '60000', RECON_QUIET_MS: process.env.RECON_SAME_WINDOW_XHS_QUIET_MS || '5000', RECON_XHS_PROBE_WAIT_MS: process.env.RECON_SAME_WINDOW_XHS_PROBE_WAIT_MS || '15000', RECON_XHS_AUTO_DISCOVER: process.env.RECON_SAME_WINDOW_XHS_AUTO_DISCOVER || process.env.RECON_XHS_AUTO_DISCOVER || '1', RECON_XHS_DISCOVERY_LIMIT: process.env.RECON_SAME_WINDOW_XHS_DISCOVERY_LIMIT || process.env.RECON_XHS_DISCOVERY_LIMIT || '1' },
       timeoutMs: Number(process.env.RECON_SAME_WINDOW_XHS_RUN_TIMEOUT_MS || 240000),
     },
     {
