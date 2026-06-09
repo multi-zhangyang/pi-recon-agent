@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="${1:-$(pwd)}"
-AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+# Historical script name kept for compatibility with old docs/gates.
+# New default is isolated repi storage, not ~/.pi/agent, so normal pi is not polluted.
+AGENT_DIR="${REPI_CODING_AGENT_DIR:-${REPI_AGENT_DIR:-$HOME/.repi/agent}}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
 if [ ! -d "$ROOT/.pi" ]; then
@@ -9,7 +11,7 @@ if [ ! -d "$ROOT/.pi" ]; then
   exit 1
 fi
 
-mkdir -p "$AGENT_DIR/extensions" "$AGENT_DIR/skills" "$AGENT_DIR/prompts" "$AGENT_DIR/memory/playbooks" "$AGENT_DIR/mission" "$AGENT_DIR/evidence/runs" "$AGENT_DIR/evidence/maps" "$AGENT_DIR/evidence/browser" "$AGENT_DIR/evidence/web-authz" "$AGENT_DIR/evidence/chains" "$AGENT_DIR/evidence/decisions" "$AGENT_DIR/evidence/exploit-lab" "$AGENT_DIR/evidence/mobile-runtime" "$AGENT_DIR/evidence/native-runtime" "$AGENT_DIR/evidence/graphs" "$AGENT_DIR/evidence/proof-loops" "$AGENT_DIR/evidence/knowledge" "$AGENT_DIR/evidence/harness" "$AGENT_DIR/tools"
+mkdir -p "$AGENT_DIR/extensions" "$AGENT_DIR/skills" "$AGENT_DIR/prompts" "$AGENT_DIR/memory/playbooks" "$AGENT_DIR/mission" "$AGENT_DIR/evidence/runs" "$AGENT_DIR/evidence/maps" "$AGENT_DIR/evidence/browser" "$AGENT_DIR/evidence/web-authz" "$AGENT_DIR/evidence/chains" "$AGENT_DIR/evidence/decisions" "$AGENT_DIR/evidence/exploit-lab" "$AGENT_DIR/evidence/mobile-runtime" "$AGENT_DIR/evidence/native-runtime" "$AGENT_DIR/evidence/graphs" "$AGENT_DIR/evidence/proof-loops" "$AGENT_DIR/evidence/knowledge" "$AGENT_DIR/evidence/harness" "$AGENT_DIR/recon/tools"
 
 for f in SYSTEM.md APPEND_SYSTEM.md; do
   if [ -f "$AGENT_DIR/$f" ]; then
@@ -34,7 +36,7 @@ fi
 if [ ! -f "$AGENT_DIR/evidence/ledger.md" ]; then
   cp "$ROOT/.pi/evidence/ledger.md" "$AGENT_DIR/evidence/ledger.md"
 fi
-cp "$ROOT/.pi/tools/tool-index.md" "$AGENT_DIR/tools/tool-index.md"
+cp "$ROOT/.pi/tools/tool-index.md" "$AGENT_DIR/recon/tools/tool-index.md"
 
 if [ -d "$ROOT/node_modules" ]; then
   if [ -L "$AGENT_DIR/node_modules" ] || [ ! -e "$AGENT_DIR/node_modules" ]; then
@@ -72,8 +74,12 @@ settings.branchSummary = { reserveTokens: 24576, skipPrompt: true, ...(settings.
 settings.extensions = unique([...(settings.extensions ?? []), 'extensions/reverse-pentest-core.ts']);
 settings.skills = unique([...(settings.skills ?? []), 'skills/reverse-pentest-orchestrator/SKILL.md']);
 settings.prompts = unique([...(settings.prompts ?? []), 'prompts']);
+delete settings.enabledModels;
 fs.writeFileSync(path, `${JSON.stringify(settings, null, 2)}\n`);
 NODE
 
-echo "Installed Pi-RECON profile into $AGENT_DIR"
+"$ROOT/scripts/reverse-agent/install-repi.sh" "$ROOT" >/dev/null
+
+echo "Installed isolated Pi-RECON profile into $AGENT_DIR"
+echo "Normal pi is not modified. Run: repi"
 echo "Run: scripts/reverse-agent/refresh-tool-index.sh \"$ROOT\""

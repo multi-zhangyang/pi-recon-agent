@@ -15,16 +15,16 @@ Pi-RECON 通过 `models.json` 接入不同的模型服务。本文说明 provide
 - Vercel AI Gateway and other routing gateways
 - Ollama / vLLM / SGLang / LM Studio
 
-Pi 的自定义 provider 配置文件是：
+`repi` 的自定义 provider 配置文件是：
 
 ```text
-~/.pi/agent/models.json
+~/.repi/agent/models.json
 ```
 
 默认模型、可切换模型等运行偏好在：
 
 ```text
-~/.pi/agent/settings.json
+~/.repi/agent/settings.json
 ```
 
 凭据建议通过环境变量或命令式 secret loader 注入。下面的示例只使用占位符和环境变量引用，例如 `$OPENAI_API_KEY`、`$ANTHROPIC_API_KEY`、`$OPENROUTER_API_KEY`、`$GEMINI_API_KEY`。
@@ -510,14 +510,14 @@ openai, openrouter, deepseek, together, zai, qwen, qwen-chat-template
 列出模型：
 
 ```bash
-PI_OFFLINE=1 ./pi-test.sh --list-models
-PI_OFFLINE=1 ./pi-test.sh --list-models <provider-or-model>
+repi --offline --list-models
+repi --offline --list-models <provider-or-model>
 ```
 
 文本 smoke test：
 
 ```bash
-PI_OFFLINE=1 ./pi-test.sh --recon \
+repi --offline \
   --provider <provider-id> \
   --model <model-id> \
   --thinking off \
@@ -529,7 +529,7 @@ PI_OFFLINE=1 ./pi-test.sh --recon \
 工具调用 smoke test：
 
 ```bash
-PI_OFFLINE=1 ./pi-test.sh --recon \
+repi --offline \
   --provider <provider-id> \
   --model <model-id> \
   --thinking off \
@@ -542,8 +542,8 @@ PI_OFFLINE=1 ./pi-test.sh --recon \
 
 新增或变更 provider 后按这个顺序验：
 
-1. 更新 `~/.pi/agent/models.json`，只写 env 引用，不写 token 明文。
-2. `PI_OFFLINE=1 ./pi-test.sh --list-models <provider-or-model>`。
+1. 更新 `~/.repi/agent/models.json`，只写 env 引用，不写 token 明文。
+2. `repi --offline --list-models <provider-or-model>`。
 3. `--no-tools` 文本 smoke test。
 4. `--tools bash` 或窄工具 allowlist 的工具调用 smoke test。
 5. 小型授权本地靶场验证：路由枚举、工具调用、证据抽取、漏洞证明、最终报告。

@@ -460,11 +460,13 @@ try {
 	if (err.code !== "ENOENT") throw e;
 }
 
-const piConfigName: string | undefined = pkg.piConfig?.name;
+const runtimeAppNameOverride = process.env.PI_CODING_AGENT_APP_NAME?.trim();
+const runtimeConfigDirOverride = process.env.PI_CODING_AGENT_CONFIG_DIR?.trim();
+const piConfigName: string | undefined = runtimeAppNameOverride || pkg.piConfig?.name;
 export const PACKAGE_NAME: string = pkg.name || "@earendil-works/pi-coding-agent";
 export const APP_NAME: string = piConfigName || "pi";
 export const APP_TITLE: string = piConfigName ? APP_NAME : "π";
-export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".pi";
+export const CONFIG_DIR_NAME: string = runtimeConfigDirOverride || pkg.piConfig?.configDir || ".pi";
 export const VERSION: string = pkg.version || "0.0.0";
 
 // e.g., PI_CODING_AGENT_DIR or TAU_CODING_AGENT_DIR

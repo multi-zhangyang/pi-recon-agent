@@ -67,7 +67,48 @@ Pi-RECON 在 `packages/coding-agent/src/core/recon-profile.ts`、`.pi/SYSTEM.md`
 | `bench/recon-remote/hard-score.mjs` | 跨平台 hard-score 评测器：按 signature_rebuild、signed_replay、anti_bot_challenge、cdn_media_probe、runtime_capture_depth、exploit_chain、bundle_trace、regression_readiness 对最新公网证据打分 |
 | `scripts/reverse-agent/refresh-tool-index.sh` | 离线刷新工具索引脚本 |
 | `scripts/reverse-agent/verify-profile.mjs` | 配置完整性验证脚本 |
-| `scripts/reverse-agent/install-global-profile.sh` | 安装到 `~/.pi/agent` 的全局 profile 脚本（会备份同名文件） |
+| `repi` | 独立 Pi-RECON 启动器，默认使用 `~/.repi/agent`，自动启用 `--recon` 并隔离普通 `pi` |
+| `scripts/reverse-agent/install-repi.sh` | 安装 `/usr/local/bin/repi` 并初始化 `~/.repi/agent` |
+| `scripts/reverse-agent/clean-global-pi-recon.sh` | 清理旧版写入 `~/.pi/agent` 的 Pi-RECON 文件型 profile，移动到备份目录 |
+| `scripts/reverse-agent/install-global-profile.sh` | 兼容旧命令名；现在默认写入 `~/.repi/agent` |
+
+
+## 独立启动器 repi
+
+`repi` 是推荐入口：它不是把 Pi-RECON 继续塞进普通 `pi` 的 `~/.pi/agent`，而是设置独立运行时：
+
+```text
+command: repi
+agent dir: ~/.repi/agent
+storage: ~/.repi/agent/recon/
+normal pi dir: ~/.pi/agent
+```
+
+安装：
+
+```bash
+scripts/reverse-agent/install-repi.sh /root/pi-diy/pi
+repi --offline --help
+repi --offline --list-models
+```
+
+默认隔离参数：
+
+```text
+--recon --no-extensions --no-skills --no-prompt-templates --no-approve --no-context-files
+```
+
+需要加载项目 AGENTS/CLAUDE 和项目 `.pi/settings.json` 时使用：
+
+```bash
+repi --project-context
+```
+
+需要恢复普通 Pi 的完整资源发现时使用：
+
+```bash
+repi --with-project-resources
+```
 
 ## 运行时能力
 
@@ -157,11 +198,17 @@ scripts/reverse-agent/verify-profile.mjs /root/pi-diy/pi
 # 刷新工具索引
 scripts/reverse-agent/refresh-tool-index.sh /root/pi-diy/pi
 
-# 可选：安装为全局 Pi profile（会备份已有 SYSTEM/APPEND_SYSTEM/settings）
-scripts/reverse-agent/install-global-profile.sh /root/pi-diy/pi
+# 推荐：安装独立 repi，避免污染原版 pi 的 ~/.pi/agent
+scripts/reverse-agent/install-repi.sh /root/pi-diy/pi
 
-# 从源码启动 Pi（交互模式）
-./pi-test.sh
+# 如以前装过旧全局 profile，清理旧污染到备份目录
+scripts/reverse-agent/clean-global-pi-recon.sh
+
+# 启动 Pi-RECON（交互模式）
+repi
+
+# 源码调试入口仍保留
+./pi-test.sh --recon
 
 # 在 Pi 内可用
 /re-tools refresh
@@ -472,5 +519,5 @@ Failure/repair 合同现在同时保留机器字段和人类可读别名：
 ## Harness 自检层
 
 - `re_harness` / `/re-harness quick|full|install|show` 生成 `harness_artifact`，聚合 `install_readiness`、`reverse_capability_guards`、`regression_guards`、注册工具/命令矩阵和 evidence/memory/tool-index 可写性。
-- 开发或魔改后执行 `re_harness full`；运行 `scripts/reverse-agent/install-global-profile.sh` 后执行 `/re-harness install`。
+- 开发或魔改后执行 `re_harness full`；运行 `scripts/reverse-agent/install-repi.sh` 后执行 `repi --offline --help` 与 `/re-harness install`。
 - `reverse_capability_guards` 会守住 re_native_runtime、re_web_authz_state、re_mobile_runtime、re_exploit_lab、re_proof_loop、re_autopilot、re_knowledge_graph、compact_resume_case_memory、compact_resume_repair_from_case_memory、compact_resume_success_skip_low_value_lane、operator_command_floor、proof_exit_criteria、specialist_runtime_planner，避免安装/自检优化削弱逆向渗透能力。

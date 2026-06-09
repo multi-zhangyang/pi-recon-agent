@@ -1,6 +1,14 @@
 # Pi-RECON Kernel Profile
 
-Pi includes a built-in reverse-engineering and pentest-oriented kernel profile. Enable it with:
+Pi includes a built-in reverse-engineering and pentest-oriented kernel profile. In this repository the recommended clean-room launcher is `repi`, which enables the profile and stores state under `~/.repi/agent` so it can coexist with normal `pi`:
+
+```bash
+repi
+repi --offline --help
+repi --offline --list-models
+```
+
+The lower-level Pi flags are still available:
 
 ```bash
 pi --recon
@@ -16,7 +24,7 @@ pi --reverse-pentest
 - injects an inline extension factory before the agent starts
 - registers reverse/pentest commands and LLM tools
 - injects built-in skills and prompt templates even when no project `.pi` files exist
-- persists Pi-RECON memory, executable mission lanes, mission blackboard, evidence ledger, and tool indexes under `~/.pi/agent/recon/`
+- persists Pi-RECON memory, executable mission lanes, mission blackboard, evidence ledger, and tool indexes under the active agent dir (`repi`: `~/.repi/agent/recon/`; raw `pi --recon`: `~/.pi/agent/recon/`)
 
 ## Runtime resources
 
@@ -24,41 +32,41 @@ The built-in profile creates these resources on demand:
 
 | Resource | Location | Purpose |
 |---|---|---|
-| Field journal | `~/.pi/agent/recon/memory/field-journal.md` | Reusable reverse/pentest observations |
-| Case index | `~/.pi/agent/recon/memory/case-index.md` | Searchable memory anchors |
-| Evolution log | `~/.pi/agent/recon/memory/evolution-log.md` | Agent improvement notes |
-| Auto playbooks | `~/.pi/agent/recon/memory/playbooks/*.md` | Scored reusable playbooks distilled from bounded `run-auto` chains |
-| Playbook index | `~/.pi/agent/recon/memory/playbooks/index.md` | Generated quality/age/status index used by `re_memory playbooks` |
-| Playbook archive | `~/.pi/agent/recon/memory/playbooks/archive/` | Low-quality, stale, or over-capacity playbooks pruned by `re_memory prune-playbooks` |
-| Mission blackboard | `~/.pi/agent/recon/mission/current.json` | Active task lanes, gates, and next actions |
-| Evidence ledger | `~/.pi/agent/recon/evidence/ledger.md` | Runtime-first facts and verification records |
-| Execution kernel artifacts | `~/.pi/agent/recon/evidence/kernel/*.md` | `re_kernel build|audit` execution_kernel artifacts with directive_stack, refusal_to_execution_rules, tool_call_policy, artifact_contract, stall_recovery, and execution_kernel_ready gate |
-| Passive map artifacts | `~/.pi/agent/recon/evidence/maps/*.md` | Auto-captured target/workspace map: stat, manifests, routes/auth strings, binary candidates, URL baseline |
-| Live browser artifacts | `~/.pi/agent/recon/evidence/browser/*.md` | `re_live_browser plan|run` browser/XHR/WS runtime artifacts with request_response_log, auth_matrix, IDOR/BOLA probes, WebSocket probes, replay_commands, and live_browser_ready gate |
-| Web authz artifacts | `~/.pi/agent/recon/evidence/web-authz/*.md` | `re_web_authz_state plan|run` web_authz_state artifacts with principal_matrix, object_probes, state_machine, sequence_replay, ownership_checks, rollback_checks, runtime anchors, and web_authz_ready gate |
-| Exploit lab artifacts | `~/.pi/agent/recon/evidence/exploit-lab/*.md` | `re_exploit_lab plan|run|bundle` exploit_lab artifacts with PoC inventory, environment pins, replay_matrix, flake_triage, bundle_manifest, stability anchors, and exploit_lab_ready gate |
-| Mobile runtime artifacts | `~/.pi/agent/recon/evidence/mobile-runtime/*.md` | `re_mobile_runtime plan|run` mobile_runtime artifacts with device_matrix, apk_inventory, process_map, frida_hooks, native_trace, anti_debug_checks, runtime anchors, and mobile_runtime_ready gate |
-| Native runtime artifacts | `~/.pi/agent/recon/evidence/native-runtime/*.md` | `re_native_runtime plan|run` native_runtime artifacts with binary_inventory, mitigation_matrix, loader_libc, symbol_map, gdb_trace, crash_plan, exploit_scaffold, runtime anchors, and native_runtime_ready gate |
-| Lane run artifacts | `~/.pi/agent/recon/evidence/runs/*.md` | Auto-captured `re_lane run` scripts, stdout, stderr, exit status, parsed anchors, and follow-up commands |
-| Attack graph artifacts | `~/.pi/agent/recon/evidence/graphs/*.md` | `re_graph build` mission graph with lanes/gates, map/run artifacts, evidence ledger nodes, tool-index gaps, `critical_path`, `gaps`, and `operator_next_actions` |
-| Exploit chain artifacts | `~/.pi/agent/recon/evidence/chains/*.md` | `re_exploit_chain plan|compose` chain artifacts with `proof_path`, `exploit_path`, `evidence_gaps`, `replay_commands`, `operator_queue`, and `exploit_chain_ready` gate |
-| Campaign artifacts | `~/.pi/agent/recon/evidence/campaigns/*.md` | `re_campaign plan` campaign graph with phases, pivots, evidence/tool gaps, and next commands |
-| Operation artifacts | `~/.pi/agent/recon/evidence/operations/*.md` | `re_operation plan|run` operation queue and phase runner |
-| Delegation artifacts | `~/.pi/agent/recon/evidence/delegations/*.md` | `re_delegate plan|merge` specialist worker packets, evidence contracts, adaptive_routing_hints, worker_promotion_queue, case_memory_migrations, and merge queues |
-| Swarm artifacts | `~/.pi/agent/recon/evidence/swarms/*.md` | `re_swarm plan|run|merge` multi-specialist worker_runtime_packets plus run-mode worker_executions, worker_results, blocked rows, merge_digest, parallel_groups, merge_protocol, collision_matrix, commander_next_actions, and merge-mode runtime digest retention |
-| Supervisor artifacts | `~/.pi/agent/recon/evidence/supervisor/*.md` | `re_supervisor review|repair` worker/swarm critic output, swarm_artifact, repair queue, commander_merge_queue, and priority queue |
-| Reflection artifacts | `~/.pi/agent/recon/evidence/reflections/*.md` | `re_reflect plan|write` reflection_cycle artifacts tied to field journal, evolution log, and playbooks |
-| Context pack artifacts | `~/.pi/agent/recon/evidence/contexts/*.md` | `re_context pack|resume` context_pack artifacts with resume_brief, artifact_index, repair queue including commander_merge_queue, commander_merge_budget, worker_scoreboard, and next_operator_commands |
-| Operator artifacts | `~/.pi/agent/recon/evidence/operators/*.md` | `re_operator plan|dispatch|verify|escalate` operator_queue artifacts with dispatcher_policy, verification_matrix, escalation_queue, and next_operator_command |
-| Verifier artifacts | `~/.pi/agent/recon/evidence/verifiers/*.md` | `re_verifier check|matrix` verifier_matrix artifacts with assertions, evidence_bindings, counter_evidence, contradictions, and gaps |
-| Compiler artifacts | `~/.pi/agent/recon/evidence/compilers/*.md` | `re_compiler draft|final` compiler_report artifacts with key_evidence_block, repro_commands, contradictions, gaps, and next_operator_queue |
-| Replayer artifacts | `~/.pi/agent/recon/evidence/replayers/*.md` | `re_replayer plan|run` replay_matrix artifacts with exit codes, stdout/stderr hashes, blocked commands, and next replay actions |
-| Autofix artifacts | `~/.pi/agent/recon/evidence/autofix/*.md` | `re_autofix plan|apply` repair artifacts with patch_queue, command_substitutions, bootstrap_queue, evidence_recapture_queue, and next_operator_queue |
-| Proof loop artifacts | `~/.pi/agent/recon/evidence/proof-loops/*.md` | `re_proof_loop plan|run` proof_loop artifacts with verdict, gate_status, evidence_summary, specialist_queue, swarm_bridge, bridge_artifacts, executed_steps, next_proof_actions, and proof_loop_ready gate |
-| Knowledge graph artifacts | `~/.pi/agent/recon/evidence/knowledge/*.md` | `re_knowledge_graph build|query` knowledge_graph artifacts with case_signatures, similarity_index, worker_routing_hints, worker_scoreboard, adaptive_routing_hints, worker_promotion_queue, compact_resume_case_memory, compact_resume_routing_hints, and command_strategy_hints |
-| Tool index | `~/.pi/agent/recon/tools/tool-index.md` | Evidence-based local tool inventory |
-| Orchestrator skill | `~/.pi/agent/recon/builtin/reverse-pentest-orchestrator/SKILL.md` | Built-in security workflow router |
-| Prompt templates | `~/.pi/agent/recon/builtin/prompts/*.md` | `/reverse`, `/websec`, `/webauthz`, `/chain`, `/decision`, `/jsre`, `/pcap`, `/pwn`, `/cloud`, `/identity`, `/memory` |
+| Field journal | `~/.repi/agent/recon/memory/field-journal.md` | Reusable reverse/pentest observations |
+| Case index | `~/.repi/agent/recon/memory/case-index.md` | Searchable memory anchors |
+| Evolution log | `~/.repi/agent/recon/memory/evolution-log.md` | Agent improvement notes |
+| Auto playbooks | `~/.repi/agent/recon/memory/playbooks/*.md` | Scored reusable playbooks distilled from bounded `run-auto` chains |
+| Playbook index | `~/.repi/agent/recon/memory/playbooks/index.md` | Generated quality/age/status index used by `re_memory playbooks` |
+| Playbook archive | `~/.repi/agent/recon/memory/playbooks/archive/` | Low-quality, stale, or over-capacity playbooks pruned by `re_memory prune-playbooks` |
+| Mission blackboard | `~/.repi/agent/recon/mission/current.json` | Active task lanes, gates, and next actions |
+| Evidence ledger | `~/.repi/agent/recon/evidence/ledger.md` | Runtime-first facts and verification records |
+| Execution kernel artifacts | `~/.repi/agent/recon/evidence/kernel/*.md` | `re_kernel build|audit` execution_kernel artifacts with directive_stack, refusal_to_execution_rules, tool_call_policy, artifact_contract, stall_recovery, and execution_kernel_ready gate |
+| Passive map artifacts | `~/.repi/agent/recon/evidence/maps/*.md` | Auto-captured target/workspace map: stat, manifests, routes/auth strings, binary candidates, URL baseline |
+| Live browser artifacts | `~/.repi/agent/recon/evidence/browser/*.md` | `re_live_browser plan|run` browser/XHR/WS runtime artifacts with request_response_log, auth_matrix, IDOR/BOLA probes, WebSocket probes, replay_commands, and live_browser_ready gate |
+| Web authz artifacts | `~/.repi/agent/recon/evidence/web-authz/*.md` | `re_web_authz_state plan|run` web_authz_state artifacts with principal_matrix, object_probes, state_machine, sequence_replay, ownership_checks, rollback_checks, runtime anchors, and web_authz_ready gate |
+| Exploit lab artifacts | `~/.repi/agent/recon/evidence/exploit-lab/*.md` | `re_exploit_lab plan|run|bundle` exploit_lab artifacts with PoC inventory, environment pins, replay_matrix, flake_triage, bundle_manifest, stability anchors, and exploit_lab_ready gate |
+| Mobile runtime artifacts | `~/.repi/agent/recon/evidence/mobile-runtime/*.md` | `re_mobile_runtime plan|run` mobile_runtime artifacts with device_matrix, apk_inventory, process_map, frida_hooks, native_trace, anti_debug_checks, runtime anchors, and mobile_runtime_ready gate |
+| Native runtime artifacts | `~/.repi/agent/recon/evidence/native-runtime/*.md` | `re_native_runtime plan|run` native_runtime artifacts with binary_inventory, mitigation_matrix, loader_libc, symbol_map, gdb_trace, crash_plan, exploit_scaffold, runtime anchors, and native_runtime_ready gate |
+| Lane run artifacts | `~/.repi/agent/recon/evidence/runs/*.md` | Auto-captured `re_lane run` scripts, stdout, stderr, exit status, parsed anchors, and follow-up commands |
+| Attack graph artifacts | `~/.repi/agent/recon/evidence/graphs/*.md` | `re_graph build` mission graph with lanes/gates, map/run artifacts, evidence ledger nodes, tool-index gaps, `critical_path`, `gaps`, and `operator_next_actions` |
+| Exploit chain artifacts | `~/.repi/agent/recon/evidence/chains/*.md` | `re_exploit_chain plan|compose` chain artifacts with `proof_path`, `exploit_path`, `evidence_gaps`, `replay_commands`, `operator_queue`, and `exploit_chain_ready` gate |
+| Campaign artifacts | `~/.repi/agent/recon/evidence/campaigns/*.md` | `re_campaign plan` campaign graph with phases, pivots, evidence/tool gaps, and next commands |
+| Operation artifacts | `~/.repi/agent/recon/evidence/operations/*.md` | `re_operation plan|run` operation queue and phase runner |
+| Delegation artifacts | `~/.repi/agent/recon/evidence/delegations/*.md` | `re_delegate plan|merge` specialist worker packets, evidence contracts, adaptive_routing_hints, worker_promotion_queue, case_memory_migrations, and merge queues |
+| Swarm artifacts | `~/.repi/agent/recon/evidence/swarms/*.md` | `re_swarm plan|run|merge` multi-specialist worker_runtime_packets plus run-mode worker_executions, worker_results, blocked rows, merge_digest, parallel_groups, merge_protocol, collision_matrix, commander_next_actions, and merge-mode runtime digest retention |
+| Supervisor artifacts | `~/.repi/agent/recon/evidence/supervisor/*.md` | `re_supervisor review|repair` worker/swarm critic output, swarm_artifact, repair queue, commander_merge_queue, and priority queue |
+| Reflection artifacts | `~/.repi/agent/recon/evidence/reflections/*.md` | `re_reflect plan|write` reflection_cycle artifacts tied to field journal, evolution log, and playbooks |
+| Context pack artifacts | `~/.repi/agent/recon/evidence/contexts/*.md` | `re_context pack|resume` context_pack artifacts with resume_brief, artifact_index, repair queue including commander_merge_queue, commander_merge_budget, worker_scoreboard, and next_operator_commands |
+| Operator artifacts | `~/.repi/agent/recon/evidence/operators/*.md` | `re_operator plan|dispatch|verify|escalate` operator_queue artifacts with dispatcher_policy, verification_matrix, escalation_queue, and next_operator_command |
+| Verifier artifacts | `~/.repi/agent/recon/evidence/verifiers/*.md` | `re_verifier check|matrix` verifier_matrix artifacts with assertions, evidence_bindings, counter_evidence, contradictions, and gaps |
+| Compiler artifacts | `~/.repi/agent/recon/evidence/compilers/*.md` | `re_compiler draft|final` compiler_report artifacts with key_evidence_block, repro_commands, contradictions, gaps, and next_operator_queue |
+| Replayer artifacts | `~/.repi/agent/recon/evidence/replayers/*.md` | `re_replayer plan|run` replay_matrix artifacts with exit codes, stdout/stderr hashes, blocked commands, and next replay actions |
+| Autofix artifacts | `~/.repi/agent/recon/evidence/autofix/*.md` | `re_autofix plan|apply` repair artifacts with patch_queue, command_substitutions, bootstrap_queue, evidence_recapture_queue, and next_operator_queue |
+| Proof loop artifacts | `~/.repi/agent/recon/evidence/proof-loops/*.md` | `re_proof_loop plan|run` proof_loop artifacts with verdict, gate_status, evidence_summary, specialist_queue, swarm_bridge, bridge_artifacts, executed_steps, next_proof_actions, and proof_loop_ready gate |
+| Knowledge graph artifacts | `~/.repi/agent/recon/evidence/knowledge/*.md` | `re_knowledge_graph build|query` knowledge_graph artifacts with case_signatures, similarity_index, worker_routing_hints, worker_scoreboard, adaptive_routing_hints, worker_promotion_queue, compact_resume_case_memory, compact_resume_routing_hints, and command_strategy_hints |
+| Tool index | `~/.repi/agent/recon/tools/tool-index.md` | Evidence-based local tool inventory |
+| Orchestrator skill | `~/.repi/agent/recon/builtin/reverse-pentest-orchestrator/SKILL.md` | Built-in security workflow router |
+| Prompt templates | `~/.repi/agent/recon/builtin/prompts/*.md` | `/reverse`, `/websec`, `/webauthz`, `/chain`, `/decision`, `/jsre`, `/pcap`, `/pwn`, `/cloud`, `/identity`, `/memory` |
 
 ## Commands and tools
 
@@ -182,21 +190,21 @@ Examples:
 
 `re_bootstrap` turns the reverse-skill “missing tools → bootstrap → refresh tool-index” rule into an in-kernel tool. Use `plan` first to see exact commands, then `install` only for tools required by the active mission lane. After installation, Pi refreshes the tool index and updates the mission gate.
 
-`re_complete` audits mission gates before a final claim. It checks route/memory/tool/passive-map/minimal-proof/evidence/repro/report/memory gates, evidence metadata, and journal/evolution state. `scaffold` writes a report draft under `~/.pi/agent/recon/reports/`.
+`re_complete` audits mission gates before a final claim. It checks route/memory/tool/passive-map/minimal-proof/evidence/repro/report/memory gates, evidence metadata, and journal/evolution state. `scaffold` writes a report draft under `~/.repi/agent/recon/reports/`.
 
 ## Project profile coexistence
 
-A project or global `.pi/extensions/reverse-pentest-core.ts` profile can still exist. When `--recon` is enabled, Pi keeps the built-in inline kernel profile and suppresses conflicts from the legacy project/global Pi-RECON extension, so users can migrate from file-based profiles without disabling their existing setup first.
+A project or global `.pi/extensions/reverse-pentest-core.ts` profile can still exist. `repi` avoids those collisions by default with `--no-extensions --no-skills --no-prompt-templates --no-approve --no-context-files`; raw `pi --recon` also keeps the built-in inline kernel profile and suppresses conflicts from the legacy file-based Pi-RECON extension where possible.
 
 ## Examples
 
 ```bash
-pi --recon "分析这个 ELF 的许可证校验逻辑"
-pi --recon /reverse ./challenge
-pi --recon /websec http://127.0.0.1:3000
-pi --reverse-pentest /jsre "抓包里的 sign 参数"
-pi --recon /cloud "K8s serviceaccount metadata privilege"
-pi --recon /identity "AD kerberos ldap bloodhound"
+repi "分析这个 ELF 的许可证校验逻辑"
+repi /reverse ./challenge
+repi /websec http://127.0.0.1:3000
+repi /jsre "抓包里的 sign 参数"
+repi /cloud "K8s serviceaccount metadata privilege"
+repi /identity "AD kerberos ldap bloodhound"
 ```
 
 

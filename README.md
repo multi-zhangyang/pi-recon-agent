@@ -93,23 +93,64 @@ cd /root/pi-diy/pi
 npm install --ignore-scripts
 ```
 
-先跑一次离线 help，确认 profile 能加载：
+安装独立启动命令 `repi`（推荐）：
 
 ```bash
-PI_OFFLINE=1 ./pi-test.sh --recon --no-tools --help
+scripts/reverse-agent/install-repi.sh "$PWD"
 ```
 
-## 从源码启动 Pi-RECON
+`repi` 使用独立目录 `~/.repi/agent`，不会再把逆向 profile 写进 `~/.pi/agent`，因此可以和你原来的 `pi` 共存。
+
+先跑一次离线 help，确认独立 profile 能加载：
+
+```bash
+repi --offline --help
+repi --offline --list-models
+```
+
+## 启动 Pi-RECON：使用独立 `repi`
 
 离线查看能力，不调用 provider：
 
 ```bash
-PI_OFFLINE=1 ./pi-test.sh --recon --no-tools --help
+repi --offline --help
+repi --offline --list-models
 ```
 
-正常启动：
+正常启动逆向 / 渗透 agent：
 
 ```bash
+repi
+```
+
+一次性非交互调用：
+
+```bash
+repi -p "分析当前目录的逆向入口，先做被动 mapping"
+```
+
+默认情况下 `repi` 会自动追加：
+
+```text
+--recon --no-extensions --no-skills --no-prompt-templates --no-approve --no-context-files
+```
+
+这样做是为了防止项目 `.pi/`、全局 `~/.pi/agent/`、旧 prompts/extensions 再次和 Pi-RECON 内置 kernel 冲突。需要读取项目 AGENTS/CLAUDE 或项目 `.pi/settings.json` 时再显式打开：
+
+```bash
+repi --project-context
+```
+
+需要完全按普通 Pi 的资源发现机制加载项目/全局扩展时：
+
+```bash
+repi --with-project-resources
+```
+
+源码入口仍然保留，主要用于开发调试：
+
+```bash
+PI_OFFLINE=1 ./pi-test.sh --recon --no-tools --help
 ./pi-test.sh --recon
 ```
 
@@ -139,34 +180,46 @@ PI_OFFLINE=1 ./pi-test.sh --recon --no-tools --help
 /re-harness show
 ```
 
-## 安装为全局 Pi profile
+## 安装方式：独立 profile，不污染原 Pi
 
-把 `.pi` profile 安装到当前 Pi agent 目录。默认目标是 `~/.pi/agent`；如需自定义可设置 `PI_CODING_AGENT_DIR`。
+推荐只安装 `repi`：
 
 ```bash
-scripts/reverse-agent/install-global-profile.sh /root/pi-diy/pi
-scripts/reverse-agent/refresh-tool-index.sh /root/pi-diy/pi
-scripts/reverse-agent/verify-profile.mjs /root/pi-diy/pi
+scripts/reverse-agent/install-repi.sh /root/pi-diy/pi
 ```
 
-安装后会同步 / 链接这些内容：
+安装后结构是：
 
 ```text
-~/.pi/agent/SYSTEM.md
-~/.pi/agent/APPEND_SYSTEM.md
-~/.pi/agent/extensions/reverse-pentest-core.ts
-~/.pi/agent/skills/reverse-pentest-orchestrator/SKILL.md
-~/.pi/agent/prompts/*.md
-~/.pi/agent/node_modules -> <repo>/node_modules
+/usr/local/bin/repi -> /root/pi-diy/pi/repi
+~/.repi/agent/settings.json
+~/.repi/agent/models.json      # 首次初始化时如存在，会从 ~/.pi/agent/models.json 复制一份
+~/.repi/agent/auth.json        # 首次初始化时如存在，会从 ~/.pi/agent/auth.json 复制一份
+~/.repi/agent/recon/           # Pi-RECON memory / mission / evidence / tool-index
 ```
+
+正常 `pi` 继续使用 `~/.pi/agent`；逆向 agent 只使用 `~/.repi/agent`。如果之前安装过旧的全局 Pi-RECON profile，可以清理旧污染：
+
+```bash
+scripts/reverse-agent/clean-global-pi-recon.sh
+```
+
+清理脚本只会把旧的 Pi-RECON 文件型 profile 移到备份目录，例如：
+
+```text
+~/.pi/agent/repi-legacy-backup.<timestamp>/
+```
+
+旧脚本 `scripts/reverse-agent/install-global-profile.sh` 现在仅作为兼容入口保留，默认也写入 `~/.repi/agent`，不再默认写入 `~/.pi/agent`。
 
 验证：
 
 ```bash
-PI_OFFLINE=1 ./pi-test.sh --recon --no-tools --help
+repi --offline --help
+repi --offline --list-models
 ```
 
-进入 Pi 后：
+进入 `repi` 后：
 
 ```text
 /re-harness install
@@ -321,12 +374,15 @@ exact_resume_verification:
 
 ## 模型 / provider 配置
 
-Pi-RECON 不绑定某个私有端点。模型配置放在用户本地 Pi 配置目录，不提交到仓库：
+Pi-RECON 不绑定某个私有端点。`repi` 的模型配置放在独立目录，不提交到仓库，也不依赖原版 `pi` 的 profile：
 
 ```text
-~/.pi/agent/models.json
-~/.pi/agent/settings.json
+~/.repi/agent/models.json
+~/.repi/agent/settings.json
+~/.repi/agent/auth.json
 ```
+
+首次运行 `repi` 时，如果检测到 `~/.pi/agent/models.json` / `auth.json` 且 `~/.repi/agent/` 内还没有对应文件，会复制一份，保证已有 provider 可以直接用；之后 `repi` 和 `pi` 的配置互不覆盖。
 
 密钥使用环境变量引用，例如：
 
@@ -372,7 +428,7 @@ export MODEL_PROVIDER_API_KEY=<your-token>
 
 ```bash
 export MODEL_PROVIDER_API_KEY=<token>
-PI_OFFLINE=1 ./pi-test.sh --recon \
+repi --offline \
   --provider openai-compatible \
   --model provider/model-id \
   --thinking off \
@@ -381,7 +437,7 @@ PI_OFFLINE=1 ./pi-test.sh --recon \
   -p "Reply exactly: PROVIDER_OK"
 ```
 
-如果要真实调用模型，把 `PI_OFFLINE=1` 去掉，并确保对应 `baseUrl`、`apiKey`、`model id` 可用。
+如果要真实调用模型，把 `--offline` 去掉，并确保对应 `baseUrl`、`apiKey`、`model id` 可用。
 
 ### Anthropic Messages 示例
 
@@ -527,7 +583,10 @@ scripts/reverse-agent/
   hard-eval-control-plane.mjs
   validate-claim-ledger.mjs
   audit-parallel-plan.mjs
-  install-global-profile.sh
+  install-repi.sh
+  init-repi-profile.mjs
+  clean-global-pi-recon.sh
+  install-global-profile.sh   # legacy compatibility; defaults to ~/.repi/agent
   refresh-tool-index.sh
   verify-profile.mjs
 ```
@@ -558,7 +617,9 @@ memory/playbooks/*.md
 
 ```bash
 npm install --ignore-scripts
-PI_OFFLINE=1 ./pi-test.sh --recon --no-tools --help
+scripts/reverse-agent/install-repi.sh "$PWD"
+repi --offline --help
+repi --offline --list-models
 ```
 
 仍失败时先看 TypeScript / 语法：
@@ -569,14 +630,22 @@ node --check .pi/extensions/reverse-pentest-core.ts
 ./node_modules/.bin/tsgo --noEmit --pretty false
 ```
 
-### 2. 全局 profile 没生效
+### 2. `repi` 没生效或又出现旧 Pi-RECON 冲突
 
-重新安装并刷新索引：
+重新安装独立入口，并清理旧全局污染：
 
 ```bash
-scripts/reverse-agent/install-global-profile.sh /root/pi-diy/pi
-scripts/reverse-agent/refresh-tool-index.sh /root/pi-diy/pi
-scripts/reverse-agent/verify-profile.mjs /root/pi-diy/pi
+scripts/reverse-agent/install-repi.sh /root/pi-diy/pi
+scripts/reverse-agent/clean-global-pi-recon.sh
+repi --offline --help
+repi --offline --list-models
+```
+
+如果 `pi` 和 `repi` 输出混在一起，检查这两个目录是否分离：
+
+```bash
+echo "pi   : ${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+echo "repi : ${REPI_CODING_AGENT_DIR:-$HOME/.repi/agent}"
 ```
 
 ### 3. context resume 被 blocked
