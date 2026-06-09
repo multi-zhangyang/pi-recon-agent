@@ -270,9 +270,21 @@ const REQUIREMENTS = [
 			},
 			{
 				id: "runtime_parallel_runner_evidence",
-				description: "现有 dogfood runner 具备真实并发进程、角色结果和 synthesizer 合并证据结构。",
+				description: "现有 dogfood runner 具备真实并发进程、角色结果、sub-agent runtime manifest 和 synthesizer 合并证据结构。",
 				files: ["bench/recon-remote/agent-dogfood/parallel-run.mjs"],
-				markers: ["Promise.all", "roleRuns", "synthesizerRun", "overlapStats", "sessionDigest"],
+				markers: [
+					"Promise.all",
+					"roleRuns",
+					"synthesizerRun",
+					"overlapStats",
+					"sessionDigest",
+					"writeSubagentRuntimeManifest",
+					"pi-recon-subagent-runtime-manifest",
+					"runtimeManifestFile",
+					"subagentRuntimeManifestsCaptured",
+					"toolResultCount",
+					"modelProvider",
+				],
 			},
 			{
 				id: "frontier_shard_plan",
@@ -302,7 +314,7 @@ const REQUIREMENTS = [
 		recommendedWork: [
 			"保持 npm run audit:parallel-plan 作为 frontier --plan 与 dogfood --plan-only 的离线 smoke gate。",
 			"保持 gate:claim-release --write-marker 作为 release gate marker，并让 supervisor/compiler/complete 消费最新 marker。",
-			"让 agent-dogfood 执行态把 planId/source/worker merge keys 写入每个 worker runtime digest。",
+			"让 agent-dogfood 的 sub-agent runtime manifest 继续和 planId/source/worker merge keys、failure signature 关联。",
 		],
 	},
 	{
@@ -416,15 +428,48 @@ const REQUIREMENTS = [
 				files: ["scripts/reverse-agent/audit-parallel-plan.mjs"],
 				markers: ["validatePlanOnlyFailureRepair", "planOnlyFailureRepair", "tmp-invalid-plan.json"],
 			},
+			{
+				id: "failure_repair_strict_schema",
+				description: "FailureLedgerEventV1 / RepairQueueItemV1 schema 绑定 strict fixture、重复 signature 去重窗口和 strict additionalProperties。",
+				files: ["schemas/reverse-agent/failure-repair-contract.schema.json"],
+				markers: [
+					"additionalProperties",
+					"deterministic_duplicate_signature_attempt_rejected",
+					"x-piReconStrictFixture",
+					"x-piReconDedupWindow",
+				],
+			},
+			{
+				id: "failure_repair_strict_fixture",
+				description: "Failure/repair strict fixture 覆盖 valid batch、duplicate signature/attempt 和 loose field 负例。",
+				files: ["fixtures/reverse-agent/failure-repair-strict.fixture.json"],
+				markers: [
+					"invalidDuplicate",
+					"invalidLoose",
+					"strict_schema_fixture_gate",
+					"unexpectedLooseField",
+				],
+			},
+			{
+				id: "failure_repair_strict_validator",
+				description: "Autonomous contracts gate 调用本地 strict validator，验证 duplicate 和 loose field 负例。",
+				files: ["scripts/reverse-agent/autonomous-contracts.mjs"],
+				markers: [
+					"validateFailureRepairStrictFixture",
+					"failureRepairStrictFixture",
+					"duplicateRejected",
+					"looseRejected",
+				],
+			},
 		],
 		hardeningNeeded: [
-			"为 runtime failure ledger 增加 strict schema fixture、重复 signature 去重窗口和回归 gate。",
-			"所有 retry 继续复用同一 signature 和 budget/retryBudget；达到 exhausted 后停止盲 retry，转 repair/escalate。",
+			"把 strict failure/repair validator 接入独立 sub-agent/session runtime regression gates。",
+			"所有 runtime retry 继续复用同一 signature 和 budget/retryBudget；达到 exhausted 后停止盲 retry，转 repair/escalate。",
 			"为 autofix/operator/compound 类动作加入 baseline、allowlist、passed gate regression 和 rollback criteria。",
 		],
 		recommendedWork: [
 			"保持 .pi/evidence/failures/ledger.jsonl 和 .pi/evidence/repairs/queue.jsonl schema，把 retryBudget/evidenceWriteback/blockedConditions 保持为必填。",
-			"继续把 agent-dogfood per-attempt session digest 扩展到独立 sub-agent runtime manifest。",
+			"把 agent-dogfood 独立 sub-agent runtime manifest 继续接入 failure signature / retry budget 去重。",
 			"让 proof-loop/knowledge graph 查询 failure signature，自动优先处理 exhausted 与重复失败。",
 		],
 	},
@@ -556,7 +601,10 @@ function validateControlContractSchema(root, contract) {
 	const definition = json ? schemaDefinition(json, contract.id) : null;
 	const required = new Set(definition?.required ?? []);
 	const properties = new Set(Object.keys(definition?.properties ?? {}));
-	const schemaInvariants = new Set(json?.["x-piReconInvariants"] ?? definition?.["x-piReconInvariants"] ?? []);
+	const schemaInvariants = new Set([
+		...(json?.["x-piReconInvariants"] ?? []),
+		...(definition?.["x-piReconInvariants"] ?? []),
+	]);
 	const missingRequired = (contract.requiredFields ?? []).filter((field) => !required.has(field));
 	const missingProperties = (contract.requiredFields ?? []).filter((field) => !properties.has(field));
 	const missingInvariants = (contract.invariants ?? []).filter((invariant) => !schemaInvariants.has(invariant));
@@ -671,13 +719,13 @@ function buildManifest(root) {
 		auditSelf,
 		controlPlaneContractAudit,
 		topAutonomousDefinition: false,
-		topAutonomousDefinitionReason: "核心组织链路、ContextPackV2 exact resume marker/negative fixtures/closure gate、runtime failure/repair ledger hooks、compound/role retry failure-repair 输出、strict claim release marker 和 supervisor/compiler/complete final gate 已可用；独立子会话 runtime 与 cross-session resume 负例仍可继续硬化。",
+		topAutonomousDefinitionReason: "核心组织链路、agent-dogfood subagent runtime manifest、ContextPackV2 exact resume marker/negative fixtures/closure gate、strict failure/repair fixture、runtime failure/repair ledger hooks、compound/role retry failure-repair 输出、strict claim release marker 和 supervisor/compiler/complete final gate 已可用；通用 re_swarm 独立子会话 runtime 与 cross-session resume 负例仍可继续硬化。",
 		pillars,
 		notYetTopAutonomousDefinition: hardeningItems,
 		recommendedNonTestWorkOrder: [
 			"保持 ReconParallelPlanV1、releaseGateMetadata、claimGatePolicy、strict claim marker 在 re_swarm / re_supervisor / re_compiler / re_complete 间同源流转。",
 			"继续把 role contract + claim ledger + conflict table 扩展到独立子会话执行态。",
-			"固化 failure ledger + repair queue + bounded retry signature + rollback criteria。",
+			"继续把 strict failure ledger + repair queue + bounded retry signature + rollback criteria 接入更多 runtime 回归门禁。",
 			"继续扩展 ContextPackV2 / ResumeContractV2 的 cross-session 和 multi-compact 负例 fixture。",
 			"完成上述控制面后，再恢复真实平台/live benchmark。",
 		],

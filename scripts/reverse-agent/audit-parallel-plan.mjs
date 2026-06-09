@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const AUDIT_VERSION = 1;
 const DOGFOOD_EVIDENCE_DIR = join(".pi", "evidence", "remote", "agent-parallel-dogfood");
+const DOGFOOD_RUNNER = join("bench", "recon-remote", "agent-dogfood", "parallel-run.mjs");
 const FRONTIER_PLAN_ARGS = [
 	"bench/recon-remote/frontier-orchestrator/run.mjs",
 	"--plan",
@@ -281,6 +282,42 @@ function validatePlanOnlyFailureRepair(run, beforeDirs, afterDirs) {
 	});
 }
 
+function validateDogfoodRuntimeManifestMarkers(root) {
+	const runnerPath = join(root, DOGFOOD_RUNNER);
+	const text = existsSync(runnerPath) ? readFileSync(runnerPath, "utf8") : "";
+	const markers = [
+		"writeSubagentRuntimeManifest",
+		"pi-recon-subagent-runtime-manifest",
+		"roleId",
+		"attempt",
+		"pid",
+		"exitCode",
+		"stdout",
+		"stderr",
+		"sha256",
+		"sessionDir",
+		"sessionFiles",
+		"toolResultCount",
+		"modelProvider",
+		"requestedProvider",
+		"requestedModel",
+		"observedProviders",
+		"observedModels",
+		"runtimeManifestFile",
+		"subagentRuntimeManifests",
+		"subagentRuntimeManifestsCaptured",
+	];
+	const rows = markers.map((marker) => ({ marker, present: text.includes(marker) }));
+	const missing = rows.filter((row) => !row.present).map((row) => row.marker);
+	return status(missing.length === 0, {
+		runner: DOGFOOD_RUNNER,
+		staticOnly: true,
+		markerCount: markers.length,
+		missing,
+		rows,
+	});
+}
+
 function formatMarkdown(result) {
 	const lines = [
 		"# Pi-RECON Parallel Plan Audit",
@@ -312,6 +349,7 @@ function formatMarkdown(result) {
 		`- no_model_needed: ${result.checks.planOnlyNoProvider.noModelNeeded}`,
 		`- no_new_agent_dogfood_dir: ${result.checks.planOnlyNoEvidenceDir.noEvidenceDirCreated}`,
 		`- invalid_plan_failure_repair: ${result.checks.planOnlyFailureRepair.status}`,
+		`- subagent_runtime_manifest_static: ${result.checks.dogfoodRuntimeManifest.status}`,
 		"",
 		"## Verification",
 		`- RECON_AGENT_MODEL/ANTHROPIC_MODEL were removed from the child environment.`,
@@ -392,6 +430,7 @@ function buildResult(root) {
 	}
 	const planOnlyCheck = validatePlanOnlyOutput(planOnlyRun.json, planOnlyRun, frontierPlan, beforeDirs, afterDirs);
 	const planOnlyFailureRepairCheck = validatePlanOnlyFailureRepair(invalidPlanRun, invalidBeforeDirs, invalidAfterDirs);
+	const dogfoodRuntimeManifestCheck = validateDogfoodRuntimeManifestMarkers(resolvedRoot);
 	const checks = {
 		frontierPlan: frontierCheck,
 		reconParallelPlanV1: status(frontierCheck.status === "pass", {
@@ -420,6 +459,7 @@ function buildResult(root) {
 		}),
 		planOnlyOutput: planOnlyCheck,
 		planOnlyFailureRepair: planOnlyFailureRepairCheck,
+		dogfoodRuntimeManifest: dogfoodRuntimeManifestCheck,
 	};
 	const ok = Object.values(checks).every((check) => check.status === "pass");
 	return {

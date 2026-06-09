@@ -362,6 +362,72 @@ async function fileDigest(path) {
   if (!buffer) return null;
   return { path: rel(path), bytes: buffer.length, sha256: sha256(buffer).slice(0, 24) };
 }
+async function writeSubagentRuntimeManifest({ role, attempt, roleSessionDir, runResult, session, stdoutPath, stderrPath }) {
+  const sessionDir = rel(roleSessionDir);
+  const sessionFiles = Array.isArray(session?.files) ? session.files : [];
+  const toolResultCount = Number(session?.toolResults || 0);
+  const stdout = await fileDigest(stdoutPath);
+  const stderr = await fileDigest(stderrPath);
+  const manifest = {
+    kind: 'pi-recon-subagent-runtime-manifest',
+    schemaVersion: 1,
+    roleId: role.id,
+    title: role.title || '',
+    attempt,
+    pid: runResult.pid,
+    parentPid: runResult.parentPid,
+    exitCode: runResult.code,
+    signal: runResult.signal,
+    startedAt: runResult.startedAt,
+    endedAt: runResult.endedAt,
+    elapsedMs: runResult.elapsedMs,
+    argvSha256: runResult.argvSha256,
+    processAtSpawn: runResult.processAtSpawn,
+    monotonic: runResult.monotonic,
+    stdout,
+    stderr,
+    sessionDir,
+    sessionFiles,
+    toolResultCount,
+    session: {
+      dir: sessionDir,
+      files: sessionFiles,
+      fileCount: sessionFiles.length,
+      fileDigests: session?.fileDigests || [],
+      sessionIds: session?.sessionIds || [],
+      sessionCwds: session?.sessionCwds || {},
+      toolCallCount: Number(session?.toolCalls || 0),
+      toolResultCount,
+      toolResultErrors: Number(session?.toolResultErrors || 0),
+      toolResultBytes: Number(session?.toolResultBytes || 0),
+      toolNames: session?.toolNames || {},
+      toolResultNames: session?.toolResultNames || {},
+      toolResultDigests: session?.toolResultDigests || [],
+    },
+    modelProvider: {
+      requestedProvider: provider,
+      requestedModel: model,
+      thinking,
+      requestedTools: tools.split(',').map((x) => x.trim()).filter(Boolean),
+      observedProviders: session?.providers || {},
+      observedModels: session?.models || {},
+      modelCalls: Number(session?.modelCalls || 0),
+      modelResponseIds: session?.modelResponseIds || [],
+      stopReasons: session?.stopReasons || {},
+      usageTokens: Number(session?.usageTokens || 0),
+    },
+    plan: {
+      source: planPreview.source,
+      planId: planPreview.planId || '',
+      workerId: role.id,
+      mergeKeys: role.planWorker?.mergeKeys || [],
+      evidenceContract: role.planWorker?.evidenceContract || [],
+    },
+  };
+  const manifestPath = join(outDir, `${role.id}.attempt-${attempt}.runtime-manifest.json`);
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  return { runtimeManifest: manifest, runtimeManifestFile: rel(manifestPath) };
+}
 async function runtimeAudit() {
   const offlineRequested = extraArgs.includes('--offline') || truthyEnvFlag(process.env.PI_OFFLINE);
   const noEnvRequested = extraArgs.includes('--no-env');
@@ -692,6 +758,7 @@ async function withRetries(label, launcher) {
       stderrBytes: last.stderrBytes,
       stdoutFile: last.attemptStdoutFile || last.stdoutFile,
       stderrFile: last.attemptStderrFile || last.stderrFile,
+      runtimeManifestFile: last.runtimeManifestFile,
       sessionFiles: last.session?.files || [],
       toolResults: last.session?.toolResults || 0,
       checks: last.checks,
@@ -729,9 +796,19 @@ async function launchRole(role, attempt = 0) {
   await writeFile(attemptStderrPath, redact(runResult.stderr));
   await writeFile(join(outDir, `${role.id}.stdout.txt`), redact(runResult.stdout));
   await writeFile(join(outDir, `${role.id}.stderr.txt`), redact(runResult.stderr));
+  const { runtimeManifest, runtimeManifestFile } = await writeSubagentRuntimeManifest({
+    role,
+    attempt,
+    roleSessionDir,
+    runResult,
+    session,
+    stdoutPath: attemptStdoutPath,
+    stderrPath: attemptStderrPath,
+  });
   return {
     id: role.id,
     title: role.title,
+    attempt,
     command: redact(`${agentCmd} ${args.map((arg) => JSON.stringify(arg)).join(' ')}`),
     code: runResult.code,
     signal: runResult.signal,
@@ -751,6 +828,8 @@ async function launchRole(role, attempt = 0) {
     stderrFile: `${rel(outDir)}/${role.id}.stderr.txt`,
     attemptStdoutFile: rel(attemptStdoutPath),
     attemptStderrFile: rel(attemptStderrPath),
+    runtimeManifestFile,
+    runtimeManifest,
     session,
     checks,
     stdoutTail: redact(runResult.stdout).slice(-5000),
@@ -795,9 +874,19 @@ async function launchSynthesizer(workerSummaryPath, workerRuns, attempt = 0) {
   await writeFile(attemptStderrPath, redact(runResult.stderr));
   await writeFile(join(outDir, `${role.id}.stdout.txt`), redact(runResult.stdout));
   await writeFile(join(outDir, `${role.id}.stderr.txt`), redact(runResult.stderr));
+  const { runtimeManifest, runtimeManifestFile } = await writeSubagentRuntimeManifest({
+    role,
+    attempt,
+    roleSessionDir,
+    runResult,
+    session,
+    stdoutPath: attemptStdoutPath,
+    stderrPath: attemptStderrPath,
+  });
   return {
     id: role.id,
     title: role.title,
+    attempt,
     command: redact(`${agentCmd} ${args.map((arg) => JSON.stringify(arg)).join(' ')}`),
     code: runResult.code,
     signal: runResult.signal,
@@ -817,6 +906,8 @@ async function launchSynthesizer(workerSummaryPath, workerRuns, attempt = 0) {
     stderrFile: `${rel(outDir)}/${role.id}.stderr.txt`,
     attemptStdoutFile: rel(attemptStdoutPath),
     attemptStderrFile: rel(attemptStderrPath),
+    runtimeManifestFile,
+    runtimeManifest,
     session,
     checks,
     stdoutTail: redact(runResult.stdout).slice(-5000),
@@ -848,6 +939,7 @@ await writeFile(join(outDir, 'worker-summary.json'), `${JSON.stringify({
     processAtSpawn: role.processAtSpawn,
     monotonic: role.monotonic,
     elapsedMs: role.elapsedMs,
+    runtimeManifestFile: role.runtimeManifestFile,
     session: role.session,
     checks: role.checks,
     stdoutFile: `${rel(outDir)}/${role.id}.stdout.txt`,
@@ -874,6 +966,42 @@ const totals = allRuns.reduce((acc, role) => {
 }, { messages: 0, modelCalls: 0, toolCalls: 0, toolResults: 0, toolResultErrors: 0, toolResultBytes: 0, usageTokens: 0, toolNames: {}, toolResultNames: {}, providers: {}, models: {} });
 const gateNames = ['exitOk', 'modelCalled', 'toolUsed', 'sectionsOk', 'platformsOk', 'hardScoreMentioned', 'artifactPathsOk', 'roleSpecific'];
 const roleGateMatrix = Object.fromEntries(allRuns.map((role) => [role.id, role.checks]));
+function subagentRuntimeManifestCaptured(role) {
+  const manifest = role.runtimeManifest || {};
+  const stdout = manifest.stdout || {};
+  const stderr = manifest.stderr || {};
+  return manifest.kind === 'pi-recon-subagent-runtime-manifest'
+    && manifest.roleId === role.id
+    && Number.isInteger(manifest.attempt)
+    && Number(manifest.pid || 0) > 0
+    && manifest.exitCode !== undefined
+    && Boolean(stdout.path && stdout.sha256)
+    && Boolean(stderr.path && stderr.sha256)
+    && Boolean(manifest.sessionDir)
+    && Array.isArray(manifest.sessionFiles)
+    && typeof manifest.toolResultCount === 'number'
+    && Boolean(manifest.session?.dir)
+    && Array.isArray(manifest.session?.files)
+    && typeof manifest.session?.toolResultCount === 'number'
+    && manifest.modelProvider?.requestedProvider === provider
+    && manifest.modelProvider?.requestedModel === model
+    && Boolean(role.runtimeManifestFile);
+}
+const subagentRuntimeManifests = allRuns.map((role) => ({
+  roleId: role.id,
+  attempt: role.runtimeManifest?.attempt ?? role.attempt ?? null,
+  file: role.runtimeManifestFile || '',
+  pid: role.runtimeManifest?.pid ?? role.pid ?? null,
+  exitCode: role.runtimeManifest?.exitCode ?? role.code ?? null,
+  stdout: role.runtimeManifest?.stdout || null,
+  stderr: role.runtimeManifest?.stderr || null,
+  sessionDir: role.runtimeManifest?.sessionDir || '',
+  sessionFiles: role.runtimeManifest?.sessionFiles || [],
+  toolResultCount: role.runtimeManifest?.toolResultCount ?? 0,
+  modelProvider: role.runtimeManifest?.modelProvider || null,
+  captured: subagentRuntimeManifestCaptured(role),
+}));
+const subagentRuntimeManifestIndexPath = rel(join(outDir, 'subagent-runtime-manifests.json'));
 const gates = {
   allRolesExited: allRuns.every((role) => role.checks.exitOk),
   allRolesModelCalled: allRuns.every((role) => role.checks.modelCalled),
@@ -898,6 +1026,7 @@ const gates = {
   monotonicClockCaptured: allRuns.every((role) => Number(role.monotonic?.elapsedMs || 0) >= 0 && Number(role.monotonic?.driftMs || 0) < 5000),
   toolResultsCaptured: totals.toolCalls > 0 && totals.toolResults >= totals.toolCalls && allRuns.every((role) => role.session.toolCalls === 0 || role.session.toolResults >= role.session.toolCalls),
   sessionDigestsCaptured: allRuns.every((role) => (role.session.fileDigests || []).length > 0 && (role.session.fileDigests || []).every((item) => item.sha256 && item.bytes > 0)),
+  subagentRuntimeManifestsCaptured: allRuns.every(subagentRuntimeManifestCaptured),
   nonMockRuntimeExpected: audit.nonMockRuntimeExpected,
   hardEvalControlRun: hardEvalRun.code === 0 && hardEvalJson?.kind === 'pi-recon-hard-eval-control-plane',
   orchestrationPlatformScoreSplit: Boolean(hardEvalJson?.antiSelfDelusion?.orchestrationPlatformSplit),
@@ -1008,6 +1137,8 @@ const result = {
   totals,
   gates,
   roleGateMatrix,
+  subagentRuntimeManifestIndex: subagentRuntimeManifestIndexPath,
+  subagentRuntimeManifests,
   failureLedgerEvents,
   repairQueue,
   failureRepairWriteback: failureLedgerEvents[0]?.evidenceWriteback || {
@@ -1036,6 +1167,12 @@ const result = {
         'tighten role prompts to force missing tool use, artifact citations, or anti-self-delusion language',
       ],
 };
+await writeFile(join(outDir, 'subagent-runtime-manifests.json'), `${JSON.stringify({
+  kind: 'pi-recon-subagent-runtime-manifest-index',
+  schemaVersion: 1,
+  manifestCount: subagentRuntimeManifests.length,
+  manifests: subagentRuntimeManifests,
+}, null, 2)}\n`);
 await writeFile(join(outDir, 'result.json'), `${JSON.stringify(result, null, 2)}\n`);
 await writeFile(join(outDir, 'failure-ledger.jsonl'), `${failureLedgerEvents.map((event) => JSON.stringify(event)).join('\n')}${failureLedgerEvents.length ? '\n' : ''}`);
 await writeFile(join(outDir, 'repair-queue.jsonl'), `${repairQueue.map((item) => JSON.stringify(item)).join('\n')}${repairQueue.length ? '\n' : ''}`);
@@ -1058,6 +1195,7 @@ const md = [
   `- hard_score_artifact=${evidencePaths.hardScore || 'none'} code=${scoreRun.code}`,
   `- hard_eval_control verdict=${hardEvalJson?.verdict || 'missing'} code=${hardEvalRun.code} orchestration_score=${hardEvalJson?.scores?.orchestration?.score ?? 'n/a'} platform_required_score=${hardEvalJson?.scores?.platformRequired?.score ?? 'n/a'} required_gaps=${hardEvalRequiredPlatformGaps.map((claim) => claim.gate).join(',') || 'none'}`,
   `- parallel_plan source=${planPreview.source} plan_id=${planPreview.planId || 'builtin'} workers=${planPreview.workerCount} merge=${planPreview.merge?.strategy || 'none'} validation=${planPreview.validation?.valid}`,
+  `- subagent_runtime_manifest_index=${subagentRuntimeManifestIndexPath} captured=${gates.subagentRuntimeManifestsCaptured}`,
   `- same_window_live=${evidencePaths.bestSameWindowLive || evidencePaths.latestSameWindowLive || 'none'}`,
   `- best_bilibili=${evidencePaths.bestBilibili || 'none'}`,
   `- best_xiaohongshu=${evidencePaths.bestXiaohongshu || 'none'}`,
@@ -1088,17 +1226,19 @@ console.log(JSON.stringify({
     agentCmdSha256: audit.agentCmdDigest?.sha256 || '',
   },
   gates,
-	  hardEvalControl: {
+  subagentRuntimeManifestIndex: subagentRuntimeManifestIndexPath,
+  subagentRuntimeManifestFiles: subagentRuntimeManifests.map((row) => row.file),
+  hardEvalControl: {
     verdict: hardEvalJson?.verdict || 'missing',
     orchestrationScore: hardEvalJson?.scores?.orchestration?.score ?? null,
     platformRequiredScore: hardEvalJson?.scores?.platformRequired?.score ?? null,
     requiredPlatformGaps: hardEvalRequiredPlatformGaps.map((claim) => ({ scope: claim.scope, gate: claim.gate, kind: claim.kind })),
-	  },
-	  parallelPlan: {
-	    source: planPreview.source,
-	    planId: planPreview.planId,
-	    workerCount: planPreview.workerCount,
-	    merge: planPreview.merge?.strategy || '',
-	    validation: planPreview.validation,
-	  },
-	}, null, 2));
+  },
+  parallelPlan: {
+    source: planPreview.source,
+    planId: planPreview.planId,
+    workerCount: planPreview.workerCount,
+    merge: planPreview.merge?.strategy || '',
+    validation: planPreview.validation,
+  },
+}, null, 2));

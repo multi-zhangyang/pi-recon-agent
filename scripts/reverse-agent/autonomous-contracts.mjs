@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { FAILURE_REPAIR_CONTRACT_SCHEMA_PATH, FAILURE_REPAIR_DEDUP_WINDOW, FAILURE_REPAIR_STRICT_FIXTURE_PATH, validateFailureRepairBatch, validateFailureRepairStrictFixture } from "./failure-repair-ledger.mjs";
 
 const CONTRACT_VERSION = 1;
 const EVIDENCE_ORDER = ["same_window_live", "runtime_artifact", "network", "served_asset", "process_config", "persisted_state"];
@@ -138,6 +139,48 @@ function validateContextResumeSchemaFile(root) {
 	return passFail(ok, { path: "schemas/reverse-agent/context-resume-contract.schema.json", contextShaPattern, resumeShaPattern, artifactMinItems, idempotencyMinLength, ledgerHashPattern, dateTime });
 }
 
+function validateFailureRepairSchemaFile(root) {
+	const path = join(root, FAILURE_REPAIR_CONTRACT_SCHEMA_PATH);
+	const schema = existsSync(path) ? safeJson(readFileSync(path, "utf8"), {}) : {};
+	const defs = schema?.$defs ?? {};
+	const failure = defs.FailureLedgerEventV1 ?? {};
+	const repair = defs.RepairQueueItemV1 ?? {};
+	const sharedStrict = ["EvidenceWriteback", "BlockedCondition", "Artifact", "ArtifactHash", "RetryBudget", "Rollback", "Preconditions", "RollbackCriteria"].every((name) => defs[name]?.additionalProperties === false);
+	const topStrict = failure.additionalProperties === false && repair.additionalProperties === false;
+	const fixturePathOk = schema?.["x-piReconStrictFixture"] === FAILURE_REPAIR_STRICT_FIXTURE_PATH;
+	const dedupWindow = schema?.["x-piReconDedupWindow"] ?? {};
+	const dedupWindowOk =
+		dedupWindow.mode === FAILURE_REPAIR_DEDUP_WINDOW.mode &&
+		JSON.stringify(dedupWindow.failureKey) === JSON.stringify(FAILURE_REPAIR_DEDUP_WINDOW.failureKey) &&
+		JSON.stringify(dedupWindow.repairKey) === JSON.stringify(FAILURE_REPAIR_DEDUP_WINDOW.repairKey) &&
+		(dedupWindow.rejects ?? []).includes("duplicate_failure_signature_attempt");
+	const hashPatternOk = defs.HexDigest8To64?.pattern === "^[a-f0-9]{8,64}$" && defs.Sha256?.pattern === "^[a-f0-9]{64}$";
+	const failureRequiredOk = SCHEMAS.FailureLedgerEventV1.required.every((field) => failure.required?.includes(field));
+	const repairRequiredOk = SCHEMAS.RepairQueueItemV1.required.every((field) => repair.required?.includes(field));
+	const oneOfOk = (schema.oneOf ?? []).some((entry) => entry.$ref === "#/$defs/FailureLedgerEventV1") && (schema.oneOf ?? []).some((entry) => entry.$ref === "#/$defs/RepairQueueItemV1");
+	const repairNoteAllowed = repair.properties?.note?.type === "string";
+	const invariantSet = new Set([...(schema?.["x-piReconInvariants"] ?? []), ...(failure?.["x-piReconInvariants"] ?? []), ...(repair?.["x-piReconInvariants"] ?? [])]);
+	const invariantsOk =
+		invariantSet.has("strict_additional_properties_false_for_failure_and_repair") &&
+		invariantSet.has("local_strict_fixture_must_pass") &&
+		invariantSet.has("deterministic_duplicate_signature_attempt_rejected") &&
+		invariantSet.has("same_signature_shares_retry_budget");
+	const ok = Boolean(schema?.$defs?.FailureLedgerEventV1 && schema?.$defs?.RepairQueueItemV1 && sharedStrict && topStrict && fixturePathOk && dedupWindowOk && hashPatternOk && failureRequiredOk && repairRequiredOk && oneOfOk && repairNoteAllowed && invariantsOk);
+	return passFail(ok, {
+		path: FAILURE_REPAIR_CONTRACT_SCHEMA_PATH,
+		sharedStrict,
+		topStrict,
+		fixturePathOk,
+		dedupWindowOk,
+		hashPatternOk,
+		failureRequiredOk,
+		repairRequiredOk,
+		oneOfOk,
+		repairNoteAllowed,
+		invariantsOk,
+	});
+}
+
 function validateRoleContract(contract) {
 	const schema = SCHEMAS.RoleContractV1;
 	const missing = fieldMissing(contract, schema.required);
@@ -182,51 +225,34 @@ function validateClaimLedger(events) {
 }
 
 function validateFailureRepair(failures, repairs) {
-	const failureSchema = SCHEMAS.FailureLedgerEventV1;
-	const repairSchema = SCHEMAS.RepairQueueItemV1;
-	const repairIds = new Set((repairs || []).map((repair) => repair.repairId));
-	const failureRows = (failures || []).map((failure) => ({
-		id: failure.id,
-		missing: fieldMissing(failure, failureSchema.required),
-		statusOk: failureSchema.enums.status.includes(failure.status),
-		attemptOk: Number(failure.attempt) <= Number(failure.maxAttempts),
-		repairLinked: repairIds.has(failure.repairId),
-		signatureOk: typeof failure.signature === "string" && failure.signature.length >= 8,
-		artifactHashesOk: Array.isArray(failure.artifactHashes) && failure.artifactHashes.every((artifact) => artifact?.path && artifact?.sha256),
-		budgetOk: Boolean(failure.budget?.retryKey && Number.isFinite(Number(failure.budget?.remainingAttempts)) && failure.budget?.exhaustedAction),
-		retryBudgetOk: Boolean(failure.retryBudget?.retryKey && Number.isFinite(Number(failure.retryBudget?.remainingAttempts)) && failure.retryBudget?.exhaustedAction),
-		evidenceWritebackOk: failure.evidenceWriteback?.appendOnly === true && Boolean(failure.evidenceWriteback?.failureLedgerPath && failure.evidenceWriteback?.repairQueuePath),
-		blockedConditionsOk: Array.isArray(failure.blockedConditions),
-		rollbackOk:
-			(failure.rollback?.required === true || failure.rollback?.required === false) &&
-			typeof failure.rollback?.baseline === "string" &&
-			Array.isArray(failure.rollback?.allowlist) &&
-			Array.isArray(failure.rollback?.criteria) &&
-			typeof failure.rollback?.restored === "boolean",
-	}));
-	const repairRows = (repairs || []).map((repair) => ({
-		repairId: repair.repairId,
-		missing: fieldMissing(repair, repairSchema.required),
-		actionOk: repairSchema.enums.action.includes(repair.action),
-		repairActionOk: repair.repairAction === repair.action && repairSchema.enums.action.includes(repair.repairAction),
-		paused: repair.paused === true || repair.paused === false,
-		signatureOk: typeof repair.signature === "string" && repair.signature.length >= 8,
-		expectedGatesOk: Array.isArray(repair.expectedGates) && repair.expectedGates.length > 0,
-		preconditionsOk: repair.preconditions?.liveAllowed === false || repair.preconditions?.liveAllowed === true,
-		rollbackCriteriaOk: typeof repair.rollbackCriteria === "object" && repair.rollbackCriteria !== null,
-		blockedConditionsOk: Array.isArray(repair.blockedConditions),
-		evidenceWritebackOk: repair.evidenceWriteback?.appendOnly === true && Boolean(repair.evidenceWriteback?.failureLedgerPath && repair.evidenceWriteback?.repairQueuePath),
-	}));
-	const ok =
-		failureRows.length > 0 &&
-		failureRows.every((row) => row.missing.length === 0 && row.statusOk && row.attemptOk && row.repairLinked && row.signatureOk && row.artifactHashesOk && row.budgetOk && row.retryBudgetOk && row.evidenceWritebackOk && row.blockedConditionsOk && row.rollbackOk) &&
-		repairRows.length >= failureRows.length &&
-		repairRows.every((row) => row.missing.length === 0 && row.actionOk && row.repairActionOk && row.paused && row.signatureOk && row.expectedGatesOk && row.preconditionsOk && row.rollbackCriteriaOk && row.blockedConditionsOk && row.evidenceWritebackOk);
-	return passFail(ok, {
-		failureCount: failureRows.length,
-		repairCount: repairRows.length,
-		badFailures: failureRows.filter((row) => row.missing.length || !row.statusOk || !row.attemptOk || !row.repairLinked || !row.signatureOk || !row.artifactHashesOk || !row.budgetOk || !row.retryBudgetOk || !row.evidenceWritebackOk || !row.blockedConditionsOk || !row.rollbackOk),
-		badRepairs: repairRows.filter((row) => row.missing.length || !row.actionOk || !row.repairActionOk || !row.paused || !row.signatureOk || !row.expectedGatesOk || !row.preconditionsOk || !row.rollbackCriteriaOk || !row.blockedConditionsOk || !row.evidenceWritebackOk),
+	const strict = validateFailureRepairBatch({ failures, repairs });
+	return passFail(strict.ok, {
+		failureCount: strict.failureCount,
+		repairCount: strict.repairCount,
+		dedup: strict.dedup,
+		badFailures: strict.failures
+			.filter((row) => !row.ok)
+			.map((row) => ({ index: row.index, id: row.id, errors: row.errors.slice(0, 10) })),
+		badRepairs: strict.repairs
+			.filter((row) => !row.ok)
+			.map((row) => ({ index: row.index, repairId: row.repairId, errors: row.errors.slice(0, 10) })),
+	});
+}
+
+function validateFailureRepairStrictFixtureFile(root) {
+	const path = join(root, FAILURE_REPAIR_STRICT_FIXTURE_PATH);
+	const fixture = existsSync(path) ? safeJson(readFileSync(path, "utf8"), {}) : {};
+	const result = validateFailureRepairStrictFixture(fixture);
+	return passFail(existsSync(path) && result.ok && result.duplicateRejected && result.looseRejected, {
+		path: FAILURE_REPAIR_STRICT_FIXTURE_PATH,
+		kind: fixture?.kind ?? "missing",
+		validOk: result.validBatch.ok,
+		duplicateRejected: result.duplicateRejected,
+		looseRejected: result.looseRejected,
+		validFailureCount: result.validBatch.failureCount,
+		validRepairCount: result.validBatch.repairCount,
+		duplicateFailures: result.duplicateBatch.dedup.duplicateFailures,
+		looseErrors: result.looseBatch.failures.flatMap((row) => row.errors).filter((error) => error.code === "additionalProperties").slice(0, 5),
 	});
 }
 
@@ -258,6 +284,8 @@ function buildReleaseGateMetadata({ checks, hardEval, contextAudit, parallelPlan
 		`release_gate.parallel_plan_audit=${checks.parallelPlanAudit?.status ?? "missing"}`,
 		`release_gate.context_compact=${checks.contextCompactAudit?.status ?? "missing"}`,
 		`release_gate.failure_repair=${checks.failureRepair?.status ?? "missing"}`,
+		`release_gate.failure_repair_schema=${checks.failureRepairSchemaFile?.status ?? "missing"}`,
+		`release_gate.failure_repair_fixture=${checks.failureRepairStrictFixture?.status ?? "missing"}`,
 		`release_gate.role_contract=${checks.roleContract?.status ?? "missing"}`,
 		`release_gate.claim_ledger=${checks.claimLedger?.status ?? "missing"}`,
 		`release_gate.runtime_parallel_plan_markers=${checks.runtimeParallelPlanMarkers?.status ?? "missing"}`,
@@ -282,6 +310,8 @@ function validateReleaseGateMetadata(rows) {
 		"release_gate.plan_sha256=",
 		"release_gate.parallel_plan_contract=",
 		"release_gate.claim_gate_verdict=",
+		"release_gate.failure_repair_schema=",
+		"release_gate.failure_repair_fixture=",
 		"release_gate.score_separation=",
 		"release_gate.release_blocking_gaps=",
 		"release_gate.orchestration_score_never_implies_platform_success=true",
@@ -355,17 +385,20 @@ function buildResult(root) {
 			planOnlyNoProvider: parallelPlanAudit?.checks?.planOnlyNoProvider?.status ?? "missing",
 			planOnlyNoEvidenceDir: parallelPlanAudit?.checks?.planOnlyNoEvidenceDir?.status ?? "missing",
 			planOnlyFailureRepair: parallelPlanAudit?.checks?.planOnlyFailureRepair?.status ?? "missing",
+			dogfoodRuntimeManifest: parallelPlanAudit?.checks?.dogfoodRuntimeManifest?.status ?? "missing",
 			stdoutSha256: parallelPlanAuditRun.stdoutSha256,
 		}),
 		resumeContractV2Schema: validateResumeContractSchema(),
 		roleContract: validateRoleContract(hardEval?.contract ?? {}),
 		claimLedger: validateClaimLedger(hardEval?.ledger ?? []),
 		failureRepair: validateFailureRepair(hardEval?.failures ?? [], hardEval?.repairQueue ?? []),
+		failureRepairSchemaFile: validateFailureRepairSchemaFile(root),
+		failureRepairStrictFixture: validateFailureRepairStrictFixtureFile(root),
 		runtimeFailureRepairMarkers: passFail(true, {
 			markers: [
 				readMarkers(root, "packages/coding-agent/src/core/recon-profile.ts", ["type FailureLedgerEventV1", "type RepairQueueItemV1", "function runtimeFailureSignature", "function failureToRepair", "function appendFailureRepairLedger", "appendRuntimeFailureRepairFromReplay", "appendRuntimeFailureRepairFromAutofix", "appendRuntimeFailureRepairFromOperator", "appendRuntimeFailureRepairFromProofLoop", "runtimeFailureLedgerPath", "runtimeRepairQueuePath"]),
 				readMarkers(root, ".pi/extensions/reverse-pentest-core.ts", ["type FailureLedgerEventV1", "type RepairQueueItemV1", "function runtimeFailureSignature", "function failureToRepair", "function appendFailureRepairLedger", "appendRuntimeFailureRepairFromReplay", "appendRuntimeFailureRepairFromAutofix", "appendRuntimeFailureRepairFromOperator", "appendRuntimeFailureRepairFromProofLoop", "runtimeFailureLedgerPath", "runtimeRepairQueuePath"]),
-				readMarkers(root, "scripts/reverse-agent/failure-repair-ledger.mjs", ["failureRepairFromGap", "failureRepairFromGaps", "appendFailureRepairWriteback", "FailureLedgerEventV1"]),
+				readMarkers(root, "scripts/reverse-agent/failure-repair-ledger.mjs", ["failureRepairFromGap", "failureRepairFromGaps", "appendFailureRepairWriteback", "FailureLedgerEventV1", "validateFailureRepairBatch", "validateFailureRepairDedup", "FAILURE_REPAIR_DEDUP_WINDOW", "FAILURE_REPAIR_STRICT_FIXTURE_PATH"]),
 				readMarkers(root, "bench/recon-remote/compound-frontier/run.mjs", ["failureRepairFromGaps", "failureLedgerEvents", "repairQueue", "failure-ledger.jsonl"]),
 				readMarkers(root, "bench/recon-remote/agent-dogfood/parallel-run.mjs", ["failureRepairFromGap", "retryExhausted", "attemptStdoutFile", "failureLedgerEvents", "repair-queue.jsonl"]),
 			],
@@ -401,7 +434,7 @@ function buildResult(root) {
 		currentLevel: ok ? "professional reverse/pentest organization with machine-readable control contracts" : "contract gaps",
 		topAutonomousDefinition: false,
 		topAutonomousReason:
-			"Schemas, validators, ReconParallelPlanV1, exact context resume markers/negative fixtures, runtime failure/repair ledger hooks, compound/role retry failure-repair outputs, and strict claim final-path gates exist; full independent subagent runtime and cross-session resume fixtures remain optional hardening.",
+			"Schemas, validators, ReconParallelPlanV1, agent-dogfood subagent runtime manifests, exact context resume markers/negative fixtures, strict FailureLedgerEventV1/RepairQueueItemV1 fixture + deterministic duplicate rejection, runtime failure/repair ledger hooks, compound/role retry failure-repair outputs, and strict claim final-path gates exist; generic re_swarm independent subagent runtime and cross-session resume fixtures remain optional hardening.",
 		schemas: SCHEMAS,
 		parallelPlan,
 		releaseGateMetadata,
@@ -430,7 +463,7 @@ function buildResult(root) {
 		nextNonTestWork: [
 			"Keep gate:claim-release marker consumption wired through supervisor/compiler/complete and promote pass markers only after required gaps close.",
 			"Harden ResumeContractV2 with cross-session/multi-compact negative fixtures and operator/proof-loop ledger state writeback.",
-			"Add strict schema fixtures, signature de-dup windows, and regression gates for FailureLedgerEventV1 / RepairQueueItemV1 outputs.",
+			"Promote FailureLedgerEventV1 / RepairQueueItemV1 strict validator into independent sub-agent/session runtime regression gates.",
 			"Extend ClaimLedgerEventV1 from offline hard-eval into independent sub-agent/session runtime outputs.",
 		],
 	};

@@ -15116,7 +15116,7 @@ function contextSessionId(mission?: MissionState): string {
 }
 
 function contextBranchId(): string {
-	return process.env.GIT_BRANCH ?? process.env.BRANCH_NAME ?? "workspace";
+	return process.env.PI_RECON_BRANCH_ID ?? process.env.GIT_BRANCH ?? process.env.BRANCH_NAME ?? "workspace";
 }
 
 function contextPackHashPayload(pack: ContextPackArtifact): unknown {
@@ -16049,6 +16049,11 @@ function verifyContextPackResume(
 		if (pack.scope.workspaceRoot && pack.scope.workspaceRoot !== process.cwd()) {
 			scope = "mismatch";
 			blocked.push(`workspaceRoot mismatch: ${pack.scope.workspaceRoot} != ${process.cwd()}`);
+		}
+		const currentBranchId = contextBranchId();
+		if (pack.scope.branchId && pack.scope.branchId !== currentBranchId) {
+			scope = "mismatch";
+			blocked.push(`branch mismatch: ${pack.scope.branchId} != ${currentBranchId}`);
 		}
 	}
 	return { ref, sourcePath, loadedBy, contextSha256, artifactHashes, scope, blocked: Array.from(new Set(blocked)), warnings };

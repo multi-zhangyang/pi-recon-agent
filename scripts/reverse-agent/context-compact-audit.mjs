@@ -76,14 +76,16 @@ export const CONTEXT_COMPACT_REQUIREMENTS = [
 	},
 	{
 		id: "exact_resume_negative_fixtures",
-		description: "Exact resume blocks stale/latest fallback, missing packs, target mismatch, artifact hash drift, and unclosed resume closures.",
+		description: "Exact resume blocks stale/latest fallback, missing packs, target mismatch, branch mismatch, artifact hash drift, and unclosed resume closures.",
 		checks: [
 			{
 				file: "packages/coding-agent/src/core/recon-profile.ts",
 				markers: [
 					"return { loadedBy: \"missing\" }",
+					"PI_RECON_BRANCH_ID",
 					"context pack not found",
 					"target mismatch",
+					"branch mismatch",
 					"artifact hash drift",
 					"context resume closure blocks completion",
 					"context resume verification blocks completion",
@@ -93,8 +95,10 @@ export const CONTEXT_COMPACT_REQUIREMENTS = [
 				file: ".pi/extensions/reverse-pentest-core.ts",
 				markers: [
 					"return { loadedBy: \"missing\" }",
+					"PI_RECON_BRANCH_ID",
 					"context pack not found",
 					"target mismatch",
+					"branch mismatch",
 					"artifact hash drift",
 					"context resume closure blocks completion",
 					"context resume verification blocks completion",
@@ -105,6 +109,7 @@ export const CONTEXT_COMPACT_REQUIREMENTS = [
 				markers: [
 					"blocks exact context resume negative fixtures and completion closure",
 					"target mismatch",
+					"branch mismatch",
 					"artifact hash drift",
 					"context pack not found",
 					"resume_queue_status: blocked",

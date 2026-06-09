@@ -12,17 +12,20 @@ import {
 } from "../src/core/recon-profile.ts";
 
 const ENV_AGENT_DIR = "PI_CODING_AGENT_DIR";
+const ENV_BRANCH_ID = "PI_RECON_BRANCH_ID";
 
 describe("Pi-RECON kernel profile", () => {
 	let tempDir: string;
 	let agentDir: string;
 	let previousAgentDir: string | undefined;
+	let previousBranchId: string | undefined;
 
 	beforeEach(() => {
 		tempDir = join(tmpdir(), `pi-recon-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		agentDir = join(tempDir, "agent");
 		mkdirSync(agentDir, { recursive: true });
 		previousAgentDir = process.env[ENV_AGENT_DIR];
+		previousBranchId = process.env[ENV_BRANCH_ID];
 		process.env[ENV_AGENT_DIR] = agentDir;
 	});
 
@@ -31,6 +34,11 @@ describe("Pi-RECON kernel profile", () => {
 			delete process.env[ENV_AGENT_DIR];
 		} else {
 			process.env[ENV_AGENT_DIR] = previousAgentDir;
+		}
+		if (previousBranchId === undefined) {
+			delete process.env[ENV_BRANCH_ID];
+		} else {
+			process.env[ENV_BRANCH_ID] = previousBranchId;
 		}
 		rmSync(tempDir, { recursive: true, force: true });
 	});
@@ -407,6 +415,7 @@ describe("Pi-RECON kernel profile", () => {
 		} as unknown as ExtensionAPI;
 
 		createReconExtensionFactory()(fakePi);
+		process.env[ENV_BRANCH_ID] = "branch-a";
 		const missionTool = tools.get("re_mission") as {
 			execute: (
 				toolCallId: string,
@@ -442,6 +451,19 @@ describe("Pi-RECON kernel profile", () => {
 		expect(contextPack.content[0]?.text).toContain("closure:");
 		expect(contextPack.content[0]?.text).toContain("- status=open");
 
+		process.env[ENV_BRANCH_ID] = "branch-b";
+		const branchResume = await contextTool.execute("tool-call-id", {
+			action: "resume",
+			target: "target-a",
+			contextPath,
+		});
+		expect(branchResume.content[0]?.text).toContain("resume_queue_status: blocked");
+		expect(branchResume.content[0]?.text).toContain("branch mismatch");
+		const branchCompletion = await completeTool.execute("tool-call-id", { action: "audit" });
+		expect(branchCompletion.content[0]?.text).toContain("context resume verification blocks completion");
+		expect(branchCompletion.content[0]?.text).toContain("branch mismatch");
+
+		process.env[ENV_BRANCH_ID] = "branch-a";
 		const mismatchResume = await contextTool.execute("tool-call-id", {
 			action: "resume",
 			target: "target-b",

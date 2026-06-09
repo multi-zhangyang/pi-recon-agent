@@ -279,7 +279,7 @@ agent-dogfood 以 `--plan-json --plan-only` 预览；runtime 层已经让 `re_sw
 当前状态：`re_swarm` 已写入 `planCoverage` / `releaseGateMetadata`，`re_supervisor`
 已把 `claimGatePolicy` / `claimGateResult` 变成硬门禁，`gate:claim-release` 已生成机器可读
 strict marker，failure/repair ledger 已接收 runtime failed|blocked rows 并回流 operator /
-proof-loop。独立子会话 runtime、更多负例 fixture 和 compound/role retry ledger 属于可选继续硬化项，不影响当前专业组织 agent 使用。
+proof-loop；agent-dogfood 已写 per-attempt subagent runtime manifest，compound/role retry 已输出 canonical failure/repair rows。通用 re_swarm 独立子会话 runtime、更多 cross-session/multi-compact 负例和 runtime claim ledger 属于可选继续硬化项，不影响当前专业组织 agent 使用。
 
 ## Reflection/evolution 闭环
 
@@ -289,7 +289,7 @@ proof-loop。独立子会话 runtime、更多负例 fixture 和 compound/role re
 
 `/re-context pack|show|resume` / `re_context` 消费 mission blackboard、evidence ledger、artifact_index、supervisor/reflect 结果、tool digest 与 memory tail，输出 `context_pack` 与 `context_artifact`。它把 `resume_brief`、`repair_queue`（含 supervisor 的 `commander_merge_queue`）、`commander_merge_budget`、`worker_scoreboard`、`reflection_reuse_rules`、`next_operator_commands` 和 `next_context_command` 固化到 `.pi/evidence/contexts/*.md`，并闭合 `context_pack_ready`，用于压缩、重启、handoff 后恢复连续逆向渗透作战。
 
-当前 runtime 已把 context pack 升级为 `ContextPackV2`：pack 记录 `schemaVersion: 2`、`contextPath`、`contextSha256`、artifact sha256/mtime/size/exists、scope（mission/session/workspace/target/branch）、`resumeQueueStatus`、`idempotencyKey`、`closure` 和 append-only `memory/compaction-resume-ledger.jsonl`。`re_context resume <contextPath>` 或 tool 参数 `contextPath` / `compactionEntryId` 会走 exact resume loader，按指定 pack 校验 `contextSha256`、artifact hash drift、target/workspace scope，并在输出中给出 `exactResumeVerification`；drift、缺失或 scope mismatch 会把 resume 标记为 blocked，避免用最新 pack 或污染 artifact 误恢复。
+当前 runtime 已把 context pack 升级为 `ContextPackV2`：pack 记录 `schemaVersion: 2`、`contextPath`、`contextSha256`、artifact sha256/mtime/size/exists、scope（mission/session/workspace/target/branch）、`resumeQueueStatus`、`idempotencyKey`、`closure` 和 append-only `memory/compaction-resume-ledger.jsonl`。`re_context resume <contextPath>` 或 tool 参数 `contextPath` / `compactionEntryId` 会走 exact resume loader，按指定 pack 校验 `contextSha256`、artifact hash drift、target/workspace/branch scope，并在输出中给出 `exactResumeVerification`；drift、缺失或 scope mismatch 会把 resume 标记为 blocked，避免用最新 pack 或污染 artifact 误恢复。
 
 ## Operator queue 调度闭环
 
@@ -313,7 +313,7 @@ proof-loop。独立子会话 runtime、更多负例 fixture 和 compound/role re
 
 ## Runtime failure/repair ledger 闭环
 
-`re_replayer`、`re_autofix`、`re_operator` 和 `re_proof_loop` 的 runtime writer 会把 failed / blocked rows 归一化为 `FailureLedgerEventV1` 与 `RepairQueueItemV1`，append 到 `.pi/evidence/failures/ledger.jsonl` 和 `.pi/evidence/repairs/queue.jsonl`。每条 failure 复用 `runtimeFailureSignature`、`budget/retryBudget`、artifact sha256、`blockedConditions`、`rollback` 与 `evidenceWriteback` 字段；`failureToRepair` 把失败映射为 `rerun`、`replace-command`、`recapture-evidence`、`refresh-context` 或 `escalate` repair action。该层让 proof-loop、operator、replayer 和 autofix 不再只在各自 artifact 中描述失败，而是写入同一 canonical failure/repair ledger，后续可继续扩展到 compound-frontier 与 agent role retry。
+`re_replayer`、`re_autofix`、`re_operator` 和 `re_proof_loop` 的 runtime writer 会把 failed / blocked rows 归一化为 `FailureLedgerEventV1` 与 `RepairQueueItemV1`，append 到 `.pi/evidence/failures/ledger.jsonl` 和 `.pi/evidence/repairs/queue.jsonl`。每条 failure 复用 `runtimeFailureSignature`、`budget/retryBudget`、artifact sha256、`blockedConditions`、`rollback` 与 `evidenceWriteback` 字段；`failureToRepair` 把失败映射为 `rerun`、`replace-command`、`recapture-evidence`、`refresh-context` 或 `escalate` repair action。该层让 proof-loop、operator、replayer 和 autofix 不再只在各自 artifact 中描述失败，而是写入同一 canonical failure/repair ledger；compound-frontier failed gates、agent-dogfood role retry 和 plan-only invalid fixture 也会生成同类 rows。schema 层通过 `fixtures/reverse-agent/failure-repair-strict.fixture.json` 验证 strict fixture、duplicate signature/attempt rejection 和 loose extra field rejection。
 
 ## Execution kernel 底层执行内核
 
@@ -466,6 +466,7 @@ Failure/repair 合同现在同时保留机器字段和人类可读别名：
 - repair item：`action/repairAction/commands/expectedArtifacts/expectedGates/preconditions/paused/rollbackCriteria/regressionGates/blockedConditions/evidenceWriteback`。
 - `--write` 仍写 per-run 目录，同时追加 canonical append-only 路径：
   `.pi/evidence/failures/ledger.jsonl` 与 `.pi/evidence/repairs/queue.jsonl`。
+- `gate:autonomous-contracts` 会读取 strict fixture，验证 valid batch 通过、duplicate signature/attempt 被拒绝、loose extra field 被拒绝。
 - release 级 claim 不走 `audit:claim-ledger --allow-platform-gaps`，而走 `gate:claim-release`；当前 required platform gaps 存在时它应该阻断，并把 blocked marker 写给 runtime final path 使用。
 
 ## Harness 自检层

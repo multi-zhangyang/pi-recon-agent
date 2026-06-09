@@ -151,14 +151,14 @@ claim ledger、hard-eval score split 和 autonomous contracts gate，输出
 
 - `re_operation → re_delegate → re_swarm → re_supervisor` 已能把 operation queue 拆成 specialist worker packets，再组织 `worker_runtime_packets`、`parallel_groups`、`merge_protocol`、`collision_matrix` 和 `commander_next_actions`。
 - `frontier-orchestrator` 已有 case catalog、`agentLane`、`--shards=N` 分片计划，并能在 `--plan --json` 输出 `ReconParallelPlanV1`。
-- `agent-dogfood/parallel-run.mjs` 已有 mapper/verifier/adversary/planner/synthesizer 多角色并发 runner，并记录 PID、session digest、model/tool call digest、overlap/speedup 等运行证据。
+- `agent-dogfood/parallel-run.mjs` 已有 mapper/verifier/adversary/planner/synthesizer 多角色并发 runner，并记录 PID、session digest、model/tool call digest、overlap/speedup 等运行证据；每个 role / synthesizer attempt 还会写 `pi-recon-subagent-runtime-manifest`，包含 attempt、PID、exit code、stdout/stderr digest、session dir/files/tool result count 和 provider/model 摘要。
 - `agent-dogfood/parallel-run.mjs --plan-json <path> --plan-only` 已能离线读取 `ReconParallelPlanV1`，归一化 workers/merge/evidence contract，并在不调用模型的情况下预览调度边界。
 
 仍需硬化：
 
 - 将 `ReconParallelPlanV1` 扩展到 `re_swarm`、`re_supervisor` 和 release gate，避免只有 frontier/dogfood 两个入口懂这个结构。
 - 把 `re_swarm` 的 command-level worker packet 升级为可选独立 Pi agent/session runtime。
-- 为每个 worker 保存 PID、session dir、stdout/stderr hash、model/tool call digest、timeout/cancel、artifact globs。
+- 将同类 runtime manifest 推广到通用 `re_swarm` worker，并补 timeout/cancel、artifact globs。
 - shard plan 支持真实并发执行、多 shard result merge、取消/超时/重排队。
 - merge 前做 structured claim coverage，不再只靠文本摘要。
 
@@ -166,7 +166,7 @@ claim ledger、hard-eval score split 和 autonomous contracts gate，输出
 
 1. 保持 `frontier-orchestrator --plan --json --shards=N | agent-dogfood --plan-json ... --plan-only` 作为静态合同 smoke check。
 2. `re_swarm plan` 输出同一 `parallel_plan` 区块。
-3. `agent-dogfood` 执行态把 planId/source/worker merge keys 写入每个 worker runtime digest。
+3. `agent-dogfood` 执行态继续把 planId/source/worker merge keys 与 failure signature 绑定到每个 subagent runtime manifest。
 4. `re_supervisor` 消费 worker runtime digest 和 structured merge keys。
 
 ## 2. 长期上下文 / compact / resume
@@ -177,23 +177,20 @@ claim ledger、hard-eval score split 和 autonomous contracts gate，输出
 - `session_before_compact` 已由 Pi-RECON 接管，返回 `pi-recon-compaction` summary/details。
 - `session_compact` 会验证 resume contract，写 auto-resume telemetry，并触发 bounded resume turn。
 - `re_operator`、`re_proof_loop`、`re_knowledge_graph` 会消费 compact resume telemetry/queue。
-- `scripts/reverse-agent/context-compact-audit.mjs` 已作为独立静态 gate 检查 context pack、owned compaction、resume contract、evidence summarization 和 budget continuation。
+- `scripts/reverse-agent/context-compact-audit.mjs` 已作为独立静态 gate 检查 context pack、owned compaction、resume contract、negative fixtures、evidence summarization 和 budget continuation。
 - `schemas/reverse-agent/context-resume-contract.schema.json` 已加固 V2 字段：`contextSha256`、artifact sha256、`idempotencyKey`、append-only ledger hash、`date-time` 与 `artifactHashes.minItems`；`gate:autonomous-contracts` 会读取真实 schema 文件确认这些不变量存在。
 
 仍需硬化：
 
-- `re_context resume` 按 `contextPath` 或 `compactionEntryId` 精确加载原 pack，而不是重新生成最新 pack。
-- context/artifact index 按 mission、session、workspace、target 过滤，避免跨任务污染。
-- artifact index 增加 sha256、mtime、size、exists、evidence rank、source command，并在恢复时校验漂移。
-- compact resume telemetry 改为 append-only ledger，持久化 auto-resume budget 和 idempotency。
-- completion audit 阻断所有 verified 但未闭合的 resume contract。
+- context/artifact index 继续按 mission、session、workspace、target 做更严格过滤，避免跨任务污染。
+- completion audit 继续扩展更多 closure 负例：多次 compact 交错、跨 session 恢复、预算 exhausted 后恢复。
+- compact resume ledger 继续扩展 queue 状态机、多次 compact 幂等回放和 operator/proof-loop 状态回写。
 
 推荐非测试顺序：
 
 1. 把 `ContextPackV2 / ResumeContractV2` schema 字段接入 runtime context pack。
 2. 增加 `memory/compaction-resume-ledger.jsonl`，每条记录带 `prevHash/entryHash/idempotencyKey`。
-3. 让 `re_context resume <contextPath|compactionEntryId>` 校验 `contextSha256`、mission、session、target 和 artifact hashes。
-4. 补静态/单元级假 artifact 场景：stale latest、hash drift、multi compact、target unresolved、cross-session contamination。
+3. 继续补静态/单元级假 artifact 场景：multi compact、target unresolved、cross-session contamination。
 
 ## 3. 失败自修复 / retry / rollback
 
@@ -204,21 +201,20 @@ claim ledger、hard-eval score split 和 autonomous contracts gate，输出
 - `re_operator`、`re_delegate`、`re_swarm`、`re_supervisor` 已有失败预算、score decay、demotion、retry queue、evidence recapture queue 等局部闭环。
 - parallel dogfood runner 已有 role/synthesizer bounded retry。
 - `hard-eval-control-plane --write` 同时写 per-run failure/repair artifact，并追加 canonical `.pi/evidence/failures/ledger.jsonl` 与 `.pi/evidence/repairs/queue.jsonl`；failure event 带 `retryBudget/evidenceWriteback/blockedConditions`，repair item 带 `repairAction/evidenceWriteback/blockedConditions`。
+- `schemas/reverse-agent/failure-repair-contract.schema.json` 已开启 strict additionalProperties=false，并绑定 `fixtures/reverse-agent/failure-repair-strict.fixture.json`；`gate:autonomous-contracts` 会验证 valid fixture 通过、duplicate signature/attempt 被拒绝、loose extra field 被拒绝。
+- compound-frontier failed gates、agent-dogfood role retry 和 plan-only invalid fixture 已输出 canonical failure/repair rows。
 
 仍需硬化：
 
-- 新增统一 failure ledger：source、scope、category、signature、attempt/maxAttempts、status、failedGates、artifact hashes。
-- 由 `failureToRepair()` 生成 repair queue，把 stale artifact、runtime failed、tool missing、contract gap 等转成机器可执行动作。
-- 所有 retry 使用同一失败签名和预算，达到 exhausted 后停止盲 retry。
-- 保存 per-attempt stdout/stderr/session artifact，避免 retry 覆盖失败证据。
+- 把 strict failure/repair validator 接入独立 sub-agent/session runtime regression gates。
+- 所有 runtime retry 使用同一失败签名和预算，达到 exhausted 后停止盲 retry。
 - 为 autofix/operator/compound 类动作加入 baseline、allowlist、passed gate regression 和 rollback criteria。
 
 推荐非测试顺序：
 
-1. 在 compound failed gates、agent role retry、replayer failed/blocked 三处复用同一 `FailureLedgerEventV1 / RepairQueueItemV1` 写 canonical ledger。
-2. 字段必须包含 `signature`、`artifactHashes`、`budget/retryBudget`、`rollback`、`evidenceWriteback` 和 `blockedConditions`。
-3. proof-loop 按 failure signature 去重，并把 exhausted 状态交给 operator escalate。
-4. autofix/apply 前记录 git HEAD、git status、allowlist、source artifact hash 和上一轮 passed gates。
+1. 让 proof-loop/knowledge graph 查询 failure signature，自动优先处理 exhausted 与重复失败。
+2. autofix/apply 前记录 git HEAD、git status、allowlist、source artifact hash 和上一轮 passed gates。
+3. 把 agent-dogfood subagent runtime manifest 与 failure signature / retry budget 去重窗口绑定。
 
 ## 4. 自动分工验证 / claim 合同 / 冲突合成
 
@@ -246,9 +242,9 @@ claim ledger、hard-eval score split 和 autonomous contracts gate，输出
 
 | 方向 | 现在能保证 | 不能夸大的部分 |
 |---|---|---|
-| 并行调度 | 能生成 `ReconParallelPlanV1`，能用 `--plan-json --plan-only` 离线预览 worker/merge/evidence contract，已有 provider-backed parallel runner 的运行证据字段。 | 还不是动态 autonomous scheduler；尚未完成跨入口统一调度、自动取消、工作窃取、实时重分片和 claim-aware merge 执行闭环。 |
-| 长期上下文压缩 | `re_context`、`session_before_compact`、`session_compact`、context audit 已覆盖 context pack、resume contract、evidence summarization 和 bounded resume。 | 还不能宣称无限长期记忆；仍需精确按 contextPath/entryId 恢复、artifact hash 漂移校验、append-only resume ledger 和跨任务污染阻断。 |
-| 失败自修复 | 已有 bounded retry、repair queue、hard-eval gaps、autofix/proof-loop 方向和 failure/repair schema。 | 还不是自动修好所有失败；plan-only 不执行 repair，真实修复仍需 failure signature 去重、attempt ledger、rollback criteria 和 passed-gate regression。 |
+| 并行调度 | 能生成 `ReconParallelPlanV1`，能用 `--plan-json --plan-only` 离线预览 worker/merge/evidence contract，agent-dogfood 已有 subagent runtime manifest 运行证据字段。 | 还不是动态 autonomous scheduler；尚未完成跨入口统一调度、自动取消、工作窃取、实时重分片和 claim-aware merge 执行闭环。 |
+| 长期上下文压缩 | `re_context`、`session_before_compact`、`session_compact`、context audit 已覆盖 context pack、resume contract、branch mismatch/hash drift/missing pack 等负例、evidence summarization 和 bounded resume。 | 还不能宣称无限长期记忆；仍需多次 compact、预算 exhausted、跨 session contamination 等更多负例和状态回写。 |
+| 失败自修复 | 已有 bounded retry、repair queue、hard-eval gaps、autofix/proof-loop、strict failure/repair schema fixture、duplicate rejection 和 compound/role retry rows。 | 还不是自动修好所有失败；plan-only 不执行 repair，真实修复仍需把 strict validator 接入更多 runtime regression、rollback criteria 和 passed-gate regression。 |
 | 自动分工验证 | 已有 role contract、claim ledger、synthesizer reconciliation、score split、strict claim marker 和 runtime final path 阻断，能防止把 orchestration 成功写成平台 claim 成功。 | 独立子会话/compound runtime 仍需把 claim ledger 写入扩展到真实执行态；每个 proven/final claim 仍需 artifact sha256、JSON query、verifier pass、无 unresolved adversary challenge。 |
 
 ## 当前不做的事
@@ -275,7 +271,7 @@ They validate these contract families without running live benchmarks or provide
 
 - `ReconParallelPlanV1`: worker IDs, roles, objectives, commands, evidence contracts, merge keys, dependencies, artifact globs, limits, merge strategy.
 - `ContextPackV2` and `ResumeContractV2`: exact context path/hash fields, cwd/session/mission/target scope fields, artifact hash policy, append-only compaction ledger, resume queue status and closure values.
-- `FailureLedgerEventV1` and `RepairQueueItemV1`: failure signature, bounded attempts, exhausted/repair status, artifact hashes, rollback criteria, linked paused repair action.
+- `FailureLedgerEventV1` and `RepairQueueItemV1`: strict schema, strict fixture, duplicate signature/attempt rejection, failure signature, bounded attempts, exhausted/repair status, artifact hashes, rollback criteria, linked paused repair action.
 - `DivisionValidationContractV1`, `RoleContractV1` and `ClaimLedgerEventV1`: mapper/verifier/adversary/synthesizer contract, handoff targets, claim ledger hash chain, evidence refs, challenge/resolution for required gaps, conflict policy.
 
 新增 schema：
@@ -286,4 +282,4 @@ They validate these contract families without running live benchmarks or provide
 
 `hard-eval-control-plane.mjs` 的离线 failure/repair 输出也已补齐 `signature`、`artifactHashes`、`budget`、`rollback`、`expectedGates`、`rollbackCriteria`；role contract 已补齐 `ledgerPolicy`、`conflictPolicy`、`claimGatePolicy`、`handoffTargets`、`evidenceContract`。
 
-This means Pi-RECON now has a usable professional control plane with machine-readable schemas, validators, exact-resume negative fixtures, failure/repair writeback hooks, strict claim release markers, and runtime final-path gates. Remaining work is limited to optional hardening such as independent sub-agent runtime, cross-session/multi-compact fixtures, and strict ledger regression fixtures.
+This means Pi-RECON now has a usable professional control plane with machine-readable schemas, validators, agent-dogfood subagent runtime manifests, exact-resume negative fixtures, strict failure/repair fixtures, failure/repair writeback hooks, strict claim release markers, and runtime final-path gates. Remaining work is limited to optional hardening such as generic re_swarm independent sub-agent runtime, cross-session/multi-compact fixtures, and runtime ledger regression wiring.

@@ -2,7 +2,118 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pi-recon.local/schemas/reverse-agent/failure-repair-contract.schema.json",
   "title": "Pi-RECON Failure and Repair Contracts",
+  "type": "object",
+  "x-piReconStrictFixture": "fixtures/reverse-agent/failure-repair-strict.fixture.json",
+  "x-piReconDedupWindow": {
+    "mode": "deterministic-batch-signature-window",
+    "failureKey": ["source", "scope", "signature", "attempt"],
+    "repairKey": ["repairId"],
+    "budgetKey": ["signature", "retryBudget.retryKey", "budget.retryKey"],
+    "rejects": ["duplicate_failure_signature_attempt", "duplicate_repair_id", "failure_repair_signature_mismatch"]
+  },
+  "x-piReconInvariants": [
+    "strict_additional_properties_false_for_failure_and_repair",
+    "local_strict_fixture_must_pass",
+    "deterministic_duplicate_signature_attempt_rejected",
+    "same_signature_shares_retry_budget",
+    "exhausted_status_stops_blind_retry",
+    "failedGates_map_to_repair_queue_item",
+    "per_attempt_stdout_stderr_or_artifact_hashes_preserved",
+    "autofix_requires_baseline_allowlist_regression_gate_and_rollback_criteria"
+  ],
   "$defs": {
+    "HexDigest8To64": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{8,64}$"
+    },
+    "Sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "EvidenceWriteback": {
+      "type": "object",
+      "required": ["failureLedgerPath", "repairQueuePath", "appendOnly"],
+      "properties": {
+        "failureLedgerPath": { "type": "string", "minLength": 1 },
+        "repairQueuePath": { "type": "string", "minLength": 1 },
+        "appendOnly": { "const": true },
+        "mode": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "BlockedCondition": {
+      "type": "object",
+      "required": ["reason", "unblock"],
+      "properties": {
+        "reason": { "type": "string", "minLength": 1 },
+        "unblock": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "Artifact": {
+      "type": "object",
+      "required": ["path", "sha256", "tier"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/Sha256" },
+        "tier": { "enum": ["same_window_live", "runtime_artifact", "network", "served_asset", "process_config", "persisted_state"] },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "mtime": { "type": "string", "format": "date-time" },
+        "exists": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "ArtifactHash": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/Sha256" }
+      },
+      "additionalProperties": false
+    },
+    "RetryBudget": {
+      "type": "object",
+      "required": ["retryKey", "remainingAttempts", "exhaustedAction"],
+      "properties": {
+        "retryKey": { "$ref": "#/$defs/HexDigest8To64" },
+        "remainingAttempts": { "type": "integer", "minimum": 0 },
+        "exhaustedAction": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "Rollback": {
+      "type": "object",
+      "required": ["required", "baseline", "allowlist", "criteria", "restored"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "baseline": { "type": "string", "minLength": 1 },
+        "allowlist": { "type": "array", "items": { "type": "string" } },
+        "criteria": { "type": "array", "items": { "type": "string" } },
+        "restored": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "Preconditions": {
+      "type": "object",
+      "required": ["liveAllowed", "providerAllowed", "requiredSecrets"],
+      "properties": {
+        "liveAllowed": { "type": "boolean" },
+        "providerAllowed": { "type": "boolean" },
+        "requiredSecrets": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "RollbackCriteria": {
+      "type": "object",
+      "required": ["baseline", "mustRestore", "verificationCommand"],
+      "properties": {
+        "baseline": { "type": "string", "minLength": 1 },
+        "mustRestore": { "type": "array", "items": { "type": "string" } },
+        "verificationCommand": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
     "FailureLedgerEventV1": {
       "title": "Pi-RECON Failure Ledger Event V1",
       "type": "object",
@@ -27,102 +138,30 @@
         "rollback"
       ],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "ts": { "type": "string" },
-        "source": { "type": "string" },
-        "scope": { "type": "string" },
+        "id": { "type": "string", "pattern": "^fail:[A-Za-z0-9_.:-]+:[a-f0-9]{8,64}(?::[0-9]+)?$" },
+        "ts": { "type": "string", "format": "date-time" },
+        "source": { "type": "string", "minLength": 1 },
+        "scope": { "type": "string", "minLength": 1 },
         "category": {
           "enum": ["artifact_stale", "runtime_failed", "tool_missing", "contract_gap", "same_window_gap", "same_window_xhs_gap", "same_window_douyin_gap", "same_window_bilibili_gap", "platform_claim_gap"]
         },
-        "signature": { "type": "string" },
+        "signature": { "$ref": "#/$defs/HexDigest8To64" },
         "attempt": { "type": "integer", "minimum": 0 },
         "maxAttempts": { "type": "integer", "minimum": 0 },
         "status": { "enum": ["failed", "retrying", "repair_queued", "repaired", "exhausted", "rolled_back", "escalated", "blocked"] },
-        "failedGates": { "type": "array", "items": { "type": "string" } },
-        "artifacts": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["path", "sha256", "tier"],
-            "properties": {
-              "path": { "type": "string" },
-              "sha256": { "type": "string" },
-              "tier": { "type": "string" }
-            },
-            "additionalProperties": true
-          }
-        },
-        "artifactHashes": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["path", "sha256"],
-            "properties": {
-              "path": { "type": "string" },
-              "sha256": { "type": "string" }
-            },
-            "additionalProperties": true
-          }
-        },
-        "repairId": { "type": "string" },
-        "budget": {
-          "type": "object",
-          "required": ["retryKey", "remainingAttempts", "exhaustedAction"],
-          "properties": {
-            "retryKey": { "type": "string" },
-            "remainingAttempts": { "type": "integer", "minimum": 0 },
-            "exhaustedAction": { "type": "string" }
-          },
-          "additionalProperties": true
-        },
-        "retryBudget": {
-          "type": "object",
-          "required": ["retryKey", "remainingAttempts", "exhaustedAction"],
-          "properties": {
-            "retryKey": { "type": "string" },
-            "remainingAttempts": { "type": "integer", "minimum": 0 },
-            "exhaustedAction": { "type": "string" }
-          },
-          "additionalProperties": true
-        },
-        "evidenceWriteback": {
-          "type": "object",
-          "required": ["failureLedgerPath", "repairQueuePath", "appendOnly"],
-          "properties": {
-            "failureLedgerPath": { "type": "string" },
-            "repairQueuePath": { "type": "string" },
-            "appendOnly": { "const": true },
-            "mode": { "type": "string" }
-          },
-          "additionalProperties": true
-        },
-        "blockedConditions": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["reason", "unblock"],
-            "properties": {
-              "reason": { "type": "string" },
-              "unblock": { "type": "string" }
-            },
-            "additionalProperties": true
-          }
-        },
-        "rollback": {
-          "type": "object",
-          "required": ["required", "baseline", "allowlist", "criteria", "restored"],
-          "properties": {
-            "required": { "type": "boolean" },
-            "baseline": { "type": "string" },
-            "allowlist": { "type": "array", "items": { "type": "string" } },
-            "criteria": { "type": "array", "items": { "type": "string" } },
-            "restored": { "type": "boolean" }
-          },
-          "additionalProperties": true
-        }
+        "failedGates": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/Artifact" } },
+        "artifactHashes": { "type": "array", "items": { "$ref": "#/$defs/ArtifactHash" } },
+        "repairId": { "type": "string", "pattern": "^repair:[A-Za-z0-9_.:-]+:[a-f0-9]{8,64}$" },
+        "budget": { "$ref": "#/$defs/RetryBudget" },
+        "retryBudget": { "$ref": "#/$defs/RetryBudget" },
+        "evidenceWriteback": { "$ref": "#/$defs/EvidenceWriteback" },
+        "blockedConditions": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/BlockedCondition" } },
+        "rollback": { "$ref": "#/$defs/Rollback" }
       },
-      "additionalProperties": true,
+      "additionalProperties": false,
       "x-piReconInvariants": [
+        "strict_additional_properties_false_for_failure_and_repair",
         "same_signature_shares_retry_budget",
         "exhausted_status_stops_blind_retry",
         "failedGates_map_to_repair_queue_item",
@@ -152,68 +191,32 @@
         "regressionGates"
       ],
       "properties": {
-        "repairId": { "type": "string", "minLength": 1 },
-        "fromFailureId": { "type": "string" },
-        "signature": { "type": "string" },
-        "scope": { "type": "string" },
+        "repairId": { "type": "string", "pattern": "^repair:[A-Za-z0-9_.:-]+:[a-f0-9]{8,64}$" },
+        "fromFailureId": { "type": "string", "pattern": "^fail:[A-Za-z0-9_.:-]+:[a-f0-9]{8,64}(?::[0-9]+)?$" },
+        "signature": { "$ref": "#/$defs/HexDigest8To64" },
+        "scope": { "type": "string", "minLength": 1 },
         "action": { "enum": ["rerun", "replace-command", "recapture-evidence", "refresh-context", "escalate", "rollback"] },
         "repairAction": { "enum": ["rerun", "replace-command", "recapture-evidence", "refresh-context", "escalate", "rollback"] },
         "commands": { "type": "array", "items": { "type": "string" } },
         "expectedArtifacts": { "type": "array", "items": { "type": "string" } },
-        "expectedGates": { "type": "array", "items": { "type": "string" } },
-        "preconditions": {
-          "type": "object",
-          "required": ["liveAllowed", "providerAllowed", "requiredSecrets"],
-          "properties": {
-            "liveAllowed": { "type": "boolean" },
-            "providerAllowed": { "type": "boolean" },
-            "requiredSecrets": { "type": "array", "items": { "type": "string" } }
-          },
-          "additionalProperties": true
-        },
+        "expectedGates": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "preconditions": { "$ref": "#/$defs/Preconditions" },
         "paused": { "type": "boolean" },
         "allowlist": { "type": "array", "items": { "type": "string" } },
-        "rollbackCriteria": {
-          "type": "object",
-          "required": ["baseline", "mustRestore", "verificationCommand"],
-          "properties": {
-            "baseline": { "type": "string" },
-            "mustRestore": { "type": "array", "items": { "type": "string" } },
-            "verificationCommand": { "type": "string" }
-          },
-          "additionalProperties": true
-        },
-        "blockedConditions": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["reason", "unblock"],
-            "properties": {
-              "reason": { "type": "string" },
-              "unblock": { "type": "string" }
-            },
-            "additionalProperties": true
-          }
-        },
-        "evidenceWriteback": {
-          "type": "object",
-          "required": ["failureLedgerPath", "repairQueuePath", "appendOnly"],
-          "properties": {
-            "failureLedgerPath": { "type": "string" },
-            "repairQueuePath": { "type": "string" },
-            "appendOnly": { "const": true },
-            "mode": { "type": "string" }
-          },
-          "additionalProperties": true
-        },
-        "regressionGates": { "type": "array", "items": { "type": "string" } }
+        "rollbackCriteria": { "$ref": "#/$defs/RollbackCriteria" },
+        "blockedConditions": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/BlockedCondition" } },
+        "evidenceWriteback": { "$ref": "#/$defs/EvidenceWriteback" },
+        "regressionGates": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "note": { "type": "string" }
       },
-      "additionalProperties": true,
+      "additionalProperties": false,
       "x-piReconInvariants": [
+        "strict_additional_properties_false_for_failure_and_repair",
         "paused_true_for_live_or_provider_dependent_repairs",
         "commands_are_not_executed_by_static_gate",
         "expectedGates_must_bind_to_failedGates",
-        "repair_completion_requires_regressionGates_pass"
+        "repair_completion_requires_regressionGates_pass",
+        "deterministic_duplicate_signature_attempt_rejected"
       ]
     }
   },
