@@ -6,6 +6,7 @@ A Pi-RECON live benchmark for public web application surface mapping and replay-
 
 ```bash
 node bench/recon-remote/public-webapp/run.mjs https://preview.owasp-juice.shop juice-shop
+node bench/recon-remote/public-webapp/run.mjs https://preview.owasp-juice.shop juice-shop-hard
 node bench/recon-remote/public-webapp/run.mjs https://demo.testfire.net testfire
 ```
 
@@ -14,6 +15,7 @@ Profiles:
 | Profile | Checks |
 |---|---|
 | `juice-shop` | SPA/API reachability, product search API, challenge metadata, exposed FTP/confidential document. |
+| `juice-shop-hard` | Multi-stage SQLi login bypass, JWT role verification, authenticated admin API/user/config/basket read probes. |
 | `testfire` | Route baseline, reflected search XSS probe, SQLi login-bypass probe. |
 | `generic` | Home/robots/sitemap/security.txt and security header baseline. |
 

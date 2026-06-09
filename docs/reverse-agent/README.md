@@ -56,7 +56,7 @@ Pi-RECON 在 `packages/coding-agent/src/core/recon-profile.ts`、`.pi/SYSTEM.md`
 | `.pi/tools/tool-index.md` | 本机工具可用性索引，避免猜工具路径 |
 | `docs/reverse-agent/model-provider-formats.md` | 主流模型/API/provider 格式模板：OpenAI-compatible、Anthropic-compatible、Gemini、OpenRouter、local runtime、Azure、Bedrock、Vertex、Cloudflare/Vercel 等 |
 | `bench/recon-remote/douyin-nowatermark/` | 真实网络 benchmark：对短视频分享页做 redirect、Chrome/CDP、状态 JSON、媒体 URL、无水印候选变换与 HEAD/range 验证 |
-| `bench/recon-remote/public-webapp/` | 公网 Web 应用 benchmark：对 OWASP Juice Shop、Altoro Mutual/TestFire 等公开测试站做 surface map、API/敏感暴露、XSS/SQLi replay-safe 验证 |
+| `bench/recon-remote/public-webapp/` | 公网 Web 应用 benchmark：对 OWASP Juice Shop、Altoro Mutual/TestFire 等公开测试站做 surface map、API/敏感暴露、XSS/SQLi replay-safe 验证；hard profile 覆盖 SQLi 登录绕过→JWT→认证 API 访问链 |
 | `scripts/reverse-agent/refresh-tool-index.sh` | 离线刷新工具索引脚本 |
 | `scripts/reverse-agent/verify-profile.mjs` | 配置完整性验证脚本 |
 | `scripts/reverse-agent/install-global-profile.sh` | 安装到 `~/.pi/agent` 的全局 profile 脚本（会备份同名文件） |

