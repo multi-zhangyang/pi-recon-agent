@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -203,6 +204,105 @@ async function concurrentAppendProbe(writers) {
   return { rows: rows.length, errors };
 }
 
+function childProcess(script, args) {
+  return new Promise((resolveProcess) => {
+    const child = spawn(process.execPath, [script, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("close", (code, signal) => resolveProcess({ code, signal, stdout, stderr }));
+    child.on("error", (error) => resolveProcess({ code: -1, signal: null, stdout, stderr: String(error) }));
+  });
+}
+
+async function childProcessConcurrentAppendProbe(writers) {
+  const dir = join(tmpdir(), `repi-memory-child-process-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  mkdirSync(dir, { recursive: true });
+  const eventsPath = join(dir, "events.jsonl");
+  const workerPath = join(dir, "memory-writer.mjs");
+  writeFileSync(eventsPath, "", "utf8");
+  writeFileSync(
+    workerPath,
+    `
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const dir = process.argv[2];
+const index = Number(process.argv[3]);
+const eventsPath = join(dir, "events.jsonl");
+const lockPath = join(dir, ".store.lock");
+const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+function eventHash(event) {
+  const { entryHash, ...withoutHash } = event;
+  return sha256(JSON.stringify(withoutHash));
+}
+function sleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+let acquired = false;
+for (let attempt = 0; attempt < 300; attempt++) {
+  try {
+    mkdirSync(lockPath);
+    acquired = true;
+    break;
+  } catch {
+    if (existsSync(lockPath)) sleep(3 + (index % 7));
+  }
+}
+if (!acquired) {
+  console.error("child_lock_timeout", index);
+  process.exit(2);
+}
+try {
+  const rows = readFileSync(eventsPath, "utf8").split(/\\r?\\n/).filter(Boolean).map((line) => JSON.parse(line));
+  const event = {
+    kind: "repi-memory-event",
+    schemaVersion: 1,
+    id: "mem:child-process-" + index,
+    seq: rows.length + 1,
+    ts: "2026-06-10T00:00:00.000Z",
+    source: "operator",
+    task: "child process memory writer " + index,
+    route: "Harness",
+    domainTags: ["child-process", "memory-store", "concurrency"],
+    caseSignature: "case-child-process-" + index,
+    outcome: "success",
+    lessons: ["child process append preserved MemoryStoreV5 hash chain"],
+    failurePatterns: [],
+    reuseRules: ["append under cross-process lock"],
+    commands: ["true"],
+    artifacts: [],
+    artifactHashes: [],
+    quality: { confidence: 0.76, replayVerified: true, reuseCount: 0, failureCount: 0, lastUsefulAt: "2026-06-10T00:00:00.000Z", decay: 0 },
+    promotion: { playbookCandidate: false, verifierRuleCandidate: true },
+    prevHash: rows.at(-1)?.entryHash ?? "0".repeat(64),
+    entryHash: ""
+  };
+  event.entryHash = eventHash(event);
+  writeFileSync(eventsPath, \`\${rows.map((row) => JSON.stringify(row)).join("\\n")}\${rows.length ? "\\n" : ""}\${JSON.stringify(event)}\\n\`, "utf8");
+  console.log("child_written", index, event.seq);
+} finally {
+  rmSync(lockPath, { recursive: true, force: true });
+}
+`,
+    "utf8",
+  );
+  const childResults = await Promise.all(Array.from({ length: writers }, (_, index) => childProcess(workerPath, [dir, String(index + 1)])));
+  const rows = readFileSync(eventsPath, "utf8").split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+  const errors = validateHashChain(rows);
+  const failedChildren = childResults
+    .map((result, index) => ({ ...result, index: index + 1 }))
+    .filter((result) => result.code !== 0);
+  rmSync(dir, { recursive: true, force: true });
+  return { rows: rows.length, errors, failedChildren };
+}
+
 function markerCheck(id, file, markers, forbidden = []) {
   const path = join(root, file);
   const text = existsSync(path) ? readFileSync(path, "utf8") : "";
@@ -228,6 +328,12 @@ async function run() {
     checks.push({ id: "eval:forbidden-leak", status: evalResult.aggregate.forbiddenLeakRate <= (thresholds.maxForbiddenLeakRate ?? 0) ? "pass" : "fail", evidence: { aggregate: evalResult.aggregate, results: evalResult.results } });
     const concurrent = await concurrentAppendProbe(fixture.concurrentAppend?.writers ?? 8);
     checks.push({ id: "concurrency:hash-chain", status: concurrent.rows === (fixture.concurrentAppend?.writers ?? 8) && concurrent.errors.length === 0 ? "pass" : "fail", evidence: concurrent });
+    const childConcurrent = await childProcessConcurrentAppendProbe(fixture.concurrentAppend?.writers ?? 8);
+    checks.push({
+      id: "concurrency:child-process-hash-chain",
+      status: childConcurrent.rows === (fixture.concurrentAppend?.writers ?? 8) && childConcurrent.errors.length === 0 && childConcurrent.failedChildren.length === 0 ? "pass" : "fail",
+      evidence: childConcurrent
+    });
   } catch (error) {
     checks.push({ id: "fixture:parse", status: "fail", evidence: { error: String(error) } });
   }
@@ -241,9 +347,9 @@ async function run() {
     "hitAtK",
     "MemoryUsefulnessEvalV1"
   ]));
-  checks.push(markerCheck("docs:memory-usefulness-readme", "README.md", ["Memory usefulness eval", "gate:memory-usefulness", "hit@k", "forbiddenHitIds", "re_memory eval"]));
-  checks.push(markerCheck("docs:memory-usefulness-recon", "packages/coding-agent/docs/recon.md", ["Memory usefulness eval", "re_memory eval", "forbiddenLeakRate"]));
-  checks.push(markerCheck("profile:memory-usefulness", "repi-profile/SYSTEM.md", ["Memory usefulness eval", "re_memory eval", "forbiddenHitIds"]));
+  checks.push(markerCheck("docs:memory-usefulness-readme", "README.md", ["Memory usefulness eval", "gate:memory-usefulness", "hit@k", "forbiddenHitIds", "child-process", "re_memory eval"]));
+  checks.push(markerCheck("docs:memory-usefulness-recon", "packages/coding-agent/docs/recon.md", ["Memory usefulness eval", "re_memory eval", "forbiddenLeakRate", "child-process"]));
+  checks.push(markerCheck("profile:memory-usefulness", "repi-profile/SYSTEM.md", ["Memory usefulness eval", "re_memory eval", "forbiddenHitIds", "child-process"]));
   checks.push(markerCheck("npm:memory-usefulness-script", "package.json", ["gate:memory-usefulness", "memory-usefulness-gate.mjs"]));
   const failed = checks.filter((check) => check.status !== "pass");
   const result = { kind: "repi-memory-usefulness-gate", schemaVersion: 1, generatedAt: new Date().toISOString(), ok: failed.length === 0, root, checks };

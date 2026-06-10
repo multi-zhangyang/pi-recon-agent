@@ -420,7 +420,7 @@ re_memory { "action": "snapshot" }
 re_memory { "action": "eval" }
 ```
 
-`re_memory verify` 写 `store-report.json`，`re_memory repair-index` 从 verified event chain 重建 `case-memory.jsonl`，`re_memory snapshot` 写 `store-snapshot.json`，`re_memory eval` 写 `usefulness-eval.json` 并度量 hit@1、hit@k、MRR、forbiddenLeakRate 和 forbiddenHitIds。`re_lane run` 的高价值 runtime 结果也会自动写 `memory_auto_writeback`，把 evidence artifact sha256、evidence_quality、self-heal 和 verifier candidate 一起沉淀。`npm run gate:memory-store` 使用 `fixtures/reverse-agent/memory-store.fixture.json` 验证坏 prevHash 阻断、case index 修复、transaction manifest 和 lane runtime auto writeback marker。`npm run gate:memory-usefulness` 使用 `fixtures/reverse-agent/memory-usefulness.fixture.json` 验证 authz/pwn 正召回、失败/跨 route forbidden memory 不进 topK，以及并发 append probe 保持 hash-chain。
+`re_memory verify` 写 `store-report.json`，`re_memory repair-index` 从 verified event chain 重建 `case-memory.jsonl`，`re_memory snapshot` 写 `store-snapshot.json`，`re_memory eval` 写 `usefulness-eval.json` 并度量 hit@1、hit@k、MRR、forbiddenLeakRate 和 forbiddenHitIds。`re_lane run` 的高价值 runtime 结果也会自动写 `memory_auto_writeback`，把 evidence artifact sha256、evidence_quality、self-heal 和 verifier candidate 一起沉淀。`npm run gate:memory-store` 使用 `fixtures/reverse-agent/memory-store.fixture.json` 验证坏 prevHash 阻断、case index 修复、transaction manifest 和 lane runtime auto writeback marker。`npm run gate:memory-usefulness` 使用 `fixtures/reverse-agent/memory-usefulness.fixture.json` 验证 authz/pwn 正召回、失败/跨 route forbidden memory 不进 topK，以及 child-process 并发 append probe 保持 hash-chain。
 
 ## Reflection/evolution 闭环
 

@@ -498,7 +498,7 @@ const REQUIREMENTS = [
 			},
 			{
 				id: "memory_usefulness_eval_runtime",
-				description: "Memory usefulness eval 把长期记忆从“能写”提升到“可度量地召回正确经验并阻断污染经验”，覆盖 hit@k、MRR、forbiddenHitIds 和并发写压力。",
+				description: "Memory usefulness eval 把长期记忆从“能写”提升到“可度量地召回正确经验并阻断污染经验”，覆盖 hit@k、MRR、forbiddenHitIds、同进程并发写和 child-process 并发写压力。",
 				files: ["packages/coding-agent/src/core/recon-profile.ts"],
 				markers: [
 					"MemoryUsefulnessEvalV1",
@@ -511,15 +511,15 @@ const REQUIREMENTS = [
 			},
 			{
 				id: "memory_usefulness_gate",
-				description: "Memory usefulness hard-eval 覆盖 authz/pwn 正召回、失败/跨 route forbidden memory 不进入 topK、并发 append 保持 hash-chain。",
+				description: "Memory usefulness hard-eval 覆盖 authz/pwn 正召回、失败/跨 route forbidden memory 不进入 topK、同进程与 child-process 并发 append 保持 hash-chain。",
 				files: ["scripts/reverse-agent/memory-usefulness-gate.mjs"],
-				markers: ["repi-memory-usefulness-gate", "eval:hit-at-1", "eval:forbidden-leak", "concurrency:hash-chain"],
+				markers: ["repi-memory-usefulness-gate", "eval:hit-at-1", "eval:forbidden-leak", "concurrency:hash-chain", "concurrency:child-process-hash-chain"],
 			},
 		],
 		hardeningNeeded: [
 			"knowledge graph/latest artifact 查询继续按 mission/session/workspace/target 做更严格过滤，避免跨任务污染。",
 			"compact resume ledger 继续扩展 queue 状态机：running/done/blocked/exhausted、auto-resume budget 和多次 compact 幂等回放。",
-			"Memory v5 后续继续补真正 embedding/vector rerank、跨 session contamination 负例和真实 worker 进程并发写压力回归。",
+			"Memory v5 后续继续补真正 embedding/vector rerank、跨 session contamination 负例和 re_swarm live worker memory writeback 压力回归。",
 		],
 		recommendedWork: [
 			"保持 ContextPackV2 / ResumeContractV2 runtime markers 与 context-compact-audit.mjs 同步。",
