@@ -210,6 +210,8 @@ function staticContractChecks() {
 			"legacyPiImported",
 			'join(homedir(), ".pi", "agent")',
 			"settings.compaction",
+			"triggerPercent: 85",
+			"warningPercent: 80",
 		], []),
 	);
 	checks.push(markerCheck("launcher:pi-non-owning-shim", "pi", ["no longer owns the `pi` command", "exec \"$candidate\" \"$@\""], ["ARGS=(--recon", "PI_RECON_PRODUCT=1", "PI_RECON_PRIMARY=1"]));
@@ -226,6 +228,7 @@ function staticContractChecks() {
 	checks.push(markerCheck("release:local-shims-repi", "scripts/local-release.mjs", ["createRepiShim", '"repi.cmd"', '"repi"', "repi-${platform}.tar.gz"], ["createPiShim", /node_modules\/\.bin\/pi\b/, /\bpi\.cmd\b/, /\bpi-\$\{platform\}\.tar\.gz/]));
 	checks.push(markerCheck("code:repi-product-switch", "packages/coding-agent/src/config.ts", ["IS_REPI_PRODUCT", "PI_RECON_PRODUCT", "APP_NAME === \"repi\"", "https://gist.github.com/"], []));
 	checks.push(markerCheck("code:update-branding-disabled", "packages/coding-agent/src/modes/interactive/interactive-mode.ts", ["if (!IS_REPI_PRODUCT)", "PI_SKIP_PACKAGE_UPDATE_CHECK", "if (IS_REPI_PRODUCT) return;", "Pi-RECON Changelog"], []));
+	checks.push(markerCheck("code:auto-compact-threshold", "packages/coding-agent/src/core/compaction/compaction.ts", ["compactionTriggerTokens", "triggerPercent", "contextWindow * triggerPercent", "contextWindow - reserveTokens"], []));
 	checks.push(markerCheck("code:provider-attribution-rebranded", "packages/coding-agent/src/core/provider-attribution.ts", ["IS_REPI_PRODUCT", "X-OpenRouter-Title", "repi-coding-agent", "x-opencode-client"], []));
 	checks.push(markerCheck("kernel:false-refusal-rewrite-source", "packages/coding-agent/src/core/recon-profile.ts", ["authorized_task_bias", "public_target_no_auto_refusal", "scope_gap_to_passive_mapping", "authorization_context_missing", "public_target_request"], []));
 	checks.push(markerCheck("kernel:false-refusal-rewrite-profile", "repi-profile/extensions/reverse-pentest-core.ts", ["authorized_task_bias", "scope_gap_to_passive_mapping", "authorization_context_missing", "public_target_request"], []));

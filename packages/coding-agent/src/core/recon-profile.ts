@@ -16338,6 +16338,7 @@ function buildReconCompactionSummary(params: {
 		...resumeCommands.map((command) => `- next: ${command}`),
 		"",
 		"## Compaction boundary",
+		"- threshold_policy: triggerPercent/warningPercent from settings.compaction; runtime trigger uses compactionTriggerTokens = min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)",
 		`- first_kept_entry_id: ${event.preparation.firstKeptEntryId}`,
 		`- tokens_before: ${event.preparation.tokensBefore}`,
 		`- branch_entries: ${event.branchEntries?.length ?? 0}`,
@@ -24843,6 +24844,8 @@ export function createReconExtensionFactory() {
 				firstKeptEntryId: event.preparation.firstKeptEntryId,
 				policy:
 					"Pi-RECON owned compaction: preserve goal, route, evidence, commands, files, unresolved assumptions, dispatcher budgets, and next steps.",
+				thresholdPolicy:
+					"triggerPercent/warningPercent from settings.compaction; compactionTriggerTokens = min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)",
 				mission: readCurrentMission(),
 				evidenceTail: truncateMiddle(buildEvidenceDigest(), 3000),
 				contextPath,

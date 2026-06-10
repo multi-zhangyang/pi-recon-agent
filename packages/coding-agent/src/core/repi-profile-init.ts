@@ -96,7 +96,9 @@ export function initializeRepiProfile(options: { repoRoot?: string; verbose?: bo
 	settings.collapseChangelog = settings.collapseChangelog ?? true;
 	settings.compaction = {
 		enabled: true,
-		reserveTokens: 32768,
+		triggerPercent: 85,
+		warningPercent: 80,
+		reserveTokens: 16384,
 		keepRecentTokens: 36000,
 		...((settings.compaction as Record<string, unknown> | undefined) ?? {}),
 	};

@@ -116,6 +116,10 @@ export interface CompactionSettings {
 	enabled: boolean;
 	reserveTokens: number;
 	keepRecentTokens: number;
+	/** Optional proactive trigger as a percentage of model.contextWindow, e.g. 85 = compact at 85%. */
+	triggerPercent?: number;
+	/** Optional warning threshold used by REPI docs/UI contracts. */
+	warningPercent?: number;
 }
 
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
@@ -214,11 +218,29 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 }
 
 /**
+ * Return the token threshold that triggers compaction.
+ *
+ * Backward compatible default: contextWindow - reserveTokens.
+ * If triggerPercent is configured, compact at the earlier of the percentage
+ * threshold and the reserve-token threshold. This lets products such as REPI
+ * mimic top-tier harness behavior with explicit 80/85% context-watermark policy
+ * while still preserving a hard response/tool budget near the model limit.
+ */
+export function compactionTriggerTokens(contextWindow: number, settings: CompactionSettings): number {
+	const reserveThreshold = contextWindow - settings.reserveTokens;
+	const triggerPercent = settings.triggerPercent;
+	if (typeof triggerPercent !== "number" || triggerPercent <= 0 || triggerPercent >= 100) return reserveThreshold;
+	const percentThreshold = Math.floor((contextWindow * triggerPercent) / 100);
+	return Math.min(percentThreshold, reserveThreshold);
+}
+
+/**
  * Check if compaction should trigger based on context usage.
  */
 export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
 	if (!settings.enabled) return false;
-	return contextTokens > contextWindow - settings.reserveTokens;
+	if (contextWindow <= 0) return false;
+	return contextTokens > compactionTriggerTokens(contextWindow, settings);
 }
 
 // ============================================================================

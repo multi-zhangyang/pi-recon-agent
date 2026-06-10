@@ -31,6 +31,17 @@ repi --reverse-pentest
 
 The kernel carries `authorized_task_bias`, `public_target_no_auto_refusal`, and `scope_gap_to_passive_mapping` as runtime contract markers, not just documentation. CTF/lab/owned/client-authorized/security-test context enters the execution chain by default. A public-looking hostname, brand, or production-like surface does not stop the task by itself; REPI first creates passive `re_map` evidence, route/auth baseline, live browser plan, `auth_context_gap`, `bounded_plan`, and `operator_queue`. If authorization context, accounts, window, or scope are incomplete, `authorization_context_missing` asks at most one path-changing question while still producing executable next commands.
 
+
+## REPI auto-compaction threshold
+
+REPI initializes `~/.repi/agent/settings.json` with an explicit top-tier harness policy instead of relying only on a fixed reserve-token buffer:
+
+```json
+{ "compaction": { "enabled": true, "triggerPercent": 85, "warningPercent": 80, "reserveTokens": 16384, "keepRecentTokens": 36000 } }
+```
+
+The runtime threshold is `compactionTriggerTokens = min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)`. Default upstream behavior without `triggerPercent` remains backward compatible: `contextWindow - reserveTokens`.
+
 ## Runtime resources
 
 The built-in profile creates these resources on demand:

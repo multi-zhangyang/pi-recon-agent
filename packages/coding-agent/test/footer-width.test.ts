@@ -1,6 +1,7 @@
 import { visibleWidth } from "@pi-recon/repi-tui";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
+import type { CompactionSettings } from "../src/core/compaction/index.ts";
 import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provider.ts";
 import { FooterComponent, formatCwdForFooter } from "../src/modes/interactive/components/footer.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
@@ -21,6 +22,7 @@ function createSession(options: {
 	reasoning?: boolean;
 	thinkingLevel?: string;
 	usage?: AssistantUsage;
+	compaction?: CompactionSettings;
 }): AgentSession {
 	const usage = options.usage;
 	const entries =
@@ -54,6 +56,10 @@ function createSession(options: {
 		getContextUsage: () => ({ contextWindow: 200_000, percent: 12.3 }),
 		modelRegistry: {
 			isUsingOAuth: () => false,
+		},
+		settingsManager: {
+			getCompactionSettings: () =>
+				options.compaction ?? { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 },
 		},
 	};
 
@@ -140,5 +146,22 @@ describe("FooterComponent width handling", () => {
 
 		const statsLine = stripAnsi(footer.render(120)[1]);
 		expect(statsLine).toContain("CH25.0%");
+	});
+
+	it("shows the configured auto-compaction threshold in the context indicator", () => {
+		const session = createSession({
+			sessionName: "",
+			compaction: {
+				enabled: true,
+				triggerPercent: 85,
+				warningPercent: 80,
+				reserveTokens: 16_384,
+				keepRecentTokens: 36_000,
+			},
+		});
+		const footer = new FooterComponent(session, createFooterData(1));
+
+		const statsLine = stripAnsi(footer.render(120)[1]);
+		expect(statsLine).toContain("(auto@85%)");
 	});
 });

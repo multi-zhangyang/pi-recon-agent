@@ -29,6 +29,11 @@ Pi-RECON 通过 `models.json` 接入不同的模型服务。本文说明 provide
 
 凭据建议通过环境变量或命令式 secret loader 注入。下面的示例只使用占位符和环境变量引用，例如 `$OPENAI_API_KEY`、`$ANTHROPIC_API_KEY`、`$OPENROUTER_API_KEY`、`$GEMINI_API_KEY`。
 
+
+## 0. 自定义模型支持结论
+
+支持。REPI 读取独立的 `~/.repi/agent/models.json`，可以配置 OpenAI-compatible、OpenAI Responses-compatible、Anthropic Messages-compatible、Google、Azure、Bedrock、Vertex、Cloudflare/Vercel 网关和本地 vLLM/SGLang/LM Studio/Ollama。每个模型的 `contextWindow` 会被 auto-compact 阈值使用；REPI 默认 `triggerPercent=85`、`warningPercent=80`、`reserveTokens=16384`，可在 `~/.repi/agent/settings.json` 覆盖。
+
 ## 1. Provider 配置结构
 
 一个 provider 条目包含四类信息：

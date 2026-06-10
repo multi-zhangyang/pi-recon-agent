@@ -29,10 +29,11 @@ Both use the same structured summary format and track file operations cumulative
 Auto-compaction triggers when:
 
 ```
-contextTokens > contextWindow - reserveTokens
+contextTokens > compactionTriggerTokens
+compactionTriggerTokens = min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)
 ```
 
-By default, `reserveTokens` is 16384 tokens (configurable in `~/.repi/agent/settings.json` or `<project-dir>/.repi/settings.json`). This leaves room for the LLM's response.
+If `triggerPercent` is omitted, the backward-compatible threshold is `contextWindow - reserveTokens`. REPI initializes `triggerPercent` to `85` and `warningPercent` to `80`, while still keeping `reserveTokens` as a hard response/tool budget. This makes large-context models compact proactively and keeps small-context models from running into the model limit.
 
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary.
 
@@ -379,8 +380,10 @@ Configure compaction in `~/.repi/agent/settings.json` or `<project-dir>/.repi/se
 {
   "compaction": {
     "enabled": true,
+    "triggerPercent": 85,
+    "warningPercent": 80,
     "reserveTokens": 16384,
-    "keepRecentTokens": 20000
+    "keepRecentTokens": 36000
   }
 }
 ```
@@ -388,7 +391,9 @@ Configure compaction in `~/.repi/agent/settings.json` or `<project-dir>/.repi/se
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `enabled` | `true` | Enable auto-compaction |
-| `reserveTokens` | `16384` | Tokens to reserve for LLM response |
-| `keepRecentTokens` | `20000` | Recent tokens to keep (not summarized) |
+| `triggerPercent` | `85` in REPI profile | Compact after context exceeds this percentage of `contextWindow` |
+| `warningPercent` | `80` in REPI profile | Warning watermark for long-running harnesses/UI contracts |
+| `reserveTokens` | `16384` | Tokens to reserve for LLM response/tool budget |
+| `keepRecentTokens` | `20000` core / `36000` REPI profile | Recent tokens to keep (not summarized) |
 
 Disable auto-compaction with `"enabled": false`. You can still compact manually with `/compact`.

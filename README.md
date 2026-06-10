@@ -405,9 +405,43 @@ exact_resume_verification:
 
 如果 hash drift、artifact 缺失或 target/workspace 不匹配，resume 会标记 blocked，不会把缺证据状态当成可完成状态。
 
+
+### REPI 自动 compact 阈值
+
+REPI 支持自定义模型，也按模型自己的 `contextWindow` 计算自动 compact 水位。默认初始化 `~/.repi/agent/settings.json` 时会写入：
+
+```json
+{
+  "compaction": {
+    "enabled": true,
+    "triggerPercent": 85,
+    "warningPercent": 80,
+    "reserveTokens": 16384,
+    "keepRecentTokens": 36000
+  }
+}
+```
+
+含义：
+
+- `triggerPercent: 85`：上下文估算超过模型窗口 85% 后触发 auto-compaction。
+- `warningPercent: 80`：给长任务和 harness 文档使用的预警水位。
+- `reserveTokens: 16384`：即使百分比阈值更晚，也至少保留这部分输出/工具预算。
+- 实际触发阈值是 `min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)`，因此小窗口模型不会被百分比策略挤爆，长窗口模型也不会拖到最后才 compact。
+
+例子：
+
+| 模型窗口 | 85% 阈值 | reserve 阈值 | 实际触发 |
+|---:|---:|---:|---:|
+| 128k | 108.8k | 111.6k | 108.8k |
+| 200k | 170k | 183.6k | 170k |
+| 32k | 27.2k | 15.6k | 15.6k |
+
+如果你想更接近保守长任务策略，可以改成 80%；如果模型很贵或上下文较短，建议保留 `reserveTokens`。
+
 ## 模型 / provider 配置
 
-Pi-RECON 不绑定某个私有端点。当前 `repi` 的模型配置放在独立目录，不提交到仓库，也不依赖旧 upstream `pi` 的 profile：
+Pi-RECON 支持自定义模型/provider，不绑定某个私有端点。当前 `repi` 的模型配置放在独立目录，不提交到仓库，也不依赖旧 upstream `pi` 的 profile：
 
 ```text
 ~/.repi/agent/models.json

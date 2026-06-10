@@ -8,6 +8,7 @@ import {
 	type CompactionSettings,
 	calculateContextTokens,
 	compact,
+	compactionTriggerTokens,
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateContextTokens,
 	findCutPoint,
@@ -244,6 +245,31 @@ describe("shouldCompact", () => {
 		};
 
 		expect(shouldCompact(95000, 100000, settings)).toBe(false);
+	});
+
+	it("should support proactive percentage thresholds", () => {
+		const settings: CompactionSettings = {
+			enabled: true,
+			reserveTokens: 10000,
+			keepRecentTokens: 20000,
+			triggerPercent: 85,
+		};
+
+		expect(compactionTriggerTokens(100000, settings)).toBe(85000);
+		expect(shouldCompact(85000, 100000, settings)).toBe(false);
+		expect(shouldCompact(85001, 100000, settings)).toBe(true);
+	});
+
+	it("should preserve reserve-token budget when it triggers earlier than percentage", () => {
+		const settings: CompactionSettings = {
+			enabled: true,
+			reserveTokens: 30000,
+			keepRecentTokens: 20000,
+			triggerPercent: 85,
+		};
+
+		expect(compactionTriggerTokens(100000, settings)).toBe(70000);
+		expect(shouldCompact(70001, 100000, settings)).toBe(true);
 	});
 });
 

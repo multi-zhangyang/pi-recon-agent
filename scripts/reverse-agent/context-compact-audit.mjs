@@ -36,6 +36,8 @@ export const CONTEXT_COMPACT_REQUIREMENTS = [
 		checks: RUNTIME_MIRRORS.map((file) => ({
 			file,
 			markers: [
+				"triggerPercent",
+				"warningPercent",
 				"session_before_compact",
 				"buildReconCompactionSummary",
 				"buildReconCompactionDetails",
@@ -48,6 +50,29 @@ export const CONTEXT_COMPACT_REQUIREMENTS = [
 			],
 		})),
 	},
+	{
+		id: "auto_compact_threshold",
+		description: "REPI exposes a configurable context-window percentage threshold with reserve-token fallback for top-tier auto-compaction behavior.",
+		checks: [
+			{
+				file: "packages/coding-agent/src/core/compaction/compaction.ts",
+				markers: ["compactionTriggerTokens", "triggerPercent", "contextWindow * triggerPercent", "contextWindow - reserveTokens"],
+			},
+			{
+				file: "packages/coding-agent/src/core/repi-profile-init.ts",
+				markers: ["triggerPercent: 85", "warningPercent: 80", "reserveTokens: 16384", "keepRecentTokens: 36000"],
+			},
+			{
+				file: "packages/coding-agent/test/compaction.test.ts",
+				markers: ["should support proactive percentage thresholds", "should preserve reserve-token budget", "compactionTriggerTokens"],
+			},
+			{
+				file: "docs/reverse-agent/README.md",
+				markers: ["triggerPercent", "warningPercent", "compactionTriggerTokens"],
+			},
+		],
+	},
+
 	{
 		id: "resume_contract_continuation",
 		description: "session_compact verifies the resume contract; re_context resume exact-loads a contextPath/compactionEntryId and records auto-resume telemetry.",

@@ -1,6 +1,7 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { type Component, truncateToWidth, visibleWidth } from "@pi-recon/repi-tui";
 import type { AgentSession } from "../../../core/agent-session.ts";
+import { compactionTriggerTokens, DEFAULT_COMPACTION_SETTINGS } from "../../../core/compaction/index.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
 import { theme } from "../theme/theme.ts";
 
@@ -144,16 +145,29 @@ export class FooterComponent implements Component {
 			statsParts.push(costStr);
 		}
 
-		// Colorize context percentage based on usage
+		// Colorize context percentage based on the same auto-compaction settings used by AgentSession.
 		let contextPercentStr: string;
-		const autoIndicator = this.autoCompactEnabled ? " (auto)" : "";
+		const compactionSettings = this.session.settingsManager?.getCompactionSettings?.() ?? DEFAULT_COMPACTION_SETTINGS;
+		const compactionTriggerPercent =
+			contextWindow > 0
+				? (compactionTriggerTokens(contextWindow, compactionSettings) / contextWindow) * 100
+				: undefined;
+		const errorThreshold = compactionTriggerPercent ?? 90;
+		const configuredWarningThreshold = compactionSettings.warningPercent ?? 70;
+		const warningThreshold = Math.min(configuredWarningThreshold, Math.max(0, errorThreshold - 5));
+		const autoIndicator =
+			this.autoCompactEnabled && compactionTriggerPercent !== undefined
+				? ` (auto@${compactionTriggerPercent.toFixed(0)}%)`
+				: this.autoCompactEnabled
+					? " (auto)"
+					: "";
 		const contextPercentDisplay =
 			contextPercent === "?"
 				? `?/${formatTokens(contextWindow)}${autoIndicator}`
 				: `${contextPercent}%/${formatTokens(contextWindow)}${autoIndicator}`;
-		if (contextPercentValue > 90) {
+		if (contextPercentValue > errorThreshold) {
 			contextPercentStr = theme.fg("error", contextPercentDisplay);
-		} else if (contextPercentValue > 70) {
+		} else if (contextPercentValue > warningThreshold) {
 			contextPercentStr = theme.fg("warning", contextPercentDisplay);
 		} else {
 			contextPercentStr = contextPercentDisplay;

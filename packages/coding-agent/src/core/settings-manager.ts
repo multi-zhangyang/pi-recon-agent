@@ -10,6 +10,8 @@ export interface CompactionSettings {
 	enabled?: boolean; // default: true
 	reserveTokens?: number; // default: 16384
 	keepRecentTokens?: number; // default: 20000
+	triggerPercent?: number; // optional: compact when context reaches this percentage of contextWindow
+	warningPercent?: number; // optional: UI/docs warning threshold for long-running harnesses
 }
 
 export interface BranchSummarySettings {
@@ -758,11 +760,29 @@ export class SettingsManager {
 		return this.settings.compaction?.keepRecentTokens ?? 20000;
 	}
 
-	getCompactionSettings(): { enabled: boolean; reserveTokens: number; keepRecentTokens: number } {
+	getCompactionTriggerPercent(): number | undefined {
+		const value = this.settings.compaction?.triggerPercent;
+		return typeof value === "number" && value > 0 && value < 100 ? value : undefined;
+	}
+
+	getCompactionWarningPercent(): number | undefined {
+		const value = this.settings.compaction?.warningPercent;
+		return typeof value === "number" && value > 0 && value < 100 ? value : undefined;
+	}
+
+	getCompactionSettings(): {
+		enabled: boolean;
+		reserveTokens: number;
+		keepRecentTokens: number;
+		triggerPercent?: number;
+		warningPercent?: number;
+	} {
 		return {
 			enabled: this.getCompactionEnabled(),
 			reserveTokens: this.getCompactionReserveTokens(),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(),
+			triggerPercent: this.getCompactionTriggerPercent(),
+			warningPercent: this.getCompactionWarningPercent(),
 		};
 	}
 
