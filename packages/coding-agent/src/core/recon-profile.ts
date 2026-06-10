@@ -982,6 +982,145 @@ type SwarmSubagentRuntimeManifestRow = SwarmSubagentRuntimeManifestV1 & {
 	runtimeManifestFile: string;
 };
 
+type WorkerRuntimePoolWorkerV1 = {
+	workerId: string;
+	role: string;
+	route: string;
+	packetId: string;
+	attempt: number;
+	maxAttempts: number;
+	retryBudget: SwarmRuntimeRetryBudget;
+	resourceLease: {
+		cpuSlots: number;
+		memoryMb: number;
+		maxProcesses: number;
+	};
+	timeoutMs: number;
+	status: SwarmRuntimeState | "passed" | "failed" | "timeout" | "retry_queued" | "exhausted";
+	startedAt?: string;
+	endedAt?: string;
+	cancelledAt?: string;
+	sessionDir: string;
+	stdoutPath: string;
+	stderrPath: string;
+	stdoutSha256: string;
+	stderrSha256: string;
+	toolCallDigest: string;
+	mergeKey: string | string[];
+	claimRefs: string[];
+};
+
+type WorkerRuntimePoolV1 = {
+	kind: "WorkerRuntimePoolV1";
+	schemaVersion: 1;
+	poolId: string;
+	maxConcurrency: number;
+	timeoutMs: number;
+	cancelOnTimeout: boolean;
+	resourceBudget: {
+		cpuSlots: number;
+		memoryMb: number;
+		maxProcesses: number;
+	};
+	workers: WorkerRuntimePoolWorkerV1[];
+	parallelGroups: {
+		groupId: string;
+		workers: string[];
+		dependsOn: string[];
+		maxConcurrency: number;
+	}[];
+	mergeProtocol: {
+		strategy: "claim-aware merge";
+		evidenceContract: string[];
+		conflicts: {
+			mergeKey: string;
+			workers: string[];
+			status: "resolved" | "unresolved";
+			winner?: string;
+			evidenceRefs: string[];
+			resolutionReason?: string;
+		}[];
+	};
+	claimLedgerEvents: SwarmClaimLedgerEventV1[];
+};
+
+function workerRuntimePoolEvidenceContract(): string[] {
+	return [
+		"worker stdout/stderr sha256 must match captured artifacts",
+		"timeout/cancel must be explicit when elapsedMs exceeds timeoutMs",
+		"retryBudget signature/attempt/remaining/exhausted must be consistent",
+		"resourceLease must fit the pool resourceBudget and group maxConcurrency",
+		"claim-aware merge must resolve duplicate mergeKey conflicts before supervisor promotion",
+		"each promoted worker claim must have artifact_handoff → claim → validation → challenge → resolution",
+	];
+}
+
+function claimAwareWorkerMergeProtocol(pool: WorkerRuntimePoolV1): string[] {
+	const resolved = new Set(pool.mergeProtocol.conflicts.filter((row) => row.status === "resolved").map((row) => row.mergeKey));
+	const collisions = new Map<string, string[]>();
+	for (const worker of pool.workers) {
+		for (const key of Array.isArray(worker.mergeKey) ? worker.mergeKey : [worker.mergeKey]) {
+			const rows = collisions.get(key) ?? [];
+			rows.push(worker.workerId);
+			collisions.set(key, rows);
+		}
+	}
+	return Array.from(collisions.entries()).flatMap(([mergeKey, workers]) => {
+		if (workers.length <= 1) return [];
+		if (resolved.has(mergeKey)) return [`mergeKey=${mergeKey} resolved workers=${workers.join(",")}`];
+		return [`mergeKey=${mergeKey} unresolved workers=${workers.join(",")} -> supervisor block`];
+	});
+}
+
+function verifyWorkerRuntimePool(pool: WorkerRuntimePoolV1): { ok: boolean; errors: string[]; evidenceContract: string[] } {
+	const errors: string[] = [];
+	const maxConcurrency = Math.max(1, Math.floor(pool.maxConcurrency));
+	const activePoints = pool.workers.flatMap((worker) => {
+		const start = worker.startedAt ? Date.parse(worker.startedAt) : Number.NaN;
+		const end = worker.endedAt ? Date.parse(worker.endedAt) : Number.NaN;
+		if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return [];
+		if (end - start > worker.timeoutMs && worker.status !== "timeout" && worker.status !== "cancelled")
+			errors.push(`timeout_not_marked:${worker.workerId}`);
+		if (worker.status === "timeout" && pool.cancelOnTimeout && !worker.cancelledAt)
+			errors.push(`timeout_without_cancel:${worker.workerId}`);
+		if (worker.attempt > worker.maxAttempts) errors.push(`attempt_exceeds_maxAttempts:${worker.workerId}`);
+		if (worker.retryBudget.remaining !== Math.max(0, worker.maxAttempts - worker.attempt))
+			errors.push(`retryBudget_remaining_inconsistent:${worker.workerId}`);
+		if (worker.retryBudget.exhausted !== (worker.attempt >= worker.maxAttempts))
+			errors.push(`retryBudget_exhausted_inconsistent:${worker.workerId}`);
+		if (worker.status === "retry_queued" && worker.retryBudget.exhausted)
+			errors.push(`exhausted_still_retrying:${worker.workerId}`);
+		if (worker.resourceLease.cpuSlots > pool.resourceBudget.cpuSlots) errors.push(`resource_cpu_exceeds_budget:${worker.workerId}`);
+		if (worker.resourceLease.memoryMb > pool.resourceBudget.memoryMb) errors.push(`resource_memory_exceeds_budget:${worker.workerId}`);
+		if (worker.resourceLease.maxProcesses > pool.resourceBudget.maxProcesses) errors.push(`resource_process_exceeds_budget:${worker.workerId}`);
+		return [
+			{ t: start, delta: 1 },
+			{ t: end, delta: -1 },
+		];
+	});
+	let active = 0;
+	for (const point of activePoints.sort((left, right) => left.t - right.t || left.delta - right.delta)) {
+		active += point.delta;
+		if (active > maxConcurrency) errors.push(`maxConcurrency_exceeded:${active}>${maxConcurrency}`);
+	}
+	if (claimAwareWorkerMergeProtocol(pool).some((row) => row.includes("unresolved"))) errors.push("duplicate_mergeKey_unresolved");
+	const eventTypes = new Map<string, Set<string>>();
+	for (const event of pool.claimLedgerEvents) {
+		const id = event.claimId ?? event.claimIds?.[0];
+		if (!id) continue;
+		const types = eventTypes.get(id) ?? new Set<string>();
+		types.add(event.type);
+		eventTypes.set(id, types);
+	}
+	for (const claimId of pool.workers.flatMap((worker) => worker.claimRefs)) {
+		const types = eventTypes.get(claimId);
+		for (const required of ["artifact_handoff", "claim", "validation", "challenge", "resolution"]) {
+			if (!types?.has(required)) errors.push(`claim_without_${required}:${claimId}`);
+		}
+	}
+	return { ok: errors.length === 0, errors: uniqueNonEmpty(errors, 80), evidenceContract: workerRuntimePoolEvidenceContract() };
+}
+
 type ReconParallelPlanWorkerV1 = {
 	id: string;
 	role: string;
@@ -1022,6 +1161,7 @@ type SwarmClaimLedgerEventV1 = {
 	source: "re_swarm";
 	type: "artifact_handoff" | "claim" | "validation" | "challenge" | "resolution";
 	claimId?: string;
+	claimIds?: string[];
 	workerId?: string;
 	role?: string;
 	scope?: string;
@@ -1742,6 +1882,54 @@ type MemoryRetrievalHit = {
 	reasons: string[];
 };
 
+type MemoryDistilledPatternV1 = {
+	kind: "repi-memory-distilled-pattern";
+	schemaVersion: 1;
+	id: string;
+	caseSignature: string;
+	route: string;
+	target?: string;
+	patternType: "command_template" | "failure_pattern" | "verifier_rule" | "worker_routing_hint" | "tool_repair_rule";
+	lifecycle: "candidate" | "promoted" | "quarantined" | "stale" | "contradicted";
+	confidence: number;
+	sourceEventIds: string[];
+	sourceHashes: string[];
+	commands: string[];
+	reuseRules: string[];
+	failurePatterns: string[];
+	evidenceRefs: string[];
+	summary: string;
+	quarantinedReason?: string;
+	entryHash: string;
+};
+
+type MemoryContaminationFindingV1 = {
+	caseSignature: string;
+	status: "clean" | "quarantine";
+	reasons: string[];
+	eventIds: string[];
+	routes: string[];
+	targets: string[];
+	quarantinedReason?: string;
+};
+
+type MemoryDistillationReportV1 = {
+	kind: "repi-memory-distillation-report";
+	schemaVersion: 1;
+	generatedAt: string;
+	hashChainOk: boolean;
+	patterns: MemoryDistilledPatternV1[];
+	quarantine: MemoryContaminationFindingV1[];
+	injectionPlan: {
+		mandatory_memory_injection_chain: ["retrieve", "rank", "inject", "execute", "verify", "feedback"];
+		retrievalReport: string;
+		distillationReport: string;
+		patternBook: string;
+		quarantine: string;
+		promotedPatternIds: string[];
+	};
+};
+
 type KnowledgeNode = {
 	id: string;
 	kind: string;
@@ -2302,7 +2490,7 @@ const RECON_PROMPTS = [
 		description: "整理当前任务并写入 REPI 长期记忆",
 		argumentHint: "[scene/title]",
 		content:
-			"将当前会话中可复用的逆向/渗透经验写入 re_memory：目标、路由、证据、有效方法、失败路线、复现命令、下次复用。",
+			"将当前会话中可复用的逆向/渗透经验写入 REPI Memory v3：目标、路由、证据、有效方法、失败路线、复现命令、下次复用；写入后可调用 re_memory search-events / consolidate / distill，生成 distillation-report、pattern-book 与 quarantine。",
 	},
 ];
 
@@ -2332,6 +2520,18 @@ function caseMemoryPath(): string {
 
 function memoryRetrievalReportPath(): string {
 	return memoryPath("retrieval-report.json");
+}
+
+function memoryDistillationReportPath(): string {
+	return memoryPath("distillation-report.json");
+}
+
+function memoryPatternBookPath(): string {
+	return memoryPath("pattern-book.md");
+}
+
+function memoryQuarantinePath(): string {
+	return memoryPath("quarantine.json");
 }
 
 function missionPath(name: string): string {
@@ -2526,6 +2726,15 @@ function ensureReconStorage(): void {
 		[
 			memoryRetrievalReportPath(),
 			`${JSON.stringify({ kind: "repi-memory-retrieval-report", schemaVersion: 1, query: "", hits: [] }, null, 2)}\n`,
+		],
+		[
+			memoryDistillationReportPath(),
+			`${JSON.stringify({ kind: "repi-memory-distillation-report", schemaVersion: 1, patterns: [], quarantine: [] }, null, 2)}\n`,
+		],
+		[memoryPatternBookPath(), "# REPI Memory Pattern Book\n\n"],
+		[
+			memoryQuarantinePath(),
+			`${JSON.stringify({ kind: "repi-memory-contamination-quarantine", schemaVersion: 1, findings: [] }, null, 2)}\n`,
 		],
 		[evidenceLedgerPath(), "# REPI Evidence Ledger\n\n"],
 		[toolIndexPath(), "# REPI Tool Index\n\n"],
@@ -23876,6 +24085,259 @@ function consolidateMemoryEvents(): string {
 	].join("\n");
 }
 
+function memoryPatternHash(pattern: Omit<MemoryDistilledPatternV1, "entryHash">): string {
+	return sha256Text(JSON.stringify(pattern));
+}
+
+function memoryCommandTemplate(command: string, target?: string): string | undefined {
+	let normalized = command.trim();
+	if (!normalized) return undefined;
+	if (target) normalized = normalized.split(target).join("<target>");
+	normalized = normalized.replace(/https?:\/\/[^\s'"`]+/gi, "<target>");
+	if (/(?:password|secret|api[_-]?key)\s*=|Bearer\s+(?!<token>)[A-Za-z0-9._-]{12,}/i.test(normalized)) return undefined;
+	return normalized;
+}
+
+function memoryTargetScope(target?: string): string {
+	const raw = String(target ?? "").trim();
+	if (!raw) return "";
+	try {
+		return new URL(raw).host.toLowerCase();
+	} catch {
+		return raw.toLowerCase();
+	}
+}
+
+function detectMemoryContamination(
+	events = readMemoryEvents(),
+	options?: { now?: string },
+): MemoryContaminationFindingV1[] {
+	const now = Date.parse(options?.now ?? new Date().toISOString());
+	const byCase = new Map<string, MemoryEventV1[]>();
+	for (const event of events) {
+		const rows = byCase.get(event.caseSignature) ?? [];
+		rows.push(event);
+		byCase.set(event.caseSignature, rows);
+	}
+	const findings: MemoryContaminationFindingV1[] = [];
+	for (const [caseSignature, rows] of byCase) {
+		const routes = uniqueNonEmpty(rows.map((event) => event.route.toLowerCase()), 12);
+		const targets = uniqueNonEmpty(rows.map((event) => memoryTargetScope(event.target)), 16);
+		const successes = rows.filter((event) => event.outcome === "success");
+		const failures = rows.filter((event) => event.outcome === "failure" || event.outcome === "blocked");
+		const highConfidenceFailures = failures.filter((event) => event.quality.confidence >= 0.78);
+		const latest = Math.max(...rows.map((event) => Date.parse(event.ts)).filter(Number.isFinite), 0);
+		const ageDays = latest > 0 && Number.isFinite(now) ? Math.floor((now - latest) / 86_400_000) : 0;
+		const failurePressure = failures.length + rows.reduce((sum, event) => sum + event.quality.failureCount, 0);
+		const reasons = uniqueNonEmpty(
+			[
+				routes.length > 1 ? `cross_route_contamination:${routes.join(",")}` : undefined,
+				targets.length > 2 ? `cross_target_contamination:${targets.join(",")}` : undefined,
+				successes.length > 0 && highConfidenceFailures.length > 0
+					? "contradicted_success_failure_high_confidence"
+					: undefined,
+				ageDays > 180 && successes.length === 0 ? `stale_negative_memory:${ageDays}d` : undefined,
+				failurePressure >= Math.max(2, successes.length + 2) ? `failure_pressure:${failurePressure}` : undefined,
+			],
+			8,
+		);
+		findings.push({
+			caseSignature,
+			status: reasons.length ? "quarantine" : "clean",
+			reasons,
+			eventIds: rows.map((event) => event.id),
+			routes,
+			targets,
+			quarantinedReason: reasons.join("; ") || undefined,
+		});
+	}
+	return findings;
+}
+
+function memoryPatternFrom(input: Omit<MemoryDistilledPatternV1, "kind" | "schemaVersion" | "entryHash">): MemoryDistilledPatternV1 {
+	const pattern = {
+		kind: "repi-memory-distilled-pattern" as const,
+		schemaVersion: 1 as const,
+		...input,
+	};
+	return { ...pattern, entryHash: memoryPatternHash(pattern) };
+}
+
+function distillMemoryPatterns(options?: { route?: string; target?: string; now?: string }): MemoryDistillationReportV1 {
+	ensureReconStorage();
+	const events = readMemoryEvents().filter((event) => {
+		if (options?.route && !memoryRouteMatches(event.route, options.route)) return false;
+		if (options?.target && event.target && !memoryTargetScope(event.target).includes(memoryTargetScope(options.target))) return false;
+		return true;
+	});
+	const contamination = detectMemoryContamination(events, { now: options?.now });
+	const quarantineByCase = new Map(contamination.map((finding) => [finding.caseSignature, finding]));
+	const byCase = new Map<string, MemoryEventV1[]>();
+	for (const event of events) {
+		const rows = byCase.get(event.caseSignature) ?? [];
+		rows.push(event);
+		byCase.set(event.caseSignature, rows);
+	}
+	const patterns: MemoryDistilledPatternV1[] = [];
+	for (const [caseSignature, rows] of byCase) {
+		const finding = quarantineByCase.get(caseSignature);
+		if (finding?.status === "quarantine") continue;
+		const successes = rows.filter((event) => event.outcome === "success");
+		const failures = rows.filter((event) => event.outcome === "failure" || event.outcome === "blocked");
+		const best = [...successes].sort(
+			(left, right) => right.quality.confidence - left.quality.confidence || right.seq - left.seq,
+		)[0];
+		const confidence = Math.max(...rows.map((event) => event.quality.confidence), 0);
+		const commands = uniqueNonEmpty(
+			successes.flatMap((event) => event.commands.map((command) => memoryCommandTemplate(command, event.target))),
+			16,
+		);
+		const evidenceRefs = uniqueNonEmpty(rows.flatMap((event) => event.artifactHashes.map((artifact) => artifact.path)), 40);
+		const sourceEventIds = rows.map((event) => event.id);
+		const sourceHashes = rows.map((event) => event.entryHash);
+		if (best && commands.length > 0 && confidence >= 0.72) {
+			patterns.push(
+				memoryPatternFrom({
+					id: `pattern:${caseSignature}:command_template`,
+					caseSignature,
+					route: best.route,
+					target: best.target,
+					patternType: "command_template",
+					lifecycle: best.quality.replayVerified ? "promoted" : "candidate",
+					confidence,
+					sourceEventIds,
+					sourceHashes,
+					commands,
+					reuseRules: uniqueNonEmpty(rows.flatMap((event) => event.reuseRules), 16),
+					failurePatterns: uniqueNonEmpty(rows.flatMap((event) => event.failurePatterns), 16),
+					evidenceRefs,
+					summary: uniqueNonEmpty([best.lessons[0], best.reuseRules[0], best.task], 3).join(" | "),
+				}),
+			);
+		}
+		if (successes.some((event) => event.quality.replayVerified || event.promotion.verifierRuleCandidate)) {
+			patterns.push(
+				memoryPatternFrom({
+					id: `pattern:${caseSignature}:verifier_rule`,
+					caseSignature,
+					route: best?.route ?? rows[0]?.route ?? "manual",
+					target: best?.target,
+					patternType: "verifier_rule",
+					lifecycle: "candidate",
+					confidence: Math.min(0.93, confidence),
+					sourceEventIds,
+					sourceHashes,
+					commands: uniqueNonEmpty(["re_verifier matrix", "re_replayer run", ...commands], 12),
+					reuseRules: uniqueNonEmpty(
+						["Require replay/verifier evidence before promoting this claim.", ...rows.flatMap((event) => event.reuseRules)],
+						16,
+					),
+					failurePatterns: uniqueNonEmpty(failures.flatMap((event) => event.failurePatterns), 16),
+					evidenceRefs,
+					summary: `Verifier rule distilled from ${successes.length} successful event(s) for ${caseSignature}.`,
+				}),
+			);
+		}
+		const workerHints = uniqueNonEmpty(rows.map((event) => event.promotion.workerRoutingHint), 8);
+		if (workerHints.length > 0) {
+			patterns.push(
+				memoryPatternFrom({
+					id: `pattern:${caseSignature}:worker_routing_hint`,
+					caseSignature,
+					route: best?.route ?? rows[0]?.route ?? "manual",
+					target: best?.target,
+					patternType: "worker_routing_hint",
+					lifecycle: confidence >= 0.75 ? "promoted" : "candidate",
+					confidence,
+					sourceEventIds,
+					sourceHashes,
+					commands: workerHints.map((hint) => `route worker=${hint}`),
+					reuseRules: workerHints.map((hint) => `Prefer ${hint} for matching ${caseSignature} evidence gaps.`),
+					failurePatterns: uniqueNonEmpty(failures.flatMap((event) => event.failurePatterns), 16),
+					evidenceRefs,
+					summary: `Worker routing hint distilled for ${caseSignature}: ${workerHints.join(", ")}`,
+				}),
+			);
+		}
+	}
+	const report: MemoryDistillationReportV1 = {
+		kind: "repi-memory-distillation-report",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		hashChainOk: memoryEventHashChainOk(readMemoryEvents()),
+		patterns,
+		quarantine: contamination.filter((finding) => finding.status === "quarantine"),
+		injectionPlan: {
+			mandatory_memory_injection_chain: ["retrieve", "rank", "inject", "execute", "verify", "feedback"],
+			retrievalReport: memoryRetrievalReportPath(),
+			distillationReport: memoryDistillationReportPath(),
+			patternBook: memoryPatternBookPath(),
+			quarantine: memoryQuarantinePath(),
+			promotedPatternIds: patterns.filter((pattern) => pattern.lifecycle === "promoted").map((pattern) => pattern.id),
+		},
+	};
+	writeFileSync(memoryDistillationReportPath(), `${JSON.stringify(report, null, 2)}\n`, "utf-8");
+	writeFileSync(
+		memoryQuarantinePath(),
+		`${JSON.stringify({ kind: "repi-memory-contamination-quarantine", schemaVersion: 1, findings: report.quarantine }, null, 2)}\n`,
+		"utf-8",
+	);
+	writeFileSync(
+		memoryPatternBookPath(),
+		[
+			"# REPI Memory Pattern Book",
+			"",
+			"memory_pattern_book:",
+			`generated_at: ${report.generatedAt}`,
+			`hash_chain_ok: ${report.hashChainOk}`,
+			`mandatory_memory_injection_chain: ${report.injectionPlan.mandatory_memory_injection_chain.join(" -> ")}`,
+			"patterns:",
+			...(patterns.length
+				? patterns.map(
+						(pattern) =>
+							`- id=${pattern.id} lifecycle=${pattern.lifecycle} route=${pattern.route} confidence=${pattern.confidence.toFixed(2)} commands=${pattern.commands.length} summary=${truncateMiddle(pattern.summary, 180)}`,
+					)
+				: ["- none"]),
+			"memory_contamination_quarantine:",
+			...(report.quarantine.length
+				? report.quarantine.map(
+						(finding) =>
+							`- case=${finding.caseSignature} reasons=${finding.reasons.join(",")} events=${finding.eventIds.join(",")}`,
+					)
+				: ["- none"]),
+			"",
+		].join("\n"),
+		"utf-8",
+	);
+	return report;
+}
+
+function formatMemoryDistillation(report = distillMemoryPatterns()): string {
+	return [
+		"memory_v3_distillation:",
+		`hash_chain_ok=${report.hashChainOk}`,
+		`patterns=${report.patterns.length}`,
+		`quarantine=${report.quarantine.length}`,
+		`distillation_report=${memoryDistillationReportPath()}`,
+		`pattern_book=${memoryPatternBookPath()}`,
+		`quarantine_path=${memoryQuarantinePath()}`,
+		`mandatory_memory_injection_chain=${report.injectionPlan.mandatory_memory_injection_chain.join(" -> ")}`,
+		"promoted_patterns:",
+		...(report.patterns.filter((pattern) => pattern.lifecycle === "promoted").length
+			? report.patterns
+					.filter((pattern) => pattern.lifecycle === "promoted")
+					.map(
+						(pattern) =>
+							`- ${pattern.id} route=${pattern.route} confidence=${pattern.confidence.toFixed(2)} commands=${pattern.commands.length}`,
+					)
+			: ["- none"]),
+		"memory_contamination_quarantine:",
+		...(report.quarantine.length
+			? report.quarantine.map((finding) => `- ${finding.caseSignature} reasons=${finding.reasons.join(",")}`)
+			: ["- none"]),
+	].join("\n");
+}
+
 function replayMemoryOutcome(replay: ReplayArtifact): MemoryOutcome {
 	if (replay.mode !== "run") return "partial";
 	if (replay.passed > 0 && replay.failed === 0 && replay.blocked.length === 0) return "success";
@@ -24290,7 +24752,7 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 	});
 	pi.registerCommand("re-memory", {
 		description:
-			"Read, append, evolve, search, consolidate, or maintain REPI memory: /re-memory [show|events|search|append|evolve|consolidate|playbooks|prune-playbooks] ...",
+			"Read, append, evolve, search, consolidate, distill, or maintain REPI memory: /re-memory [show|events|search|append|evolve|consolidate|distill|playbooks|prune-playbooks] ...",
 		handler: async (args) => {
 			const trimmed = args.trim();
 			if (trimmed.startsWith("append ")) {
@@ -24337,6 +24799,12 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 			}
 			if (trimmed === "consolidate") {
 				sendDisplayMessage(pi, "REPI Memory Consolidation", consolidateMemoryEvents());
+				return;
+			}
+			if (trimmed === "distill") {
+				const report = distillMemoryPatterns();
+				updateMissionGate("memory_or_evolution_written", "done", `memory_v3_distillation patterns=${report.patterns.length} quarantine=${report.quarantine.length}`);
+				sendDisplayMessage(pi, "REPI Memory Distillation", formatMemoryDistillation(report));
 				return;
 			}
 			if (trimmed === "playbooks") {
@@ -25046,6 +25514,7 @@ function installReconTools(pi: ExtensionAPI): void {
 				Type.Literal("append"),
 				Type.Literal("evolve"),
 				Type.Literal("consolidate"),
+				Type.Literal("distill"),
 				Type.Literal("playbooks"),
 				Type.Literal("prune-playbooks"),
 			]),
@@ -25104,6 +25573,19 @@ function installReconTools(pi: ExtensionAPI): void {
 				return {
 					content: [{ type: "text" as const, text }],
 					details: { events: memoryEventsPath(), caseMemory: caseMemoryPath() } as Record<string, unknown>,
+				};
+			}
+			if (params.action === "distill") {
+				const report = distillMemoryPatterns();
+				const text = formatMemoryDistillation(report);
+				updateMissionGate("memory_or_evolution_written", "done", `memory_v3_distillation patterns=${report.patterns.length} quarantine=${report.quarantine.length}`);
+				return {
+					content: [{ type: "text" as const, text }],
+					details: {
+						distillationReport: memoryDistillationReportPath(),
+						patternBook: memoryPatternBookPath(),
+						quarantine: memoryQuarantinePath(),
+					} as Record<string, unknown>,
 				};
 			}
 			if (params.action === "playbooks" || params.action === "prune-playbooks") {

@@ -371,10 +371,23 @@ const REQUIREMENTS = [
 					"invalid_resume_transition",
 				],
 			},
+			{
+				id: "worker_runtime_pool_contract_gate",
+				description: "WorkerRuntimePoolV1 hard-eval 覆盖真实调度应有的 maxConcurrency、timeout/cancel、resource lease、retryBudget 和 claim-aware merge 负例。",
+				files: ["scripts/reverse-agent/worker-runtime-pool-gate.mjs", "fixtures/reverse-agent/worker-runtime-pool.fixture.json"],
+				markers: [
+					"WorkerRuntimePoolV1",
+					"maxConcurrency_exceeded",
+					"timeout_without_cancel",
+					"duplicate_mergeKey_unresolved",
+					"exhausted_still_retrying",
+					"claim-aware merge",
+				],
+			},
 		],
 		hardeningNeeded: [
-			"让 shard plan 支持真实并发执行、依赖检查、timeout/cancel、资源配额和多 shard result merge。",
-			"把 worker merge 从文本摘要升级为 structured claim merge，并在 supervisor 前阻断缺证据或冲突 claim。",
+			"把 WorkerRuntimePoolV1 离线 hard-eval 接入真实 child session/provider runtime，形成 live timeout/cancel/resource lease 回归证据。",
+			"把 worker merge 从文本摘要升级为 structured claim merge，并在 supervisor 前阻断缺证据或冲突 claim；离线 duplicate mergeKey 负例已由 gate:worker-runtime-pool 保护。",
 			"把 re_swarm command-level SubagentRuntimeManifestV1 继续升级为可选独立 Pi child session/provider runtime。",
 		],
 		recommendedWork: [
@@ -424,6 +437,29 @@ const REQUIREMENTS = [
 				description: "公开文档记录 context/resume pack、owned compaction 和 audit harness，不依赖 upstream compact 说明。",
 				files: ["docs/reverse-agent/README.md"],
 				markers: ["Context/resume pack 闭环", "REPI owned compaction kernel update", "context-compact-audit.mjs"],
+			},
+			{
+				id: "memory_v3_distiller_quarantine",
+				description: "Memory v3 不只保留事件，还把经验蒸馏为 pattern-book，并隔离跨 route/陈旧/矛盾/污染 case。",
+				files: ["packages/coding-agent/src/core/recon-profile.ts"],
+				markers: [
+					"MemoryDistilledPatternV1",
+					"distillMemoryPatterns",
+					"mandatory_memory_injection_chain",
+					"memory_contamination_quarantine",
+				],
+			},
+			{
+				id: "memory_v3_distiller_gate",
+				description: "Memory v3 distiller gate 覆盖 promote/quarantine/hash drift/低置信负例。",
+				files: ["scripts/reverse-agent/memory-distiller-gate.mjs"],
+				markers: ["repi-memory-distiller-gate", "mandatory_memory_injection_chain", "memory_contamination_quarantine"],
+			},
+			{
+				id: "memory_v3_distiller_fixture",
+				description: "Memory v3 fixture 包含跨 route 污染、陈旧失败和 mandatory injection chain 场景。",
+				files: ["fixtures/reverse-agent/memory-distiller.fixture.json"],
+				markers: ["repi-memory-distiller-fixture", "case-cross-route-pollution", "mustHaveInjectionStages"],
 			},
 		],
 		hardeningNeeded: [

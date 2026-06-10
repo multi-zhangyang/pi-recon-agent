@@ -245,7 +245,7 @@ function staticContractChecks() {
 	checks.push(markerCheck("profile:runtime-config-knowledge", "repi-profile/SYSTEM.md", ["model_provider_configuration_runtime", "~/.repi/agent/models.json", "openai-completions", "anthropic-messages", "repi --list-models", "triggerPercent"], []));
 	checks.push(markerCheck("prompt:repi-config", "repi-profile/prompts/repi-config.md", ["~/.repi/agent/models.json", "OpenAI-compatible", "anthropic-messages", "triggerPercent=85"], []));
 	checks.push(markerCheck("docs:runtime-configuration", "docs/reverse-agent/repi-runtime-configuration.md", ["model_provider_configuration_runtime", "~/.repi/agent/models.json", "repi --offline", "openai-completions", "triggerPercent"], []));
-	checks.push(markerCheck("npm:top-harness-script", "package.json", ["gate:repi-harness", "gate:repi-product", "gate:repi-isolation", "gate:repi-product-surface", "gate:context-compact", "gate:compact-resume-chain", "gate:memory-contract", "gate:memory-utility", "gate:memory-feedback", "gate:memory-hybrid", "install:repi", "clean:repi-legacy-profile"], ["install:recon-pi", "gate:pi-recon-primary"]));
+	checks.push(markerCheck("npm:top-harness-script", "package.json", ["gate:repi-harness", "gate:repi-product", "gate:repi-isolation", "gate:repi-product-surface", "gate:context-compact", "gate:compact-resume-chain", "gate:memory-contract", "gate:memory-utility", "gate:memory-feedback", "gate:memory-hybrid", "gate:memory-distiller", "gate:worker-runtime-pool", "install:repi", "clean:repi-legacy-profile"], ["install:recon-pi", "gate:pi-recon-primary"]));
 	checks.push(markerCheck("memory:v2-runtime-contract", "packages/coding-agent/src/core/recon-profile.ts", ["type MemoryEventV1", "function appendMemoryEvent", "function appendReplayerMemoryEvent", "appendReplayerMemoryEvent(replay, path)", "function appendAutofixMemoryEvent", "appendAutofixMemoryEvent(autofix, path)", "function appendProofLoopMemoryEvent", "appendProofLoopMemoryEvent(proof, path)", "function appendCompletionMemoryEvent", "appendCompletionMemoryEvent(audit", "function searchMemoryEvents", "memory_event_reuse", "events.jsonl", "case-memory.jsonl"], []));
 	checks.push(markerCheck("memory:v2-schema-fixture", "schemas/reverse-agent/memory-event.schema.json", ["MemoryEventV1", "CaseMemoryV1", "MemoryRetrievalReportV1", "confidence"], []));
 	checks.push(markerCheck("memory:utility-hard-eval", "scripts/reverse-agent/memory-utility-gate.mjs", ["repi-memory-utility-gate", "scenario:", "mustSuggestCommands", "mustNotSuggestCommands", "routeMatches"], []));
@@ -254,6 +254,10 @@ function staticContractChecks() {
 	checks.push(markerCheck("memory:feedback-fixture", "fixtures/reverse-agent/memory-feedback.fixture.json", ["repi-memory-feedback-fixture", "success-feedback-promotes-source-case", "failure-feedback-demotes-bad-case", "memory_reuse_feedback_demote"], []));
 	checks.push(markerCheck("memory:hybrid-hard-eval", "scripts/reverse-agent/memory-hybrid-gate.mjs", ["repi-memory-hybrid-gate", "memory_semantic_hybrid_reuse", "case-memory-hybrid", "artifact-hybrid"], []));
 	checks.push(markerCheck("memory:hybrid-fixture", "fixtures/reverse-agent/memory-hybrid.fixture.json", ["repi-memory-hybrid-fixture", "semantic-authz-recall", "artifact-pcap-recall", "mustHaveTopReasonPrefixes"], []));
+	checks.push(markerCheck("memory:v3-distiller-hard-eval", "scripts/reverse-agent/memory-distiller-gate.mjs", ["repi-memory-distiller-gate", "mandatory_memory_injection_chain", "memory_contamination_quarantine"], []));
+	checks.push(markerCheck("memory:v3-distiller-fixture", "fixtures/reverse-agent/memory-distiller.fixture.json", ["repi-memory-distiller-fixture", "case-cross-route-pollution", "mustHaveInjectionStages"], []));
+	checks.push(markerCheck("swarm:worker-runtime-pool-hard-eval", "scripts/reverse-agent/worker-runtime-pool-gate.mjs", ["repi-worker-runtime-pool-gate", "maxConcurrency_exceeded", "timeout_without_cancel", "duplicate_mergeKey_unresolved"], []));
+	checks.push(markerCheck("swarm:worker-runtime-pool-fixture", "fixtures/reverse-agent/worker-runtime-pool.fixture.json", ["repi-worker-runtime-pool-fixture", "WorkerRuntimePoolV1", "claim-aware merge"], []));
 	checks.push(markerCheck("compact:resume-chain-hard-eval", "scripts/reverse-agent/compact-resume-chain-gate.mjs", ["repi-compact-resume-chain-gate", "verifyContextPack", "verifyLedger", "verifyTransitions", "verifyTelemetry", "invalid_resume_transition"], []));
 	checks.push(markerCheck("compact:resume-chain-fixture", "fixtures/reverse-agent/compact-resume-chain.fixture.json", ["repi-compact-resume-chain-fixture", "resumeTransitions", "autoResumeTelemetry", "negativeCases", "compact_resume_success_skip_low_value_lane"], []));
 	checks.push(markerCheck("ci:repi-harness-template", "docs/reverse-agent/repi-harness.github-actions.yml", ["REPI Independent Harness", "npm ci --ignore-scripts", "npm run gate:repi-harness", "npm run check", "git diff --exit-code"], []));
@@ -410,6 +414,8 @@ function childGateChecks() {
 		["gate:memory-utility", ["scripts/reverse-agent/memory-utility-gate.mjs", root, "--strict"]],
 		["gate:memory-feedback", ["scripts/reverse-agent/memory-feedback-gate.mjs", root, "--strict"]],
 		["gate:memory-hybrid", ["scripts/reverse-agent/memory-hybrid-gate.mjs", root, "--strict"]],
+		["gate:memory-distiller", ["scripts/reverse-agent/memory-distiller-gate.mjs", root, "--strict"]],
+		["gate:worker-runtime-pool", ["scripts/reverse-agent/worker-runtime-pool-gate.mjs", root, "--strict"]],
 		["gate:autonomous-runtime", ["scripts/reverse-agent/autonomous-runtime-contracts.mjs", root, "--strict"]],
 		["gate:autonomy-control", ["scripts/reverse-agent/autonomy-control-plane.mjs", root, "--strict"]],
 	];

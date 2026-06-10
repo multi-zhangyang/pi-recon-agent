@@ -222,6 +222,6 @@ re_delegate plan 必须读取 worker_scoreboard 与 knowledge-graph-index/simila
 - `re_complete audit` 前保持逆向能力守卫：re_native_runtime、re_web_authz_state、compact_resume_case_memory、compact_resume_repair_from_case_memory、compact_resume_success_skip_low_value_lane、operator_command_floor、proof_exit_criteria、specialist_runtime_planner。
 
 
-## Memory v2
+## Memory v3
 
-长期记忆不要只写 Markdown。`re_reflect write`、`re_memory append/evolve` 应写入 `~/.repi/agent/recon/memory/events.jsonl`，再由 `case-memory.jsonl` 聚合 case signature；需要复用时先调用 `re_memory search-events`，必要时 `re_memory consolidate`。`re_replayer`、`re_autofix`、`re_proof_loop`、`re_complete` 必须把 runtime 结果自动写成 MemoryEventV1。`retrieval-report.json` 是最近一次检索的 score/reasons/hash-chain 报告。
+长期记忆不要只写 Markdown。`re_reflect write`、`re_memory append/evolve` 应写入 `~/.repi/agent/recon/memory/events.jsonl`，再由 `case-memory.jsonl` 聚合 case signature；需要复用时先调用 `re_memory search-events`，必要时 `re_memory consolidate` / `re_memory distill`。`re_replayer`、`re_autofix`、`re_proof_loop`、`re_complete` 必须把 runtime 结果自动写成 MemoryEventV1。`retrieval-report.json` 是最近一次检索的 score/reasons/hash-chain 报告；`distillation-report.json` / `pattern-book.md` / `quarantine.json` 记录 Memory v3 蒸馏 pattern、mandatory_memory_injection_chain 和 memory_contamination_quarantine。

@@ -159,11 +159,12 @@ claim ledger、hard-eval score split 和 autonomous contracts gate，输出
 - `agent-dogfood/parallel-run.mjs` 已有 mapper/verifier/adversary/planner/synthesizer 多角色并发 runner，并记录 PID、session digest、model/tool call digest、overlap/speedup 等运行证据；每个 role / synthesizer attempt 还会写 `pi-recon-subagent-runtime-manifest`，包含 attempt、PID、exit code、stdout/stderr digest、session dir/files/tool result count 和 provider/model 摘要，并输出 runtime `claim-ledger.jsonl` 把 artifact_handoff、claim、validation、challenge、resolution 串成 hash chain。
 - `re_swarm` 与 `compound-frontier` 已写 runtime `claim-ledger.jsonl` / `claimLedger*` 字段，把 worker 或 compound frontier 的 artifact handoff、claim、validation、challenge、resolution 绑定到 hash chain 和 failure/repair queue。
 - `agent-dogfood/parallel-run.mjs --plan-json <path> --plan-only` 已能离线读取 `ReconParallelPlanV1`，归一化 workers/merge/evidence contract，并在不调用模型的情况下预览调度边界。
+- `gate:worker-runtime-pool` 已新增 `WorkerRuntimePoolV1` hard-eval，覆盖 `maxConcurrency`、resource lease、timeout/cancel、retryBudget、stdout/stderr hash、claim refs、claim-aware merge 与 exhausted retry 负例。
 
 仍需硬化：
 
 - 把 `re_swarm` 的 command-level worker packet 升级为可选独立 Pi agent/session runtime。
-- 将同类 runtime manifest 推广到通用 `re_swarm` worker，并补 timeout/cancel、artifact globs。
+- 将同类 runtime manifest 推广到通用 `re_swarm` worker，并把 `WorkerRuntimePoolV1` 合同接入真实 child session/provider runtime，而不是只停在离线 fixture。
 - shard plan 支持真实并发执行、多 shard result merge、取消/超时/重排队。
 - merge 前做 structured claim coverage，不再只靠文本摘要。
 
@@ -248,8 +249,8 @@ claim ledger、hard-eval score split 和 autonomous contracts gate，输出
 
 | 方向 | 现在能保证 | 不能夸大的部分 |
 |---|---|---|
-| 并行调度 | 能生成 `ReconParallelPlanV1`，能用 `--plan-json --plan-only` 离线预览 worker/merge/evidence contract，agent-dogfood 已有 subagent runtime manifest，re_swarm run 也会写 command-level `SubagentRuntimeManifestV1`、stdout/stderr、sessionDir 和 toolCallDigest。 | 还不是动态 autonomous scheduler；尚未完成跨入口统一调度、自动取消、工作窃取、实时重分片和 claim-aware merge 执行闭环，也还未把 re_swarm worker 升级成独立 Pi child session/provider runtime。 |
-| 长期上下文压缩 | `re_context`、`session_before_compact`、`session_compact`、context audit 已覆盖 context pack、resume contract、branch mismatch/hash drift/missing pack 等负例、evidence summarization 和 bounded resume。 | 还不能宣称无限长期记忆；仍需多次 compact、预算 exhausted、跨 session contamination 等更多负例和状态回写。 |
+| 并行调度 | 能生成 `ReconParallelPlanV1`，能用 `--plan-json --plan-only` 离线预览 worker/merge/evidence contract，agent-dogfood 已有 subagent runtime manifest，re_swarm run 也会写 command-level `SubagentRuntimeManifestV1`、stdout/stderr、sessionDir 和 toolCallDigest；`WorkerRuntimePoolV1` hard-eval 已覆盖并发、timeout/cancel、retryBudget、claim-aware merge 负例。 | 还不是动态 autonomous scheduler；尚未完成跨入口统一调度、自动取消、工作窃取、实时重分片和真实 child-session claim-aware merge 执行闭环，也还未把 re_swarm worker 升级成独立 Pi child session/provider runtime。 |
+| 长期上下文压缩/记忆 | `re_context`、`session_before_compact`、`session_compact`、context audit 已覆盖 context pack、resume contract、branch mismatch/hash drift/missing pack 等负例；Memory v3 已有 distillation-report、pattern-book、quarantine 和 mandatory injection chain。 | 还不能宣称无限长期记忆；仍需多次 compact、预算 exhausted、跨 session contamination、embedding/semantic index 和更多记忆污染回滚负例。 |
 | 失败自修复 | 已有 bounded retry、repair queue、hard-eval gaps、autofix/proof-loop、strict failure/repair schema fixture、duplicate rejection 和 compound/role retry rows。 | 还不是自动修好所有失败；plan-only 不执行 repair，真实修复仍需把 strict validator 接入更多 runtime regression、rollback criteria 和 passed-gate regression。 |
 | 自动分工验证 | 已有 role contract、hard-eval claim ledger、agent-dogfood / re_swarm / compound runtime claim ledger、runtime-claim-ledger adapter/gate、synthesizer reconciliation、score split、strict claim marker 和 runtime final path 阻断，能防止把 orchestration 成功写成平台 claim 成功。 | 仍需补齐 agent-dogfood/re_swarm live runtime artifacts、unresolved challenge 自动回流、claim-aware merge 和最终 claim promotion 全覆盖；每个 proven/final claim 仍需 artifact sha256、JSON query、verifier pass、无 unresolved adversary challenge。 |
 

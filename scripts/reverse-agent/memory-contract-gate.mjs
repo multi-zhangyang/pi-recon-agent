@@ -254,9 +254,9 @@ function main() {
 			"memory_event_reuse",
 			"<memory_events_tail>",
 		]),
-		markerCheck("docs:memory-v2-readme", "README.md", ["Memory v2", "events.jsonl", "case-memory.jsonl", "gate:memory-contract"]),
-		markerCheck("docs:memory-v2-recon", "packages/coding-agent/docs/recon.md", ["Memory v2", "events.jsonl", "search-events", "gate:memory-contract"]),
-		markerCheck("profile:memory-v2-knowledge", "repi-profile/SYSTEM.md", ["Memory v2", "events.jsonl", "case-memory.jsonl", "re_memory search-events"]),
+		markerCheck("docs:memory-v3-readme", "README.md", ["Memory v3", "events.jsonl", "case-memory.jsonl", "gate:memory-contract"]),
+		markerCheck("docs:memory-v3-recon", "packages/coding-agent/docs/recon.md", ["Memory v3", "events.jsonl", "search-events", "gate:memory-contract"]),
+		markerCheck("profile:memory-v3-knowledge", "repi-profile/SYSTEM.md", ["Memory v3", "events.jsonl", "case-memory.jsonl", "re_memory search-events"]),
 		markerCheck("npm:memory-contract-script", "package.json", ["gate:memory-contract", "memory-contract-gate.mjs"]),
 	);
 	const failed = checks.filter((check) => check.status !== "pass");

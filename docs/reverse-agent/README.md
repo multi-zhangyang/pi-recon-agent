@@ -192,7 +192,7 @@ REPI 的 `re_kernel` 内置 `authorized_task_bias`、`public_target_no_auto_refu
   - `re_exploit_lab`：模型可调用的 exploit/PoC 稳定化实验室工具，绑定 PoC inventory、环境 pin、多次 replay、flake triage 和 bundle manifest。
   - `re_mobile_runtime`：模型可调用的 APK/Android ADB/Frida runtime 工具，绑定 device/process map、Java crypto/String/native compare hooks、anti-debug checks 和 `mobile_runtime_artifact`。
   - `re_native_runtime`：模型可调用的 ELF/SO GDB/Pwn runtime 工具，绑定 binary inventory、mitigation matrix、loader/libc map、symbol/string map、GDB/crash/register anchors、pwntools scaffold 和 `native_runtime_artifact`。
-  - `re_memory`：模型可读写的长期记忆工具；`events` / `search-events` / `consolidate` 读取 Memory v2 结构化 ledger，`append` / `evolve` 同时写 Markdown 镜像与 `events.jsonl`。
+  - `re_memory`：模型可读写的长期记忆工具；`events` / `search-events` / `consolidate` / `distill` 读取 Memory v3 结构化 ledger、蒸馏 pattern book 与 contamination quarantine，`append` / `evolve` 同时写 Markdown 镜像与 `events.jsonl`。
   - `re_tool_index`：模型可刷新/读取的工具索引。
   - `re_mission`：模型可维护任务黑板、gates 和下一步。
   - `re_lane`：模型可推进/阻塞/新增 mission lanes，并按 lane/target 生成或执行命令包；执行结果会成为 runtime evidence，且自动附带下一 lane/命令建议。
@@ -371,6 +371,18 @@ agent-dogfood 以 `--plan-json --plan-only` 预览；runtime 层已经让 `re_sw
 已把 `claimGatePolicy` / `claimGateResult` 变成硬门禁，`gate:claim-release` 已生成机器可读
 strict marker，failure/repair ledger 已接收 runtime failed|blocked rows 并回流 operator /
 proof-loop；agent-dogfood 已写 per-attempt subagent runtime manifest 和 runtime claim-ledger hash chain；AutonomousRuntimeBatchV1 strict gate 已覆盖 subagent manifest、shard state、compact resume transition、repair budget 和 runtime claim promotion；re_swarm 与 compound-frontier 也已输出 runtime ClaimLedgerEventV1 hash chain；compound/role retry 已输出 canonical failure/repair rows。通用 re_swarm 独立子会话 runtime、更多 cross-session/multi-compact 负例和 runtime ledger regression wiring 属于继续硬化项，不影响当前专业组织 agent 使用。
+
+## Memory v3 蒸馏 / 污染隔离闭环
+
+`/re-memory distill` / `re_memory { "action": "distill" }` 会把 `events.jsonl` 的成功复现、失败反馈、artifact hash 和 worker hint 蒸馏为 `MemoryDistilledPatternV1`。输出位置：
+
+```text
+~/.repi/agent/recon/memory/distillation-report.json
+~/.repi/agent/recon/memory/pattern-book.md
+~/.repi/agent/recon/memory/quarantine.json
+```
+
+蒸馏后的 `memory_pattern_book` 包含 `command_template`、`verifier_rule`、`worker_routing_hint`，并记录 `mandatory_memory_injection_chain: retrieve -> rank -> inject -> execute -> verify -> feedback`。`detectMemoryContamination` 会把 cross-route、cross-target、高置信成功/失败矛盾、陈旧失败、高 failure pressure 的 case 写入 `memory_contamination_quarantine`，防止 Web/authz 经验污染 pwn/native/mobile，或把未验证/陈旧失败路线继续注入新计划。`npm run gate:memory-distiller` 使用 `fixtures/reverse-agent/memory-distiller.fixture.json` 覆盖 promote、quarantine、hash drift、低置信不提升等负例。
 
 ## Reflection/evolution 闭环
 
@@ -558,6 +570,14 @@ npm run gate:runtime-claim-ledger
 ```
 
 它会发现最新 `agent-parallel-dogfood`、`re_swarm`、`compound-frontier` runtime claim ledger，把 runtime `ClaimLedgerEventV1` 适配成 `validate-claim-ledger.mjs` strict input，并同时跑 `--allow-platform-gaps` 与 `--strict-claims`。缺失的 live runtime artifact 会以 `missing_runtime_artifact` 输出，不会伪装成 pass；已存在的 runtime ledger 必须通过 strict validator。
+
+Worker Runtime Pool hard-eval 用来把“并行 worker 是真的 runtime 组织”从叙述变成合同：
+
+```bash
+npm run gate:worker-runtime-pool
+```
+
+它验证 `WorkerRuntimePoolV1` 的 `maxConcurrency`、resource lease、timeout/cancel、retryBudget、stdout/stderr hash、claim refs、append-only claim ledger 与 claim-aware merge。负例包含超并发、timeout 未 cancel、duplicate mergeKey 未解决、retry budget 不一致、claim 缺 validation、stdout hash drift、exhausted 后继续 retry。这个 gate 先以离线 fixture 保护调度语义，后续可把同一合同接入真实独立 child session/provider runtime。
 
 `scripts/reverse-agent/autonomous-runtime-contracts.mjs . --strict` 验证 autonomous runtime strict fixture：subagent manifest、parallel shard state、compact resume transition、repair budget 与 runtime claim promotion gate。`scripts/reverse-agent/autonomous-contracts.mjs . --strict` 会把该 gate 纳入总控制合同，并继续聚合 `ReconParallelPlanV1`、`ResumeContractV2`、`FailureLedgerEventV1/RepairQueueItemV1`、`RoleContractV1/ClaimLedgerEventV1`。常用入口：
 
