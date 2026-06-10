@@ -1643,6 +1643,7 @@ type MemoryEventSource =
 	| "reflect"
 	| "complete"
 	| "proof_loop"
+	| "replayer"
 	| "autofix"
 	| "operator"
 	| "manual"
@@ -19583,6 +19584,7 @@ function writeReplayerArtifact(replay: ReplayArtifact): string {
 	});
 	if (replay.mode === "run") updateMissionGate("replay_ready", replay.executions.length ? "done" : "blocked", path);
 	appendRuntimeFailureRepairFromReplay(replay, path);
+	appendReplayerMemoryEvent(replay, path);
 	return path;
 }
 
@@ -19950,6 +19952,7 @@ function writeAutofixArtifact(autofix: AutofixArtifact): string {
 	});
 	updateMissionGate("autofix_ready", "done", path);
 	appendRuntimeFailureRepairFromAutofix(autofix, path);
+	appendAutofixMemoryEvent(autofix, path);
 	return path;
 }
 
@@ -20609,6 +20612,7 @@ function writeProofLoopArtifact(proof: ProofLoopArtifact): string {
 	});
 	updateMissionGate("proof_loop_ready", proof.verdict === "blocked" ? "blocked" : "done", path);
 	appendRuntimeFailureRepairFromProofLoop(proof, path);
+	appendProofLoopMemoryEvent(proof, path);
 	return path;
 }
 
@@ -22547,8 +22551,7 @@ function auditCompletion(): { ready: boolean; blockers: string[]; warnings: stri
 	return { ready: blockers.length === 0, blockers, warnings, mission };
 }
 
-function formatCompletionAudit(): string {
-	const audit = auditCompletion();
+function formatCompletionAuditFromAudit(audit: { ready: boolean; blockers: string[]; warnings: string[]; mission?: MissionState }): string {
 	return [
 		audit.ready ? "completion_status: ready" : "completion_status: blocked",
 		audit.mission ? formatMission(audit.mission) : "mission: none",
@@ -22563,9 +22566,14 @@ function formatCompletionAudit(): string {
 	].join("\n");
 }
 
+function formatCompletionAudit(): string {
+	return formatCompletionAuditFromAudit(auditCompletion());
+}
+
 function writeReportScaffold(title?: string): string {
 	ensureReconStorage();
 	const mission = readCurrentMission();
+	const audit = auditCompletion();
 	const date = new Date().toISOString().replace(/[:.]/g, "-");
 	const safeTitle = (title ?? mission?.route.domain ?? "pi-recon-report").replace(/[^a-z0-9._-]+/gi, "-").slice(0, 80);
 	const path = join(reportDir(), `${date}-${safeTitle}.md`);
@@ -22588,10 +22596,11 @@ function writeReportScaffold(title?: string): string {
 		"",
 		"## Completion Audit",
 		"",
-		formatCompletionAudit(),
+		formatCompletionAuditFromAudit(audit),
 		"",
 	].join("\n");
 	writeFileSync(path, body, "utf-8");
+	appendCompletionMemoryEvent(audit, path);
 	const strictClaim = strictClaimGateSnapshot();
 	updateMissionGate(
 		"report_or_writeup_ready",
@@ -23568,8 +23577,235 @@ function consolidateMemoryEvents(): string {
 				(row) =>
 					`- case=${row.caseSignature} route=${row.route} confidence=${row.quality.confidence.toFixed(2)} reuse=${row.quality.reuseCount} failures=${row.quality.failureCount} events=${row.eventIds.length} summary=${truncateMiddle(row.summary, 180)}`,
 				)
-			: ["- none"]),
+		: ["- none"]),
 	].join("\n");
+}
+
+function replayMemoryOutcome(replay: ReplayArtifact): MemoryOutcome {
+	if (replay.mode !== "run") return "partial";
+	if (replay.passed > 0 && replay.failed === 0 && replay.blocked.length === 0) return "success";
+	if (replay.failed > 0) return "repair";
+	if (replay.blocked.length > 0) return "blocked";
+	return "partial";
+}
+
+function appendReplayerMemoryEvent(replay: ReplayArtifact, artifactPath: string): MemoryEventV1 {
+	const outcome = replayMemoryOutcome(replay);
+	return appendMemoryEvent({
+		source: "replayer",
+		task: `replayer ${replay.mode} ${replay.target ?? replay.route ?? "security"}`,
+		route: replay.route,
+		target: replay.target,
+		domainTags: ["replayer", "replay_matrix", ...(replay.route ? [replay.route] : [])],
+		outcome,
+		lessons: uniqueNonEmpty(
+			[
+				`Replay ${replay.mode}: passed=${replay.passed} failed=${replay.failed} blocked=${replay.blocked.length} executed=${replay.executions.length}.`,
+				...replay.replayMatrix.slice(0, 8),
+			],
+			20,
+		),
+		failurePatterns: uniqueNonEmpty(
+			[
+				...replay.blocked,
+				...replay.executions
+					.filter((execution) => execution.status === "failed")
+					.map((execution) => `failed replay ${execution.stepId} exit=${execution.exit} command=${execution.command}`),
+			],
+			24,
+		),
+		reuseRules: uniqueNonEmpty(
+			[
+				outcome === "success"
+					? "Reuse the passed replay matrix before final claim promotion."
+					: "Route failed/blocked replay rows through re_autofix before final claim.",
+				...replay.nextActions,
+			],
+			24,
+		),
+		commands: uniqueNonEmpty(
+			[
+				...replay.steps.map((step) => step.command),
+				...replay.executions.map((execution) => execution.command),
+				...replay.nextActions,
+			],
+			40,
+		),
+		artifactPaths: uniqueNonEmpty([artifactPath, replay.compilerArtifact, ...replay.sourceArtifacts], 80),
+		confidence: replay.mode === "run" ? (outcome === "success" ? 0.86 : 0.72) : 0.58,
+		replayVerified: replay.passed > 0 && replay.failed === 0 && replay.blocked.length === 0,
+		playbookCandidate: outcome === "success",
+		verifierRuleCandidate: replay.replayMatrix.length > 0,
+	});
+}
+
+function autofixMemoryOutcome(autofix: AutofixArtifact): MemoryOutcome {
+	if (autofix.mode === "apply" && autofix.applied.length > 0 && autofix.failures.length === 0) return "success";
+	if (autofix.failures.length > 0 || autofix.patchQueue.length > 0 || autofix.commandSubstitutions.length > 0)
+		return "repair";
+	if (autofix.bootstrapQueue.length > 0 || autofix.evidenceRecaptureQueue.length > 0) return "partial";
+	return autofix.mode === "apply" ? "success" : "partial";
+}
+
+function appendAutofixMemoryEvent(autofix: AutofixArtifact, artifactPath: string): MemoryEventV1 {
+	const outcome = autofixMemoryOutcome(autofix);
+	return appendMemoryEvent({
+		source: "autofix",
+		task: `autofix ${autofix.mode} ${autofix.target ?? autofix.route ?? "security"}`,
+		route: autofix.route,
+		target: autofix.target,
+		domainTags: ["autofix", "repair_queue", ...(autofix.route ? [autofix.route] : [])],
+		outcome,
+		lessons: uniqueNonEmpty(
+			[
+				`Autofix ${autofix.mode}: failures=${autofix.failures.length} patch=${autofix.patchQueue.length} substitutions=${autofix.commandSubstitutions.length} bootstrap=${autofix.bootstrapQueue.length} recapture=${autofix.evidenceRecaptureQueue.length}.`,
+				...autofix.operatorFeedback.slice(0, 8),
+			],
+			24,
+		),
+		failurePatterns: uniqueNonEmpty(autofix.failures, 32),
+		reuseRules: uniqueNonEmpty(
+			[
+				"Replay failures must flow through patch/substitution/bootstrap/evidence-recapture queues before final claim.",
+				...autofix.nextOperatorQueue,
+			],
+			32,
+		),
+		commands: uniqueNonEmpty(
+			[
+				...autofix.patchQueue.map((item) => item.command),
+				...autofix.commandSubstitutions.map((item) => item.command),
+				...autofix.bootstrapQueue.map((item) => item.command),
+				...autofix.evidenceRecaptureQueue.map((item) => item.command),
+				...autofix.nextOperatorQueue,
+				...autofix.applied,
+			],
+			48,
+		),
+		artifactPaths: uniqueNonEmpty(
+			[artifactPath, autofix.replayArtifact, autofix.compilerArtifact, ...autofix.sourceArtifacts],
+			80,
+		),
+		confidence: autofix.mode === "apply" ? 0.78 : 0.64,
+		replayVerified: autofix.mode === "apply" && autofix.applied.length > 0,
+		playbookCandidate: outcome === "success" || outcome === "repair",
+		verifierRuleCandidate: true,
+	});
+}
+
+function proofLoopMemoryOutcome(proof: ProofLoopArtifact): MemoryOutcome {
+	if (proof.verdict === "ready") return "success";
+	if (proof.verdict === "needs_repair") return "repair";
+	if (proof.verdict === "blocked") return "blocked";
+	return "partial";
+}
+
+function appendProofLoopMemoryEvent(proof: ProofLoopArtifact, artifactPath: string): MemoryEventV1 {
+	const outcome = proofLoopMemoryOutcome(proof);
+	return appendMemoryEvent({
+		source: "proof_loop",
+		task: `proof_loop ${proof.mode} ${proof.target ?? proof.route ?? "security"}`,
+		route: proof.route,
+		target: proof.target,
+		domainTags: ["proof_loop", "verifier", "compiler", "replayer", "autofix", ...(proof.route ? [proof.route] : [])],
+		outcome,
+		lessons: uniqueNonEmpty(
+			[
+				`Proof loop ${proof.mode}: verdict=${proof.verdict} executed=${proof.executed.length} replay_steps=${proof.replaySteps} specialist_queue=${proof.specialistQueue.length}.`,
+				...proof.evidenceSummary,
+				...proof.gateStatus,
+			],
+			36,
+		),
+		failurePatterns: uniqueNonEmpty(
+			[
+				...proof.steps
+					.filter((step) => step.status === "blocked")
+					.map((step) => `${step.id}: ${step.reason ?? "blocked"} :: ${step.command}`),
+				...proof.operatorFeedbackQueue,
+				...proof.swarmRetryQueue,
+			],
+			36,
+		),
+		reuseRules: uniqueNonEmpty(
+			[
+				outcome === "success"
+					? "Proof loop reached ready; reuse verifier→compiler→replayer→knowledge→completion ordering."
+					: "Partial/repair proof loops should bridge delegate→swarm→supervisor before final claim.",
+				...proof.caseMemoryBridge,
+				...proof.swarmBridge,
+				...proof.nextActions,
+			],
+			48,
+		),
+		commands: uniqueNonEmpty(
+			[
+				...proof.steps.map((step) => step.command),
+				...proof.executed.map((execution) => execution.command),
+				...proof.nextActions,
+			],
+			64,
+		),
+		artifactPaths: uniqueNonEmpty([artifactPath, ...proof.sourceArtifacts, ...proof.bridgeArtifacts], 120),
+		confidence: proof.mode === "run" ? (outcome === "success" ? 0.9 : 0.76) : 0.62,
+		replayVerified: proof.verdict === "ready" || proof.executed.some((execution) => /re_replayer|replay_matrix/i.test(execution.output)),
+		playbookCandidate: outcome === "success" || outcome === "repair",
+		workerRoutingHint: proof.specialistQueue[0] ?? proof.swarmBridge[0],
+		verifierRuleCandidate: true,
+	});
+}
+
+function appendCompletionMemoryEvent(
+	audit: { ready: boolean; blockers: string[]; warnings: string[]; mission?: MissionState },
+	artifactPath?: string,
+): MemoryEventV1 | undefined {
+	if (!audit.mission) return undefined;
+	return appendMemoryEvent({
+		source: "complete",
+		task: `completion audit ${audit.mission.task}`,
+		route: audit.mission.route.domain,
+		target: audit.mission.task,
+		domainTags: ["completion", "claim_gate", audit.mission.route.domain],
+		outcome: audit.ready ? "success" : "blocked",
+		lessons: uniqueNonEmpty(
+			[
+				`Completion audit ${audit.ready ? "ready" : "blocked"}: blockers=${audit.blockers.length} warnings=${audit.warnings.length}.`,
+				...audit.warnings,
+			],
+			32,
+		),
+		failurePatterns: uniqueNonEmpty(audit.blockers, 48),
+		reuseRules: uniqueNonEmpty(
+			[
+				"Final output must include Outcome / Key Evidence / Verification / Next Step and an evidence block.",
+				audit.ready ? "All completion gates green; promote report scaffold/final answer." : "Blocked completion must return to operator/proof/autofix gates.",
+			],
+			16,
+		),
+		commands: uniqueNonEmpty(
+			[
+				"re_complete audit",
+				...(audit.ready ? ["re_complete scaffold"] : ["re_operator plan", "re_proof_loop run", "re_autofix plan"]),
+			],
+			16,
+		),
+		artifactPaths: uniqueNonEmpty(
+			[
+				artifactPath,
+				currentMissionPath(),
+				evidenceLedgerPath(),
+				latestContextPackArtifactPath(),
+				latestProofLoopArtifactPath(),
+				latestCompilerArtifactPath(),
+				latestSupervisorArtifactPath(),
+			],
+			80,
+		),
+		confidence: audit.ready ? 0.86 : 0.7,
+		replayVerified: audit.ready,
+		playbookCandidate: audit.ready,
+		verifierRuleCandidate: true,
+	});
 }
 
 async function refreshToolIndex(pi: ExtensionAPI): Promise<string> {
@@ -24196,7 +24432,19 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 				sendDisplayMessage(pi, "REPI Report Scaffold", `${path}\n\n${formatCompletionAudit()}`);
 				return;
 			}
-			sendDisplayMessage(pi, "REPI Completion Audit", formatCompletionAudit());
+			const audit = auditCompletion();
+			const memoryEvent = appendCompletionMemoryEvent(audit);
+			const refreshedAudit = memoryEvent ? auditCompletion() : audit;
+			sendDisplayMessage(
+				pi,
+				"REPI Completion Audit",
+				[
+					formatCompletionAuditFromAudit(refreshedAudit),
+					memoryEvent ? `\ncompletion_memory_event: ${memoryEvent.id}` : undefined,
+				]
+					.filter(Boolean)
+					.join("\n"),
+			);
 		},
 	});
 	pi.registerCommand("re-self-review", {
@@ -25398,9 +25646,21 @@ function installReconTools(pi: ExtensionAPI): void {
 				};
 			}
 			const audit = auditCompletion();
+			const memoryEvent = appendCompletionMemoryEvent(audit);
+			const refreshedAudit = memoryEvent ? auditCompletion() : audit;
 			return {
-				content: [{ type: "text" as const, text: formatCompletionAudit() }],
-				details: audit as unknown as Record<string, unknown>,
+				content: [
+					{
+						type: "text" as const,
+						text: [
+							formatCompletionAuditFromAudit(refreshedAudit),
+							memoryEvent ? `\ncompletion_memory_event: ${memoryEvent.id}` : undefined,
+						]
+							.filter(Boolean)
+							.join("\n"),
+					},
+				],
+				details: { ...refreshedAudit, memoryEvent } as unknown as Record<string, unknown>,
 			};
 		},
 	});

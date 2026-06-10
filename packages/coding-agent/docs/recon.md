@@ -51,7 +51,7 @@ The built-in profile creates these resources on demand:
 | Field journal | `~/.repi/agent/recon/memory/field-journal.md` | Reusable reverse/pentest observations |
 | Case index | `~/.repi/agent/recon/memory/case-index.md` | Searchable memory anchors |
 | Evolution log | `~/.repi/agent/recon/memory/evolution-log.md` | Agent improvement notes |
-| Memory v2 events | `~/.repi/agent/recon/memory/events.jsonl` | Append-only `MemoryEventV1` hash chain written by `re_reflect write`, `re_memory append/evolve`, and future completion/proof writebacks |
+| Memory v2 events | `~/.repi/agent/recon/memory/events.jsonl` | Append-only `MemoryEventV1` hash chain written by `re_reflect write`, `re_memory append/evolve`, `re_replayer`, `re_autofix`, `re_proof_loop`, and `re_complete` writebacks |
 | Memory v2 case memory | `~/.repi/agent/recon/memory/case-memory.jsonl` | `CaseMemoryV1` aggregated view keyed by case signature for cross-task reuse |
 | Memory v2 retrieval report | `~/.repi/agent/recon/memory/retrieval-report.json` | Last `re_memory search-events` report with hit scores, reasons, quality, and hash-chain status |
 | Auto playbooks | `~/.repi/agent/recon/memory/playbooks/*.md` | Scored reusable playbooks distilled from bounded `run-auto` chains |
@@ -171,7 +171,7 @@ The profile automatically routes security tasks during `before_agent_start`, inj
 ## Bootstrap and completion gates
 
 
-Memory v2 makes long-term memory machine-readable instead of relying only on Markdown. `re_memory events` shows recent structured `events.jsonl` rows, `re_memory search-events` writes `retrieval-report.json` and ranks by token match, route/target match, `quality.confidence`, replay verification, reuse count, failure count, and decay. `re_memory consolidate` summarizes latest `case-memory.jsonl` rows. `re_lane plan` also searches Memory v2 and emits `memory_event_reuse` when it merges commands from structured events. The contract is guarded by `schemas/reverse-agent/memory-event.schema.json`, `fixtures/reverse-agent/memory-event.fixture.json`, and `npm run gate:memory-contract`.
+Memory v2 makes long-term memory machine-readable instead of relying only on Markdown. Replay, autofix, proof-loop, and completion stages automatically write structured memory events, so successful and failed execution paths both survive compaction and future task planning. `re_memory events` shows recent structured `events.jsonl` rows, `re_memory search-events` writes `retrieval-report.json` and ranks by token match, route/target match, `quality.confidence`, replay verification, reuse count, failure count, and decay. `re_memory consolidate` summarizes latest `case-memory.jsonl` rows. `re_lane plan` also searches Memory v2 and emits `memory_event_reuse` when it merges commands from structured events. The contract is guarded by `schemas/reverse-agent/memory-event.schema.json`, `fixtures/reverse-agent/memory-event.fixture.json`, and `npm run gate:memory-contract`.
 
 `re_memory playbooks` generates `memory/playbooks/index.md` without moving files. `re_memory prune-playbooks` applies the maintenance policy (`minQuality`, `maxActive`, `maxAgeDays`) and moves low-quality, stale, or over-capacity playbooks to `memory/playbooks/archive/`.
 

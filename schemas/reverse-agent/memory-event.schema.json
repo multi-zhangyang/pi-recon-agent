@@ -53,7 +53,7 @@
         "id": { "type": "string", "pattern": "^mem:[a-f0-9]{20}$" },
         "seq": { "type": "integer", "minimum": 1 },
         "ts": { "type": "string", "format": "date-time" },
-        "source": { "type": "string", "enum": ["reflect", "complete", "proof_loop", "autofix", "operator", "manual", "knowledge_graph"] },
+        "source": { "type": "string", "enum": ["reflect", "complete", "proof_loop", "replayer", "autofix", "operator", "manual", "knowledge_graph"] },
         "task": { "type": "string", "minLength": 1 },
         "route": { "type": "string", "minLength": 1 },
         "target": { "type": "string" },

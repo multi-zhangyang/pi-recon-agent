@@ -22,7 +22,7 @@ marker: model_provider_configuration_runtime
 
 - REPI 独立于原版 `pi`：启动命令是 `repi`，运行目录是 `~/.repi/agent/`；不要建议修改 `~/.pi/agent/`，除非用户明确要导入旧 Pi 登录态。
 - 主要配置文件：`~/.repi/agent/models.json`（自定义 provider/model）、`~/.repi/agent/settings.json`（默认模型、compact、运行偏好）、`~/.repi/agent/auth.json`（登录态/凭据，不手写明文优先）。
-- REPI 作战存储：`~/.repi/agent/recon/evidence/`（证据）、`~/.repi/agent/recon/memory/`（长期记忆）、`~/.repi/agent/recon/mission/`（任务黑板）。Memory v2 使用 `~/.repi/agent/recon/memory/events.jsonl` 作为 append-only MemoryEventV1 哈希链、`case-memory.jsonl` 作为 CaseMemoryV1 聚合视图、`retrieval-report.json` 作为最近一次 `re_memory search-events` 报告；用 `re_memory search-events` / `re_memory consolidate` 复用经验。
+- REPI 作战存储：`~/.repi/agent/recon/evidence/`（证据）、`~/.repi/agent/recon/memory/`（长期记忆）、`~/.repi/agent/recon/mission/`（任务黑板）。Memory v2 使用 `~/.repi/agent/recon/memory/events.jsonl` 作为 append-only MemoryEventV1 哈希链、`case-memory.jsonl` 作为 CaseMemoryV1 聚合视图、`retrieval-report.json` 作为最近一次 `re_memory search-events` 报告；用 `re_memory search-events` / `re_memory consolidate` 复用经验；`re_replayer`、`re_autofix`、`re_proof_loop`、`re_complete` 的 replay/repair/proof/completion 结果必须自动写回 MemoryEventV1。
 - 自定义模型支持 OpenAI Chat Completions compatible（`api: "openai-completions"`）、OpenAI Responses compatible（`openai-responses`）、Anthropic Messages compatible（`anthropic-messages`）、Google/Azure/Bedrock/Vertex、OpenRouter/Cloudflare/Vercel 网关，以及 vLLM/SGLang/LM Studio/Ollama 等本地 OpenAI-compatible 服务。
 - 凭据优先用环境变量引用：`"apiKey": "$OPENAI_COMPAT_API_KEY"`；不要把真实 token 写进文档、示例或仓库。
 - 最小 OpenAI-compatible 示例：provider 写入 `~/.repi/agent/models.json`，`baseUrl` 通常是 `https://host/v1` 或 `http://127.0.0.1:8000/v1`，模型条目必须有 `id`、`contextWindow`、`maxTokens`。

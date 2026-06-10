@@ -398,7 +398,7 @@ re_memory { "action": "consolidate" }
 
 沉淀规则：
 
-- `re_reflect write` 会把 supervisor lessons / failure patterns / reuse rules / repair commands 同时写入 playbook 和 `events.jsonl`。
+- `re_reflect write` 会把 supervisor lessons / failure patterns / reuse rules / repair commands 同时写入 playbook 和 `events.jsonl`；`re_replayer` / `re_autofix` / `re_proof_loop` / `re_complete` 会把 replay 结果、修复队列、证明闭环和完成审计自动写回 MemoryEventV1。
 - `re_lane plan` 会读取 playbook、knowledge graph 和 `events.jsonl`，把高分结构化历史命令合入命令包，并在 notes 中显示 `memory_event_reuse`。
 - 每条 memory event 带 `quality.confidence`、`replayVerified`、`reuseCount`、`failureCount`、`decay`；检索时低置信、失败和衰减记录会降权。
 - 结构化契约由 `schemas/reverse-agent/memory-event.schema.json`、`fixtures/reverse-agent/memory-event.fixture.json` 和 `npm run gate:memory-contract` 保护。

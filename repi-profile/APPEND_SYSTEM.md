@@ -224,4 +224,4 @@ re_delegate plan 必须读取 worker_scoreboard 与 knowledge-graph-index/simila
 
 ## Memory v2
 
-长期记忆不要只写 Markdown。`re_reflect write`、`re_memory append/evolve` 应写入 `~/.repi/agent/recon/memory/events.jsonl`，再由 `case-memory.jsonl` 聚合 case signature；需要复用时先调用 `re_memory search-events`，必要时 `re_memory consolidate`。`retrieval-report.json` 是最近一次检索的 score/reasons/hash-chain 报告。
+长期记忆不要只写 Markdown。`re_reflect write`、`re_memory append/evolve` 应写入 `~/.repi/agent/recon/memory/events.jsonl`，再由 `case-memory.jsonl` 聚合 case signature；需要复用时先调用 `re_memory search-events`，必要时 `re_memory consolidate`。`re_replayer`、`re_autofix`、`re_proof_loop`、`re_complete` 必须把 runtime 结果自动写成 MemoryEventV1。`retrieval-report.json` 是最近一次检索的 score/reasons/hash-chain 报告。

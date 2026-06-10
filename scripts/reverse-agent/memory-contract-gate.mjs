@@ -54,7 +54,7 @@ const CASE_KEYS = [
 	"sourceEvents",
 	"lastEventHash",
 ];
-const SOURCES = new Set(["reflect", "complete", "proof_loop", "autofix", "operator", "manual", "knowledge_graph"]);
+const SOURCES = new Set(["reflect", "complete", "proof_loop", "replayer", "autofix", "operator", "manual", "knowledge_graph"]);
 const OUTCOMES = new Set(["success", "failure", "partial", "blocked", "repair"]);
 const TIERS = new Set(["runtime_artifact", "process_config", "persisted_state", "persisted_memory", "artifact"]);
 
@@ -242,6 +242,14 @@ function main() {
 			"function memoryEventsPath",
 			"function caseMemoryPath",
 			"function appendMemoryEvent",
+			"function appendReplayerMemoryEvent",
+			"function appendAutofixMemoryEvent",
+			"function appendProofLoopMemoryEvent",
+			"function appendCompletionMemoryEvent",
+			"appendReplayerMemoryEvent(replay, path)",
+			"appendAutofixMemoryEvent(autofix, path)",
+			"appendProofLoopMemoryEvent(proof, path)",
+			"appendCompletionMemoryEvent(audit",
 			"function searchMemoryEvents",
 			"memory_event_reuse",
 			"<memory_events_tail>",

@@ -40,7 +40,7 @@ REPI 在 `packages/coding-agent/src/core/recon-profile.ts`、`repi-profile/SYSTE
 | `repi-profile/extensions/reverse-pentest-core.ts` | 运行时核心：路由、记忆、工具索引、自审计、loop guard、compaction checkpoint、自定义工具 |
 | `repi-profile/skills/reverse-pentest-orchestrator/SKILL.md` | 安全任务总控 skill，按 reverse-skill 思维方式编排工作流 |
 | `repi-profile/prompts/*.md` | `/reverse`、`/websec`、`/jsre`、`/pwn`、`/pcap`、`/cloud`、`/identity`、`/memory`、`/audit-agent` 任务模板 |
-| `repi-profile/memory/*` | 长期经验、索引、自我进化记录；运行时使用 `~/.repi/agent/recon/memory/events.jsonl` / `case-memory.jsonl` / `retrieval-report.json` 作为 Memory v2 结构化事实源，Markdown journal/playbook 是人类可读镜像；`repi-profile/memory/playbooks/index.md` 记录 playbook 质量/年龄/状态，`repi-profile/memory/playbooks/archive/` 存放被淘汰的低质或过旧链路 |
+| `repi-profile/memory/*` | 长期经验、索引、自我进化记录；运行时使用 `~/.repi/agent/recon/memory/events.jsonl` / `case-memory.jsonl` / `retrieval-report.json` 作为 Memory v2 结构化事实源，`re_replayer` / `re_autofix` / `re_proof_loop` / `re_complete` 会自动写回 replay/repair/proof/completion 事件，Markdown journal/playbook 是人类可读镜像；`repi-profile/memory/playbooks/index.md` 记录 playbook 质量/年龄/状态，`repi-profile/memory/playbooks/archive/` 存放被淘汰的低质或过旧链路 |
 | `.repi-harness/evidence/kernel/*.md` | `re_kernel build|audit` 生成的 execution_kernel、kernel_artifact、directive_stack、refusal_to_execution_rules、tool_call_policy、artifact_contract 与 stall_recovery |
 | `.repi-harness/evidence/maps/*.md` | `re_map` 自动生成的被动目标/工作区快照：stat、manifest/config、route/auth 搜索、binary candidates、URL baseline |
 | `.repi-harness/evidence/browser/*.md` | `re_live_browser plan|run` 生成的 live_browser、request_response_log、auth_matrix、IDOR/BOLA probes、WebSocket probes 与 replay_commands |
