@@ -80,6 +80,8 @@ REPI 在 `packages/coding-agent/src/core/recon-profile.ts`、`repi-profile/SYSTE
 | `scripts/reverse-agent/memory-utility-gate.mjs` | Memory utility hard-eval：用 authz 跨目标迁移与 pwn replay fixture 验证正确召回、失败/陈旧降权、跨 route 命令污染阻断；对应 `npm run gate:memory-utility` |
 | `scripts/reverse-agent/memory-feedback-gate.mjs` | Memory reuse feedback hard-eval：验证 `re_lane run` 复用结构化记忆后的在线学习闭环，成功 promote、失败 demote，并阻断失败 case 命令继续污染；对应 `npm run gate:memory-feedback` |
 | `scripts/reverse-agent/memory-hybrid-gate.mjs` | Memory hybrid retrieval hard-eval：验证语义轻量召回、case-memory 文本召回、artifact path/tier 召回和 route 隔离；对应 `npm run gate:memory-hybrid` |
+| `scripts/reverse-agent/memory-distiller-gate.mjs` | Memory v3 distiller hard-eval：验证 promoted pattern、mandatory injection chain、memory_contamination_quarantine、hash drift 和低置信不提升；对应 `npm run gate:memory-distiller` |
+| `scripts/reverse-agent/memory-sedimentation-gate.mjs` | Memory v4 sedimentation hard-eval：验证 semantic-index、contradiction-ledger、mandatory_memory_injection_packet、artifact/verifier/quarantine/feedback 门禁；对应 `npm run gate:memory-sedimentation` |
 | `pi` | 非拥有型兼容 shim；不会启动 REPI，只会转交给 PATH 中的原版 Pi，找不到则提示使用 `repi` |
 | `repi` | REPI 独立产品入口，默认使用 `~/.repi/agent`；源码 wrapper 和 npm/bin 直启都会由 CLI bootstrap 自动启用 `--recon` 隔离参数 |
 | `scripts/reverse-agent/install-repi.sh` | 安装 `/usr/local/bin/repi`，初始化 `~/.repi/agent`，不会覆盖/删除普通 `pi` |
@@ -192,7 +194,7 @@ REPI 的 `re_kernel` 内置 `authorized_task_bias`、`public_target_no_auto_refu
   - `re_exploit_lab`：模型可调用的 exploit/PoC 稳定化实验室工具，绑定 PoC inventory、环境 pin、多次 replay、flake triage 和 bundle manifest。
   - `re_mobile_runtime`：模型可调用的 APK/Android ADB/Frida runtime 工具，绑定 device/process map、Java crypto/String/native compare hooks、anti-debug checks 和 `mobile_runtime_artifact`。
   - `re_native_runtime`：模型可调用的 ELF/SO GDB/Pwn runtime 工具，绑定 binary inventory、mitigation matrix、loader/libc map、symbol/string map、GDB/crash/register anchors、pwntools scaffold 和 `native_runtime_artifact`。
-  - `re_memory`：模型可读写的长期记忆工具；`events` / `search-events` / `consolidate` / `distill` 读取 Memory v3 结构化 ledger、蒸馏 pattern book 与 contamination quarantine，`append` / `evolve` 同时写 Markdown 镜像与 `events.jsonl`。
+  - `re_memory`：模型可读写的长期记忆工具；`events` / `search-events` / `consolidate` / `distill` / `sediment` 读取 Memory v4 结构化 ledger、蒸馏 pattern book、contamination quarantine、semantic-index、contradiction-ledger 与 mandatory injection packet，`append` / `evolve` 同时写 Markdown 镜像与 `events.jsonl`。
   - `re_tool_index`：模型可刷新/读取的工具索引。
   - `re_mission`：模型可维护任务黑板、gates 和下一步。
   - `re_lane`：模型可推进/阻塞/新增 mission lanes，并按 lane/target 生成或执行命令包；执行结果会成为 runtime evidence，且自动附带下一 lane/命令建议。
@@ -245,6 +247,8 @@ npm run gate:memory-contract
 npm run gate:memory-utility
 npm run gate:memory-feedback
 npm run gate:memory-hybrid
+npm run gate:memory-distiller
+npm run gate:memory-sedimentation
 npm run gate:repi-product
 npm run gate:repi-isolation
 
@@ -383,6 +387,19 @@ proof-loop；agent-dogfood 已写 per-attempt subagent runtime manifest 和 runt
 ```
 
 蒸馏后的 `memory_pattern_book` 包含 `command_template`、`verifier_rule`、`worker_routing_hint`，并记录 `mandatory_memory_injection_chain: retrieve -> rank -> inject -> execute -> verify -> feedback`。`detectMemoryContamination` 会把 cross-route、cross-target、高置信成功/失败矛盾、陈旧失败、高 failure pressure 的 case 写入 `memory_contamination_quarantine`，防止 Web/authz 经验污染 pwn/native/mobile，或把未验证/陈旧失败路线继续注入新计划。`npm run gate:memory-distiller` 使用 `fixtures/reverse-agent/memory-distiller.fixture.json` 覆盖 promote、quarantine、hash drift、低置信不提升等负例。
+
+## Memory v4 sedimentation / 强制注入包
+
+`/re-memory sediment` / `re_memory { "action": "sediment" }` 会把 MemoryEventV1、CaseMemoryV1 和 Memory v3 pattern 再沉淀为可被 planner 直接消费的 runtime packet：
+
+```text
+~/.repi/agent/recon/memory/semantic-index.json
+~/.repi/agent/recon/memory/contradiction-ledger.jsonl
+~/.repi/agent/recon/memory/injection-packet.json
+~/.repi/agent/recon/memory/sedimentation-report.json
+```
+
+Memory v4 sedimentation 的晋升规则是硬门禁：`artifact_sha256_required`、`promotion_requires_verifier_or_replay`、`quarantine_blocks_injection`、`feedback_writeback_required_after_execution`、`memory_sedimentation_grade>=70`。`re_lane plan` 会刷新 `injection-packet.json` 并把合格命令注入为 `memory-sediment:<eventId>:<n>`；`re_lane run` 执行后复用同一 feedback 闭环，成功提升、失败降权。`npm run gate:memory-sedimentation` 使用 `fixtures/reverse-agent/memory-sedimentation.fixture.json` 验证 artifact 缺失、verifier 缺失、cross-route quarantine、失败反馈 demote、hash-chain drift 等负例。
 
 ## Reflection/evolution 闭环
 

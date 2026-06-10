@@ -2251,6 +2251,76 @@ type MemoryDistillationReportV1 = {
 	};
 };
 
+
+type MemorySedimentationAction = "inject" | "retain" | "demote" | "quarantine" | "expire";
+
+type MemorySemanticIndexEntryV1 = {
+	kind: "repi-memory-semantic-index-entry";
+	schemaVersion: 1;
+	id: string;
+	eventId: string;
+	caseSignature: string;
+	route: string;
+	targetScope: string;
+	domainTags: string[];
+	normalizedTokens: string[];
+	commandFingerprints: string[];
+	artifactRefs: MemoryArtifactHash[];
+	verifierRefs: string[];
+	claimRefs: string[];
+	grade: number;
+	action: MemorySedimentationAction;
+	blockers: string[];
+	reuseSummary: string;
+};
+
+type MemoryContradictionLedgerEntryV1 = {
+	kind: "repi-memory-contradiction-ledger-entry";
+	schemaVersion: 1;
+	id: string;
+	caseSignature: string;
+	status: "quarantine" | "contradicted" | "stale" | "clean";
+	reasons: string[];
+	eventIds: string[];
+	routes: string[];
+	targets: string[];
+	entryHash: string;
+};
+
+type MemoryInjectionPacketV1 = {
+	kind: "repi-memory-injection-packet";
+	schemaVersion: 1;
+	generatedAt: string;
+	mandatory_memory_injection_packet: true;
+	budget: { maxEntries: number; maxCommands: number; maxTokens: number };
+	entries: MemorySemanticIndexEntryV1[];
+	commands: string[];
+	verifierRules: string[];
+	requiredGates: string[];
+	feedbackWriteback: string;
+};
+
+type MemorySedimentationReportV1 = {
+	kind: "repi-memory-sedimentation-report";
+	schemaVersion: 1;
+	generatedAt: string;
+	hashChainOk: boolean;
+	semanticIndexPath: string;
+	contradictionLedgerPath: string;
+	injectionPacketPath: string;
+	distillationReportPath: string;
+	entries: MemorySemanticIndexEntryV1[];
+	contradictions: MemoryContradictionLedgerEntryV1[];
+	injectionPacket: MemoryInjectionPacketV1;
+	policy: {
+		MemorySedimentationV1: true;
+		promotionRequiresArtifactSha256: true;
+		promotionRequiresVerifierOrReplay: true;
+		quarantineBlocksInjection: true;
+		failureFeedbackDemotes: true;
+	};
+};
+
 type KnowledgeNode = {
 	id: string;
 	kind: string;
@@ -2855,6 +2925,23 @@ function memoryQuarantinePath(): string {
 	return memoryPath("quarantine.json");
 }
 
+
+function memorySemanticIndexPath(): string {
+	return memoryPath("semantic-index.json");
+}
+
+function memoryContradictionLedgerPath(): string {
+	return memoryPath("contradiction-ledger.jsonl");
+}
+
+function memoryInjectionPacketPath(): string {
+	return memoryPath("injection-packet.json");
+}
+
+function memorySedimentationReportPath(): string {
+	return memoryPath("sedimentation-report.json");
+}
+
 function missionPath(name: string): string {
 	return join(reconDir(), "mission", name);
 }
@@ -3056,6 +3143,19 @@ function ensureReconStorage(): void {
 		[
 			memoryQuarantinePath(),
 			`${JSON.stringify({ kind: "repi-memory-contamination-quarantine", schemaVersion: 1, findings: [] }, null, 2)}\n`,
+		],
+		[
+			memorySemanticIndexPath(),
+			`${JSON.stringify({ kind: "repi-memory-semantic-index", schemaVersion: 1, entries: [] }, null, 2)}\n`,
+		],
+		[memoryContradictionLedgerPath(), ""],
+		[
+			memoryInjectionPacketPath(),
+			`${JSON.stringify({ kind: "repi-memory-injection-packet", schemaVersion: 1, entries: [], commands: [] }, null, 2)}\n`,
+		],
+		[
+			memorySedimentationReportPath(),
+			`${JSON.stringify({ kind: "repi-memory-sedimentation-report", schemaVersion: 1, entries: [], contradictions: [] }, null, 2)}\n`,
 		],
 		[evidenceLedgerPath(), "# REPI Evidence Ledger\n\n"],
 		[toolIndexPath(), "# REPI Tool Index\n\n"],
@@ -4861,6 +4961,26 @@ function structuredMemoryCommandCandidates(
 	const hits = searchMemoryEvents(query, { route: mission.route.domain, target, limit: 8 });
 	const candidates: MemoryCommandCandidate[] = [];
 	const caseMemory = latestCaseMemoryBySignature();
+	const eventsById = new Map(readMemoryEvents().map((event) => [event.id, event]));
+	const sedimentation = buildMemorySemanticIndex({ route: mission.route.domain, target, maxEntries: 8 });
+	for (const [entryIndex, entry] of sedimentation.injectionPacket.entries.entries()) {
+		if (!memoryRouteMatches(entry.route, mission.route.domain)) continue;
+		if (entry.blockers.length > 0) continue;
+		const event = eventsById.get(entry.eventId);
+		if (!event) continue;
+		for (const [commandIndex, command] of event.commands.entries()) {
+			const normalized = normalizeHistoricalCommand(command, event.target === "<none>" ? undefined : event.target, target);
+			if (!normalized) continue;
+			candidates.push({
+				label: `memory-sediment:${entry.eventId}:${commandIndex + 1}`,
+				command: normalized,
+				evidence: `mandatory memory injection packet event=${entry.eventId} grade=${entry.grade.toFixed(1)} case=${entry.caseSignature} packet=${memoryInjectionPacketPath()} index=${entryIndex + 1}`,
+				source: memoryInjectionPacketPath(),
+				score: Math.round(entry.grade) + 40,
+			});
+			if (candidates.length >= 8) break;
+		}
+	}
 	for (const hit of hits) {
 		if (!memoryRouteMatches(hit.event.route, mission.route.domain)) continue;
 		const caseRow = caseMemory.get(hit.event.caseSignature);
@@ -23203,6 +23323,12 @@ function buildMemoryDigest(): string {
 		"<case_index>",
 		truncateMiddle(readText(memoryPath("case-index.md")), 2000),
 		"</case_index>",
+		"<memory_sedimentation>",
+		truncateMiddle(readText(memorySedimentationReportPath()), 2400),
+		"</memory_sedimentation>",
+		"<mandatory_memory_injection_packet>",
+		truncateMiddle(readText(memoryInjectionPacketPath()), 2200),
+		"</mandatory_memory_injection_packet>",
 		"<field_journal_tail>",
 		truncateMiddle(readText(memoryPath("field-journal.md")), 3600),
 		"</field_journal_tail>",
@@ -23987,8 +24113,8 @@ function memoryReuseFeedbackReferences(pack: LaneCommandPack): MemoryReuseFeedba
 	const refs = new Map<string, MemoryReuseFeedbackReference>();
 	for (const command of pack.commands) {
 		const eventId =
-			/^memory-event:(mem:[a-f0-9]+):/i.exec(command.label)?.[1] ??
-			/structured memory event\s+(mem:[a-f0-9]+)/i.exec(command.evidence)?.[1];
+			/^memory-(?:event|sediment):(mem:[a-z0-9-]+):/i.exec(command.label)?.[1] ??
+			/(?:structured memory event|mandatory memory injection packet event=)\s*(mem:[a-z0-9-]+)/i.exec(command.evidence)?.[1];
 		if (!eventId) continue;
 		const caseSignature = /\bcase=([a-f0-9]{12,64})\b/i.exec(command.evidence)?.[1];
 		const score = Number(/\bscore=([0-9]+(?:\.[0-9]+)?)\b/i.exec(command.evidence)?.[1]);
@@ -24659,6 +24785,243 @@ function formatMemoryDistillation(report = distillMemoryPatterns()): string {
 	].join("\n");
 }
 
+
+function memoryCommandFingerprint(command: string, target?: string): string {
+	const template = memoryCommandTemplate(command, target) ?? command.trim();
+	return `cmd:${sha256Text(template.toLowerCase()).slice(0, 16)}:${truncateMiddle(template.replace(/\s+/g, " "), 120)}`;
+}
+
+function memoryVerifierRefs(event: MemoryEventV1): string[] {
+	const commandRefs = event.commands.filter((command) => /\bre_(?:verifier|replayer|proof_loop|complete)\b|\bnpm\s+run\s+gate:|\bpytest\b|\bvitest\b/i.test(command));
+	return uniqueNonEmpty(
+		[
+			...(event.quality.replayVerified ? [`replay_verified:event=${event.id}`] : []),
+			...(event.promotion.verifierRuleCandidate ? [`verifier_rule_candidate:event=${event.id}`] : []),
+			...commandRefs,
+		],
+		12,
+	);
+}
+
+function memoryClaimRefs(event: MemoryEventV1): string[] {
+	return uniqueNonEmpty(
+		[...event.lessons, ...event.reuseRules, ...event.failurePatterns]
+			.filter((line) => /\b(?:claim|verdict|evidence|artifact|offset|route|authz|primitive|signature|ioc|proof)\b/i.test(line))
+			.map((line) => truncateMiddle(line, 180)),
+		12,
+	);
+}
+
+function memorySedimentationTokens(event: MemoryEventV1, caseRow: CaseMemoryV1 | undefined): string[] {
+	const text = [memoryTextForSearch(event), memoryCaseTextForSearch(caseRow)].join("\n");
+	return uniqueNonEmpty([...memorySearchTokens(text), ...memoryHybridQueryTokens([...memorySearchTokens(text)].slice(0, 80))], 96);
+}
+
+function memorySedimentationGrade(params: {
+	event: MemoryEventV1;
+	caseRow?: CaseMemoryV1;
+	finding?: MemoryContaminationFindingV1;
+	patterns: MemoryDistilledPatternV1[];
+	now?: string;
+}): { grade: number; action: MemorySedimentationAction; blockers: string[] } {
+	const { event, caseRow, finding, patterns } = params;
+	const now = Date.parse(params.now ?? new Date().toISOString());
+	const ageDays = Number.isFinite(now) ? Math.max(0, Math.floor((now - Date.parse(event.ts)) / 86_400_000)) : 0;
+	const artifactReady = event.artifactHashes.some((artifact) => typeof artifact.sha256 === "string" && artifact.sha256.length >= 32);
+	const verifierReady = event.quality.replayVerified || event.promotion.verifierRuleCandidate || memoryVerifierRefs(event).length > 0;
+	const successful = event.outcome === "success" || event.outcome === "repair";
+	const failed = event.outcome === "failure" || event.outcome === "blocked";
+	const patternBoost = patterns.filter((pattern) => pattern.caseSignature === event.caseSignature && pattern.lifecycle !== "quarantined").length;
+	let grade = 0;
+	grade += event.quality.confidence * 38;
+	grade += event.quality.replayVerified ? 18 : 0;
+	grade += event.promotion.playbookCandidate ? 6 : 0;
+	grade += event.promotion.verifierRuleCandidate ? 7 : 0;
+	grade += successful ? 12 : 0;
+	grade += artifactReady ? 8 : 0;
+	grade += Math.min(10, event.quality.reuseCount * 2 + (caseRow?.quality.reuseCount ?? 0) * 1.5);
+	grade += Math.min(8, patternBoost * 2);
+	grade -= failed ? 18 : 0;
+	grade -= Math.min(22, event.quality.failureCount * 5 + (caseRow?.quality.failureCount ?? 0) * 3);
+	grade -= Math.min(18, event.quality.decay * 18 + ageDays * 0.03);
+	const blockers = uniqueNonEmpty(
+		[
+			finding?.status === "quarantine" ? `memory_contamination_quarantine:${finding.reasons.join(",")}` : undefined,
+			!artifactReady ? "artifact_sha256_missing" : undefined,
+			!verifierReady ? "verifier_or_replay_missing" : undefined,
+			failed ? `negative_outcome:${event.outcome}` : undefined,
+			ageDays > 365 && !successful ? `stale_memory:${ageDays}d` : undefined,
+		],
+		8,
+	);
+	const hardQuarantine = Boolean(
+		finding?.status === "quarantine" && finding.reasons.some((reason) => !/^failure_pressure:/i.test(reason)),
+	);
+	let action: MemorySedimentationAction = "retain";
+	if (hardQuarantine) action = "quarantine";
+	else if (ageDays > 540 && !successful) action = "expire";
+	else if (failed || grade < 34) action = "demote";
+	else if (grade >= 70 && successful && artifactReady && verifierReady && !finding?.reasons.length) action = "inject";
+	return { grade: Number(Math.max(0, Math.min(100, grade)).toFixed(2)), action, blockers };
+}
+
+function memoryContradictionEntry(finding: MemoryContaminationFindingV1): MemoryContradictionLedgerEntryV1 {
+	const status: MemoryContradictionLedgerEntryV1["status"] = finding.reasons.some((reason) => /contradicted/i.test(reason))
+		? "contradicted"
+		: finding.reasons.some((reason) => /stale/i.test(reason))
+			? "stale"
+			: finding.status;
+	const base = {
+		kind: "repi-memory-contradiction-ledger-entry" as const,
+		schemaVersion: 1 as const,
+		id: `memory-contradiction:${finding.caseSignature}`,
+		caseSignature: finding.caseSignature,
+		status,
+		reasons: finding.reasons,
+		eventIds: finding.eventIds,
+		routes: finding.routes,
+		targets: finding.targets,
+	};
+	return { ...base, entryHash: sha256Text(JSON.stringify(base)) };
+}
+
+function buildMemorySemanticIndex(options?: { route?: string; target?: string; now?: string; maxEntries?: number }): MemorySedimentationReportV1 {
+	ensureReconStorage();
+	const events = readMemoryEvents().filter((event) => {
+		if (options?.route && !memoryRouteMatches(event.route, options.route)) return false;
+		if (options?.target && event.target && !memoryTargetScope(event.target).includes(memoryTargetScope(options.target))) return false;
+		return true;
+	});
+	const caseMemory = latestCaseMemoryBySignature();
+	const distillation = distillMemoryPatterns({ route: options?.route, target: options?.target, now: options?.now });
+	const contamination = detectMemoryContamination(events, { now: options?.now });
+	const quarantineByCase = new Map(contamination.map((finding) => [finding.caseSignature, finding]));
+	const entries = events
+		.map((event) => {
+			const caseRow = caseMemory.get(event.caseSignature);
+			const finding = quarantineByCase.get(event.caseSignature);
+			const graded = memorySedimentationGrade({ event, caseRow, finding, patterns: distillation.patterns, now: options?.now });
+			const verifierRefs = memoryVerifierRefs(event);
+			const claimRefs = memoryClaimRefs(event);
+			const entry: MemorySemanticIndexEntryV1 = {
+				kind: "repi-memory-semantic-index-entry",
+				schemaVersion: 1,
+				id: `memory-semantic:${event.id}`,
+				eventId: event.id,
+				caseSignature: event.caseSignature,
+				route: event.route,
+				targetScope: memoryTargetScope(event.target),
+				domainTags: event.domainTags,
+				normalizedTokens: memorySedimentationTokens(event, caseRow),
+				commandFingerprints: uniqueNonEmpty(event.commands.map((command) => memoryCommandFingerprint(command, event.target)), 20),
+				artifactRefs: event.artifactHashes.filter((artifact) => artifact.sha256),
+				verifierRefs,
+				claimRefs,
+				grade: graded.grade,
+				action: graded.action,
+				blockers: graded.blockers,
+				reuseSummary: truncateMiddle(caseRow?.summary || uniqueNonEmpty([event.lessons[0], event.reuseRules[0], event.task], 3).join(" | "), 420),
+			};
+			return entry;
+		})
+		.sort((left, right) => right.grade - left.grade || left.eventId.localeCompare(right.eventId));
+	const byId = new Map(events.map((event) => [event.id, event]));
+	const contradictions = contamination
+		.filter((finding) => finding.status === "quarantine" || finding.reasons.length > 0)
+		.map(memoryContradictionEntry);
+	const injectable = entries
+		.filter((entry) => entry.action === "inject")
+		.slice(0, options?.maxEntries ?? 8);
+	const commands = uniqueNonEmpty(
+		injectable.flatMap((entry) => byId.get(entry.eventId)?.commands ?? []),
+		32,
+	);
+	const verifierRules = uniqueNonEmpty(
+		[
+			...injectable.flatMap((entry) => entry.verifierRefs),
+			...(injectable.length ? ["Verify injected memory with replay/verifier evidence before claim promotion."] : []),
+		],
+		32,
+	);
+	const injectionPacket: MemoryInjectionPacketV1 = {
+		kind: "repi-memory-injection-packet",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		mandatory_memory_injection_packet: true,
+		budget: { maxEntries: options?.maxEntries ?? 8, maxCommands: 32, maxTokens: 3500 },
+		entries: injectable,
+		commands,
+		verifierRules,
+		requiredGates: [
+			"artifact_sha256_required",
+			"promotion_requires_verifier_or_replay",
+			"quarantine_blocks_injection",
+			"feedback_writeback_required_after_execution",
+			"memory_sedimentation_grade>=70",
+		],
+		feedbackWriteback: "After executing an injected command, append MemoryEventV1 feedback with outcome, artifact sha256 and verifier result.",
+	};
+	const report: MemorySedimentationReportV1 = {
+		kind: "repi-memory-sedimentation-report",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		hashChainOk: memoryEventHashChainOk(readMemoryEvents()),
+		semanticIndexPath: memorySemanticIndexPath(),
+		contradictionLedgerPath: memoryContradictionLedgerPath(),
+		injectionPacketPath: memoryInjectionPacketPath(),
+		distillationReportPath: memoryDistillationReportPath(),
+		entries,
+		contradictions,
+		injectionPacket,
+		policy: {
+			MemorySedimentationV1: true,
+			promotionRequiresArtifactSha256: true,
+			promotionRequiresVerifierOrReplay: true,
+			quarantineBlocksInjection: true,
+			failureFeedbackDemotes: true,
+		},
+	};
+	writeFileSync(
+		memorySemanticIndexPath(),
+		`${JSON.stringify({ kind: "repi-memory-semantic-index", schemaVersion: 1, generatedAt: report.generatedAt, entries }, null, 2)}\n`,
+		"utf-8",
+	);
+	writeFileSync(memoryContradictionLedgerPath(), `${contradictions.map((entry) => JSON.stringify(entry)).join("\n")}${contradictions.length ? "\n" : ""}`, "utf-8");
+	writeFileSync(memoryInjectionPacketPath(), `${JSON.stringify(injectionPacket, null, 2)}\n`, "utf-8");
+	writeFileSync(memorySedimentationReportPath(), `${JSON.stringify(report, null, 2)}\n`, "utf-8");
+	return report;
+}
+
+function formatMemorySedimentation(report = buildMemorySemanticIndex()): string {
+	const counts = report.entries.reduce<Record<string, number>>((acc, entry) => {
+		acc[entry.action] = (acc[entry.action] ?? 0) + 1;
+		return acc;
+	}, {});
+	return [
+		"memory_v4_sedimentation:",
+		`hash_chain_ok=${report.hashChainOk}`,
+		`semantic_index=${report.semanticIndexPath}`,
+		`contradiction_ledger=${report.contradictionLedgerPath}`,
+		`mandatory_memory_injection_packet=${report.injectionPacketPath}`,
+		`distillation_report=${report.distillationReportPath}`,
+		`memory_sedimentation_grade_policy=artifact_sha256+verifier_or_replay+feedback_decay+quarantine`,
+		`counts=inject:${counts.inject ?? 0},retain:${counts.retain ?? 0},demote:${counts.demote ?? 0},quarantine:${counts.quarantine ?? 0},expire:${counts.expire ?? 0}`,
+		"injectable_entries:",
+		...(report.injectionPacket.entries.length
+			? report.injectionPacket.entries.map(
+					(entry) =>
+						`- event=${entry.eventId} grade=${entry.grade.toFixed(1)} route=${entry.route} case=${entry.caseSignature} artifacts=${entry.artifactRefs.length} verifiers=${entry.verifierRefs.length}`,
+				)
+			: ["- none"]),
+		"contradictions_or_quarantine:",
+		...(report.contradictions.length
+			? report.contradictions.map((entry) => `- case=${entry.caseSignature} status=${entry.status} reasons=${entry.reasons.join(",")}`)
+			: ["- none"]),
+		"required_gates:",
+		...report.injectionPacket.requiredGates.map((gate) => `- ${gate}`),
+	].join("\n");
+}
+
 function replayMemoryOutcome(replay: ReplayArtifact): MemoryOutcome {
 	if (replay.mode !== "run") return "partial";
 	if (replay.passed > 0 && replay.failed === 0 && replay.blocked.length === 0) return "success";
@@ -25073,7 +25436,7 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 	});
 	pi.registerCommand("re-memory", {
 		description:
-			"Read, append, evolve, search, consolidate, distill, or maintain REPI memory: /re-memory [show|events|search|append|evolve|consolidate|distill|playbooks|prune-playbooks] ...",
+			"Read, append, evolve, search, consolidate, distill, sediment, or maintain REPI memory: /re-memory [show|events|search|append|evolve|consolidate|distill|sediment|playbooks|prune-playbooks] ...",
 		handler: async (args) => {
 			const trimmed = args.trim();
 			if (trimmed.startsWith("append ")) {
@@ -25126,6 +25489,12 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 				const report = distillMemoryPatterns();
 				updateMissionGate("memory_or_evolution_written", "done", `memory_v3_distillation patterns=${report.patterns.length} quarantine=${report.quarantine.length}`);
 				sendDisplayMessage(pi, "REPI Memory Distillation", formatMemoryDistillation(report));
+				return;
+			}
+			if (trimmed === "sediment" || trimmed === "index" || trimmed === "inject") {
+				const report = buildMemorySemanticIndex();
+				updateMissionGate("memory_or_evolution_written", "done", `memory_v4_sedimentation inject=${report.injectionPacket.entries.length} contradictions=${report.contradictions.length}`);
+				sendDisplayMessage(pi, "REPI Memory Sedimentation", formatMemorySedimentation(report));
 				return;
 			}
 			if (trimmed === "playbooks") {
@@ -25823,7 +26192,7 @@ function installReconTools(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "re_memory",
 		label: "RE Memory",
-		description: "Read, search, append, evolve, or maintain REPI long-term memory and playbooks.",
+		description: "Read, search, append, evolve, distill, sediment, or maintain REPI long-term memory and playbooks.",
 		promptSnippet: "Use long-term reverse/pentest memory for reusable evidence and lessons.",
 		promptGuidelines: ["Before repeating a known security workflow, inspect re_memory for similar cases."],
 		parameters: Type.Object({
@@ -25836,6 +26205,9 @@ function installReconTools(pi: ExtensionAPI): void {
 				Type.Literal("evolve"),
 				Type.Literal("consolidate"),
 				Type.Literal("distill"),
+				Type.Literal("sediment"),
+				Type.Literal("index"),
+				Type.Literal("inject"),
 				Type.Literal("playbooks"),
 				Type.Literal("prune-playbooks"),
 			]),
@@ -25906,6 +26278,20 @@ function installReconTools(pi: ExtensionAPI): void {
 						distillationReport: memoryDistillationReportPath(),
 						patternBook: memoryPatternBookPath(),
 						quarantine: memoryQuarantinePath(),
+					} as Record<string, unknown>,
+				};
+			}
+			if (params.action === "sediment" || params.action === "index" || params.action === "inject") {
+				const report = buildMemorySemanticIndex();
+				const text = formatMemorySedimentation(report);
+				updateMissionGate("memory_or_evolution_written", "done", `memory_v4_sedimentation inject=${report.injectionPacket.entries.length} contradictions=${report.contradictions.length}`);
+				return {
+					content: [{ type: "text" as const, text }],
+					details: {
+						semanticIndex: memorySemanticIndexPath(),
+						contradictionLedger: memoryContradictionLedgerPath(),
+						injectionPacket: memoryInjectionPacketPath(),
+						sedimentationReport: memorySedimentationReportPath(),
 					} as Record<string, unknown>,
 				};
 			}
