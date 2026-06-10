@@ -245,9 +245,11 @@ function staticContractChecks() {
 	checks.push(markerCheck("profile:runtime-config-knowledge", "repi-profile/SYSTEM.md", ["model_provider_configuration_runtime", "~/.repi/agent/models.json", "openai-completions", "anthropic-messages", "repi --list-models", "triggerPercent"], []));
 	checks.push(markerCheck("prompt:repi-config", "repi-profile/prompts/repi-config.md", ["~/.repi/agent/models.json", "OpenAI-compatible", "anthropic-messages", "triggerPercent=85"], []));
 	checks.push(markerCheck("docs:runtime-configuration", "docs/reverse-agent/repi-runtime-configuration.md", ["model_provider_configuration_runtime", "~/.repi/agent/models.json", "repi --offline", "openai-completions", "triggerPercent"], []));
-	checks.push(markerCheck("npm:top-harness-script", "package.json", ["gate:repi-harness", "gate:repi-product", "gate:repi-isolation", "gate:repi-product-surface", "gate:memory-contract", "install:repi", "clean:repi-legacy-profile"], ["install:recon-pi", "gate:pi-recon-primary"]));
+	checks.push(markerCheck("npm:top-harness-script", "package.json", ["gate:repi-harness", "gate:repi-product", "gate:repi-isolation", "gate:repi-product-surface", "gate:memory-contract", "gate:memory-utility", "install:repi", "clean:repi-legacy-profile"], ["install:recon-pi", "gate:pi-recon-primary"]));
 	checks.push(markerCheck("memory:v2-runtime-contract", "packages/coding-agent/src/core/recon-profile.ts", ["type MemoryEventV1", "function appendMemoryEvent", "function appendReplayerMemoryEvent", "appendReplayerMemoryEvent(replay, path)", "function appendAutofixMemoryEvent", "appendAutofixMemoryEvent(autofix, path)", "function appendProofLoopMemoryEvent", "appendProofLoopMemoryEvent(proof, path)", "function appendCompletionMemoryEvent", "appendCompletionMemoryEvent(audit", "function searchMemoryEvents", "memory_event_reuse", "events.jsonl", "case-memory.jsonl"], []));
 	checks.push(markerCheck("memory:v2-schema-fixture", "schemas/reverse-agent/memory-event.schema.json", ["MemoryEventV1", "CaseMemoryV1", "MemoryRetrievalReportV1", "confidence"], []));
+	checks.push(markerCheck("memory:utility-hard-eval", "scripts/reverse-agent/memory-utility-gate.mjs", ["repi-memory-utility-gate", "scenario:", "mustSuggestCommands", "mustNotSuggestCommands", "routeMatches"], []));
+	checks.push(markerCheck("memory:utility-fixture", "fixtures/reverse-agent/memory-utility.fixture.json", ["repi-memory-utility-fixture", "authz-transfer-to-new-target", "pwn-replay-reuse", "mustNotRecallEventIds"], []));
 	checks.push(markerCheck("ci:repi-harness-template", "docs/reverse-agent/repi-harness.github-actions.yml", ["REPI Independent Harness", "npm ci --ignore-scripts", "npm run gate:repi-harness", "npm run check", "git diff --exit-code"], []));
 	checks.push(markerCheck("docs:independent-entry", "README.md", ["repi  -> REPI", "pi    -> 你本机安装的原版 Pi", "npm run install:repi", "npm run gate:repi-harness"], ["npm run install:recon-pi\n", "npm run gate:pi-recon-primary\n"]));
 	checks.push(markerCheck("runtime:repi-storage-path-language", "repi-profile/SYSTEM.md", ["REPI", "~/.repi/agent/recon/evidence", "~/.repi/agent/recon/memory", "~/.repi/agent/recon/mission"], [/\.pi\/(?:evidence|memory|mission|reports)/]));
@@ -398,6 +400,7 @@ function childGateChecks() {
 		["gate:repi-isolation", ["scripts/reverse-agent/assert-repi-isolated.mjs", root]],
 		["gate:context-compact", ["scripts/reverse-agent/context-compact-audit.mjs", root]],
 		["gate:memory-contract", ["scripts/reverse-agent/memory-contract-gate.mjs", root, "--strict"]],
+		["gate:memory-utility", ["scripts/reverse-agent/memory-utility-gate.mjs", root, "--strict"]],
 		["gate:autonomous-runtime", ["scripts/reverse-agent/autonomous-runtime-contracts.mjs", root, "--strict"]],
 		["gate:autonomy-control", ["scripts/reverse-agent/autonomy-control-plane.mjs", root, "--strict"]],
 	];

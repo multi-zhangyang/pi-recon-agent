@@ -76,6 +76,7 @@ REPI 在 `packages/coding-agent/src/core/recon-profile.ts`、`repi-profile/SYSTE
 | `scripts/reverse-agent/refresh-tool-index.sh` | 离线刷新工具索引脚本 |
 | `scripts/reverse-agent/verify-profile.mjs` | 配置完整性验证脚本 |
 | `scripts/reverse-agent/memory-contract-gate.mjs` | Memory v2 结构化记忆门禁：验证 `MemoryEventV1` hash chain、`CaseMemoryV1` 引用、retrieval report 引用和负例拒绝；对应 `npm run gate:memory-contract` |
+| `scripts/reverse-agent/memory-utility-gate.mjs` | Memory utility hard-eval：用 authz 跨目标迁移与 pwn replay fixture 验证正确召回、失败/陈旧降权、跨 route 命令污染阻断；对应 `npm run gate:memory-utility` |
 | `pi` | 非拥有型兼容 shim；不会启动 REPI，只会转交给 PATH 中的原版 Pi，找不到则提示使用 `repi` |
 | `repi` | REPI 独立产品入口，默认使用 `~/.repi/agent`；源码 wrapper 和 npm/bin 直启都会由 CLI bootstrap 自动启用 `--recon` 隔离参数 |
 | `scripts/reverse-agent/install-repi.sh` | 安装 `/usr/local/bin/repi`，初始化 `~/.repi/agent`，不会覆盖/删除普通 `pi` |
@@ -237,6 +238,7 @@ scripts/reverse-agent/clean-global-repi-profile.sh
 # 验证 repi 已经可用，不应再出现 model pattern、API key、collision、Global tools 报错
 npm run gate:repi-harness
 npm run gate:memory-contract
+npm run gate:memory-utility
 npm run gate:repi-product
 npm run gate:repi-isolation
 

@@ -26,6 +26,7 @@
 		"gate:compound-frontier": "node bench/recon-remote/compound-frontier/run.mjs --live --strict",
 		"gate:context-compact": "node scripts/reverse-agent/context-compact-audit.mjs .",
 		"gate:memory-contract": "node scripts/reverse-agent/memory-contract-gate.mjs . --strict",
+		"gate:memory-utility": "node scripts/reverse-agent/memory-utility-gate.mjs . --strict",
 		"gate:autonomy-control": "node scripts/reverse-agent/autonomy-control-plane.mjs . --strict",
 		"audit:hard-eval-control": "node scripts/reverse-agent/hard-eval-control-plane.mjs .",
 		"audit:claim-ledger": "node scripts/reverse-agent/hard-eval-control-plane.mjs . --json | node scripts/reverse-agent/validate-claim-ledger.mjs --stdin --allow-platform-gaps",

@@ -1,0 +1,313 @@
+{
+  "kind": "repi-memory-utility-fixture",
+  "schemaVersion": 1,
+  "description": "Offline hard-eval proving Memory v2 recalls useful high-quality case memory and demotes failed/stale noise.",
+  "events": [
+    {
+      "kind": "repi-memory-event",
+      "schemaVersion": 1,
+      "id": "mem:0c4cd8e01b1b7c21eae7",
+      "seq": 1,
+      "ts": "2026-06-10T18:00:00.000Z",
+      "source": "proof_loop",
+      "task": "browser authz state-machine ownership replay",
+      "route": "web-api",
+      "target": "https://old.example.local",
+      "domainTags": [
+        "web-api",
+        "authz",
+        "idor",
+        "bola",
+        "replay",
+        "ownership"
+      ],
+      "caseSignature": "9fc15d78381eaf5b92cc37c1",
+      "outcome": "success",
+      "lessons": [
+        "Authz ownership checks need route graph, principal matrix, object ownership probe, and rollback state before final claim."
+      ],
+      "failurePatterns": [
+        "Narrative-only IDOR/BOLA claim without request/response artifact must be demoted."
+      ],
+      "reuseRules": [
+        "Run re_web_authz_state run <target> 30000 before compiler final when ownership is uncertain."
+      ],
+      "commands": [
+        "re_web_authz_state run https://old.example.local 30000",
+        "re_verifier matrix https://old.example.local",
+        "re_compiler draft https://old.example.local"
+      ],
+      "artifacts": [
+        {
+          "path": "/tmp/repi/evidence/web-authz/authz-state.md",
+          "sha256": "0c4cd8e01b1b7c21eae7968ebbafe764a4c6680b098d1092d1e33e9e353da8a7",
+          "tier": "runtime_artifact",
+          "required": true
+        }
+      ],
+      "artifactHashes": [
+        {
+          "path": "/tmp/repi/evidence/web-authz/authz-state.md",
+          "sha256": "0c4cd8e01b1b7c21eae7968ebbafe764a4c6680b098d1092d1e33e9e353da8a7",
+          "tier": "runtime_artifact",
+          "required": true
+        }
+      ],
+      "quality": {
+        "confidence": 0.94,
+        "replayVerified": true,
+        "reuseCount": 3,
+        "failureCount": 0,
+        "lastUsefulAt": "2026-06-10T18:00:00.000Z",
+        "decay": 0
+      },
+      "promotion": {
+        "playbookCandidate": true,
+        "verifierRuleCandidate": true
+      },
+      "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "entryHash": "cb1553f2c1e165012f15a7ab4b9efc8a010e7176953afe400636939f4b095077"
+    },
+    {
+      "kind": "repi-memory-event",
+      "schemaVersion": 1,
+      "id": "mem:9db429a94601b71147f8",
+      "seq": 2,
+      "ts": "2026-06-10T18:00:00.000Z",
+      "source": "manual",
+      "task": "authz replay quick admin curl failed",
+      "route": "web-api",
+      "target": "https://old.example.local",
+      "domainTags": [
+        "web-api",
+        "authz",
+        "replay",
+        "admin"
+      ],
+      "caseSignature": "5ac41e7dc9bd8d5771673064",
+      "outcome": "failure",
+      "lessons": [
+        "Blind admin curl without session model produced false positive."
+      ],
+      "failurePatterns": [
+        "Blind curl against admin route without principal matrix produced 403 and no ownership proof."
+      ],
+      "reuseRules": [
+        "Do not promote blind admin curls before auth matrix."
+      ],
+      "commands": [
+        "curl https://new.example.local/admin --cookie stale"
+      ],
+      "artifacts": [
+        {
+          "path": "/tmp/repi/evidence/runs/bad-admin-curl.md",
+          "sha256": "9db429a94601b71147f8b0043ec7d3fc5160b79707d848f28cbac3d10ecc311e",
+          "tier": "runtime_artifact",
+          "required": true
+        }
+      ],
+      "artifactHashes": [
+        {
+          "path": "/tmp/repi/evidence/runs/bad-admin-curl.md",
+          "sha256": "9db429a94601b71147f8b0043ec7d3fc5160b79707d848f28cbac3d10ecc311e",
+          "tier": "runtime_artifact",
+          "required": true
+        }
+      ],
+      "quality": {
+        "confidence": 0.22,
+        "replayVerified": false,
+        "reuseCount": 0,
+        "failureCount": 4,
+        "lastUsefulAt": "2026-06-10T18:00:00.000Z",
+        "decay": 0.8
+      },
+      "promotion": {
+        "playbookCandidate": false,
+        "verifierRuleCandidate": false
+      },
+      "prevHash": "cb1553f2c1e165012f15a7ab4b9efc8a010e7176953afe400636939f4b095077",
+      "entryHash": "bc1c6e4a7f52c0afa29fbf42ae803b7bf95206c97d9c5a0d00d8dc53d0c128e7"
+    },
+    {
+      "kind": "repi-memory-event",
+      "schemaVersion": 1,
+      "id": "mem:70b82f69e068307d11a5",
+      "seq": 3,
+      "ts": "2026-06-10T18:00:00.000Z",
+      "source": "replayer",
+      "task": "pwn ret2libc cyclic offset rop chain replay",
+      "route": "pwn",
+      "target": "./vuln-old",
+      "domainTags": [
+        "pwn",
+        "rop",
+        "libc",
+        "cyclic",
+        "replay"
+      ],
+      "caseSignature": "007b1c5d12c9a4f861768ec7",
+      "outcome": "success",
+      "lessons": [
+        "Cyclic crash, offset calculation, libc leak, and local verifier stabilized the exploit."
+      ],
+      "failurePatterns": [
+        "Skipping checksec and libc fingerprint caused wrong one_gadget assumptions."
+      ],
+      "reuseRules": [
+        "Run checksec/file/ldd before ROP chain; verify with local pwntools replay."
+      ],
+      "commands": [
+        "checksec --file ./vuln-old",
+        "python3 exploit.py ./vuln-old --local-verify",
+        "re_native_runtime run ./vuln-old 60000"
+      ],
+      "artifacts": [
+        {
+          "path": "/tmp/repi/evidence/replayers/pwn-replay.md",
+          "sha256": "70b82f69e068307d11a5445c38eebb892740a0c9108549b31b28ae88bff514e9",
+          "tier": "runtime_artifact",
+          "required": true
+        }
+      ],
+      "artifactHashes": [
+        {
+          "path": "/tmp/repi/evidence/replayers/pwn-replay.md",
+          "sha256": "70b82f69e068307d11a5445c38eebb892740a0c9108549b31b28ae88bff514e9",
+          "tier": "runtime_artifact",
+          "required": true
+        }
+      ],
+      "quality": {
+        "confidence": 0.89,
+        "replayVerified": true,
+        "reuseCount": 2,
+        "failureCount": 0,
+        "lastUsefulAt": "2026-06-10T18:00:00.000Z",
+        "decay": 0
+      },
+      "promotion": {
+        "playbookCandidate": true,
+        "verifierRuleCandidate": true
+      },
+      "prevHash": "bc1c6e4a7f52c0afa29fbf42ae803b7bf95206c97d9c5a0d00d8dc53d0c128e7",
+      "entryHash": "d6fb5a0f1a9c6a5261aa2adb7833e76d9b7e4d11a59af949ca7aee771471cf1b"
+    },
+    {
+      "kind": "repi-memory-event",
+      "schemaVersion": 1,
+      "id": "mem:7b7bb5d1b8112c830e62",
+      "seq": 4,
+      "ts": "2025-01-01T00:00:00.000Z",
+      "source": "manual",
+      "task": "generic web replay note from old task",
+      "route": "web-api",
+      "target": "https://old.example.local",
+      "domainTags": [
+        "web-api",
+        "replay",
+        "generic"
+      ],
+      "caseSignature": "ec274fd08d1a5be5ce807b4d",
+      "outcome": "success",
+      "lessons": [
+        "Old generic replay note."
+      ],
+      "failurePatterns": [
+        "Old note lacks artifact binding."
+      ],
+      "reuseRules": [
+        "Prefer newer verified events."
+      ],
+      "commands": [
+        "curl https://old.example.local/health"
+      ],
+      "artifacts": [
+        {
+          "path": "/tmp/repi/memory/old-note.md",
+          "sha256": "7b7bb5d1b8112c830e62fcfb896214d94078ffad611cd46a279853d19fd8760c",
+          "tier": "persisted_memory",
+          "required": true
+        }
+      ],
+      "artifactHashes": [
+        {
+          "path": "/tmp/repi/memory/old-note.md",
+          "sha256": "7b7bb5d1b8112c830e62fcfb896214d94078ffad611cd46a279853d19fd8760c",
+          "tier": "persisted_memory",
+          "required": true
+        }
+      ],
+      "quality": {
+        "confidence": 0.5,
+        "replayVerified": false,
+        "reuseCount": 0,
+        "failureCount": 1,
+        "lastUsefulAt": "2025-01-01T00:00:00.000Z",
+        "decay": 1.2
+      },
+      "promotion": {
+        "playbookCandidate": false,
+        "verifierRuleCandidate": false
+      },
+      "prevHash": "d6fb5a0f1a9c6a5261aa2adb7833e76d9b7e4d11a59af949ca7aee771471cf1b",
+      "entryHash": "995f8e3f7dab448e66b6447919e118a9461e8665c437fdc68068439c03d9cd1b"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "authz-transfer-to-new-target",
+      "query": "authz ownership replay route graph principal matrix",
+      "route": "web-api",
+      "target": "https://new.example.local",
+      "limit": 4,
+      "maxCommands": 6,
+      "expectedFirstEventId": "mem:0c4cd8e01b1b7c21eae7",
+      "mustRecallEventIds": [
+        "mem:0c4cd8e01b1b7c21eae7"
+      ],
+      "mustNotRecallEventIds": [
+        "mem:9db429a94601b71147f8"
+      ],
+      "mustNotRecallTopN": 2,
+      "mustSuggestCommands": [
+        "re_web_authz_state run https://new.example.local 30000",
+        "re_verifier matrix https://new.example.local"
+      ],
+      "mustNotSuggestCommands": [
+        "curl https://new.example.local/admin --cookie stale",
+        "checksec --file https://new.example.local",
+        "python3 exploit.py https://new.example.local --local-verify",
+        "re_native_runtime run https://new.example.local 60000"
+      ],
+      "minTopScore": 40
+    },
+    {
+      "id": "pwn-replay-reuse",
+      "query": "pwn rop libc cyclic replay local verifier",
+      "route": "pwn",
+      "target": "./vuln-new",
+      "limit": 4,
+      "maxCommands": 6,
+      "expectedFirstEventId": "mem:70b82f69e068307d11a5",
+      "mustRecallEventIds": [
+        "mem:70b82f69e068307d11a5"
+      ],
+      "mustNotRecallEventIds": [
+        "mem:7b7bb5d1b8112c830e62"
+      ],
+      "mustNotRecallTopN": 3,
+      "mustSuggestCommands": [
+        "checksec --file ./vuln-new",
+        "python3 exploit.py ./vuln-new --local-verify",
+        "re_native_runtime run ./vuln-new 60000"
+      ],
+      "mustNotSuggestCommands": [
+        "curl https://old.example.local/health",
+        "re_web_authz_state run ./vuln-new 30000",
+        "re_verifier matrix ./vuln-new"
+      ],
+      "minTopScore": 35
+    }
+  ]
+}

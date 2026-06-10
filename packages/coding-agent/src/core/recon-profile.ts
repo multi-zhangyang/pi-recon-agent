@@ -4331,6 +4331,7 @@ function structuredMemoryCommandCandidates(
 	const hits = searchMemoryEvents(query, { route: mission.route.domain, target, limit: 8 });
 	const candidates: MemoryCommandCandidate[] = [];
 	for (const hit of hits) {
+		if (!memoryRouteMatches(hit.event.route, mission.route.domain)) continue;
 		if (hit.event.quality.confidence < 0.45 || hit.event.outcome === "failure") continue;
 		for (const [index, command] of hit.event.commands.entries()) {
 			const normalized = normalizeHistoricalCommand(command, hit.event.target === "<none>" ? undefined : hit.event.target, target);
@@ -23469,14 +23470,30 @@ function memoryTextForSearch(event: MemoryEventV1): string {
 	].join("\n").toLowerCase();
 }
 
+function memorySearchTokens(text: string): Set<string> {
+	return new Set(
+		uniqueNonEmpty(String(text ?? "").toLowerCase().split(/[^a-z0-9一-鿿]+/), 240).filter((token) => token.length >= 2),
+	);
+}
+
+function memoryRouteMatches(eventRoute: string | undefined, route: string | undefined): boolean {
+	const left = String(eventRoute ?? "").trim().toLowerCase();
+	const right = String(route ?? "").trim().toLowerCase();
+	if (!right) return true;
+	if (!left) return false;
+	return left === right || left.includes(right) || right.includes(left);
+}
+
 function searchMemoryEvents(query?: string, options?: { route?: string; target?: string; limit?: number }): MemoryRetrievalHit[] {
 	ensureReconStorage();
 	const events = readMemoryEvents();
-	const queryTokens = uniqueNonEmpty((query ?? "").toLowerCase().split(/[^a-z0-9一-鿿._:-]+/), 24).filter(
+	const queryTokens = uniqueNonEmpty((query ?? "").toLowerCase().split(/[^a-z0-9一-鿿]+/), 24).filter(
 		(token) => token.length >= 2,
 	);
 	const hits = events.flatMap((event) => {
+		if (options?.route && !memoryRouteMatches(event.route, options.route)) return [];
 		const haystack = memoryTextForSearch(event);
+		const haystackTokens = memorySearchTokens(haystack);
 		const reasons: string[] = [];
 		let score = 0;
 		if (queryTokens.length === 0) {
@@ -23484,12 +23501,12 @@ function searchMemoryEvents(query?: string, options?: { route?: string; target?:
 			reasons.push("recent");
 		}
 		for (const token of queryTokens) {
-			if (haystack.includes(token)) {
+			if (haystackTokens.has(token)) {
 				score += 4;
 				reasons.push(`token:${token}`);
 			}
 		}
-		if (options?.route && event.route.toLowerCase().includes(options.route.toLowerCase())) {
+		if (options?.route && memoryRouteMatches(event.route, options.route)) {
 			score += 6;
 			reasons.push("route");
 		}
@@ -23498,11 +23515,11 @@ function searchMemoryEvents(query?: string, options?: { route?: string; target?:
 			reasons.push("target");
 		}
 		const ageDays = Math.max(0, Math.floor((Date.now() - Date.parse(event.ts)) / 86_400_000));
-		const decay = Math.min(15, ageDays * 0.05 + event.quality.decay * 10 + event.quality.failureCount * 2);
+		const decay = Math.min(25, ageDays * 0.08 + event.quality.decay * 12 + event.quality.failureCount * 4);
 		score += event.quality.confidence * 10 + (event.quality.replayVerified ? 8 : 0) + event.quality.reuseCount * 2;
 		score -= decay;
 		if (event.outcome === "success") score += 6;
-		if (event.outcome === "blocked" || event.outcome === "failure") score -= 4;
+		if (event.outcome === "blocked" || event.outcome === "failure") score -= event.outcome === "failure" ? 10 : 8;
 		if (score <= 0 || (queryTokens.length > 0 && !reasons.some((reason) => reason.startsWith("token:")))) return [];
 		return [{ event, score, reasons }];
 	});
