@@ -75,6 +75,7 @@ REPI 在 `packages/coding-agent/src/core/recon-profile.ts`、`repi-profile/SYSTE
 | `bench/recon-remote/hard-score.mjs` | 跨平台 hard-score 评测器：按 signature_rebuild、signed_replay、anti_bot_challenge、cdn_media_probe、runtime_capture_depth、exploit_chain、bundle_trace、regression_readiness 对最新公网证据打分 |
 | `scripts/reverse-agent/refresh-tool-index.sh` | 离线刷新工具索引脚本 |
 | `scripts/reverse-agent/verify-profile.mjs` | 配置完整性验证脚本 |
+| `scripts/reverse-agent/compact-resume-chain-gate.mjs` | Compact/resume chain hard-eval：验证跨 session 精确恢复、ContextPackV2/ResumeContractV2 hash、artifact drift、append-only ledger、resume 状态机、telemetry proof-loop entry 和负例阻断；对应 `npm run gate:compact-resume-chain` |
 | `scripts/reverse-agent/memory-contract-gate.mjs` | Memory v2 结构化记忆门禁：验证 `MemoryEventV1` hash chain、`CaseMemoryV1` 引用、retrieval report 引用和负例拒绝；对应 `npm run gate:memory-contract` |
 | `scripts/reverse-agent/memory-utility-gate.mjs` | Memory utility hard-eval：用 authz 跨目标迁移与 pwn replay fixture 验证正确召回、失败/陈旧降权、跨 route 命令污染阻断；对应 `npm run gate:memory-utility` |
 | `scripts/reverse-agent/memory-feedback-gate.mjs` | Memory reuse feedback hard-eval：验证 `re_lane run` 复用结构化记忆后的在线学习闭环，成功 promote、失败 demote，并阻断失败 case 命令继续污染；对应 `npm run gate:memory-feedback` |
@@ -239,6 +240,7 @@ scripts/reverse-agent/clean-global-repi-profile.sh
 
 # 验证 repi 已经可用，不应再出现 model pattern、API key、collision、Global tools 报错
 npm run gate:repi-harness
+npm run gate:compact-resume-chain
 npm run gate:memory-contract
 npm run gate:memory-utility
 npm run gate:memory-feedback
@@ -378,7 +380,7 @@ proof-loop；agent-dogfood 已写 per-attempt subagent runtime manifest 和 runt
 
 `/re-context pack|show|resume` / `re_context` 消费 mission blackboard、evidence ledger、artifact_index、supervisor/reflect 结果、tool digest 与 memory tail，输出 `context_pack` 与 `context_artifact`。它把 `resume_brief`、`repair_queue`（含 supervisor 的 `commander_merge_queue`）、`commander_merge_budget`、`worker_scoreboard`、`reflection_reuse_rules`、`next_operator_commands` 和 `next_context_command` 固化到 `.repi-harness/evidence/contexts/*.md`，并闭合 `context_pack_ready`，用于压缩、重启、handoff 后恢复连续逆向渗透作战。
 
-当前 runtime 已把 context pack 升级为 `ContextPackV2`：pack 记录 `schemaVersion: 2`、`contextPath`、`contextSha256`、artifact sha256/mtime/size/exists、scope（mission/session/workspace/target/branch）、`resumeQueueStatus`、`idempotencyKey`、`closure` 和 append-only `memory/compaction-resume-ledger.jsonl`。`re_context resume <contextPath>` 或 tool 参数 `contextPath` / `compactionEntryId` 会走 exact resume loader，按指定 pack 校验 `contextSha256`、artifact hash drift、target/workspace/branch scope，并在输出中给出 `exactResumeVerification`；drift、缺失或 scope mismatch 会把 resume 标记为 blocked，避免用最新 pack 或污染 artifact 误恢复。
+当前 runtime 已把 context pack 升级为 `ContextPackV2`：pack 记录 `schemaVersion: 2`、`contextPath`、`contextSha256`、artifact sha256/mtime/size/exists、scope（mission/session/workspace/target/branch）、`resumeQueueStatus`、`idempotencyKey`、`closure` 和 append-only `memory/compaction-resume-ledger.jsonl`。`re_context resume <contextPath>` 或 tool 参数 `contextPath` / `compactionEntryId` 会走 exact resume loader，按指定 pack 校验 `contextSha256`、artifact hash drift、target/workspace/branch scope，并在输出中给出 `exactResumeVerification`；drift、缺失或 scope mismatch 会把 resume 标记为 blocked，避免用最新 pack 或污染 artifact 误恢复。`re_complete audit` 还会验证 `compaction-resume-ledger.jsonl` 的 `prevHash/entryHash`；`npm run gate:compact-resume-chain` 用 fixture 覆盖 queued→running→done、proof-loop telemetry、duplicate idempotency、invalid transition、budget exhausted/open closure 等跨 session 精确恢复负例。
 
 ## Operator queue 调度闭环
 
@@ -496,7 +498,7 @@ REPI auto-compact threshold policy is explicit and testable: `triggerPercent` de
 
 ## Context compact harness 自检
 
-`scripts/reverse-agent/context-compact-audit.mjs [root] [--json]` 是 context_compact_audit 静态门槛，用于在改动后快速确认源码内核与文件型 profile 都保留上下文恢复链路。它分组检查 `context_pack`、REPI-owned compaction provider、resume contract/auto-resume telemetry、`evidence_summarization`、`budget_continuation`、runtime tests 和 docs contract；失败时列出缺失 marker，避免 context/compact 能力只存在于 upstream 默认逻辑或文档描述里。
+`scripts/reverse-agent/context-compact-audit.mjs [root] [--json]` 是 context_compact_audit 静态门槛，用于在改动后快速确认源码内核与文件型 profile 都保留上下文恢复链路。它仍分组检查 `context_pack`、REPI-owned compaction provider、resume contract/auto-resume telemetry、`evidence_summarization`、`budget_continuation`、runtime tests 和 docs contract。`scripts/reverse-agent/compact-resume-chain-gate.mjs [root] --strict` 是 hard-eval 门槛，用 fixture 证明 exact context load、append-only ledger、resume 状态机和 telemetry proof-loop entry 真能闭合，并拒绝 drift / scope mismatch / duplicate idempotency / invalid transition / exhausted-open closure。两者配合避免 context/compact 能力只存在于 upstream 默认逻辑或文档描述里。
 
 ## Autonomous control plane 静态审计
 

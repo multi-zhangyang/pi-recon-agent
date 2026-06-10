@@ -371,6 +371,8 @@ pack 中包含：
 - `idempotencyKey`
 - `next_operator_commands`
 
+Compact/resume chain hard-eval：`npm run gate:compact-resume-chain` 会离线验证跨 session 精确恢复链路，不只看 marker。它检查 `ContextPackV2` / `ResumeContractV2` 的 `contextSha256`、artifact hash、target/workspace/branch scope、append-only `compaction-resume-ledger.jsonl` 的 `prevHash/entryHash`、resume 状态机 `queued→running→done`、auto-resume telemetry 的 proof-loop entry，以及 context drift、artifact drift、duplicate idempotency、invalid transition、budget exhausted/open closure 等负例。运行时 `re_complete audit` 也会校验 compaction resume ledger，发现 ledger drift 会阻断最终完成。
+
 ## 长期记忆沉淀 / Memory v2
 
 当前 REPI 的长期记忆分两层：
@@ -613,6 +615,7 @@ npm run gate:repi-harness
 - 旧 `~/.pi/agent` 污染样本不会被默认读取或改写；auth/models 只有 `--import-pi-auth` 才单向导入。
 - `repi --help` / `repi update --help` 不泄漏 `pi update`、`Update Available`、`pi.dev/changelog` 等 upstream Pi 文案。
 - 串联 `gate:repi-product`、`gate:repi-isolation`、`gate:context-compact`、`gate:autonomous-runtime`、`gate:autonomy-control`，确认安装独立性和逆向/渗透控制面能力同时成立。
+- `gate:compact-resume-chain` 作为 context-compact 的 hard-eval 补充，覆盖跨 session 精确恢复、append-only ledger、状态机和负例阻断。
 
 
 ### CI 自动验收模板
@@ -635,6 +638,7 @@ git diff --exit-code
 node --check packages/coding-agent/src/core/recon-profile.ts
 node --check repi-profile/extensions/reverse-pentest-core.ts  # legacy mirror; repi 默认不加载
 node --check scripts/reverse-agent/context-compact-audit.mjs
+node --check scripts/reverse-agent/compact-resume-chain-gate.mjs
 node --check scripts/reverse-agent/memory-contract-gate.mjs
 node --check scripts/reverse-agent/memory-utility-gate.mjs
 node --check scripts/reverse-agent/memory-feedback-gate.mjs
@@ -646,6 +650,7 @@ env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY -u OPENAI_API_KEY \
     ./node_modules/.bin/tsgo --noEmit --pretty false
 
 npm run gate:context-compact
+npm run gate:compact-resume-chain
 npm run gate:memory-contract
 npm run gate:memory-utility
 npm run gate:memory-feedback

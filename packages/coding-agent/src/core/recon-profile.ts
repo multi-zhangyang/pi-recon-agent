@@ -16506,6 +16506,44 @@ function writeContextPackArtifact(pack: ContextPackArtifact): string {
 	return path;
 }
 
+function verifyCompactionResumeLedger(): { path: string; rows: number; status: "pass" | "missing" | "corrupt"; blocked: string[] } {
+	const path = memoryPath("compaction-resume-ledger.jsonl");
+	const text = readText(path);
+	if (!text.trim()) return { path, rows: 0, status: "missing", blocked: [] };
+	const blocked: string[] = [];
+	let previousText = "";
+	let rows = 0;
+	for (const [index, line] of text.split(/\r?\n/).entries()) {
+		if (!line.trim()) continue;
+		rows += 1;
+		let row: { ts?: string; prevHash?: string; entryHash?: string; contextPath?: string; contextSha256?: string };
+		try {
+			row = JSON.parse(line) as typeof row;
+		} catch {
+			blocked.push(`compaction resume ledger JSON corrupt at row ${index + 1}`);
+			previousText += `${line}\n`;
+			continue;
+		}
+		const expectedPrevHash = previousText.trim()
+			? createHash("sha256").update(previousText).digest("hex")
+			: "0".repeat(64);
+		if (row.prevHash !== expectedPrevHash) blocked.push(`compaction resume ledger prevHash drift at row ${index + 1}`);
+		if (!row.ts || !row.entryHash) {
+			blocked.push(`compaction resume ledger missing hash fields at row ${index + 1}`);
+		} else {
+			const expectedEntryHash = createHash("sha256").update(`${expectedPrevHash}\n${row.ts}\ncontext-pack`).digest("hex");
+			if (row.entryHash !== expectedEntryHash)
+				blocked.push(`compaction resume ledger entryHash drift at row ${index + 1}`);
+		}
+		if (row.contextPath && !existsSync(row.contextPath))
+			blocked.push(`compaction resume ledger contextPath missing at row ${index + 1}: ${row.contextPath}`);
+		if (row.contextSha256 && !/^[a-f0-9]{64}$/.test(row.contextSha256))
+			blocked.push(`compaction resume ledger contextSha256 invalid at row ${index + 1}`);
+		previousText += `${line}\n`;
+	}
+	return { path, rows, status: blocked.length ? "corrupt" : "pass", blocked };
+}
+
 function reconCompactionBullets(rows: string[], fallback = "none"): string[] {
 	return rows.length ? rows.map((item) => `- ${item}`) : [`- ${fallback}`];
 }
@@ -22472,6 +22510,11 @@ function auditCompletion(): { ready: boolean; blockers: string[]; warnings: stri
 	const contextPath = latestContextPackArtifactPath();
 	const contextPack = contextPath ? parseContextPackArtifact(contextPath) : undefined;
 	if (contextPack && contextPath) {
+		const ledgerVerification = verifyCompactionResumeLedger();
+		if (ledgerVerification.status === "corrupt") {
+			for (const row of ledgerVerification.blocked.slice(0, 8)) blockers.push(row);
+		}
+		if (ledgerVerification.status === "pass") warnings.push(`compaction resume ledger verified: ${ledgerVerification.rows} row(s)`);
 		const contextVerification = verifyContextPackResume(
 			contextPack,
 			contextPath,
