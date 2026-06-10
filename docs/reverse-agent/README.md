@@ -86,6 +86,7 @@ REPI 在 `packages/coding-agent/src/core/recon-profile.ts`、`repi-profile/SYSTE
 | `scripts/reverse-agent/memory-sedimentation-gate.mjs` | Memory v4 sedimentation hard-eval：验证 semantic-index、contradiction-ledger、mandatory_memory_injection_packet、artifact/verifier/quarantine/feedback 门禁；对应 `npm run gate:memory-sedimentation` |
 | `scripts/reverse-agent/memory-store-gate.mjs` | Memory v5 store hard-eval：验证 transaction manifest、hash-chain append 前校验、坏 prevHash 阻断、case-memory repair-index 与 lane runtime auto writeback；对应 `npm run gate:memory-store` |
 | `scripts/reverse-agent/memory-swarm-writeback-gate.mjs` | re_swarm worker memory writeback hard-eval：验证 `memory-swarm-writeback` 事件数量、SubagentRuntimeManifestV1/stdout/stderr/claim artifact 捕获、blocked/success outcome 和非 run 模式跳过；对应 `npm run gate:memory-swarm-writeback` |
+| `scripts/reverse-agent/memory-supervisor-gate.mjs` | Memory Supervisor hard-eval：真实调用 `re_memory supervise`，验证 `MemorySupervisorV1` report schema、lifecycle-board、promotion/demotion/quarantine/merge fixture 和 required gates；对应 `npm run gate:memory-supervisor` |
 | `pi` | 非拥有型兼容 shim；不会启动 REPI，只会转交给 PATH 中的原版 Pi，找不到则提示使用 `repi` |
 | `repi` | REPI 独立产品入口，默认使用 `~/.repi/agent`；源码 wrapper 和 npm/bin 直启都会由 CLI bootstrap 自动启用 `--recon` 隔离参数 |
 | `scripts/reverse-agent/install-repi.sh` | 安装 `/usr/local/bin/repi`，初始化 `~/.repi/agent`，不会覆盖/删除普通 `pi` |
@@ -256,6 +257,7 @@ npm run gate:memory-distiller
 npm run gate:memory-sedimentation
 npm run gate:memory-store
 npm run gate:memory-swarm-writeback
+npm run gate:memory-supervisor
 npm run gate:repi-product
 npm run gate:repi-isolation
 
@@ -423,7 +425,7 @@ re_memory { "action": "snapshot" }
 re_memory { "action": "eval" }
 ```
 
-`re_memory verify` 写 `store-report.json`，`re_memory repair-index` 从 verified event chain 重建 `case-memory.jsonl`，`re_memory snapshot` 写 `store-snapshot.json`，`re_memory eval` 写 `usefulness-eval.json` 并度量 hit@1、hit@k、MRR、forbiddenLeakRate 和 forbiddenHitIds。`re_lane run` 的高价值 runtime 结果会自动写 `memory_auto_writeback`，把 evidence artifact sha256、evidence_quality、self-heal 和 verifier candidate 一起沉淀；`re_swarm run` 的已执行 worker 会自动写 `memory-swarm-writeback`，把 SubagentRuntimeManifestV1、stdout/stderr hash、toolCallDigest、claim/merge artifact、命令和 blocked/success outcome 写回 MemoryStoreV5。`npm run gate:memory-store` 使用 `fixtures/reverse-agent/memory-store.fixture.json` 验证坏 prevHash 阻断、case index 修复、transaction manifest 和 lane runtime auto writeback marker；`npm run gate:memory-swarm-writeback` 使用 `fixtures/reverse-agent/memory-swarm-writeback.fixture.json` 验证 worker 写回数量、artifact 捕获和 plan/merge 非 run 模式不重复写入。`npm run gate:memory-usefulness` 使用 `fixtures/reverse-agent/memory-usefulness.fixture.json` 验证 authz/pwn 正召回、失败/跨 route forbidden memory 不进 topK，以及 child-process 并发 append probe 保持 hash-chain。
+`re_memory verify` 写 `store-report.json`，`re_memory repair-index` 从 verified event chain 重建 `case-memory.jsonl`，`re_memory snapshot` 写 `store-snapshot.json`，`re_memory eval` 写 `usefulness-eval.json` 并度量 hit@1、hit@k、MRR、forbiddenLeakRate 和 forbiddenHitIds；`re_memory supervise` 写 `supervisor-report.json` 与 `lifecycle-board.md`，把沉淀结果治理成 promotion/demotion/quarantine/expire/merge/retain 队列。`re_lane run` 的高价值 runtime 结果会自动写 `memory_auto_writeback`，把 evidence artifact sha256、evidence_quality、self-heal 和 verifier candidate 一起沉淀；`re_swarm run` 的已执行 worker 会自动写 `memory-swarm-writeback`，把 SubagentRuntimeManifestV1、stdout/stderr hash、toolCallDigest、claim/merge artifact、命令和 blocked/success outcome 写回 MemoryStoreV5。`npm run gate:memory-store` 使用 `fixtures/reverse-agent/memory-store.fixture.json` 验证坏 prevHash 阻断、case index 修复、transaction manifest 和 lane runtime auto writeback marker；`npm run gate:memory-swarm-writeback` 使用 `fixtures/reverse-agent/memory-swarm-writeback.fixture.json` 验证 worker 写回数量、artifact 捕获和 plan/merge 非 run 模式不重复写入。`npm run gate:memory-usefulness` 使用 `fixtures/reverse-agent/memory-usefulness.fixture.json` 验证 authz/pwn 正召回、失败/跨 route forbidden memory 不进 topK，以及 child-process 并发 append probe 保持 hash-chain。`npm run gate:memory-supervisor` 使用 `schemas/reverse-agent/memory-supervisor.schema.json` 与 `fixtures/reverse-agent/memory-supervisor.fixture.json` 验证 `MemorySupervisorV1` lifecycle 治理、promotion/demotion/quarantine/merge 和 runtime `re_memory supervise`。
 
 ## Reflection/evolution 闭环
 

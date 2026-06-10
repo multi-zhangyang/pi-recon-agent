@@ -2362,6 +2362,67 @@ type MemorySedimentationReportV1 = {
 	};
 };
 
+type MemorySupervisorAction = "promote" | "retain" | "demote" | "quarantine" | "expire" | "merge";
+
+type MemorySupervisorDecisionV1 = {
+	kind: "repi-memory-supervisor-decision";
+	schemaVersion: 1;
+	id: string;
+	caseSignature: string;
+	eventIds: string[];
+	action: MemorySupervisorAction;
+	reason: string;
+	grade: number;
+	confidence: number;
+	targetScope: string;
+	route: string;
+	evidenceRefs: MemoryArtifactHash[];
+	commands: string[];
+	blockers: string[];
+	lifecycle: {
+		ttlDays: number;
+		reviewAfterDays: number;
+		archiveCandidate: boolean;
+		requiresFeedback: boolean;
+	};
+};
+
+type MemorySupervisorReportV1 = {
+	kind: "repi-memory-supervisor-report";
+	schemaVersion: 1;
+	generatedAt: string;
+	MemorySupervisorV1: true;
+	storeReportPath: string;
+	sedimentationReportPath: string;
+	usefulnessReportPath: string;
+	supervisorReportPath: string;
+	lifecycleBoardPath: string;
+	eventCount: number;
+	caseCount: number;
+	storeGrade: "pass" | "repairable" | "blocked";
+	hashChainOk: boolean;
+	usefulnessStatus: "pass" | "warn" | "fail" | "empty";
+	decisions: MemorySupervisorDecisionV1[];
+	promotionQueue: MemorySupervisorDecisionV1[];
+	demotionQueue: MemorySupervisorDecisionV1[];
+	quarantineQueue: MemorySupervisorDecisionV1[];
+	expireQueue: MemorySupervisorDecisionV1[];
+	mergeQueue: MemorySupervisorDecisionV1[];
+	retainQueue: MemorySupervisorDecisionV1[];
+	injectionAllowedEventIds: string[];
+	recommendedCommands: string[];
+	requiredGates: string[];
+	policy: {
+		MemorySupervisorV1: true;
+		supervisorRunsAfterSedimentation: true;
+		promotionRequiresArtifactSha256: true;
+		promotionRequiresVerifierOrReplay: true;
+		quarantineOverridesPromotion: true;
+		failureFeedbackDemotes: true;
+		mergeByCaseSignature: true;
+	};
+};
+
 type MemoryTransactionFileDigestV1 = {
 	path: string;
 	beforeSha256: string;
@@ -3013,7 +3074,7 @@ const RECON_PROMPTS = [
 		description: "整理当前任务并写入 REPI 长期记忆",
 		argumentHint: "[scene/title]",
 		content:
-			"将当前会话中可复用的逆向/渗透经验写入 REPI Memory v5：目标、路由、证据、有效方法、失败路线、复现命令、下次复用；写入后可调用 re_memory verify / repair-index / snapshot / eval / search-events / consolidate / distill / sediment，生成 store-report、store-snapshot、usefulness-eval、distillation-report、pattern-book、quarantine 与 injection-packet。",
+			"将当前会话中可复用的逆向/渗透经验写入 REPI Memory v5：目标、路由、证据、有效方法、失败路线、复现命令、下次复用；写入后可调用 re_memory verify / repair-index / snapshot / eval / search-events / consolidate / distill / sediment / supervise，生成 store-report、store-snapshot、usefulness-eval、distillation-report、pattern-book、quarantine、injection-packet、supervisor-report 与 lifecycle-board。",
 	},
 ];
 
@@ -3072,6 +3133,14 @@ function memoryInjectionPacketPath(): string {
 
 function memorySedimentationReportPath(): string {
 	return memoryPath("sedimentation-report.json");
+}
+
+function memorySupervisorReportPath(): string {
+	return memoryPath("supervisor-report.json");
+}
+
+function memoryLifecycleBoardPath(): string {
+	return memoryPath("lifecycle-board.md");
 }
 
 function memoryTransactionsDir(): string {
@@ -3310,6 +3379,11 @@ function ensureReconStorage(): void {
 			memorySedimentationReportPath(),
 			`${JSON.stringify({ kind: "repi-memory-sedimentation-report", schemaVersion: 1, entries: [], contradictions: [] }, null, 2)}\n`,
 		],
+		[
+			memorySupervisorReportPath(),
+			`${JSON.stringify({ kind: "repi-memory-supervisor-report", schemaVersion: 1, MemorySupervisorV1: true, decisions: [] }, null, 2)}\n`,
+		],
+		[memoryLifecycleBoardPath(), "# REPI Memory Lifecycle Board\n\n"],
 		[
 			memoryStoreReportPath(),
 			`${JSON.stringify({ kind: "repi-memory-store-verification", schemaVersion: 1, MemoryStoreV5: true, eventCount: 0, caseRowCount: 0, errors: [] }, null, 2)}\n`,
@@ -17079,12 +17153,13 @@ function contextEvidenceRank(kind: string): string {
 }
 
 function contextSourceCommand(kind: string): string {
-	if (/^memory_(?:events|case_memory|retrieval|store|snapshot|usefulness|distillation|quarantine|semantic|contradiction|injection|sedimentation)/i.test(kind)) {
+	if (/^memory_(?:events|case_memory|retrieval|store|snapshot|usefulness|distillation|quarantine|semantic|contradiction|injection|sedimentation|supervisor|lifecycle)/i.test(kind)) {
 		if (/store_report/i.test(kind)) return "re_memory verify";
 		if (/store_snapshot/i.test(kind)) return "re_memory snapshot";
 		if (/usefulness/i.test(kind)) return "re_memory eval";
 		if (/distillation|quarantine/i.test(kind)) return "re_memory distill";
 		if (/semantic|contradiction|injection|sedimentation/i.test(kind)) return "re_memory sediment";
+		if (/supervisor|lifecycle/i.test(kind)) return "re_memory supervise";
 		return "re_memory events";
 	}
 	return `re_${kind.replace(/-/g, "_")} show`;
@@ -17207,6 +17282,8 @@ function contextArtifactIndex(): ContextArtifactIndexEntry[] {
 		["memory_contradiction_ledger", existingPath(memoryContradictionLedgerPath())],
 		["memory_injection_packet", existingPath(memoryInjectionPacketPath())],
 		["memory_sedimentation_report", existingPath(memorySedimentationReportPath())],
+		["memory_supervisor_report", existingPath(memorySupervisorReportPath())],
+		["memory_lifecycle_board", existingPath(memoryLifecycleBoardPath())],
 	];
 	return pairs.filter((pair): pair is [string, string] => Boolean(pair[1])).map(([kind, path]) => contextArtifactEntry(kind, path));
 }
@@ -23789,6 +23866,9 @@ function buildMemoryDigest(): string {
 		"<memory_sedimentation>",
 		truncateMiddle(readText(memorySedimentationReportPath()), 2400),
 		"</memory_sedimentation>",
+		"<memory_supervisor>",
+		truncateMiddle(readText(memorySupervisorReportPath()), 2400),
+		"</memory_supervisor>",
 		"<mandatory_memory_injection_packet>",
 		truncateMiddle(readText(memoryInjectionPacketPath()), 2200),
 		"</mandatory_memory_injection_packet>",
@@ -26255,6 +26335,304 @@ function formatMemorySedimentation(report = buildMemorySemanticIndex()): string 
 	].join("\n");
 }
 
+function memorySupervisorTtlDays(action: MemorySupervisorAction): number {
+	if (action === "promote") return 180;
+	if (action === "retain" || action === "merge") return 90;
+	if (action === "demote") return 30;
+	if (action === "quarantine") return 14;
+	return 0;
+}
+
+function memorySupervisorDecisionFromEntry(params: {
+	entry: MemorySemanticIndexEntryV1;
+	event?: MemoryEventV1;
+	caseRow?: CaseMemoryV1;
+	action?: MemorySupervisorAction;
+	reason?: string;
+}): MemorySupervisorDecisionV1 {
+	const action =
+		params.action ??
+		(params.entry.action === "inject"
+			? "promote"
+			: params.entry.action === "quarantine"
+				? "quarantine"
+				: params.entry.action === "expire"
+					? "expire"
+					: params.entry.action === "demote"
+						? "demote"
+						: "retain");
+	const ttlDays = memorySupervisorTtlDays(action);
+	const confidence = params.event?.quality.confidence ?? params.caseRow?.quality.confidence ?? Math.min(0.99, params.entry.grade / 100);
+	const reason =
+		params.reason ??
+		(params.entry.blockers.length
+			? params.entry.blockers.join("; ")
+			: action === "promote"
+				? "artifact_sha256+verifier_or_replay+non_quarantine grade>=70"
+				: `sedimentation_action=${params.entry.action} grade=${params.entry.grade.toFixed(1)}`);
+	return {
+		kind: "repi-memory-supervisor-decision",
+		schemaVersion: 1,
+		id: `memory-supervisor:${action}:${params.entry.eventId}`,
+		caseSignature: params.entry.caseSignature,
+		eventIds: [params.entry.eventId],
+		action,
+		reason: truncateMiddle(reason, 420),
+		grade: params.entry.grade,
+		confidence: Number(confidence.toFixed(3)),
+		targetScope: params.entry.targetScope,
+		route: params.entry.route,
+		evidenceRefs: params.entry.artifactRefs,
+		commands: uniqueNonEmpty(params.event?.commands ?? [], 16),
+		blockers: params.entry.blockers,
+		lifecycle: {
+			ttlDays,
+			reviewAfterDays: action === "promote" ? 45 : action === "retain" || action === "merge" ? 21 : 7,
+			archiveCandidate: action === "expire" || action === "quarantine",
+			requiresFeedback: action === "promote" || action === "retain" || action === "merge",
+		},
+	};
+}
+
+function memorySupervisorMergeDecision(caseRow: CaseMemoryV1): MemorySupervisorDecisionV1 | undefined {
+	if (caseRow.eventIds.length < 2) return undefined;
+	const ttlDays = memorySupervisorTtlDays("merge");
+	return {
+		kind: "repi-memory-supervisor-decision",
+		schemaVersion: 1,
+		id: `memory-supervisor:merge:${caseRow.caseSignature}`,
+		caseSignature: caseRow.caseSignature,
+		eventIds: caseRow.eventIds.slice(0, 80),
+		action: "merge",
+		reason: `merge_by_case_signature events=${caseRow.eventIds.length} reuse=${caseRow.quality.reuseCount} failures=${caseRow.quality.failureCount}`,
+		grade: Number(Math.min(100, caseRow.quality.confidence * 70 + Math.min(20, caseRow.quality.reuseCount * 3)).toFixed(2)),
+		confidence: Number(caseRow.quality.confidence.toFixed(3)),
+		targetScope: memoryTargetScope(caseRow.target),
+		route: caseRow.route,
+		evidenceRefs: [],
+		commands: uniqueNonEmpty(caseRow.commands, 16),
+		blockers: caseRow.quality.failureCount > caseRow.quality.reuseCount ? ["failure_dominant_case_requires_demote_review"] : [],
+		lifecycle: {
+			ttlDays,
+			reviewAfterDays: 21,
+			archiveCandidate: false,
+			requiresFeedback: true,
+		},
+	};
+}
+
+function memorySupervisorQuarantineDecision(
+	finding: MemoryContradictionLedgerEntryV1,
+	caseRow?: CaseMemoryV1,
+): MemorySupervisorDecisionV1 {
+	const action: MemorySupervisorAction = finding.status === "stale" ? "expire" : "quarantine";
+	const ttlDays = memorySupervisorTtlDays(action);
+	return {
+		kind: "repi-memory-supervisor-decision",
+		schemaVersion: 1,
+		id: `memory-supervisor:${action}:${finding.caseSignature}`,
+		caseSignature: finding.caseSignature,
+		eventIds: finding.eventIds.slice(0, 80),
+		action,
+		reason: truncateMiddle(`contradiction_ledger:${finding.status}:${finding.reasons.join("; ")}`, 420),
+		grade: 0,
+		confidence: Number((caseRow?.quality.confidence ?? 0.3).toFixed(3)),
+		targetScope: memoryTargetScope(caseRow?.target ?? finding.targets[0]),
+		route: caseRow?.route ?? finding.routes[0] ?? "unknown",
+		evidenceRefs: [],
+		commands: uniqueNonEmpty(caseRow?.commands ?? [], 16),
+		blockers: finding.reasons,
+		lifecycle: {
+			ttlDays,
+			reviewAfterDays: 7,
+			archiveCandidate: true,
+			requiresFeedback: false,
+		},
+	};
+}
+
+function formatMemorySupervisorBoard(report: MemorySupervisorReportV1): string {
+	const decisionLine = (decision: MemorySupervisorDecisionV1) =>
+		`- id=${decision.id} case=${decision.caseSignature} action=${decision.action} grade=${decision.grade.toFixed(1)} confidence=${decision.confidence.toFixed(2)} route=${decision.route} ttl=${decision.lifecycle.ttlDays}d events=${decision.eventIds.length} reason=${truncateMiddle(decision.reason, 180)}`;
+	return [
+		"# REPI Memory Lifecycle Board",
+		"",
+		"memory_supervisor:",
+		`MemorySupervisorV1: ${report.MemorySupervisorV1}`,
+		`generated_at: ${report.generatedAt}`,
+		`store_grade: ${report.storeGrade}`,
+		`hash_chain_ok: ${report.hashChainOk}`,
+		`usefulness_status: ${report.usefulnessStatus}`,
+		`events: ${report.eventCount}`,
+		`cases: ${report.caseCount}`,
+		`supervisor_report: ${report.supervisorReportPath}`,
+		`sedimentation_report: ${report.sedimentationReportPath}`,
+		`usefulness_report: ${report.usefulnessReportPath}`,
+		"promotion_queue:",
+		...(report.promotionQueue.length ? report.promotionQueue.map(decisionLine) : ["- none"]),
+		"demotion_queue:",
+		...(report.demotionQueue.length ? report.demotionQueue.map(decisionLine) : ["- none"]),
+		"quarantine_queue:",
+		...(report.quarantineQueue.length ? report.quarantineQueue.map(decisionLine) : ["- none"]),
+		"expire_queue:",
+		...(report.expireQueue.length ? report.expireQueue.map(decisionLine) : ["- none"]),
+		"merge_queue:",
+		...(report.mergeQueue.length ? report.mergeQueue.map(decisionLine) : ["- none"]),
+		"injection_allowed_event_ids:",
+		...(report.injectionAllowedEventIds.length ? report.injectionAllowedEventIds.map((id) => `- ${id}`) : ["- none"]),
+		"recommended_commands:",
+		...(report.recommendedCommands.length ? report.recommendedCommands.map((command) => `- ${command}`) : ["- none"]),
+		"required_gates:",
+		...report.requiredGates.map((gate) => `- ${gate}`),
+		"",
+	].join("\n");
+}
+
+function superviseMemoryLifecycle(): MemorySupervisorReportV1 {
+	ensureReconStorage();
+	const store = verifyMemoryStore();
+	const usefulness = evaluateMemoryUsefulness();
+	const sedimentation = buildMemorySemanticIndex();
+	const events = readMemoryEvents();
+	const eventsById = new Map(events.map((event) => [event.id, event]));
+	const casesBySignature = latestCaseMemoryBySignature();
+	const decisions = sedimentation.entries.map((entry) =>
+		memorySupervisorDecisionFromEntry({
+			entry,
+			event: eventsById.get(entry.eventId),
+			caseRow: casesBySignature.get(entry.caseSignature),
+		}),
+	);
+	const existingDecisionIds = new Set(decisions.map((decision) => decision.id));
+	for (const finding of sedimentation.contradictions) {
+		const decision = memorySupervisorQuarantineDecision(finding, casesBySignature.get(finding.caseSignature));
+		if (!existingDecisionIds.has(decision.id)) {
+			decisions.push(decision);
+			existingDecisionIds.add(decision.id);
+		}
+	}
+	for (const caseRow of casesBySignature.values()) {
+		const decision = memorySupervisorMergeDecision(caseRow);
+		if (decision && !existingDecisionIds.has(decision.id)) {
+			decisions.push(decision);
+			existingDecisionIds.add(decision.id);
+		}
+	}
+	decisions.sort((left, right) => {
+		const order: Record<MemorySupervisorAction, number> = {
+			quarantine: 0,
+			expire: 1,
+			demote: 2,
+			promote: 3,
+			merge: 4,
+			retain: 5,
+		};
+		return order[left.action] - order[right.action] || right.grade - left.grade || left.id.localeCompare(right.id);
+	});
+	const byAction = (action: MemorySupervisorAction) => decisions.filter((decision) => decision.action === action);
+	const promotionQueue = byAction("promote");
+	const demotionQueue = byAction("demote");
+	const quarantineQueue = byAction("quarantine");
+	const expireQueue = byAction("expire");
+	const mergeQueue = byAction("merge");
+	const retainQueue = byAction("retain");
+	const recommendedCommands = uniqueNonEmpty(
+		[
+			store.storeGrade === "blocked" ? "inspect memory/events.jsonl parse/hash-chain errors before new writes" : undefined,
+			store.storeGrade === "repairable" ? "re_memory repair-index" : undefined,
+			"re_memory verify",
+			"re_memory sediment",
+			quarantineQueue.length || expireQueue.length ? "re_memory prune-playbooks" : undefined,
+			mergeQueue.length ? "re_memory consolidate" : undefined,
+			promotionQueue.length ? "re_memory playbooks" : undefined,
+			"re_context pack",
+		].filter(Boolean) as string[],
+		12,
+	);
+	const report: MemorySupervisorReportV1 = {
+		kind: "repi-memory-supervisor-report",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		MemorySupervisorV1: true,
+		storeReportPath: memoryStoreReportPath(),
+		sedimentationReportPath: memorySedimentationReportPath(),
+		usefulnessReportPath: memoryUsefulnessEvalReportPath(),
+		supervisorReportPath: memorySupervisorReportPath(),
+		lifecycleBoardPath: memoryLifecycleBoardPath(),
+		eventCount: events.length,
+		caseCount: casesBySignature.size,
+		storeGrade: store.storeGrade,
+		hashChainOk: store.hashChainOk && sedimentation.hashChainOk,
+		usefulnessStatus: usefulness.aggregate.status,
+		decisions,
+		promotionQueue,
+		demotionQueue,
+		quarantineQueue,
+		expireQueue,
+		mergeQueue,
+		retainQueue,
+		injectionAllowedEventIds: promotionQueue.flatMap((decision) => decision.eventIds).slice(0, 64),
+		recommendedCommands,
+		requiredGates: [
+			"MemorySupervisorV1",
+			"store_verify_before_supervision",
+			"sedimentation_before_promotion",
+			"quarantine_overrides_promotion",
+			"merge_by_case_signature",
+			"ttl_review_after_days",
+			"feedback_required_after_injection",
+		],
+		policy: {
+			MemorySupervisorV1: true,
+			supervisorRunsAfterSedimentation: true,
+			promotionRequiresArtifactSha256: true,
+			promotionRequiresVerifierOrReplay: true,
+			quarantineOverridesPromotion: true,
+			failureFeedbackDemotes: true,
+			mergeByCaseSignature: true,
+		},
+	};
+	writeFileAtomic(memorySupervisorReportPath(), `${JSON.stringify(report, null, 2)}\n`);
+	writeFileAtomic(memoryLifecycleBoardPath(), formatMemorySupervisorBoard(report));
+	return report;
+}
+
+function formatMemorySupervisor(report = superviseMemoryLifecycle()): string {
+	return [
+		"memory_supervisor:",
+		`MemorySupervisorV1=${report.MemorySupervisorV1}`,
+		`store_grade=${report.storeGrade}`,
+		`hash_chain_ok=${report.hashChainOk}`,
+		`usefulness_status=${report.usefulnessStatus}`,
+		`events=${report.eventCount}`,
+		`cases=${report.caseCount}`,
+		`supervisor_report=${report.supervisorReportPath}`,
+		`lifecycle_board=${report.lifecycleBoardPath}`,
+		`queues=promote:${report.promotionQueue.length},demote:${report.demotionQueue.length},quarantine:${report.quarantineQueue.length},expire:${report.expireQueue.length},merge:${report.mergeQueue.length},retain:${report.retainQueue.length}`,
+		"promotion_queue:",
+		...(report.promotionQueue.length
+			? report.promotionQueue.slice(0, 8).map(
+					(decision) =>
+						`- case=${decision.caseSignature} event=${decision.eventIds[0] ?? "none"} grade=${decision.grade.toFixed(1)} reason=${truncateMiddle(decision.reason, 180)}`,
+				)
+			: ["- none"]),
+		"demotion_or_quarantine_queue:",
+		...[...report.quarantineQueue, ...report.expireQueue, ...report.demotionQueue].slice(0, 12).map(
+			(decision) =>
+				`- action=${decision.action} case=${decision.caseSignature} grade=${decision.grade.toFixed(1)} blockers=${decision.blockers.join(",") || "none"}`,
+		),
+		...(report.quarantineQueue.length + report.expireQueue.length + report.demotionQueue.length === 0 ? ["- none"] : []),
+		"merge_queue:",
+		...(report.mergeQueue.length
+			? report.mergeQueue.slice(0, 8).map((decision) => `- case=${decision.caseSignature} events=${decision.eventIds.length} commands=${decision.commands.length}`)
+			: ["- none"]),
+		"recommended_commands:",
+		...report.recommendedCommands.map((command) => `- ${command}`),
+		"required_gates:",
+		...report.requiredGates.map((gate) => `- ${gate}`),
+	].join("\n");
+}
+
 function replayMemoryOutcome(replay: ReplayArtifact): MemoryOutcome {
 	if (replay.mode !== "run") return "partial";
 	if (replay.passed > 0 && replay.failed === 0 && replay.blocked.length === 0) return "success";
@@ -26669,7 +27047,7 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 	});
 	pi.registerCommand("re-memory", {
 		description:
-			"Read, append, evolve, search, verify, repair, snapshot, eval, distill, sediment, or maintain REPI memory: /re-memory [show|events|search|append|evolve|verify|repair-index|snapshot|eval|consolidate|distill|sediment|playbooks|prune-playbooks] ...",
+			"Read, append, evolve, search, verify, repair, snapshot, eval, distill, sediment, supervise, or maintain REPI memory: /re-memory [show|events|search|append|evolve|verify|repair-index|snapshot|eval|consolidate|distill|sediment|supervise|playbooks|prune-playbooks] ...",
 		handler: async (args) => {
 			const trimmed = args.trim();
 			if (trimmed.startsWith("append ")) {
@@ -26753,6 +27131,12 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 				const report = buildMemorySemanticIndex();
 				updateMissionGate("memory_or_evolution_written", "done", `memory_v4_sedimentation inject=${report.injectionPacket.entries.length} contradictions=${report.contradictions.length}`);
 				sendDisplayMessage(pi, "REPI Memory Sedimentation", formatMemorySedimentation(report));
+				return;
+			}
+			if (trimmed === "supervise" || trimmed === "supervisor" || trimmed === "lifecycle") {
+				const report = superviseMemoryLifecycle();
+				updateMissionGate("memory_or_evolution_written", report.storeGrade === "blocked" ? "blocked" : "done", `MemorySupervisorV1 promote=${report.promotionQueue.length} quarantine=${report.quarantineQueue.length} demote=${report.demotionQueue.length}`);
+				sendDisplayMessage(pi, "REPI Memory Supervisor", formatMemorySupervisor(report));
 				return;
 			}
 			if (trimmed === "playbooks") {
@@ -27450,7 +27834,7 @@ function installReconTools(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "re_memory",
 		label: "RE Memory",
-		description: "Read, search, append, evolve, verify, evaluate, distill, sediment, or maintain REPI long-term memory and playbooks.",
+		description: "Read, search, append, evolve, verify, evaluate, distill, sediment, supervise, or maintain REPI long-term memory and playbooks.",
 		promptSnippet: "Use long-term reverse/pentest memory for reusable evidence and lessons.",
 		promptGuidelines: ["Before repeating a known security workflow, inspect re_memory for similar cases."],
 		parameters: Type.Object({
@@ -27472,6 +27856,9 @@ function installReconTools(pi: ExtensionAPI): void {
 				Type.Literal("sediment"),
 				Type.Literal("index"),
 				Type.Literal("inject"),
+				Type.Literal("supervise"),
+				Type.Literal("supervisor"),
+				Type.Literal("lifecycle"),
 				Type.Literal("playbooks"),
 				Type.Literal("prune-playbooks"),
 			]),
@@ -27593,6 +27980,18 @@ function installReconTools(pi: ExtensionAPI): void {
 						contradictionLedger: memoryContradictionLedgerPath(),
 						injectionPacket: memoryInjectionPacketPath(),
 						sedimentationReport: memorySedimentationReportPath(),
+					} as Record<string, unknown>,
+				};
+			}
+			if (params.action === "supervise" || params.action === "supervisor" || params.action === "lifecycle") {
+				const report = superviseMemoryLifecycle();
+				const text = formatMemorySupervisor(report);
+				updateMissionGate("memory_or_evolution_written", report.storeGrade === "blocked" ? "blocked" : "done", `MemorySupervisorV1 promote=${report.promotionQueue.length} quarantine=${report.quarantineQueue.length} demote=${report.demotionQueue.length}`);
+				return {
+					content: [{ type: "text" as const, text }],
+					details: {
+						supervisorReport: memorySupervisorReportPath(),
+						lifecycleBoard: memoryLifecycleBoardPath(),
 					} as Record<string, unknown>,
 				};
 			}

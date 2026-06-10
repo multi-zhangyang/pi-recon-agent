@@ -1,0 +1,49 @@
+{
+  "kind": "repi-memory-supervisor-fixture",
+  "schemaVersion": 1,
+  "MemorySupervisorV1": true,
+  "description": "fixture:promotion-demotion-quarantine-merge covers the lifecycle decisions a top harness must preserve after Memory v5 sedimentation.",
+  "requiredGates": [
+    "MemorySupervisorV1",
+    "store_verify_before_supervision",
+    "sedimentation_before_promotion",
+    "quarantine_overrides_promotion",
+    "failureFeedbackDemotes",
+    "merge_by_case_signature",
+    "feedback_required_after_injection"
+  ],
+  "scenarios": [
+    {
+      "id": "promote-replayed-artifact-backed-case",
+      "decisions": [
+        { "action": "promote", "caseSignature": "case:web-authz", "eventIds": ["mem-web-success"], "grade": 86, "blockers": [] }
+      ]
+    },
+    {
+      "id": "demote-failure-feedback-case",
+      "decisions": [
+        { "action": "demote", "caseSignature": "case:web-authz", "eventIds": ["mem-web-failed"], "grade": 22, "blockers": ["negative_outcome:failure"] }
+      ]
+    },
+    {
+      "id": "quarantine-cross-route-pollution",
+      "decisions": [
+        { "action": "quarantine", "caseSignature": "case:cross-route", "eventIds": ["mem-pwn", "mem-authz"], "grade": 0, "blockers": ["memory_contamination_quarantine:cross_route"] }
+      ]
+    },
+    {
+      "id": "merge-duplicate-case-signature",
+      "decisions": [
+        { "action": "merge", "caseSignature": "case:pwn-crash", "eventIds": ["mem-pwn-1", "mem-pwn-2"], "grade": 72, "blockers": [] }
+      ]
+    }
+  ],
+  "mustHaveMarkers": [
+    "MemorySupervisorV1",
+    "quarantine_overrides_promotion",
+    "failureFeedbackDemotes",
+    "merge_by_case_signature",
+    "feedback_required_after_injection",
+    "lifecycle-board"
+  ]
+}

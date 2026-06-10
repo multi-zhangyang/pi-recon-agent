@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repi.local/schemas/memory-supervisor.schema.json",
+  "title": "REPI Memory Supervisor V1",
+  "$defs": {
+    "MemoryArtifactHash": {
+      "type": "object",
+      "required": ["path", "sha256", "tier"],
+      "properties": {
+        "path": { "type": "string" },
+        "sha256": { "type": ["string", "null"] },
+        "tier": { "type": "string" },
+        "required": { "type": "boolean" }
+      }
+    },
+    "MemorySupervisorDecisionV1": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "id", "caseSignature", "eventIds", "action", "reason", "grade", "confidence", "targetScope", "route", "evidenceRefs", "commands", "blockers", "lifecycle"],
+      "properties": {
+        "kind": { "const": "repi-memory-supervisor-decision" },
+        "schemaVersion": { "const": 1 },
+        "id": { "type": "string", "minLength": 1 },
+        "caseSignature": { "type": "string", "minLength": 1 },
+        "eventIds": { "type": "array", "items": { "type": "string" } },
+        "action": { "enum": ["promote", "retain", "demote", "quarantine", "expire", "merge"] },
+        "reason": { "type": "string" },
+        "grade": { "type": "number" },
+        "confidence": { "type": "number" },
+        "targetScope": { "type": "string" },
+        "route": { "type": "string" },
+        "evidenceRefs": { "type": "array", "items": { "$ref": "#/$defs/MemoryArtifactHash" } },
+        "commands": { "type": "array", "items": { "type": "string" } },
+        "blockers": { "type": "array", "items": { "type": "string" } },
+        "lifecycle": {
+          "type": "object",
+          "required": ["ttlDays", "reviewAfterDays", "archiveCandidate", "requiresFeedback"],
+          "properties": {
+            "ttlDays": { "type": "number" },
+            "reviewAfterDays": { "type": "number" },
+            "archiveCandidate": { "type": "boolean" },
+            "requiresFeedback": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "MemorySupervisorReportV1": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "generatedAt", "MemorySupervisorV1", "storeReportPath", "sedimentationReportPath", "usefulnessReportPath", "supervisorReportPath", "lifecycleBoardPath", "eventCount", "caseCount", "storeGrade", "hashChainOk", "usefulnessStatus", "decisions", "promotionQueue", "demotionQueue", "quarantineQueue", "expireQueue", "mergeQueue", "retainQueue", "injectionAllowedEventIds", "recommendedCommands", "requiredGates", "policy"],
+      "properties": {
+        "kind": { "const": "repi-memory-supervisor-report" },
+        "schemaVersion": { "const": 1 },
+        "generatedAt": { "type": "string", "format": "date-time" },
+        "MemorySupervisorV1": { "const": true },
+        "storeReportPath": { "type": "string" },
+        "sedimentationReportPath": { "type": "string" },
+        "usefulnessReportPath": { "type": "string" },
+        "supervisorReportPath": { "type": "string" },
+        "lifecycleBoardPath": { "type": "string" },
+        "eventCount": { "type": "number" },
+        "caseCount": { "type": "number" },
+        "storeGrade": { "enum": ["pass", "repairable", "blocked"] },
+        "hashChainOk": { "type": "boolean" },
+        "usefulnessStatus": { "enum": ["pass", "warn", "fail", "empty"] },
+        "decisions": { "type": "array", "items": { "$ref": "#/$defs/MemorySupervisorDecisionV1" } },
+        "promotionQueue": { "type": "array", "items": { "$ref": "#/$defs/MemorySupervisorDecisionV1" } },
+        "demotionQueue": { "type": "array", "items": { "$ref": "#/$defs/MemorySupervisorDecisionV1" } },
+        "quarantineQueue": { "type": "array", "items": { "$ref": "#/$defs/MemorySupervisorDecisionV1" } },
+        "expireQueue": { "type": "array", "items": { "$ref": "#/$defs/MemorySupervisorDecisionV1" } },
+        "mergeQueue": { "type": "array", "items": { "$ref": "#/$defs/MemorySupervisorDecisionV1" } },
+        "retainQueue": { "type": "array", "items": { "$ref": "#/$defs/MemorySupervisorDecisionV1" } },
+        "injectionAllowedEventIds": { "type": "array", "items": { "type": "string" } },
+        "recommendedCommands": { "type": "array", "items": { "type": "string" } },
+        "requiredGates": { "type": "array", "items": { "type": "string" } },
+        "policy": {
+          "type": "object",
+          "required": ["MemorySupervisorV1", "supervisorRunsAfterSedimentation", "promotionRequiresArtifactSha256", "promotionRequiresVerifierOrReplay", "quarantineOverridesPromotion", "failureFeedbackDemotes", "mergeByCaseSignature"],
+          "properties": {
+            "MemorySupervisorV1": { "const": true },
+            "supervisorRunsAfterSedimentation": { "const": true },
+            "promotionRequiresArtifactSha256": { "const": true },
+            "promotionRequiresVerifierOrReplay": { "const": true },
+            "quarantineOverridesPromotion": { "const": true },
+            "failureFeedbackDemotes": { "const": true },
+            "mergeByCaseSignature": { "const": true }
+          }
+        }
+      }
+    }
+  }
+}

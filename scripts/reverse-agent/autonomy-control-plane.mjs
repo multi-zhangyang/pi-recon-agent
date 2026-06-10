@@ -523,6 +523,30 @@ const REQUIREMENTS = [
 					files: ["scripts/reverse-agent/memory-swarm-writeback-gate.mjs"],
 					markers: ["repi-memory-swarm-writeback-gate", "fixture:writeback-count", "fixture:artifact-capture", "gate:memory-swarm-writeback"],
 				},
+				{
+					id: "memory_supervisor_lifecycle_runtime",
+					description: "Memory Supervisor 在 sedimentation 后输出 promotion/demotion/quarantine/expire/merge 队列、lifecycle-board 和 required gates，避免长期记忆只会写不会治理。",
+					files: ["packages/coding-agent/src/core/recon-profile.ts", "repi-profile/extensions/reverse-pentest-core.ts"],
+					markers: ["MemorySupervisorV1", "superviseMemoryLifecycle", "formatMemorySupervisor", "memorySupervisorReportPath", "memoryLifecycleBoardPath", "quarantineOverridesPromotion", "mergeByCaseSignature"],
+				},
+				{
+					id: "memory_supervisor_gate",
+					description: "Memory Supervisor hard-eval 真实调用 re_memory supervise 并验证 report schema、lifecycle-board、promotion/demotion/quarantine/merge fixture。",
+					files: ["scripts/reverse-agent/memory-supervisor-gate.mjs"],
+					markers: ["repi-memory-supervisor-gate", "runtime:report-schema", "runtime:lifecycle-board", "fixture:promotion-demotion-quarantine-merge"],
+				},
+				{
+					id: "memory_supervisor_schema",
+					description: "Memory Supervisor schema 固化 report/decision/lifecycle policy 的可机读合同。",
+					files: ["schemas/reverse-agent/memory-supervisor.schema.json"],
+					markers: ["MemorySupervisorReportV1", "MemorySupervisorDecisionV1", "quarantineOverridesPromotion", "mergeByCaseSignature"],
+				},
+				{
+					id: "memory_supervisor_fixture",
+					description: "Memory Supervisor fixture 覆盖 promote/demote/quarantine/merge 生命周期场景。",
+					files: ["fixtures/reverse-agent/memory-supervisor.fixture.json"],
+					markers: ["repi-memory-supervisor-fixture", "promote", "demote", "quarantine", "merge", "feedback_required_after_injection"],
+				},
 			{
 				id: "memory_usefulness_eval_runtime",
 				description: "Memory usefulness eval 把长期记忆从“能写”提升到“可度量地召回正确经验并阻断污染经验”，覆盖 hit@k、MRR、forbiddenHitIds、同进程并发写和 child-process 并发写压力。",

@@ -36,6 +36,7 @@
 		"gate:memory-sedimentation": "node scripts/reverse-agent/memory-sedimentation-gate.mjs . --strict",
 		"gate:memory-store": "node scripts/reverse-agent/memory-store-gate.mjs . --strict",
 		"gate:memory-swarm-writeback": "node scripts/reverse-agent/memory-swarm-writeback-gate.mjs . --strict",
+		"gate:memory-supervisor": "node scripts/reverse-agent/memory-supervisor-gate.mjs . --strict",
 		"gate:worker-runtime-pool": "node scripts/reverse-agent/worker-runtime-pool-gate.mjs . --strict",
 		"gate:worker-child-session": "node scripts/reverse-agent/worker-child-session-gate.mjs . --strict",
 		"gate:structured-claim-merge": "node scripts/reverse-agent/structured-claim-merge-gate.mjs . --strict",

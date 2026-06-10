@@ -47,7 +47,7 @@ re_kernel → re_decision_core → re_map → re_operation → re_delegate
 - `re_operation` / `re_delegate` / `re_swarm`：把大任务拆成 phase、worker packet、parallel plan。
 - `re_supervisor`：审查 worker 输出，生成冲突表、claim gate policy 和修复队列。
 - `re_reflect` / `re_knowledge_graph`：沉淀经验、case signature、playbook 和跨任务知识。
-- `re_memory events/search-events/verify/repair-index/snapshot/consolidate/distill/sediment`：读取结构化长期记忆、检索可复用 case、校验/修复事务化 store、汇总高质量经验，把事件蒸馏为 command template / verifier rule / worker routing hint，并生成 Memory v4 semantic-index、contradiction-ledger 与 mandatory injection packet。
+- `re_memory events/search-events/verify/repair-index/snapshot/consolidate/distill/sediment/supervise`：读取结构化长期记忆、检索可复用 case、校验/修复事务化 store、汇总高质量经验，把事件蒸馏为 command template / verifier rule / worker routing hint，并生成 Memory v4 semantic-index、contradiction-ledger、mandatory injection packet，以及 Memory Supervisor 的 supervisor-report / lifecycle-board。
 - `re_context`：生成可恢复上下文包，支持 exact resume。
 - `re_operator`：把 next commands 转成 bounded operator queue。
 - `re_verifier` / `re_compiler` / `re_replayer` / `re_autofix` / `re_proof_loop`：验证、报告编译、复现、修复、闭环证明。
@@ -66,7 +66,9 @@ re_kernel → re_decision_core → re_map → re_operation → re_delegate
 - Memory usefulness eval：`re_memory eval` 会生成 `usefulness-eval.json`，度量 hit@1、hit@k、MRR、forbiddenLeakRate 和空召回率；`npm run gate:memory-usefulness` 用 authz / pwn 正召回、失败/跨 route forbidden memory 不进 topK、child-process 并发 append 保持 hash-chain 的 hard-eval 保护“记忆真的有用”。
 - Memory v3 distiller：`re_memory distill` 会把 `events.jsonl` 中高置信、已复现、同 route 的经验蒸馏进 `distillation-report.json` / `pattern-book.md`，产出 `command_template`、`verifier_rule`、`worker_routing_hint`，并强制记录 `mandatory_memory_injection_chain=retrieve -> rank -> inject -> execute -> verify -> feedback`。跨 route/cross target/高置信矛盾/陈旧失败会进入 `quarantine.json`，避免把脏经验继续注入计划。`npm run gate:memory-distiller` 用 promote、quarantine、hash drift、低置信负例保护该能力。
 - Memory v4 sedimentation：`re_memory sediment` 会在 Memory v3 之上生成 `semantic-index.json`、`contradiction-ledger.jsonl`、`injection-packet.json` 和 `sedimentation-report.json`。`re_lane plan` 会强制刷新该沉淀包，并优先注入 `memory-sediment:*` 命令；只有同时具备 artifact sha256、replay/verifier 证据、非 quarantine、grade≥70 的事件才可进入 mandatory injection packet，执行后仍走 `memory_reuse_feedback` 写回。`npm run gate:memory-sedimentation` 验证 artifact/verifier/quarantine/feedback/hash-chain 负例。
-- Memory v5 store：`appendMemoryEvent` 不再直接拼接 JSONL，而是先拿 `~/.repi/agent/recon/memory/.store.lock`，校验 hash-chain/seq/parse，再写 `transactions/*.json` transaction manifest，最后原子替换 `events.jsonl` 与 `case-memory.jsonl`。`re_memory verify` 写 `store-report.json`，`re_memory repair-index` 从事件链重建 case-memory，`re_memory snapshot` 写 `store-snapshot.json`；普通 `re_lane run` 的高价值 runtime 结果会自动写入 `memory_auto_writeback`，`re_swarm run` 的 worker 结果会写入 `memory-swarm-writeback`。`npm run gate:memory-store` 验证锁、坏 prevHash 阻断、case index 修复和 live writeback marker；`npm run gate:memory-swarm-writeback` 验证并行 worker 写回 MemoryStoreV5。
+- Memory Supervisor：`re_memory supervise` 在 `verify/eval/sediment` 后生成 `memory/supervisor-report.json` 与 `memory/lifecycle-board.md`，把长期记忆治理成 promotion / demotion / quarantine / expire / merge / retain 队列；它要求 `store_verify_before_supervision`、`sedimentation_before_promotion`、`quarantine_overrides_promotion`、`merge_by_case_signature`、`feedback_required_after_injection`，防止长期记忆只会写入、不会降噪和生命周期管理。
+
+- Memory v5 store：`appendMemoryEvent` 不再直接拼接 JSONL，而是先拿 `~/.repi/agent/recon/memory/.store.lock`，校验 hash-chain/seq/parse，再写 `transactions/*.json` transaction manifest，最后原子替换 `events.jsonl` 与 `case-memory.jsonl`。`re_memory verify` 写 `store-report.json`，`re_memory repair-index` 从事件链重建 case-memory，`re_memory snapshot` 写 `store-snapshot.json`；普通 `re_lane run` 的高价值 runtime 结果会自动写入 `memory_auto_writeback`，`re_swarm run` 的 worker 结果会写入 `memory-swarm-writeback`。`npm run gate:memory-store` 验证锁、坏 prevHash 阻断、case index 修复和 live writeback marker；`npm run gate:memory-swarm-writeback` 验证并行 worker 写回 MemoryStoreV5；`npm run gate:memory-supervisor` 真实调用 `re_memory supervise`，验证 `MemorySupervisorV1` report schema、promotion/demotion/quarantine/merge fixture、lifecycle-board 和 required gates。
 - strict claim gate：`gate:claim-release` 使用严格 claim ledger validation，不把 orchestration 成功误报成平台 claim 成功；执行后会写 `~/.repi/agent/recon/evidence/claim-release/<timestamp>/result.json`，供 supervisor/compiler/complete 三段 runtime 读取。
 - failure/repair runtime ledger：`FailureLedgerEventV1`、`RepairQueueItemV1` strict schema、strict fixture、duplicate signature/attempt 去重检查、hard-eval 离线样例，`re_replayer` / `re_autofix` / `re_operator` / `re_proof_loop` failed|blocked row 到 `~/.repi/agent/recon/evidence/failures/ledger.jsonl`、`~/.repi/agent/recon/evidence/repairs/queue.jsonl` 的 append-only 写入 hooks，以及 compound-frontier、agent-dogfood role retry、plan-only invalid fixture 的 failure/repair 输出。
 - AutonomousRuntimeBatchV1 strict gate：`schemas/reverse-agent/autonomous-runtime-contract.schema.json` 与 `fixtures/reverse-agent/autonomous-runtime-contract.fixture.json` 覆盖 subagent runtime manifest、parallel shard state、compact resume transition、repair budget 和 runtime claim promotion；`npm run gate:autonomous-runtime` 会拒绝 duplicate subagent attempt、非法 resume transition 和 loose claim-gate 字段。
@@ -705,6 +707,7 @@ npm run gate:memory-distiller
 npm run gate:memory-sedimentation
 npm run gate:memory-store
 npm run gate:memory-swarm-writeback
+npm run gate:memory-supervisor
 npm run gate:repi-harness
 npm run gate:repi-product
 npm run gate:repi-isolation
