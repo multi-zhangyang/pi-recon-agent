@@ -78,6 +78,7 @@ REPI 在 `packages/coding-agent/src/core/recon-profile.ts`、`repi-profile/SYSTE
 | `scripts/reverse-agent/memory-contract-gate.mjs` | Memory v2 结构化记忆门禁：验证 `MemoryEventV1` hash chain、`CaseMemoryV1` 引用、retrieval report 引用和负例拒绝；对应 `npm run gate:memory-contract` |
 | `scripts/reverse-agent/memory-utility-gate.mjs` | Memory utility hard-eval：用 authz 跨目标迁移与 pwn replay fixture 验证正确召回、失败/陈旧降权、跨 route 命令污染阻断；对应 `npm run gate:memory-utility` |
 | `scripts/reverse-agent/memory-feedback-gate.mjs` | Memory reuse feedback hard-eval：验证 `re_lane run` 复用结构化记忆后的在线学习闭环，成功 promote、失败 demote，并阻断失败 case 命令继续污染；对应 `npm run gate:memory-feedback` |
+| `scripts/reverse-agent/memory-hybrid-gate.mjs` | Memory hybrid retrieval hard-eval：验证语义轻量召回、case-memory 文本召回、artifact path/tier 召回和 route 隔离；对应 `npm run gate:memory-hybrid` |
 | `pi` | 非拥有型兼容 shim；不会启动 REPI，只会转交给 PATH 中的原版 Pi，找不到则提示使用 `repi` |
 | `repi` | REPI 独立产品入口，默认使用 `~/.repi/agent`；源码 wrapper 和 npm/bin 直启都会由 CLI bootstrap 自动启用 `--recon` 隔离参数 |
 | `scripts/reverse-agent/install-repi.sh` | 安装 `/usr/local/bin/repi`，初始化 `~/.repi/agent`，不会覆盖/删除普通 `pi` |
@@ -241,6 +242,7 @@ npm run gate:repi-harness
 npm run gate:memory-contract
 npm run gate:memory-utility
 npm run gate:memory-feedback
+npm run gate:memory-hybrid
 npm run gate:repi-product
 npm run gate:repi-isolation
 

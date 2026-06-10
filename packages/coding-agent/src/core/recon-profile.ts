@@ -23589,6 +23589,109 @@ function memoryRouteMatches(eventRoute: string | undefined, route: string | unde
 	return left === right || left.includes(right) || right.includes(left);
 }
 
+function memorySemanticAliases(token: string): string[] {
+	const aliases: Record<string, string[]> = {
+		acl: ["authz", "authorization", "permission", "role", "ownership"],
+		authorization: ["authz", "permission", "role", "ownership"],
+		authz: ["authorization", "permission", "role", "ownership", "principal"],
+		bola: ["authz", "authorization", "ownership", "object", "principal"],
+		idor: ["authz", "authorization", "ownership", "object", "principal"],
+		owner: ["ownership", "principal", "object", "tenant"],
+		ownership: ["owner", "principal", "object", "tenant", "authz"],
+		tenant: ["ownership", "principal", "object", "scope"],
+		crash: ["segfault", "core", "overflow", "primitive", "pwn"],
+		exploit: ["pwn", "poc", "payload", "primitive", "replay"],
+		leak: ["libc", "address", "rop", "pwn"],
+		ret2libc: ["rop", "libc", "pwn", "chain"],
+		segfault: ["crash", "core", "overflow", "primitive"],
+		signature: ["sign", "hmac", "crypto", "nonce", "timestamp"],
+		signing: ["sign", "signature", "hmac", "crypto", "nonce"],
+		packet: ["pcap", "stream", "tshark", "flow"],
+		stream: ["pcap", "packet", "tshark", "flow"],
+		rootfs: ["firmware", "squashfs", "binwalk", "iot"],
+		metadata: ["cloud", "iam", "instance", "k8s", "kubernetes"],
+		ioc: ["malware", "c2", "yara", "capa", "floss"],
+	};
+	return aliases[token] ?? [];
+}
+
+function memoryHybridQueryTokens(queryTokens: string[]): string[] {
+	return uniqueNonEmpty(queryTokens.flatMap((token) => memorySemanticAliases(token)), 48);
+}
+
+function memoryCaseTextForSearch(row: CaseMemoryV1 | undefined): string {
+	if (!row) return "";
+	return [
+		row.summary,
+		row.route,
+		row.target ?? "",
+		...row.domainTags,
+		...row.commands,
+		...row.reuseRules,
+		...row.failurePatterns,
+	].join("\n").toLowerCase();
+}
+
+function memoryArtifactTextForSearch(event: MemoryEventV1): string {
+	return event.artifactHashes.map((artifact) => `${artifact.path} ${artifact.tier}`).join("\n").toLowerCase();
+}
+
+function memoryHybridOverlapScore(params: {
+	tokens: string[];
+	haystack: Set<string>;
+	reasonPrefix: string;
+	points: number;
+	max: number;
+	reasons: string[];
+}): number {
+	let score = 0;
+	for (const token of params.tokens) {
+		if (!params.haystack.has(token)) continue;
+		score += params.points;
+		params.reasons.push(`${params.reasonPrefix}:${token}`);
+		if (score >= params.max) return params.max;
+	}
+	return score;
+}
+
+function memoryHybridSignalScore(
+	event: MemoryEventV1,
+	caseRow: CaseMemoryV1 | undefined,
+	queryTokens: string[],
+	semanticTokens: string[],
+	reasons: string[],
+): number {
+	const caseTokens = memorySearchTokens(memoryCaseTextForSearch(caseRow));
+	const artifactTokens = memorySearchTokens(memoryArtifactTextForSearch(event));
+	const eventTokens = memorySearchTokens(memoryTextForSearch(event));
+	let score = 0;
+	score += memoryHybridOverlapScore({
+		tokens: semanticTokens,
+		haystack: eventTokens,
+		reasonPrefix: "memory_semantic_hybrid_reuse",
+		points: 2,
+		max: 12,
+		reasons,
+	});
+	score += memoryHybridOverlapScore({
+		tokens: queryTokens,
+		haystack: caseTokens,
+		reasonPrefix: "case-memory-hybrid",
+		points: 2.5,
+		max: 12,
+		reasons,
+	});
+	score += memoryHybridOverlapScore({
+		tokens: [...queryTokens, ...semanticTokens],
+		haystack: artifactTokens,
+		reasonPrefix: "artifact-hybrid",
+		points: 3,
+		max: 9,
+		reasons,
+	});
+	return score;
+}
+
 function searchMemoryEvents(query?: string, options?: { route?: string; target?: string; limit?: number }): MemoryRetrievalHit[] {
 	ensureReconStorage();
 	const events = readMemoryEvents();
@@ -23596,6 +23699,7 @@ function searchMemoryEvents(query?: string, options?: { route?: string; target?:
 	const queryTokens = uniqueNonEmpty((query ?? "").toLowerCase().split(/[^a-z0-9一-鿿]+/), 24).filter(
 		(token) => token.length >= 2,
 	);
+	const semanticTokens = memoryHybridQueryTokens(queryTokens);
 	const hits = events.flatMap((event) => {
 		if (options?.route && !memoryRouteMatches(event.route, options.route)) return [];
 		const haystack = memoryTextForSearch(event);
@@ -23625,6 +23729,7 @@ function searchMemoryEvents(query?: string, options?: { route?: string; target?:
 		score += event.quality.confidence * 10 + (event.quality.replayVerified ? 8 : 0) + event.quality.reuseCount * 2;
 		score -= decay;
 		const caseRow = caseMemory.get(event.caseSignature);
+		score += memoryHybridSignalScore(event, caseRow, queryTokens, semanticTokens, reasons);
 		if (caseRow) {
 			const caseReuseBoost = Math.min(12, caseRow.quality.reuseCount * 1.5);
 			const caseFailurePenalty = Math.min(18, caseRow.quality.failureCount * 3 + caseRow.quality.decay * 10);
@@ -23643,7 +23748,14 @@ function searchMemoryEvents(query?: string, options?: { route?: string; target?:
 		}
 		if (event.outcome === "success") score += 6;
 		if (event.outcome === "blocked" || event.outcome === "failure") score -= event.outcome === "failure" ? 10 : 8;
-		if (score <= 0 || (queryTokens.length > 0 && !reasons.some((reason) => reason.startsWith("token:")))) return [];
+		if (
+			score <= 0 ||
+			(queryTokens.length > 0 &&
+				!reasons.some((reason) =>
+					/^(?:token:|memory_semantic_hybrid_reuse:|case-memory-hybrid:|artifact-hybrid:)/.test(reason),
+				))
+		)
+			return [];
 		return [{ event, score, reasons }];
 	});
 	const result = hits

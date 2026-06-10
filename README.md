@@ -62,6 +62,7 @@ re_kernel → re_decision_core → re_map → re_operation → re_delegate
 - Memory v2：`~/.repi/agent/recon/memory/events.jsonl` 是 append-only `MemoryEventV1` 哈希链；`case-memory.jsonl` 是按 case signature 聚合后的复用视图；`retrieval-report.json` 记录每次 `re_memory search-events` 的召回、分数、原因和 hash-chain 状态。Markdown journal/playbook 仍保留给人读，但不再是唯一事实源。
 - Memory utility hard-eval：`npm run gate:memory-utility` 用跨目标 authz 与 pwn 负例 fixture 验证“正确召回”——高置信、已复现、同 route 的成功经验应排第一并给出可迁移命令；失败、过旧、跨 route 的噪声不能进入高位或污染命令建议。
 - Memory reuse feedback：`re_lane run` 复用 `memory-event:*` 命令后会自动写回在线学习闭环；强证据会追加 `memory_reuse_feedback_promote` 事件并提升同 case，弱证据/失败会追加 `memory_reuse_feedback_demote` 事件并让后续检索降权。`npm run gate:memory-feedback` 用成功提升和失败降权双场景保护该行为。
+- Memory hybrid retrieval：`re_memory search-events` 不再只靠精确 token；它会结合语义轻量召回、case-memory 文本、artifact path/tier 和在线反馈一起打分。`npm run gate:memory-hybrid` 用 `idor/bola/acl`→authz ownership、PCAP artifact 召回等场景保护该能力。
 - strict claim gate：`gate:claim-release` 使用严格 claim ledger validation，不把 orchestration 成功误报成平台 claim 成功；执行后会写 `~/.repi/agent/recon/evidence/claim-release/<timestamp>/result.json`，供 supervisor/compiler/complete 三段 runtime 读取。
 - failure/repair runtime ledger：`FailureLedgerEventV1`、`RepairQueueItemV1` strict schema、strict fixture、duplicate signature/attempt 去重检查、hard-eval 离线样例，`re_replayer` / `re_autofix` / `re_operator` / `re_proof_loop` failed|blocked row 到 `~/.repi/agent/recon/evidence/failures/ledger.jsonl`、`~/.repi/agent/recon/evidence/repairs/queue.jsonl` 的 append-only 写入 hooks，以及 compound-frontier、agent-dogfood role retry、plan-only invalid fixture 的 failure/repair 输出。
 - AutonomousRuntimeBatchV1 strict gate：`schemas/reverse-agent/autonomous-runtime-contract.schema.json` 与 `fixtures/reverse-agent/autonomous-runtime-contract.fixture.json` 覆盖 subagent runtime manifest、parallel shard state、compact resume transition、repair budget 和 runtime claim promotion；`npm run gate:autonomous-runtime` 会拒绝 duplicate subagent attempt、非法 resume transition 和 loose claim-gate 字段。
@@ -403,10 +404,12 @@ re_memory { "action": "consolidate" }
 - `re_reflect write` 会把 supervisor lessons / failure patterns / reuse rules / repair commands 同时写入 playbook 和 `events.jsonl`；`re_replayer` / `re_autofix` / `re_proof_loop` / `re_complete` 会把 replay 结果、修复队列、证明闭环和完成审计自动写回 MemoryEventV1。
 - `re_lane plan` 会读取 playbook、knowledge graph 和 `events.jsonl`，把高分结构化历史命令合入命令包，并在 notes 中显示 `memory_event_reuse`。
 - `re_lane run` 执行到结构化记忆命令后会写 `memory_reuse_feedback`：成功/强证据形成 promote 事件，失败/弱证据形成 demote 事件；后续 `search-events` 会把同 case 的 `reuseCount/failureCount/decay/replayVerified` 作为在线学习闭环纳入排序和命令建议。
+- `re_memory search-events` 已接入 hybrid retrieval：精确 token 命中之外，还会用 `memory_semantic_hybrid_reuse`、`case-memory-hybrid`、`artifact-hybrid` 三类原因解释召回，覆盖术语不一致但工程语义相同的场景。
 - 每条 memory event 带 `quality.confidence`、`replayVerified`、`reuseCount`、`failureCount`、`decay`；检索时低置信、失败和衰减记录会降权，带 route 的检索会阻断跨域 command reuse，避免 Web/authz 经验污染 pwn 或相反。
 - 结构化契约由 `schemas/reverse-agent/memory-event.schema.json`、`fixtures/reverse-agent/memory-event.fixture.json` 和 `npm run gate:memory-contract` 保护。
 - Memory utility hard-eval 由 `fixtures/reverse-agent/memory-utility.fixture.json` 与 `npm run gate:memory-utility` 保护：它不只验证能写入，还验证能正确召回高价值事件、降权失败/陈旧噪声、拒绝跨 route 命令建议。
 - Memory reuse feedback hard-eval 由 `fixtures/reverse-agent/memory-feedback.fixture.json` 与 `npm run gate:memory-feedback` 保护：它验证复用成功会提升 case、复用失败会降权 case，且失败 case 不再继续污染命令建议。
+- Memory hybrid retrieval hard-eval 由 `fixtures/reverse-agent/memory-hybrid.fixture.json` 与 `npm run gate:memory-hybrid` 保护：它验证语义轻量召回、case-memory 辅助召回、artifact path/tier 召回都能进入排序原因，并保持 route 隔离。
 
 恢复时可以直接指定原始 pack：
 
@@ -635,6 +638,7 @@ node --check scripts/reverse-agent/context-compact-audit.mjs
 node --check scripts/reverse-agent/memory-contract-gate.mjs
 node --check scripts/reverse-agent/memory-utility-gate.mjs
 node --check scripts/reverse-agent/memory-feedback-gate.mjs
+node --check scripts/reverse-agent/memory-hybrid-gate.mjs
 git diff --check
 
 env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY -u OPENAI_API_KEY \
@@ -645,6 +649,7 @@ npm run gate:context-compact
 npm run gate:memory-contract
 npm run gate:memory-utility
 npm run gate:memory-feedback
+npm run gate:memory-hybrid
 npm run gate:repi-harness
 npm run gate:repi-product
 npm run gate:repi-isolation
