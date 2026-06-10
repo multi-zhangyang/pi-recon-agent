@@ -5,82 +5,370 @@
   "$defs": {
     "MemoryArtifactHash": {
       "type": "object",
-      "required": ["path", "sha256", "tier"],
+      "required": [
+        "path",
+        "sha256",
+        "tier"
+      ],
       "properties": {
-        "path": { "type": "string" },
-        "sha256": { "type": ["string", "null"] },
-        "tier": { "type": "string" },
-        "required": { "type": "boolean" }
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tier": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        }
       }
     },
     "MemoryVectorIndexEntryV1": {
       "type": "object",
-      "required": ["kind", "schemaVersion", "eventId", "caseSignature", "route", "targetScope", "model", "dimensions", "tokens", "vector", "qualityWeight", "artifactRefs", "entryHash"],
+      "required": [
+        "kind",
+        "schemaVersion",
+        "eventId",
+        "caseSignature",
+        "route",
+        "targetScope",
+        "model",
+        "embeddingProvider",
+        "dimensions",
+        "tokens",
+        "vector",
+        "qualityWeight",
+        "artifactRefs",
+        "entryHash"
+      ],
       "properties": {
-        "kind": { "const": "repi-memory-vector-index-entry" },
-        "schemaVersion": { "const": 1 },
-        "eventId": { "type": "string", "minLength": 1 },
-        "caseSignature": { "type": "string", "minLength": 1 },
-        "route": { "type": "string" },
-        "targetScope": { "type": "string" },
-        "model": { "const": "repi-local-hash-embedding-v1" },
-        "dimensions": { "const": 64 },
-        "tokens": { "type": "array", "items": { "type": "string" } },
-        "vector": { "type": "array", "items": { "type": "number" }, "minItems": 64 },
-        "qualityWeight": { "type": "number" },
-        "artifactRefs": { "type": "array", "items": { "$ref": "#/$defs/MemoryArtifactHash" } },
-        "entryHash": { "type": "string", "minLength": 16 }
+        "kind": {
+          "const": "repi-memory-vector-index-entry"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "eventId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "caseSignature": {
+          "type": "string",
+          "minLength": 1
+        },
+        "route": {
+          "type": "string"
+        },
+        "targetScope": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dimensions": {
+          "type": "number"
+        },
+        "tokens": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "vector": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 1
+        },
+        "qualityWeight": {
+          "type": "number"
+        },
+        "artifactRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MemoryArtifactHash"
+          }
+        },
+        "entryHash": {
+          "type": "string",
+          "minLength": 16
+        },
+        "embeddingProvider": {
+          "$ref": "#/$defs/MemoryEmbeddingProviderV1"
+        }
       }
     },
     "MemoryVectorIndexV1": {
       "type": "object",
-      "required": ["kind", "schemaVersion", "generatedAt", "MemoryVectorIndexV1", "model", "dimensions", "eventsPath", "indexPath", "eventCount", "hashChainOk", "entries", "requiredGates"],
+      "required": [
+        "kind",
+        "schemaVersion",
+        "generatedAt",
+        "MemoryVectorIndexV1",
+        "model",
+        "embeddingProvider",
+        "dimensions",
+        "eventsPath",
+        "indexPath",
+        "eventCount",
+        "hashChainOk",
+        "entries",
+        "requiredGates"
+      ],
       "properties": {
-        "kind": { "const": "repi-memory-vector-index" },
-        "schemaVersion": { "const": 1 },
-        "generatedAt": { "type": "string", "format": "date-time" },
-        "MemoryVectorIndexV1": { "const": true },
-        "model": { "const": "repi-local-hash-embedding-v1" },
-        "dimensions": { "const": 64 },
-        "eventsPath": { "type": "string" },
-        "indexPath": { "type": "string" },
-        "eventCount": { "type": "number" },
-        "hashChainOk": { "type": "boolean" },
-        "entries": { "type": "array", "items": { "$ref": "#/$defs/MemoryVectorIndexEntryV1" } },
-        "requiredGates": { "type": "array", "items": { "type": "string" } }
+        "kind": {
+          "const": "repi-memory-vector-index"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "generatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "MemoryVectorIndexV1": {
+          "const": true
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dimensions": {
+          "type": "number"
+        },
+        "eventsPath": {
+          "type": "string"
+        },
+        "indexPath": {
+          "type": "string"
+        },
+        "eventCount": {
+          "type": "number"
+        },
+        "hashChainOk": {
+          "type": "boolean"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MemoryVectorIndexEntryV1"
+          }
+        },
+        "requiredGates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "embeddingProvider": {
+          "$ref": "#/$defs/MemoryEmbeddingProviderV1"
+        }
       }
     },
     "MemoryVectorSearchHitV1": {
       "type": "object",
-      "required": ["eventId", "caseSignature", "score", "cosine", "qualityWeight", "reasons", "commands"],
+      "required": [
+        "eventId",
+        "caseSignature",
+        "score",
+        "cosine",
+        "qualityWeight",
+        "reasons",
+        "commands"
+      ],
       "properties": {
-        "eventId": { "type": "string" },
-        "caseSignature": { "type": "string" },
-        "score": { "type": "number" },
-        "cosine": { "type": "number" },
-        "qualityWeight": { "type": "number" },
-        "reasons": { "type": "array", "items": { "type": "string" } },
-        "commands": { "type": "array", "items": { "type": "string" } }
+        "eventId": {
+          "type": "string"
+        },
+        "caseSignature": {
+          "type": "string"
+        },
+        "score": {
+          "type": "number"
+        },
+        "cosine": {
+          "type": "number"
+        },
+        "qualityWeight": {
+          "type": "number"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
     "MemoryVectorSearchReportV1": {
       "type": "object",
-      "required": ["kind", "schemaVersion", "generatedAt", "MemoryVectorSearchV1", "query", "indexPath", "reportPath", "model", "dimensions", "hits", "requiredGates"],
+      "required": [
+        "kind",
+        "schemaVersion",
+        "generatedAt",
+        "MemoryVectorSearchV1",
+        "query",
+        "indexPath",
+        "reportPath",
+        "model",
+        "embeddingProvider",
+        "dimensions",
+        "hits",
+        "requiredGates"
+      ],
       "properties": {
-        "kind": { "const": "repi-memory-vector-search-report" },
-        "schemaVersion": { "const": 1 },
-        "generatedAt": { "type": "string", "format": "date-time" },
-        "MemoryVectorSearchV1": { "const": true },
-        "query": { "type": "string" },
-        "route": { "type": "string" },
-        "target": { "type": "string" },
-        "indexPath": { "type": "string" },
-        "reportPath": { "type": "string" },
-        "model": { "const": "repi-local-hash-embedding-v1" },
-        "dimensions": { "const": 64 },
-        "hits": { "type": "array", "items": { "$ref": "#/$defs/MemoryVectorSearchHitV1" } },
-        "requiredGates": { "type": "array", "items": { "type": "string" } }
+        "kind": {
+          "const": "repi-memory-vector-search-report"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "generatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "MemoryVectorSearchV1": {
+          "const": true
+        },
+        "query": {
+          "type": "string"
+        },
+        "route": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "indexPath": {
+          "type": "string"
+        },
+        "reportPath": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dimensions": {
+          "type": "number"
+        },
+        "hits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MemoryVectorSearchHitV1"
+          }
+        },
+        "requiredGates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "embeddingProvider": {
+          "$ref": "#/$defs/MemoryEmbeddingProviderV1"
+        }
       }
+    },
+    "MemoryEmbeddingProviderV1": {
+      "type": "object",
+      "required": [
+        "kind",
+        "schemaVersion",
+        "MemoryEmbeddingProviderV1",
+        "backend",
+        "requestedBackend",
+        "model",
+        "dimensions",
+        "status",
+        "source",
+        "allowRemote",
+        "timeoutMs",
+        "requiredGates"
+      ],
+      "properties": {
+        "kind": {
+          "const": "repi-memory-embedding-provider"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "MemoryEmbeddingProviderV1": {
+          "const": true
+        },
+        "backend": {
+          "enum": [
+            "local-hash",
+            "openai-compatible",
+            "mock-remote"
+          ]
+        },
+        "requestedBackend": {
+          "enum": [
+            "local-hash",
+            "openai-compatible",
+            "mock-remote"
+          ]
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Default local fallback model is repi-local-hash-embedding-v1; OpenAI-compatible models use configured model id."
+        },
+        "dimensions": {
+          "type": "number"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "fallback"
+          ]
+        },
+        "source": {
+          "enum": [
+            "default",
+            "env"
+          ]
+        },
+        "allowRemote": {
+          "type": "boolean"
+        },
+        "baseUrl": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "apiKeyEnv": {
+          "type": "string"
+        },
+        "timeoutMs": {
+          "type": "number"
+        },
+        "fallbackReason": {
+          "type": "string"
+        },
+        "requiredGates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "MemoryEmbeddingProviderV1 supports local-hash, mock-remote and openai-compatible embedding contracts; remote embedding requires explicit allow and apiKeyEnv, never literal keys."
     }
-  }
+  },
+  "description": "MemoryVectorIndexV1 and MemoryVectorSearchReportV1 include MemoryEmbeddingProviderV1, openai_compatible_embedding_contract, local_hash_embedding_fallback, embedding_api_key_env_ref_only and remote_embedding_requires_explicit_allow. Default local model marker: repi-local-hash-embedding-v1."
 }

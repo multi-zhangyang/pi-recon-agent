@@ -66,12 +66,12 @@ function validateSchema(value, node, schema, path = "$") {
 }
 
 function validateFixture(fixture) {
-	const required = ["deterministic_local_hash_embedding", "route_scoped_vector_rerank", "quality_weighted_vector_score", "forbidden_cross_route_vector_leak_blocked"];
+	const required = ["MemoryEmbeddingProviderV1", "deterministic_local_hash_embedding", "local_hash_embedding_fallback", "openai_compatible_embedding_contract", "embedding_api_key_env_ref_only", "remote_embedding_requires_explicit_allow", "route_scoped_vector_rerank", "quality_weighted_vector_score", "forbidden_cross_route_vector_leak_blocked"];
 	const gates = new Set(fixture.requiredGates ?? []);
 	const scenarioIds = new Set((fixture.scenarios ?? []).map((scenario) => scenario.id));
 	return {
 		missingGates: required.filter((gate) => !gates.has(gate)),
-		missingScenarios: ["semantic-authz-rerank", "forbidden-cross-route-vector-leak", "quality-weighted-replay-boost"].filter((id) => !scenarioIds.has(id)),
+		missingScenarios: ["semantic-authz-rerank", "forbidden-cross-route-vector-leak", "quality-weighted-replay-boost", "provider-contract-env-fallback"].filter((id) => !scenarioIds.has(id)),
 	};
 }
 
@@ -103,7 +103,14 @@ async function main() {
   const vectorIndexPath = vectorResult?.details?.vectorIndex;
   const vectorReport = JSON.parse(readFileSync(vectorReportPath, "utf8"));
   const vectorIndex = JSON.parse(readFileSync(vectorIndexPath, "utf8"));
-  writeFileSync(outPath, JSON.stringify({ tempRoot, agentDir, vectorText: vectorResult?.content?.[0]?.text ?? "", searchText: searchResult?.content?.[0]?.text ?? "", vectorReportPath, vectorIndexPath, vectorReport, vectorIndex }, null, 2));
+  process.env.REPI_MEMORY_EMBEDDING_PROVIDER = "openai-compatible";
+  process.env.REPI_MEMORY_EMBEDDING_MODEL = "text-embedding-3-small";
+  process.env.REPI_MEMORY_EMBEDDING_API_KEY_ENV = "REPI_MEMORY_EMBEDDING_API_KEY";
+  delete process.env.REPI_MEMORY_EMBEDDING_ALLOW_REMOTE;
+  const fallbackResult = await memory.execute("memory-vector", { action: "vector", query: "authz ownership provider fallback" });
+  const fallbackReport = JSON.parse(readFileSync(fallbackResult?.details?.vectorSearchReport, "utf8"));
+  const embeddingResult = await memory.execute("memory-vector", { action: "embedding" });
+  writeFileSync(outPath, JSON.stringify({ tempRoot, agentDir, vectorText: vectorResult?.content?.[0]?.text ?? "", searchText: searchResult?.content?.[0]?.text ?? "", fallbackText: fallbackResult?.content?.[0]?.text ?? "", embeddingText: embeddingResult?.content?.[0]?.text ?? "", vectorReportPath, vectorIndexPath, vectorReport, vectorIndex, fallbackReport, embeddingDetails: embeddingResult?.details }, null, 2));
 }
 main().catch((error) => { console.error(error); process.exit(1); });
 `,
@@ -144,12 +151,16 @@ function main() {
 			checks.push(check("runtime:index-schema", indexErrors.length === 0, { errors: indexErrors, indexPath: probeData.vectorIndexPath, entries: probeData.vectorIndex?.entries?.length, sha256: sha256(JSON.stringify(probeData.vectorIndex)).slice(0, 24) }));
 			checks.push(check("runtime:search-schema", searchErrors.length === 0, { errors: searchErrors, reportPath: probeData.vectorReportPath, hits: probeData.vectorReport?.hits?.length, sha256: sha256(JSON.stringify(probeData.vectorReport)).slice(0, 24) }));
 			checks.push(check("runtime:vector-rerank-used", /memory_vector_rerank|MemoryVectorSearchV1/.test(probeData.vectorText) && /memory_vector_rerank/.test(probeData.searchText), { vectorTextHead: probeData.vectorText.slice(0, 800), searchTextHead: probeData.searchText.slice(0, 800) }));
-			checks.push(check("runtime:required-gates", ["MemoryVectorSearchV1", "vector_index_built_before_search", "route_scoped_vector_rerank", "quality_weighted_vector_score", "forbidden_cross_route_vector_leak_blocked"].every((gate) => probeData.vectorReport.requiredGates?.includes(gate)), { requiredGates: probeData.vectorReport.requiredGates }));
+			checks.push(check("runtime:required-gates", ["MemoryVectorSearchV1", "MemoryEmbeddingProviderV1", "vector_index_built_before_search", "route_scoped_vector_rerank", "quality_weighted_vector_score", "forbidden_cross_route_vector_leak_blocked"].every((gate) => probeData.vectorReport.requiredGates?.includes(gate)), { requiredGates: probeData.vectorReport.requiredGates }));
+			checks.push(check("runtime:embedding-provider-contract", probeData.vectorReport.embeddingProvider?.MemoryEmbeddingProviderV1 === true && probeData.vectorIndex.embeddingProvider?.backend === "local-hash", { provider: probeData.vectorReport.embeddingProvider }));
+			checks.push(check("runtime:openai-compatible-fallback", probeData.fallbackReport.embeddingProvider?.requestedBackend === "openai-compatible" && probeData.fallbackReport.embeddingProvider?.status === "fallback" && /remote_embedding_requires_explicit_allow/.test(probeData.fallbackReport.embeddingProvider?.fallbackReason ?? ""), { provider: probeData.fallbackReport.embeddingProvider, fallbackTextHead: probeData.fallbackText?.slice(0, 600), embeddingTextHead: probeData.embeddingText?.slice(0, 600) }));
 		} else {
 			checks.push(check("runtime:index-schema", false, { error: "probe output missing" }));
 			checks.push(check("runtime:search-schema", false, { error: "probe output missing" }));
 			checks.push(check("runtime:vector-rerank-used", false, { error: "probe output missing" }));
 			checks.push(check("runtime:required-gates", false, { error: "probe output missing" }));
+			checks.push(check("runtime:embedding-provider-contract", false, { error: "probe output missing" }));
+			checks.push(check("runtime:openai-compatible-fallback", false, { error: "probe output missing" }));
 		}
 		checks.push(check("code:vector-markers", ["MemoryVectorIndexV1", "MemoryVectorSearchV1", "buildMemoryVectorIndex", "searchMemoryVectors", "memory_vector_rerank", "repi-local-hash-embedding-v1"].every((marker) => readText("packages/coding-agent/src/core/recon-profile.ts").includes(marker)), { markers: ["MemoryVectorIndexV1", "MemoryVectorSearchV1", "buildMemoryVectorIndex"] }));
 	} catch (error) {

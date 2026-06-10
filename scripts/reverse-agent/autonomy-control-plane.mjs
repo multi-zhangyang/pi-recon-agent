@@ -575,25 +575,25 @@ const REQUIREMENTS = [
 				id: "memory_vector_rerank_runtime",
 				description: "Memory Vector Index 用本地 deterministic hash embedding 生成 vector-index/vector-search-report，并把 memory_vector_rerank 接入 search-events 排序。",
 				files: ["packages/coding-agent/src/core/recon-profile.ts", "repi-profile/extensions/reverse-pentest-core.ts"],
-				markers: ["MemoryVectorIndexV1", "MemoryVectorSearchV1", "buildMemoryVectorIndex", "searchMemoryVectors", "memory_vector_rerank", "repi-local-hash-embedding-v1"],
+				markers: ["MemoryVectorIndexV1", "MemoryVectorSearchV1", "MemoryEmbeddingProviderV1", "buildMemoryVectorIndex", "searchMemoryVectors", "memoryEmbeddingProviderConfig", "openai_compatible_embedding_contract", "memory_vector_rerank", "repi-local-hash-embedding-v1"],
 			},
 			{
 				id: "memory_vector_gate",
 				description: "Memory Vector hard-eval 真实调用 re_memory vector/search-events，验证 index/search schema、rerank reason 和跨 route 负例 fixture。",
 				files: ["scripts/reverse-agent/memory-vector-gate.mjs"],
-				markers: ["repi-memory-vector-gate", "runtime:index-schema", "runtime:search-schema", "runtime:vector-rerank-used", "fixture:vector-rerank-negative"],
+				markers: ["repi-memory-vector-gate", "runtime:index-schema", "runtime:search-schema", "runtime:vector-rerank-used", "runtime:embedding-provider-contract", "runtime:openai-compatible-fallback", "fixture:vector-rerank-negative"],
 			},
 			{
 				id: "memory_vector_schema",
 				description: "Memory Vector schema 固化 index/search/hit 的可机读合同。",
 				files: ["schemas/reverse-agent/memory-vector.schema.json"],
-				markers: ["MemoryVectorIndexV1", "MemoryVectorSearchReportV1", "MemoryVectorIndexEntryV1", "repi-local-hash-embedding-v1"],
+				markers: ["MemoryVectorIndexV1", "MemoryVectorSearchReportV1", "MemoryVectorIndexEntryV1", "MemoryEmbeddingProviderV1", "openai_compatible_embedding_contract", "repi-local-hash-embedding-v1"],
 			},
 			{
 				id: "memory_vector_fixture",
 				description: "Memory Vector fixture 覆盖语义 rerank、跨 route forbidden leak 和 quality-weighted boost。",
 				files: ["fixtures/reverse-agent/memory-vector.fixture.json"],
-				markers: ["repi-memory-vector-fixture", "semantic-authz-rerank", "forbidden-cross-route-vector-leak", "quality-weighted-replay-boost"],
+				markers: ["repi-memory-vector-fixture", "semantic-authz-rerank", "forbidden-cross-route-vector-leak", "quality-weighted-replay-boost", "provider-contract-env-fallback"],
 			},
 			{
 				id: "memory_usefulness_eval_runtime",
@@ -618,7 +618,7 @@ const REQUIREMENTS = [
 		hardeningNeeded: [
 			"knowledge graph/latest artifact 查询继续按 mission/session/workspace/target 做更严格过滤，避免跨任务污染。",
 			"compact resume ledger 继续扩展 queue 状态机：running/done/blocked/exhausted、auto-resume budget 和多次 compact 幂等回放。",
-				"Memory v5 后续继续补 provider/remote embedding 后端、跨 session contamination 负例和 re_swarm 多进程 worker memory writeback 压力回归；injection feedback closure 已接入 gate。",
+				"Memory v5 后续继续补真实远程 embedding live 回归、跨 session contamination 负例和 re_swarm 多进程 worker memory writeback 压力回归；embedding provider contract 与 injection feedback closure 已接入 gate。",
 		],
 		recommendedWork: [
 			"保持 ContextPackV2 / ResumeContractV2 runtime markers 与 context-compact-audit.mjs 同步。",

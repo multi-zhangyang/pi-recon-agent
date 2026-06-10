@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Type } from "typebox";
@@ -2557,6 +2558,27 @@ type MemoryUsefulnessEvalReportV1 = {
 	recommendations: string[];
 };
 
+type MemoryEmbeddingProviderKind = "local-hash" | "openai-compatible" | "mock-remote";
+
+type MemoryEmbeddingProviderV1 = {
+	kind: "repi-memory-embedding-provider";
+	schemaVersion: 1;
+	MemoryEmbeddingProviderV1: true;
+	backend: MemoryEmbeddingProviderKind;
+	requestedBackend: MemoryEmbeddingProviderKind;
+	model: string;
+	dimensions: number;
+	status: "active" | "fallback";
+	source: "default" | "env";
+	allowRemote: boolean;
+	baseUrl?: string;
+	endpoint?: string;
+	apiKeyEnv?: string;
+	timeoutMs: number;
+	fallbackReason?: string;
+	requiredGates: string[];
+};
+
 type MemoryVectorIndexEntryV1 = {
 	kind: "repi-memory-vector-index-entry";
 	schemaVersion: 1;
@@ -2564,7 +2586,8 @@ type MemoryVectorIndexEntryV1 = {
 	caseSignature: string;
 	route: string;
 	targetScope: string;
-	model: "repi-local-hash-embedding-v1";
+	model: string;
+	embeddingProvider: MemoryEmbeddingProviderV1;
 	dimensions: number;
 	tokens: string[];
 	vector: number[];
@@ -2578,7 +2601,8 @@ type MemoryVectorIndexV1 = {
 	schemaVersion: 1;
 	generatedAt: string;
 	MemoryVectorIndexV1: true;
-	model: "repi-local-hash-embedding-v1";
+	model: string;
+	embeddingProvider: MemoryEmbeddingProviderV1;
 	dimensions: number;
 	eventsPath: string;
 	indexPath: string;
@@ -2608,7 +2632,8 @@ type MemoryVectorSearchReportV1 = {
 	target?: string;
 	indexPath: string;
 	reportPath: string;
-	model: "repi-local-hash-embedding-v1";
+	model: string;
+	embeddingProvider: MemoryEmbeddingProviderV1;
 	dimensions: number;
 	hits: MemoryVectorSearchHitV1[];
 	requiredGates: string[];
@@ -3514,11 +3539,11 @@ function ensureReconStorage(): void {
 		],
 		[
 			memoryVectorIndexPath(),
-			`${JSON.stringify({ kind: "repi-memory-vector-index", schemaVersion: 1, MemoryVectorIndexV1: true, entries: [] }, null, 2)}\n`,
+			`${JSON.stringify({ kind: "repi-memory-vector-index", schemaVersion: 1, MemoryVectorIndexV1: true, embeddingProvider: memoryEmbeddingProviderConfig(), entries: [] }, null, 2)}\n`,
 		],
 		[
 			memoryVectorSearchReportPath(),
-			`${JSON.stringify({ kind: "repi-memory-vector-search-report", schemaVersion: 1, MemoryVectorSearchV1: true, hits: [] }, null, 2)}\n`,
+			`${JSON.stringify({ kind: "repi-memory-vector-search-report", schemaVersion: 1, MemoryVectorSearchV1: true, embeddingProvider: memoryEmbeddingProviderConfig(), hits: [] }, null, 2)}\n`,
 		],
 		[evidenceLedgerPath(), "# REPI Evidence Ledger\n\n"],
 		[toolIndexPath(), "# REPI Tool Index\n\n"],
@@ -25616,6 +25641,13 @@ function memorySearchTokens(text: string): Set<string> {
 
 const MEMORY_VECTOR_DIMENSIONS = 64;
 const MEMORY_VECTOR_MODEL = "repi-local-hash-embedding-v1" as const;
+const MEMORY_EMBEDDING_PROVIDER_GATE_MARKERS = [
+	"MemoryEmbeddingProviderV1",
+	"local_hash_embedding_fallback",
+	"openai_compatible_embedding_contract",
+	"embedding_api_key_env_ref_only",
+	"remote_embedding_requires_explicit_allow",
+];
 
 function memoryVectorTokens(text: string): string[] {
 	const tokens = Array.from(memorySearchTokens(text));
@@ -25638,6 +25670,179 @@ function memoryVectorForTokens(tokens: string[], dimensions = MEMORY_VECTOR_DIME
 
 function memoryVectorForText(text: string): number[] {
 	return memoryVectorForTokens(memoryVectorTokens(text));
+}
+
+function memoryEmbeddingProviderKind(value: string | undefined): MemoryEmbeddingProviderKind {
+	const normalized = String(value ?? "").trim().toLowerCase();
+	if (normalized === "openai" || normalized === "openai-compatible" || normalized === "openai_compatible")
+		return "openai-compatible";
+	if (normalized === "mock" || normalized === "mock-remote" || normalized === "mock_remote") return "mock-remote";
+	return "local-hash";
+}
+
+function memoryEmbeddingProviderConfig(overrides?: Partial<MemoryEmbeddingProviderV1>): MemoryEmbeddingProviderV1 {
+	const requestedBackend = memoryEmbeddingProviderKind(process.env.REPI_MEMORY_EMBEDDING_PROVIDER);
+	const source = process.env.REPI_MEMORY_EMBEDDING_PROVIDER ? "env" : "default";
+	const requestedModel =
+		process.env.REPI_MEMORY_EMBEDDING_MODEL ??
+		(requestedBackend === "openai-compatible"
+			? "text-embedding-3-small"
+			: requestedBackend === "mock-remote"
+				? "repi-mock-remote-embedding-v1"
+				: MEMORY_VECTOR_MODEL);
+	const requestedDimensions = Number(process.env.REPI_MEMORY_EMBEDDING_DIMENSIONS);
+	const timeoutMs = Math.max(250, Math.min(30_000, Number(process.env.REPI_MEMORY_EMBEDDING_TIMEOUT_MS) || 6000));
+	const allowRemote = process.env.REPI_MEMORY_EMBEDDING_ALLOW_REMOTE === "1";
+	const baseUrl = process.env.REPI_MEMORY_EMBEDDING_BASE_URL;
+	const endpoint = process.env.REPI_MEMORY_EMBEDDING_ENDPOINT ?? "/v1/embeddings";
+	const apiKeyEnv = process.env.REPI_MEMORY_EMBEDDING_API_KEY_ENV ?? "REPI_MEMORY_EMBEDDING_API_KEY";
+	let backend = requestedBackend;
+	let model = requestedModel;
+	let dimensions = Number.isFinite(requestedDimensions) && requestedDimensions > 0 ? Math.floor(requestedDimensions) : MEMORY_VECTOR_DIMENSIONS;
+	let status: MemoryEmbeddingProviderV1["status"] = "active";
+	let fallbackReason: string | undefined;
+	if (requestedBackend === "openai-compatible") {
+		dimensions = Number.isFinite(requestedDimensions) && requestedDimensions > 0 ? Math.floor(requestedDimensions) : 1536;
+		if (!allowRemote) fallbackReason = "remote_embedding_requires_explicit_allow";
+		else if (!baseUrl) fallbackReason = "embedding_base_url_missing";
+		else if (!apiKeyEnv || !process.env[apiKeyEnv]) fallbackReason = "embedding_api_key_env_missing";
+		if (fallbackReason) {
+			backend = "local-hash";
+			model = MEMORY_VECTOR_MODEL;
+			dimensions = MEMORY_VECTOR_DIMENSIONS;
+			status = "fallback";
+		}
+	}
+	if (requestedBackend === "mock-remote") {
+		dimensions = Number.isFinite(requestedDimensions) && requestedDimensions > 0 ? Math.floor(requestedDimensions) : 96;
+	}
+	return {
+		kind: "repi-memory-embedding-provider",
+		schemaVersion: 1,
+		MemoryEmbeddingProviderV1: true,
+		backend,
+		requestedBackend,
+		model,
+		dimensions,
+		status,
+		source,
+		allowRemote,
+		baseUrl: requestedBackend === "openai-compatible" ? baseUrl : undefined,
+		endpoint: requestedBackend === "openai-compatible" ? endpoint : undefined,
+		apiKeyEnv: requestedBackend === "openai-compatible" ? apiKeyEnv : undefined,
+		timeoutMs,
+		fallbackReason,
+		requiredGates: MEMORY_EMBEDDING_PROVIDER_GATE_MARKERS,
+		...overrides,
+	};
+}
+
+function normalizeMemoryEmbeddingVector(vector: number[]): number[] {
+	const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
+	if (!norm) return vector.map((value) => Number(value.toFixed(6)));
+	return vector.map((value) => Number((value / norm).toFixed(6)));
+}
+
+function memoryOpenAiCompatibleEmbeddings(
+	texts: string[],
+	provider: MemoryEmbeddingProviderV1,
+): { ok: true; vectors: number[][]; dimensions: number } | { ok: false; error: string } {
+	if (provider.backend !== "openai-compatible" || !provider.baseUrl || !provider.apiKeyEnv) {
+		return { ok: false, error: "openai_compatible_embedding_contract_incomplete" };
+	}
+	const script = `
+const fs = require("node:fs");
+const payload = JSON.parse(fs.readFileSync(0, "utf8"));
+const controller = new AbortController();
+const timer = setTimeout(() => controller.abort(), payload.timeoutMs);
+(async () => {
+  try {
+    const url = new URL(payload.endpoint || "/v1/embeddings", payload.baseUrl).toString();
+    const apiKey = process.env[payload.apiKeyEnv];
+    if (!apiKey) throw new Error("embedding_api_key_env_missing");
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer " + apiKey },
+      body: JSON.stringify({ model: payload.model, input: payload.texts }),
+      signal: controller.signal,
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error("embedding_http_" + response.status + ":" + JSON.stringify(json).slice(0, 500));
+    const vectors = (json.data || []).map((row) => row && row.embedding).filter(Array.isArray);
+    if (vectors.length !== payload.texts.length) throw new Error("embedding_count_mismatch");
+    process.stdout.write(JSON.stringify({ vectors }));
+  } catch (error) {
+    process.stderr.write(String(error && error.message ? error.message : error));
+    process.exit(1);
+  } finally {
+    clearTimeout(timer);
+  }
+})();
+`;
+	const child = spawnSync(process.execPath, ["-e", script], {
+		input: JSON.stringify({
+			baseUrl: provider.baseUrl,
+			endpoint: provider.endpoint,
+			model: provider.model,
+			texts,
+			apiKeyEnv: provider.apiKeyEnv,
+			timeoutMs: provider.timeoutMs,
+		}),
+		encoding: "utf8",
+		timeout: provider.timeoutMs + 1000,
+		env: process.env,
+		maxBuffer: 20 * 1024 * 1024,
+	});
+	if (child.status !== 0) return { ok: false, error: (child.stderr || child.error?.message || "embedding_child_failed").slice(0, 800) };
+	try {
+		const parsed = JSON.parse(child.stdout || "{}");
+		const vectors = parsed.vectors;
+		if (!Array.isArray(vectors) || vectors.some((vector) => !Array.isArray(vector))) return { ok: false, error: "embedding_response_invalid" };
+		const normalized = vectors.map((vector) => normalizeMemoryEmbeddingVector(vector.map(Number)));
+		const dimensions = normalized[0]?.length ?? 0;
+		if (!dimensions) return { ok: false, error: "embedding_empty_vector" };
+		return { ok: true, vectors: normalized, dimensions };
+	} catch (error) {
+		return { ok: false, error: `embedding_parse_failed:${String(error).slice(0, 300)}` };
+	}
+}
+
+function memoryEmbeddingVectorsForTexts(
+	texts: string[],
+	provider = memoryEmbeddingProviderConfig(),
+): { provider: MemoryEmbeddingProviderV1; vectors: number[][] } {
+	if (provider.backend === "openai-compatible") {
+		const remote = memoryOpenAiCompatibleEmbeddings(texts, provider);
+		if (remote.ok) {
+			return {
+				provider: memoryEmbeddingProviderConfig({ ...provider, dimensions: remote.dimensions, status: "active" }),
+				vectors: remote.vectors,
+			};
+		}
+		const fallback = memoryEmbeddingProviderConfig({
+			backend: "local-hash",
+			model: MEMORY_VECTOR_MODEL,
+			dimensions: MEMORY_VECTOR_DIMENSIONS,
+			status: "fallback",
+			fallbackReason: `openai_compatible_embedding_failed:${remote.error}`,
+		});
+		return {
+			provider: fallback,
+			vectors: texts.map((text) => memoryVectorForText(text)),
+		};
+	}
+	const dimensions = provider.dimensions || MEMORY_VECTOR_DIMENSIONS;
+	return {
+		provider,
+		vectors: texts.map((text) =>
+			memoryVectorForTokens(
+				provider.backend === "mock-remote"
+					? uniqueNonEmpty([...memoryVectorTokens(text), "mock_remote_embedding_provider"], 260)
+					: memoryVectorTokens(text),
+				dimensions,
+			),
+		),
+	};
 }
 
 function memoryVectorCosine(left: number[], right: number[]): number {
@@ -25665,7 +25870,11 @@ function memoryVectorQualityWeight(event: MemoryEventV1): number {
 	return Number(Math.max(0.1, Math.min(1.35, weight)).toFixed(4));
 }
 
-function memoryVectorEntryFromEvent(event: MemoryEventV1): MemoryVectorIndexEntryV1 {
+function memoryVectorEntryFromEvent(
+	event: MemoryEventV1,
+	provider: MemoryEmbeddingProviderV1,
+	vector: number[],
+): MemoryVectorIndexEntryV1 {
 	const tokens = memoryVectorTokens(memoryTextForSearch(event));
 	const base = {
 		kind: "repi-memory-vector-index-entry" as const,
@@ -25674,10 +25883,11 @@ function memoryVectorEntryFromEvent(event: MemoryEventV1): MemoryVectorIndexEntr
 		caseSignature: event.caseSignature,
 		route: event.route,
 		targetScope: memoryTargetScope(event.target),
-		model: MEMORY_VECTOR_MODEL,
-		dimensions: MEMORY_VECTOR_DIMENSIONS,
+		model: provider.model,
+		embeddingProvider: provider,
+		dimensions: provider.dimensions,
 		tokens,
-		vector: memoryVectorForTokens(tokens),
+		vector,
 		qualityWeight: memoryVectorQualityWeight(event),
 		artifactRefs: event.artifactHashes.filter((artifact) => artifact.sha256).slice(0, 32),
 	};
@@ -25797,21 +26007,30 @@ function memoryHybridSignalScore(
 
 function buildMemoryVectorIndex(events = readMemoryEvents()): MemoryVectorIndexV1 {
 	ensureReconStorage();
+	const embedding = memoryEmbeddingVectorsForTexts(events.map(memoryTextForSearch));
 	const index: MemoryVectorIndexV1 = {
 		kind: "repi-memory-vector-index",
 		schemaVersion: 1,
 		generatedAt: new Date().toISOString(),
 		MemoryVectorIndexV1: true,
-		model: MEMORY_VECTOR_MODEL,
-		dimensions: MEMORY_VECTOR_DIMENSIONS,
+		model: embedding.provider.model,
+		embeddingProvider: embedding.provider,
+		dimensions: embedding.provider.dimensions,
 		eventsPath: memoryEventsPath(),
 		indexPath: memoryVectorIndexPath(),
 		eventCount: events.length,
 		hashChainOk: memoryEventHashChainOk(events),
-		entries: events.map(memoryVectorEntryFromEvent),
+		entries: events.map((event, index) =>
+			memoryVectorEntryFromEvent(event, embedding.provider, embedding.vectors[index] ?? memoryVectorForText(memoryTextForSearch(event))),
+		),
 		requiredGates: [
 			"MemoryVectorIndexV1",
+			"MemoryEmbeddingProviderV1",
 			"deterministic_local_hash_embedding",
+			"local_hash_embedding_fallback",
+			"openai_compatible_embedding_contract",
+			"embedding_api_key_env_ref_only",
+			"remote_embedding_requires_explicit_allow",
 			"route_scoped_vector_rerank",
 			"quality_weighted_vector_score",
 			"forbidden_cross_route_vector_leak_blocked",
@@ -25828,7 +26047,8 @@ function searchMemoryVectors(query?: string, options?: { route?: string; target?
 	const index = buildMemoryVectorIndex(events);
 	const queryText = query ?? "";
 	const queryTokens = memoryVectorTokens(queryText);
-	const queryVector = memoryVectorForTokens(queryTokens);
+	const queryEmbedding = memoryEmbeddingVectorsForTexts([queryText], index.embeddingProvider);
+	const queryVector = queryEmbedding.vectors[0] ?? memoryVectorForTokens(queryTokens, index.dimensions);
 	const hits = index.entries
 		.flatMap((entry) => {
 			const event = eventsById.get(entry.eventId);
@@ -25867,12 +26087,17 @@ function searchMemoryVectors(query?: string, options?: { route?: string; target?
 		target: options?.target,
 		indexPath: memoryVectorIndexPath(),
 		reportPath: memoryVectorSearchReportPath(),
-		model: MEMORY_VECTOR_MODEL,
-		dimensions: MEMORY_VECTOR_DIMENSIONS,
+		model: index.embeddingProvider.model,
+		embeddingProvider: queryEmbedding.provider,
+		dimensions: queryEmbedding.provider.dimensions,
 		hits,
 		requiredGates: [
 			"MemoryVectorSearchV1",
+			"MemoryEmbeddingProviderV1",
 			"vector_index_built_before_search",
+			"openai_compatible_embedding_contract",
+			"embedding_api_key_env_ref_only",
+			"local_hash_embedding_fallback",
 			"route_scoped_vector_rerank",
 			"quality_weighted_vector_score",
 			"forbidden_cross_route_vector_leak_blocked",
@@ -25889,6 +26114,10 @@ function formatMemoryVectorSearch(report = searchMemoryVectors("")): string {
 		`query=${report.query}`,
 		`model=${report.model}`,
 		`dimensions=${report.dimensions}`,
+		`embedding_provider=${report.embeddingProvider.backend}`,
+		`embedding_provider_status=${report.embeddingProvider.status}`,
+		`embedding_requested_backend=${report.embeddingProvider.requestedBackend}`,
+		`embedding_fallback_reason=${report.embeddingProvider.fallbackReason ?? "none"}`,
 		`index=${report.indexPath}`,
 		`report=${report.reportPath}`,
 		"hits:",
@@ -25900,6 +26129,26 @@ function formatMemoryVectorSearch(report = searchMemoryVectors("")): string {
 			: ["- none"]),
 		"required_gates:",
 		...report.requiredGates.map((gate) => `- ${gate}`),
+	].join("\n");
+}
+
+function formatMemoryEmbeddingProvider(provider = memoryEmbeddingProviderConfig()): string {
+	return [
+		"memory_embedding_provider:",
+		`MemoryEmbeddingProviderV1=${provider.MemoryEmbeddingProviderV1}`,
+		`backend=${provider.backend}`,
+		`requested_backend=${provider.requestedBackend}`,
+		`model=${provider.model}`,
+		`dimensions=${provider.dimensions}`,
+		`status=${provider.status}`,
+		`source=${provider.source}`,
+		`allow_remote=${provider.allowRemote}`,
+		`base_url=${provider.baseUrl ?? "none"}`,
+		`endpoint=${provider.endpoint ?? "none"}`,
+		`api_key_env=${provider.apiKeyEnv ?? "none"}`,
+		`fallback_reason=${provider.fallbackReason ?? "none"}`,
+		"required_gates:",
+		...provider.requiredGates.map((gate) => `- ${gate}`),
 	].join("\n");
 }
 
@@ -27708,6 +27957,12 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 				sendDisplayMessage(pi, "REPI Memory Vector Search", formatMemoryVectorSearch(report));
 				return;
 			}
+			if (trimmed === "embedding" || trimmed === "embedding-provider") {
+				const provider = memoryEmbeddingProviderConfig();
+				updateMissionGate("memory_checked", "done", `MemoryEmbeddingProviderV1=${provider.backend}:${provider.status}`);
+				sendDisplayMessage(pi, "REPI Memory Embedding Provider", formatMemoryEmbeddingProvider(provider));
+				return;
+			}
 			if (trimmed === "supervise" || trimmed === "supervisor" || trimmed === "lifecycle") {
 				const report = superviseMemoryLifecycle();
 				updateMissionGate("memory_or_evolution_written", report.storeGrade === "blocked" ? "blocked" : "done", `MemorySupervisorV1 promote=${report.promotionQueue.length} quarantine=${report.quarantineQueue.length} demote=${report.demotionQueue.length}`);
@@ -28421,6 +28676,8 @@ function installReconTools(pi: ExtensionAPI): void {
 				Type.Literal("vector"),
 				Type.Literal("vectors"),
 				Type.Literal("rerank"),
+				Type.Literal("embedding"),
+				Type.Literal("embedding-provider"),
 				Type.Literal("append"),
 				Type.Literal("evolve"),
 				Type.Literal("verify"),
@@ -28590,6 +28847,14 @@ function installReconTools(pi: ExtensionAPI): void {
 						vectorIndex: memoryVectorIndexPath(),
 						vectorSearchReport: memoryVectorSearchReportPath(),
 					} as Record<string, unknown>,
+				};
+			}
+			if (params.action === "embedding" || params.action === "embedding-provider") {
+				const provider = memoryEmbeddingProviderConfig();
+				updateMissionGate("memory_checked", "done", `MemoryEmbeddingProviderV1=${provider.backend}:${provider.status}`);
+				return {
+					content: [{ type: "text" as const, text: formatMemoryEmbeddingProvider(provider) }],
+					details: provider as unknown as Record<string, unknown>,
 				};
 			}
 			if (params.action === "supervise" || params.action === "supervisor" || params.action === "lifecycle") {
