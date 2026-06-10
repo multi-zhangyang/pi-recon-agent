@@ -26,6 +26,7 @@
 		"gate:compound-frontier": "node bench/recon-remote/compound-frontier/run.mjs --live --strict",
 		"gate:context-compact": "node scripts/reverse-agent/context-compact-audit.mjs .",
 		"gate:compact-resume-chain": "node scripts/reverse-agent/compact-resume-chain-gate.mjs . --strict",
+		"gate:context-runtime-schema": "node scripts/reverse-agent/context-runtime-schema-gate.mjs . --strict",
 		"gate:memory-contract": "node scripts/reverse-agent/memory-contract-gate.mjs . --strict",
 		"gate:memory-utility": "node scripts/reverse-agent/memory-utility-gate.mjs . --strict",
 		"gate:memory-feedback": "node scripts/reverse-agent/memory-feedback-gate.mjs . --strict",

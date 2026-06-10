@@ -448,6 +448,12 @@ const REQUIREMENTS = [
 				],
 			},
 			{
+				id: "context_runtime_schema_gate",
+				description: "真实运行 re_context pack/resume，按 ContextPackV2 / ResumeContractV2 校验 contextSha256、artifactHashes、memory hash contract 和 exact resume closure。",
+				files: ["scripts/reverse-agent/context-runtime-schema-gate.mjs"],
+				markers: ["repi-context-runtime-schema-gate", "runtime:pack-schema", "runtime:resume-schema", "runtime:memory-hash-contract", "ContextPackV2", "ResumeContractV2"],
+			},
+			{
 				id: "context_docs_contract",
 				description: "公开文档记录 context/resume pack、owned compaction 和 audit harness，不依赖 upstream compact 说明。",
 				files: ["docs/reverse-agent/README.md"],

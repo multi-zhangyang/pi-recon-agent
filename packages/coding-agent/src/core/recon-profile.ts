@@ -1675,7 +1675,11 @@ type ContextPackArtifact = {
 	contractId?: string;
 	schemaVersion?: 2;
 	timestamp: string;
+	createdAt?: string;
 	missionId?: string;
+	sessionId?: string;
+	cwd?: string;
+	workspaceRoot?: string;
 	route?: string;
 	target?: string;
 	mode: "pack" | "resume";
@@ -1695,6 +1699,23 @@ type ContextPackArtifact = {
 	idempotencyKey?: string;
 	ledgerPath?: string;
 	closure?: { status: "open" | "closed" | "blocked" | "exhausted"; closedAt: string | null; reason: string; verifiedBy: string };
+	resumeContract?: {
+		contractId: string;
+		schemaVersion: 2;
+		compactionEntryId: string;
+		contextPath: string;
+		contextSha256: string;
+		cwd: string;
+		missionId: string;
+		sessionId: string;
+		target: string;
+		artifactHashes: Array<{ artifactId: string; path: string; sha256: string; required: boolean }>;
+		resumeQueueStatus: "queued" | "running" | "done" | "blocked" | "exhausted";
+		idempotencyKey: string;
+		ledgerPath: string;
+		budget: { maxResumeTurns: number; maxOperatorDispatch: number; maxProofLoops: number };
+		closure: { status: "open" | "closed" | "blocked" | "exhausted"; closedAt: string | null; reason: string; verifiedBy: string };
+	};
 	compactionLedger?: { path: string; appendOnly: true; prevHash: string; entryHash: string };
 	exactResumeVerification?: ContextResumeVerification;
 	activeLane?: string;
@@ -17148,6 +17169,7 @@ function contextCompactionLedger(timestamp: string): { path: string; appendOnly:
 }
 
 function contextArtifactIndex(): ContextArtifactIndexEntry[] {
+	const existingPath = (path: string): string | undefined => (existsSync(path) ? path : undefined);
 	const pairs: Array<[string, string | undefined]> = [
 		["map", recentMarkdownArtifacts(evidenceMapsDir(), 1)[0]],
 		["browser", latestLiveBrowserArtifactPath()],
@@ -17173,18 +17195,18 @@ function contextArtifactIndex(): ContextArtifactIndexEntry[] {
 		["proof_loop", latestProofLoopArtifactPath()],
 		["knowledge", latestKnowledgeGraphArtifactPath()],
 		["harness", latestHarnessArtifactPath()],
-		["memory_events", memoryEventsPath()],
-		["memory_case_memory", caseMemoryPath()],
-		["memory_retrieval_report", memoryRetrievalReportPath()],
-		["memory_store_report", memoryStoreReportPath()],
-		["memory_store_snapshot", memoryStoreSnapshotPath()],
-		["memory_usefulness_eval", memoryUsefulnessEvalReportPath()],
-		["memory_distillation_report", memoryDistillationReportPath()],
-		["memory_quarantine", memoryQuarantinePath()],
-		["memory_semantic_index", memorySemanticIndexPath()],
-		["memory_contradiction_ledger", memoryContradictionLedgerPath()],
-		["memory_injection_packet", memoryInjectionPacketPath()],
-		["memory_sedimentation_report", memorySedimentationReportPath()],
+		["memory_events", existingPath(memoryEventsPath())],
+		["memory_case_memory", existingPath(caseMemoryPath())],
+		["memory_retrieval_report", existingPath(memoryRetrievalReportPath())],
+		["memory_store_report", existingPath(memoryStoreReportPath())],
+		["memory_store_snapshot", existingPath(memoryStoreSnapshotPath())],
+		["memory_usefulness_eval", existingPath(memoryUsefulnessEvalReportPath())],
+		["memory_distillation_report", existingPath(memoryDistillationReportPath())],
+		["memory_quarantine", existingPath(memoryQuarantinePath())],
+		["memory_semantic_index", existingPath(memorySemanticIndexPath())],
+		["memory_contradiction_ledger", existingPath(memoryContradictionLedgerPath())],
+		["memory_injection_packet", existingPath(memoryInjectionPacketPath())],
+		["memory_sedimentation_report", existingPath(memorySedimentationReportPath())],
 	];
 	return pairs.filter((pair): pair is [string, string] => Boolean(pair[1])).map(([kind, path]) => contextArtifactEntry(kind, path));
 }
@@ -17198,7 +17220,6 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume" }
 	const timestamp = new Date().toISOString();
 	const mission = readCurrentMission();
 	const active = mission ? activeLane(mission) : undefined;
-	const artifactIndex = contextArtifactIndex();
 	const supervisorPath = latestSupervisorArtifactPath();
 	const reflectionPath = latestReflectionArtifactPath();
 	const supervisor = supervisorPath ? parseSupervisorArtifact(supervisorPath) : undefined;
@@ -17226,6 +17247,7 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume" }
 	const swarmRetryQueue = swarmRetry.rows;
 	const caseMemoryPlan = currentCaseMemoryLanePlan(target);
 	const caseMemoryNextCommands = caseMemoryOperatorCommands(caseMemoryPlan, target);
+	const artifactIndex = contextArtifactIndex();
 	const reflectionReuseRules = Array.from(new Set(reflection?.reuseRules ?? [])).slice(0, 24);
 	const route = mission?.route.domain ?? reflection?.route ?? supervisor?.route;
 	const mode = options.mode ?? "pack";
@@ -17271,7 +17293,7 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume" }
 			"re_context pack",
 		]),
 	).slice(0, 14);
-	const resumeBrief = [
+		const resumeBrief = [
 		`mission=${mission?.id ?? "none"}`,
 		`route=${mission?.route.domain ?? reflection?.route ?? supervisor?.route ?? "unknown"}`,
 		`active_lane=${active?.name ?? "none"}`,
@@ -17284,29 +17306,63 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume" }
 		`commander_merge_queue=${supervisor?.commanderMergeQueue.length ?? 0}`,
 		`commander_budget=${commanderMergeBudget.join(";") || "none"}`,
 		`case_memory_lane_plan=${caseMemoryPlan?.action ?? "none"}:${caseMemoryPlan?.targetLane ?? caseMemoryPlan?.addedLane ?? active?.name ?? "none"}`,
-		`first_command=${nextCommands[0] ?? "re_mission show"}`,
-	];
-	const pack: ContextPackArtifact = {
-		contractId: `context-pack/${slug(route ?? target ?? "context")}/${timestamp}`,
-		schemaVersion: 2,
-		timestamp,
-		missionId: mission?.id ?? reflection?.missionId ?? supervisor?.missionId,
-		route,
-		target,
-		mode,
-		contextPath,
-		scope,
-		artifactHashes: contextArtifactHashes(artifactIndex),
-		resumeQueueStatus: mode === "resume" ? "done" : "queued",
-		idempotencyKey: createHash("sha256").update(`${scope.sessionId}\n${contextPath}\n${nextCommands.join("\n")}`).digest("hex"),
-		ledgerPath: memoryPath("compaction-resume-ledger.jsonl"),
-		closure: {
-			status: mode === "resume" ? "closed" : "open",
+			`first_command=${nextCommands[0] ?? "re_mission show"}`,
+		];
+		const artifactHashes = contextArtifactHashes(artifactIndex);
+		const resumeArtifactHashes = artifactHashes
+			.filter((artifact): artifact is { artifactId: string; path: string; sha256: string; required: boolean } =>
+				Boolean(artifact.required && artifact.sha256),
+			)
+			.slice(0, 96);
+		const compactionLedger = contextCompactionLedger(timestamp);
+		const idempotencyKey = createHash("sha256").update(`${scope.sessionId}\n${contextPath}\n${nextCommands.join("\n")}`).digest("hex");
+		const closure = {
+			status: (mode === "resume" ? "closed" : "open") as "open" | "closed",
 			closedAt: mode === "resume" ? timestamp : null,
 			reason: mode === "resume" ? "resume context rebuilt from verified state" : "context pack awaiting resume",
 			verifiedBy: "re_context",
-		},
-		compactionLedger: contextCompactionLedger(timestamp),
+		};
+		const pack: ContextPackArtifact = {
+			contractId: `context-pack/${slug(route ?? target ?? "context")}/${timestamp}`,
+			schemaVersion: 2,
+			timestamp,
+			createdAt: timestamp,
+			missionId: mission?.id ?? reflection?.missionId ?? supervisor?.missionId,
+			sessionId: scope.sessionId,
+			cwd: scope.cwd,
+			workspaceRoot: scope.workspaceRoot,
+			route,
+			target,
+			mode,
+			contextPath,
+			scope,
+			artifactHashes,
+			resumeQueueStatus: mode === "resume" ? "done" : "queued",
+			idempotencyKey,
+			ledgerPath: memoryPath("compaction-resume-ledger.jsonl"),
+			closure,
+			compactionLedger,
+			resumeContract: {
+				contractId: `resume-contract/${slug(route ?? target ?? "context")}/${timestamp}`,
+				schemaVersion: 2,
+				compactionEntryId: compactionLedger.entryHash,
+				contextPath,
+				contextSha256: "0".repeat(64),
+				cwd: scope.cwd,
+				missionId: scope.missionId ?? "none",
+				sessionId: scope.sessionId,
+				target: target ?? "workspace",
+				artifactHashes: resumeArtifactHashes,
+				resumeQueueStatus: mode === "resume" ? "done" : "queued",
+				idempotencyKey,
+				ledgerPath: memoryPath("compaction-resume-ledger.jsonl"),
+				budget: {
+					maxResumeTurns: autonomousBudget.maxTurns,
+					maxOperatorDispatch: autonomousBudget.maxDispatch,
+					maxProofLoops: autonomousBudget.maxProofLoops,
+				},
+				closure,
+			},
 		activeLane: active?.name,
 		gateSummary,
 		missionSnapshot: mission ? formatMission(mission) : "no active mission",
@@ -17341,10 +17397,11 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume" }
 				].filter(Boolean) as string[],
 			),
 		),
-	};
-	pack.contextSha256 = contextPackSha256(pack);
-	return pack;
-}
+		};
+		pack.contextSha256 = contextPackSha256(pack);
+		if (pack.resumeContract) pack.resumeContract.contextSha256 = pack.contextSha256;
+		return pack;
+	}
 
 function formatContextPack(pack: ContextPackArtifact, path?: string): string {
 	return [
@@ -17428,7 +17485,13 @@ function writeContextPackArtifact(pack: ContextPackArtifact): string {
 	ensureReconStorage();
 	const path = pack.contextPath ?? contextPackArtifactPathFor(pack);
 	pack.contextPath = path;
+	if (pack.resumeContract) {
+		pack.resumeContract.contextPath = path;
+		pack.resumeContract.resumeQueueStatus = pack.resumeQueueStatus ?? pack.resumeContract.resumeQueueStatus;
+		if (pack.closure) pack.resumeContract.closure = pack.closure;
+	}
 	pack.contextSha256 = contextPackSha256(pack);
+	if (pack.resumeContract) pack.resumeContract.contextSha256 = pack.contextSha256;
 	writeFileSync(
 		path,
 		[
