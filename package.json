@@ -30,6 +30,7 @@
 		"gate:memory-utility": "node scripts/reverse-agent/memory-utility-gate.mjs . --strict",
 		"gate:memory-feedback": "node scripts/reverse-agent/memory-feedback-gate.mjs . --strict",
 		"gate:memory-hybrid": "node scripts/reverse-agent/memory-hybrid-gate.mjs . --strict",
+		"gate:memory-usefulness": "node scripts/reverse-agent/memory-usefulness-gate.mjs . --strict",
 		"gate:memory-distiller": "node scripts/reverse-agent/memory-distiller-gate.mjs . --strict",
 		"gate:memory-sedimentation": "node scripts/reverse-agent/memory-sedimentation-gate.mjs . --strict",
 		"gate:memory-store": "node scripts/reverse-agent/memory-store-gate.mjs . --strict",

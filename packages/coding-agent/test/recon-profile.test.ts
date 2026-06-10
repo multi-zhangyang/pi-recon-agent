@@ -1963,6 +1963,11 @@ describe("REPI kernel profile", () => {
 		const snapshot = await memoryTool.execute("tool-call-id", { action: "snapshot" });
 		expect(snapshot.content[0]?.text).toContain("snapshot=");
 		expect(readFileSync(join(memoryDir, "store-snapshot.json"), "utf-8")).toContain("repi-memory-store-snapshot");
+
+		const evalResult = await memoryTool.execute("tool-call-id", { action: "eval" });
+		expect(evalResult.content[0]?.text).toContain("memory_usefulness_eval:");
+		expect(evalResult.content[0]?.text).toContain("hit_at_k=");
+		expect(readFileSync(join(memoryDir, "usefulness-eval.json"), "utf-8")).toContain("repi-memory-usefulness-eval");
 	});
 
 	it("scores weak lane evidence and queues self-healing follow-ups", async () => {

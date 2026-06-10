@@ -2387,6 +2387,47 @@ type MemoryStoreVerificationV1 = {
 	requiredGates: string[];
 };
 
+type MemoryUsefulnessEvalScenarioV1 = {
+	id: string;
+	query: string;
+	route?: string;
+	target?: string;
+	expectedEventIds: string[];
+	forbiddenEventIds: string[];
+	topK: number;
+	source: "default-from-memory" | "operator" | "fixture";
+};
+
+type MemoryUsefulnessEvalScenarioResultV1 = MemoryUsefulnessEvalScenarioV1 & {
+	hits: Array<{ eventId: string; score: number; reasons: string[]; outcome: MemoryOutcome; route: string }>;
+	expectedRank?: number;
+	hitAt1: boolean;
+	hitAtK: boolean;
+	reciprocalRank: number;
+	forbiddenHitIds: string[];
+	status: "pass" | "warn" | "fail";
+};
+
+type MemoryUsefulnessEvalReportV1 = {
+	kind: "repi-memory-usefulness-eval";
+	schemaVersion: 1;
+	generatedAt: string;
+	MemoryUsefulnessEvalV1: true;
+	scenarioCount: number;
+	scenarios: MemoryUsefulnessEvalScenarioResultV1[];
+	aggregate: {
+		hitAt1: number;
+		hitAtK: number;
+		mrr: number;
+		forbiddenLeakRate: number;
+		emptyScenarioRate: number;
+		status: "pass" | "warn" | "fail" | "empty";
+	};
+	requiredGates: string[];
+	reportPath: string;
+	recommendations: string[];
+};
+
 type KnowledgeNode = {
 	id: string;
 	kind: string;
@@ -2947,7 +2988,7 @@ const RECON_PROMPTS = [
 		description: "整理当前任务并写入 REPI 长期记忆",
 		argumentHint: "[scene/title]",
 		content:
-			"将当前会话中可复用的逆向/渗透经验写入 REPI Memory v5：目标、路由、证据、有效方法、失败路线、复现命令、下次复用；写入后可调用 re_memory verify / repair-index / snapshot / search-events / consolidate / distill / sediment，生成 store-report、store-snapshot、distillation-report、pattern-book、quarantine 与 injection-packet。",
+			"将当前会话中可复用的逆向/渗透经验写入 REPI Memory v5：目标、路由、证据、有效方法、失败路线、复现命令、下次复用；写入后可调用 re_memory verify / repair-index / snapshot / eval / search-events / consolidate / distill / sediment，生成 store-report、store-snapshot、usefulness-eval、distillation-report、pattern-book、quarantine 与 injection-packet。",
 	},
 ];
 
@@ -3022,6 +3063,10 @@ function memoryStoreReportPath(): string {
 
 function memoryStoreSnapshotPath(): string {
 	return memoryPath("store-snapshot.json");
+}
+
+function memoryUsefulnessEvalReportPath(): string {
+	return memoryPath("usefulness-eval.json");
 }
 
 function missionPath(name: string): string {
@@ -3247,6 +3292,10 @@ function ensureReconStorage(): void {
 		[
 			memoryStoreSnapshotPath(),
 			`${JSON.stringify({ kind: "repi-memory-store-snapshot", schemaVersion: 1, events: [], caseMemory: [] }, null, 2)}\n`,
+		],
+		[
+			memoryUsefulnessEvalReportPath(),
+			`${JSON.stringify({ kind: "repi-memory-usefulness-eval", schemaVersion: 1, MemoryUsefulnessEvalV1: true, scenarioCount: 0, scenarios: [] }, null, 2)}\n`,
 		],
 		[evidenceLedgerPath(), "# REPI Evidence Ledger\n\n"],
 		[toolIndexPath(), "# REPI Tool Index\n\n"],
@@ -23627,6 +23676,9 @@ function buildMemoryDigest(): string {
 		"<memory_store_v5>",
 		truncateMiddle(readText(memoryStoreReportPath()), 1800),
 		"</memory_store_v5>",
+		"<memory_usefulness_eval>",
+		truncateMiddle(readText(memoryUsefulnessEvalReportPath()), 1800),
+		"</memory_usefulness_eval>",
 		"<case_index>",
 		truncateMiddle(readText(memoryPath("case-index.md")), 2000),
 		"</case_index>",
@@ -25306,7 +25358,160 @@ function formatMemoryRetrieval(query?: string, hits = searchMemoryEvents(query))
 				(hit) =>
 					`- id=${hit.event.id} score=${hit.score.toFixed(1)} outcome=${hit.event.outcome} route=${hit.event.route} case=${hit.event.caseSignature} reasons=${hit.reasons.join(",")} commands=${hit.event.commands.length} lessons=${hit.event.lessons.length}`,
 				)
+		: ["- none"]),
+	].join("\n");
+}
+
+function memoryUsefulnessQueryForEvent(event: MemoryEventV1): string {
+	const tokens = uniqueNonEmpty(
+		[
+			...event.domainTags,
+			...event.route.split(/\s+/),
+			...event.lessons.flatMap((line) => [...memorySearchTokens(line)].slice(0, 8)),
+			...event.reuseRules.flatMap((line) => [...memorySearchTokens(line)].slice(0, 8)),
+			...event.commands.flatMap((line) => [...memorySearchTokens(line)].slice(0, 6)),
+		],
+		12,
+	).filter((token) => token.length >= 2 && !/^(?:the|and|for|with|when|this|that|route|lane|run)$/i.test(token));
+	return tokens.slice(0, 8).join(" ") || event.task || event.route;
+}
+
+function defaultMemoryUsefulnessScenarios(events = readMemoryEvents()): MemoryUsefulnessEvalScenarioV1[] {
+	const recentUseful = [...events]
+		.filter(
+			(event) =>
+				event.outcome !== "failure" &&
+				event.outcome !== "blocked" &&
+				event.quality.confidence >= 0.5 &&
+				(event.lessons.length > 0 || event.reuseRules.length > 0 || event.commands.length > 0),
+		)
+		.sort(
+			(left, right) =>
+				Number(right.quality.replayVerified) - Number(left.quality.replayVerified) ||
+				right.quality.confidence - left.quality.confidence ||
+				right.seq - left.seq,
+		)
+		.slice(0, 10);
+	return recentUseful.map((event, index) => {
+		const forbiddenEventIds = events
+			.filter(
+				(candidate) =>
+					candidate.id !== event.id &&
+					(candidate.route !== event.route || candidate.outcome === "failure" || candidate.outcome === "blocked"),
+			)
+			.map((candidate) => candidate.id)
+			.slice(0, 24);
+		return {
+			id: `default-memory-usefulness:${index + 1}:${event.id}`,
+			query: memoryUsefulnessQueryForEvent(event),
+			route: event.route,
+			target: event.target,
+			expectedEventIds: [event.id],
+			forbiddenEventIds,
+			topK: 3,
+			source: "default-from-memory",
+		};
+	});
+}
+
+function evaluateMemoryUsefulness(
+	scenarios = defaultMemoryUsefulnessScenarios(),
+	options?: { write?: boolean },
+): MemoryUsefulnessEvalReportV1 {
+	ensureReconStorage();
+	const results: MemoryUsefulnessEvalScenarioResultV1[] = scenarios.map((scenario) => {
+		const topK = Math.max(1, Math.min(10, Math.floor(scenario.topK || 3)));
+		const hits = searchMemoryEvents(scenario.query, {
+			route: scenario.route,
+			target: scenario.target,
+			limit: Math.max(topK, scenario.forbiddenEventIds.length ? 8 : topK),
+		});
+		const hitRows = hits.map((hit) => ({
+			eventId: hit.event.id,
+			score: Number(hit.score.toFixed(2)),
+			reasons: hit.reasons,
+			outcome: hit.event.outcome,
+			route: hit.event.route,
+		}));
+		const expectedRank = hitRows.findIndex((hit) => scenario.expectedEventIds.includes(hit.eventId)) + 1 || undefined;
+		const topIds = hitRows.slice(0, topK).map((hit) => hit.eventId);
+		const forbiddenHitIds = topIds.filter((eventId) => scenario.forbiddenEventIds.includes(eventId));
+		const hitAt1 = Boolean(expectedRank && expectedRank <= 1);
+		const hitAtK = scenario.expectedEventIds.length === 0 ? true : Boolean(expectedRank && expectedRank <= topK);
+		const reciprocalRank = expectedRank ? 1 / expectedRank : 0;
+		const status = hitAtK && forbiddenHitIds.length === 0 ? "pass" : hitRows.length === 0 ? "warn" : "fail";
+		return { ...scenario, topK, hits: hitRows, expectedRank, hitAt1, hitAtK, reciprocalRank, forbiddenHitIds, status };
+	});
+	const scenarioCount = results.length;
+	const failCount = results.filter((scenario) => scenario.status === "fail").length;
+	const warnCount = results.filter((scenario) => scenario.status === "warn").length;
+	const aggregate = {
+		hitAt1: scenarioCount ? Number((results.filter((scenario) => scenario.hitAt1).length / scenarioCount).toFixed(4)) : 0,
+		hitAtK: scenarioCount ? Number((results.filter((scenario) => scenario.hitAtK).length / scenarioCount).toFixed(4)) : 0,
+		mrr: scenarioCount ? Number((results.reduce((sum, scenario) => sum + scenario.reciprocalRank, 0) / scenarioCount).toFixed(4)) : 0,
+		forbiddenLeakRate: scenarioCount
+			? Number((results.filter((scenario) => scenario.forbiddenHitIds.length > 0).length / scenarioCount).toFixed(4))
+			: 0,
+		emptyScenarioRate: scenarioCount ? Number((results.filter((scenario) => scenario.hits.length === 0).length / scenarioCount).toFixed(4)) : 0,
+		status:
+			scenarioCount === 0
+				? ("empty" as const)
+				: failCount > 0 || results.some((scenario) => scenario.forbiddenHitIds.length > 0)
+					? ("fail" as const)
+					: warnCount > 0 || results.some((scenario) => !scenario.hitAt1)
+						? ("warn" as const)
+						: ("pass" as const),
+	};
+	const report: MemoryUsefulnessEvalReportV1 = {
+		kind: "repi-memory-usefulness-eval",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		MemoryUsefulnessEvalV1: true,
+		scenarioCount,
+		scenarios: results,
+		aggregate,
+		requiredGates: [
+			"hit_at_1_or_warn",
+			"hit_at_k_required",
+			"forbidden_memory_not_in_top_k",
+			"route_scope_blocks_cross_domain_recall",
+			"memory_store_verified_before_eval",
+		],
+		reportPath: memoryUsefulnessEvalReportPath(),
+		recommendations:
+			aggregate.status === "pass"
+				? ["keep re_memory eval in release gates after memory schema changes"]
+				: [
+						"run re_memory verify and re_memory repair-index before trusting recall",
+						"inspect forbiddenHitIds for cross-route or failure-dominant pollution",
+						"add verifier/replay evidence or demote stale memories",
+					],
+	};
+	if (options?.write !== false) writeFileAtomic(memoryUsefulnessEvalReportPath(), `${JSON.stringify(report, null, 2)}\n`);
+	return report;
+}
+
+function formatMemoryUsefulnessEval(report = evaluateMemoryUsefulness()): string {
+	return [
+		"memory_usefulness_eval:",
+		`status=${report.aggregate.status}`,
+		`scenarios=${report.scenarioCount}`,
+		`hit_at_1=${report.aggregate.hitAt1}`,
+		`hit_at_k=${report.aggregate.hitAtK}`,
+		`mrr=${report.aggregate.mrr}`,
+		`forbidden_leak_rate=${report.aggregate.forbiddenLeakRate}`,
+		`report=${report.reportPath}`,
+		"scenario_results:",
+		...(report.scenarios.length
+			? report.scenarios.map(
+					(scenario) =>
+						`- id=${scenario.id} status=${scenario.status} expected_rank=${scenario.expectedRank ?? "missing"} topK=${scenario.topK} forbidden_hits=${scenario.forbiddenHitIds.join(",") || "none"} query=${truncateMiddle(scenario.query, 140)}`,
+				)
 			: ["- none"]),
+		"required_gates:",
+		...report.requiredGates.map((gate) => `- ${gate}`),
+		"recommendations:",
+		...report.recommendations.map((item) => `- ${item}`),
 	].join("\n");
 }
 
@@ -26239,7 +26444,7 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 	});
 	pi.registerCommand("re-memory", {
 		description:
-			"Read, append, evolve, search, verify, repair, snapshot, distill, sediment, or maintain REPI memory: /re-memory [show|events|search|append|evolve|verify|repair-index|snapshot|consolidate|distill|sediment|playbooks|prune-playbooks] ...",
+			"Read, append, evolve, search, verify, repair, snapshot, eval, distill, sediment, or maintain REPI memory: /re-memory [show|events|search|append|evolve|verify|repair-index|snapshot|eval|consolidate|distill|sediment|playbooks|prune-playbooks] ...",
 		handler: async (args) => {
 			const trimmed = args.trim();
 			if (trimmed.startsWith("append ")) {
@@ -26300,6 +26505,13 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 				const report = snapshotMemoryStore();
 				updateMissionGate("memory_or_evolution_written", report.storeGrade === "blocked" ? "blocked" : "done", `memory_store_v5_snapshot=${report.storeGrade}`);
 				sendDisplayMessage(pi, "REPI Memory Store Snapshot", formatMemoryStoreVerification(report));
+				return;
+			}
+			if (trimmed === "eval" || trimmed === "usefulness") {
+				verifyMemoryStore();
+				const report = evaluateMemoryUsefulness();
+				updateMissionGate("memory_checked", report.aggregate.status === "fail" ? "blocked" : "done", `memory_usefulness_eval=${report.aggregate.status}`);
+				sendDisplayMessage(pi, "REPI Memory Usefulness Eval", formatMemoryUsefulnessEval(report));
 				return;
 			}
 			if (trimmed === "consolidate") {
@@ -27013,7 +27225,7 @@ function installReconTools(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "re_memory",
 		label: "RE Memory",
-		description: "Read, search, append, evolve, distill, sediment, or maintain REPI long-term memory and playbooks.",
+		description: "Read, search, append, evolve, verify, evaluate, distill, sediment, or maintain REPI long-term memory and playbooks.",
 		promptSnippet: "Use long-term reverse/pentest memory for reusable evidence and lessons.",
 		promptGuidelines: ["Before repeating a known security workflow, inspect re_memory for similar cases."],
 		parameters: Type.Object({
@@ -27028,6 +27240,8 @@ function installReconTools(pi: ExtensionAPI): void {
 				Type.Literal("repair-index"),
 				Type.Literal("snapshot"),
 				Type.Literal("compact"),
+				Type.Literal("eval"),
+				Type.Literal("usefulness"),
 				Type.Literal("consolidate"),
 				Type.Literal("distill"),
 				Type.Literal("sediment"),
@@ -27108,6 +27322,16 @@ function installReconTools(pi: ExtensionAPI): void {
 				const report = snapshotMemoryStore();
 				const text = formatMemoryStoreVerification(report);
 				updateMissionGate("memory_or_evolution_written", report.storeGrade === "blocked" ? "blocked" : "done", `memory_store_v5_snapshot=${report.storeGrade}`);
+				return {
+					content: [{ type: "text" as const, text }],
+					details: report as unknown as Record<string, unknown>,
+				};
+			}
+			if (params.action === "eval" || params.action === "usefulness") {
+				verifyMemoryStore();
+				const report = evaluateMemoryUsefulness();
+				const text = formatMemoryUsefulnessEval(report);
+				updateMissionGate("memory_checked", report.aggregate.status === "fail" ? "blocked" : "done", `memory_usefulness_eval=${report.aggregate.status}`);
 				return {
 					content: [{ type: "text" as const, text }],
 					details: report as unknown as Record<string, unknown>,
