@@ -40,7 +40,7 @@ REPI 在 `packages/coding-agent/src/core/recon-profile.ts`、`repi-profile/SYSTE
 | `repi-profile/extensions/reverse-pentest-core.ts` | 运行时核心：路由、记忆、工具索引、自审计、loop guard、compaction checkpoint、自定义工具 |
 | `repi-profile/skills/reverse-pentest-orchestrator/SKILL.md` | 安全任务总控 skill，按 reverse-skill 思维方式编排工作流 |
 | `repi-profile/prompts/*.md` | `/reverse`、`/websec`、`/jsre`、`/pwn`、`/pcap`、`/cloud`、`/identity`、`/memory`、`/audit-agent` 任务模板 |
-| `repi-profile/memory/*` | 长期经验、索引、自我进化记录；运行时使用 `~/.repi/agent/recon/memory/events.jsonl` / `case-memory.jsonl` / `retrieval-report.json` / `store-report.json` 作为 Memory v5 结构化事实源，所有 append 通过 `.store.lock` 与 `transactions/*.json` manifest 提交，`re_replayer` / `re_autofix` / `re_proof_loop` / `re_complete` / 高价值 `re_lane run` 会自动写回 replay/repair/proof/completion/runtime 事件，Markdown journal/playbook 是人类可读镜像；`repi-profile/memory/playbooks/index.md` 记录 playbook 质量/年龄/状态，`repi-profile/memory/playbooks/archive/` 存放被淘汰的低质或过旧链路 |
+| `repi-profile/memory/*` | 长期经验、索引、自我进化记录；运行时使用 `~/.repi/agent/recon/memory/events.jsonl` / `case-memory.jsonl` / `retrieval-report.json` / `store-report.json` 作为 Memory v5 结构化事实源，所有 append 通过 `.store.lock` 与 `transactions/*.json` manifest 提交，`re_replayer` / `re_autofix` / `re_proof_loop` / `re_complete` / 高价值 `re_lane run` / `re_swarm run` 会自动写回 replay/repair/proof/completion/runtime/worker 事件，`re_swarm` 写回 marker 为 `memory-swarm-writeback`；Markdown journal/playbook 是人类可读镜像；`repi-profile/memory/playbooks/index.md` 记录 playbook 质量/年龄/状态，`repi-profile/memory/playbooks/archive/` 存放被淘汰的低质或过旧链路 |
 | `.repi-harness/evidence/kernel/*.md` | `re_kernel build|audit` 生成的 execution_kernel、kernel_artifact、directive_stack、refusal_to_execution_rules、tool_call_policy、artifact_contract 与 stall_recovery |
 | `.repi-harness/evidence/maps/*.md` | `re_map` 自动生成的被动目标/工作区快照：stat、manifest/config、route/auth 搜索、binary candidates、URL baseline |
 | `.repi-harness/evidence/browser/*.md` | `re_live_browser plan|run` 生成的 live_browser、request_response_log、auth_matrix、IDOR/BOLA probes、WebSocket probes 与 replay_commands |
@@ -84,6 +84,7 @@ REPI 在 `packages/coding-agent/src/core/recon-profile.ts`、`repi-profile/SYSTE
 | `scripts/reverse-agent/memory-distiller-gate.mjs` | Memory v3 distiller hard-eval：验证 promoted pattern、mandatory injection chain、memory_contamination_quarantine、hash drift 和低置信不提升；对应 `npm run gate:memory-distiller` |
 | `scripts/reverse-agent/memory-sedimentation-gate.mjs` | Memory v4 sedimentation hard-eval：验证 semantic-index、contradiction-ledger、mandatory_memory_injection_packet、artifact/verifier/quarantine/feedback 门禁；对应 `npm run gate:memory-sedimentation` |
 | `scripts/reverse-agent/memory-store-gate.mjs` | Memory v5 store hard-eval：验证 transaction manifest、hash-chain append 前校验、坏 prevHash 阻断、case-memory repair-index 与 lane runtime auto writeback；对应 `npm run gate:memory-store` |
+| `scripts/reverse-agent/memory-swarm-writeback-gate.mjs` | re_swarm worker memory writeback hard-eval：验证 `memory-swarm-writeback` 事件数量、SubagentRuntimeManifestV1/stdout/stderr/claim artifact 捕获、blocked/success outcome 和非 run 模式跳过；对应 `npm run gate:memory-swarm-writeback` |
 | `pi` | 非拥有型兼容 shim；不会启动 REPI，只会转交给 PATH 中的原版 Pi，找不到则提示使用 `repi` |
 | `repi` | REPI 独立产品入口，默认使用 `~/.repi/agent`；源码 wrapper 和 npm/bin 直启都会由 CLI bootstrap 自动启用 `--recon` 隔离参数 |
 | `scripts/reverse-agent/install-repi.sh` | 安装 `/usr/local/bin/repi`，初始化 `~/.repi/agent`，不会覆盖/删除普通 `pi` |
@@ -174,7 +175,7 @@ REPI 的 `re_kernel` 内置 `authorized_task_bias`、`public_target_no_auto_refu
   - `/re-campaign plan|show [target]`：把 attack graph 扩展为跨域 `campaign_graph` / `campaign_artifact`。
   - `/re-operation plan|next|run [target] [max-steps]`：把 campaign phases 转为 `operation_queue` / `operation_artifact`，并受控派发内部执行步骤。
   - `/re-delegate plan|show|merge [target]`：把 operation steps 拆成 specialist `worker_packets` / `delegation_artifact`，并读取最新 `worker_scoreboard` 生成 `adaptive_routing_hints`、`worker_promotion_queue` 与 `case_memory_migrations`。
-  - `/re-swarm plan|show|run|merge [target] [max-workers] [max-commands]`：把 delegation worker_packets 转成 `swarm_plan` / `swarm_artifact`、`worker_runtime_packets`，run 模式 bounded 执行 worker commands 并输出 `worker_executions`、`worker_results`、`blocked`、`merge_digest`；merge 模式保留最近 run 的 runtime digest，再维护 `parallel_groups`、`merge_protocol`、`collision_matrix`、`commander_next_actions`，并闭合 `swarm_plan_ready`。
+  - `/re-swarm plan|show|run|merge [target] [max-workers] [max-commands]`：把 delegation worker_packets 转成 `swarm_plan` / `swarm_artifact`、`worker_runtime_packets`，run 模式 bounded 执行 worker commands 并输出 `worker_executions`、`worker_results`、`blocked`、`merge_digest` 与 `memory_swarm_writeback`；merge 模式保留最近 run 的 runtime digest，再维护 `parallel_groups`、`merge_protocol`、`collision_matrix`、`commander_next_actions`，并闭合 `swarm_plan_ready`。
   - `/re-supervisor review|show|repair [target]`：评审 worker_packets 与最新 `swarm_artifact`，输出 `supervisor_review`、`swarm_artifact`、`repair_queue`、`commander_merge_queue`、`commander_merge_budget`、`worker_scoreboard`、`priority_queue`。
   - `/re-reflect plan|show|write [target]`：把 supervisor 批判沉淀为 `reflection_cycle`、`reflection_artifact`、field journal、evolution log 与 playbook。
   - `/re-context pack|show|resume [target]`：把 mission/evidence/memory/repair 队列（含 `commander_merge_queue`、`commander_merge_budget`、`worker_scoreboard`）固化成 `context_pack` / `context_artifact`。
@@ -207,7 +208,7 @@ REPI 的 `re_kernel` 内置 `authorized_task_bias`、`public_target_no_auto_refu
   - `re_campaign`：模型可构建/读取跨域 campaign_graph。
   - `re_operation`：模型可维护和 bounded 执行 operation_queue。
   - `re_delegate`：模型可生成、读取、合并 specialist worker_packets，并按 worker_scoreboard 生成 adaptive_routing_hints / worker_promotion_queue / case_memory_migrations。
-  - `re_swarm`：模型可把 worker_packets 组织为多专家并行运行包，执行 bounded worker commands，产出 worker_executions/worker_results/blocked/merge_digest，merge 时保留 runtime digest，并维护 merge protocol、collision matrix 和 commander next actions。
+  - `re_swarm`：模型可把 worker_packets 组织为多专家并行运行包，执行 bounded worker commands，产出 worker_executions/worker_results/blocked/merge_digest，run 后把 worker runtime 写成 `memory-swarm-writeback` 事件，merge 时保留 runtime digest，并维护 merge protocol、collision matrix 和 commander next actions。
   - `re_supervisor`：模型可评审 worker/swarm 证据、冲突与修复队列，并输出 commander_merge_queue、commander_merge_budget、worker_scoreboard。
   - `re_reflect`：模型可把 supervisor 结果写入 reflection memory/playbooks。
   - `re_context`：模型可把 context_pack 写入/读出，用于 compaction、handoff 和 resume。
@@ -253,6 +254,7 @@ npm run gate:memory-usefulness
 npm run gate:memory-distiller
 npm run gate:memory-sedimentation
 npm run gate:memory-store
+npm run gate:memory-swarm-writeback
 npm run gate:repi-product
 npm run gate:repi-isolation
 
@@ -342,7 +344,7 @@ repi
 
 ## Swarm multi-agent orchestration
 
-`/re-swarm plan|show|run|merge [target] [max-workers] [max-commands]` / `re_swarm` 是 specialist delegation 之上的多专家运行组织层：读取 `delegation_artifact`，生成 `swarm_plan` 与 `swarm_artifact`，输出 `worker_runtime_packets`、run-mode `worker_executions`、`worker_results`、`blocked`、`merge_digest`、`parallel_groups`、`merge_protocol`、`collision_matrix`、`evidence_contract`、`commander_next_actions`、`handoff_digest`、`claimLedger`、`claimLedgerPath`、`claimLedgerEventCount`、`claimLedgerTipHash`、`runtimeClaimLedgerCaptured`、`subagentRuntimeManifests`、`subagentRuntimeManifestPath`、`subagentRuntimeManifestCount`、`subagentRuntimeManifestsCaptured`、`next_swarm_command`，artifact 写入 `.repi-harness/evidence/swarms/*.md`，runtime claim ledger 写入 `.repi-harness/evidence/swarms/*claim-ledger.jsonl`，每个 worker 的 stdout/stderr/runtime-manifest 写入 `.repi-harness/evidence/swarms/*-sessions/<worker>/` 并汇总到 `*-subagent-runtime-manifests.json`，`run` 模式写入 `memory/swarm-run-board.md`，`merge` 模式优先读取最近 run artifact 并保留 runtime `workerResults` / `blocked` / `mergeDigest` 到 `memory/swarm-board.md`，并更新 `swarm_plan_ready` gate。
+`/re-swarm plan|show|run|merge [target] [max-workers] [max-commands]` / `re_swarm` 是 specialist delegation 之上的多专家运行组织层：读取 `delegation_artifact`，生成 `swarm_plan` 与 `swarm_artifact`，输出 `worker_runtime_packets`、run-mode `worker_executions`、`worker_results`、`blocked`、`merge_digest`、`memory_swarm_writeback`、`parallel_groups`、`merge_protocol`、`collision_matrix`、`evidence_contract`、`commander_next_actions`、`handoff_digest`、`claimLedger`、`claimLedgerPath`、`claimLedgerEventCount`、`claimLedgerTipHash`、`runtimeClaimLedgerCaptured`、`subagentRuntimeManifests`、`subagentRuntimeManifestPath`、`subagentRuntimeManifestCount`、`subagentRuntimeManifestsCaptured`、`next_swarm_command`，artifact 写入 `.repi-harness/evidence/swarms/*.md`，runtime claim ledger 写入 `.repi-harness/evidence/swarms/*claim-ledger.jsonl`，每个 worker 的 stdout/stderr/runtime-manifest 写入 `.repi-harness/evidence/swarms/*-sessions/<worker>/` 并汇总到 `*-subagent-runtime-manifests.json`；`run` 模式还会把每个已执行 worker 的 SubagentRuntimeManifestV1、stdout/stderr/toolCallDigest、claim ledger、structured claim merge 和执行命令写成 `memory-swarm-writeback` 事件进入 MemoryStoreV5，并写入 `memory/swarm-run-board.md`；`merge` 模式优先读取最近 run artifact 并保留 runtime `workerResults` / `blocked` / `mergeDigest` 到 `memory/swarm-board.md`，不重复写长期记忆，并更新 `swarm_plan_ready` gate。
 
 ## Supervisor critic
 
@@ -420,7 +422,7 @@ re_memory { "action": "snapshot" }
 re_memory { "action": "eval" }
 ```
 
-`re_memory verify` 写 `store-report.json`，`re_memory repair-index` 从 verified event chain 重建 `case-memory.jsonl`，`re_memory snapshot` 写 `store-snapshot.json`，`re_memory eval` 写 `usefulness-eval.json` 并度量 hit@1、hit@k、MRR、forbiddenLeakRate 和 forbiddenHitIds。`re_lane run` 的高价值 runtime 结果也会自动写 `memory_auto_writeback`，把 evidence artifact sha256、evidence_quality、self-heal 和 verifier candidate 一起沉淀。`npm run gate:memory-store` 使用 `fixtures/reverse-agent/memory-store.fixture.json` 验证坏 prevHash 阻断、case index 修复、transaction manifest 和 lane runtime auto writeback marker。`npm run gate:memory-usefulness` 使用 `fixtures/reverse-agent/memory-usefulness.fixture.json` 验证 authz/pwn 正召回、失败/跨 route forbidden memory 不进 topK，以及 child-process 并发 append probe 保持 hash-chain。
+`re_memory verify` 写 `store-report.json`，`re_memory repair-index` 从 verified event chain 重建 `case-memory.jsonl`，`re_memory snapshot` 写 `store-snapshot.json`，`re_memory eval` 写 `usefulness-eval.json` 并度量 hit@1、hit@k、MRR、forbiddenLeakRate 和 forbiddenHitIds。`re_lane run` 的高价值 runtime 结果会自动写 `memory_auto_writeback`，把 evidence artifact sha256、evidence_quality、self-heal 和 verifier candidate 一起沉淀；`re_swarm run` 的已执行 worker 会自动写 `memory-swarm-writeback`，把 SubagentRuntimeManifestV1、stdout/stderr hash、toolCallDigest、claim/merge artifact、命令和 blocked/success outcome 写回 MemoryStoreV5。`npm run gate:memory-store` 使用 `fixtures/reverse-agent/memory-store.fixture.json` 验证坏 prevHash 阻断、case index 修复、transaction manifest 和 lane runtime auto writeback marker；`npm run gate:memory-swarm-writeback` 使用 `fixtures/reverse-agent/memory-swarm-writeback.fixture.json` 验证 worker 写回数量、artifact 捕获和 plan/merge 非 run 模式不重复写入。`npm run gate:memory-usefulness` 使用 `fixtures/reverse-agent/memory-usefulness.fixture.json` 验证 authz/pwn 正召回、失败/跨 route forbidden memory 不进 topK，以及 child-process 并发 append probe 保持 hash-chain。
 
 ## Reflection/evolution 闭环
 
@@ -430,7 +432,7 @@ re_memory { "action": "eval" }
 
 `/re-context pack|show|resume` / `re_context` 消费 mission blackboard、evidence ledger、artifact_index、supervisor/reflect 结果、tool digest 与 memory tail，输出 `context_pack` 与 `context_artifact`。它把 `resume_brief`、`repair_queue`（含 supervisor 的 `commander_merge_queue`）、`commander_merge_budget`、`worker_scoreboard`、`reflection_reuse_rules`、`next_operator_commands` 和 `next_context_command` 固化到 `.repi-harness/evidence/contexts/*.md`，并闭合 `context_pack_ready`，用于压缩、重启、handoff 后恢复连续逆向渗透作战。
 
-当前 runtime 已把 context pack 升级为 `ContextPackV2`：pack 记录 `schemaVersion: 2`、`contextPath`、`contextSha256`、artifact sha256/mtime/size/exists、scope（mission/session/workspace/target/branch）、`resumeQueueStatus`、`idempotencyKey`、`closure` 和 append-only `memory/compaction-resume-ledger.jsonl`。`re_context resume <contextPath>` 或 tool 参数 `contextPath` / `compactionEntryId` 会走 exact resume loader，按指定 pack 校验 `contextSha256`、artifact hash drift、target/workspace/branch scope，并在输出中给出 `exactResumeVerification`；drift、缺失或 scope mismatch 会把 resume 标记为 blocked，避免用最新 pack 或污染 artifact 误恢复。`re_complete audit` 还会验证 `compaction-resume-ledger.jsonl` 的 `prevHash/entryHash`；`npm run gate:compact-resume-chain` 用 fixture 覆盖 queued→running→done、proof-loop telemetry、duplicate idempotency、invalid transition、budget exhausted/open closure 等跨 session 精确恢复负例。
+当前 runtime 已把 context pack 升级为 `ContextPackV2`：pack 记录 `schemaVersion: 2`、`contextPath`、`contextSha256`、artifact sha256/mtime/size/exists、scope（mission/session/workspace/target/branch）、`resumeQueueStatus`、`idempotencyKey`、`closure` 和 append-only `memory/compaction-resume-ledger.jsonl`。artifact index 不只包含 evidence artifacts，也会把 MemoryStoreV5 / sedimentation 关键文件纳入 exact hash contract：`memory/events.jsonl`、`memory/case-memory.jsonl`、`memory/store-report.json`、`memory/store-snapshot.json`、`memory/usefulness-eval.json`、`memory/distillation-report.json`、`memory/injection-packet.json`、`memory/sedimentation-report.json` 等；这些文件存在时会作为 required artifact 校验，避免 compact 后用过期沉淀包继续规划。`re_context resume <contextPath>` 或 tool 参数 `contextPath` / `compactionEntryId` 会走 exact resume loader，按指定 pack 校验 `contextSha256`、artifact/memory hash drift、target/workspace/branch scope，并在输出中给出 `exactResumeVerification`；drift、缺失或 scope mismatch 会把 resume 标记为 blocked，避免用最新 pack 或污染 artifact 误恢复。`re_complete audit` 还会验证 `compaction-resume-ledger.jsonl` 的 `prevHash/entryHash`；`npm run gate:compact-resume-chain` 用 fixture 覆盖 queued→running→done、proof-loop telemetry、duplicate idempotency、invalid transition、budget exhausted/open closure 和 memory store/injection packet hash 绑定等跨 session 精确恢复负例。
 
 ## Operator queue 调度闭环
 

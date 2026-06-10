@@ -421,8 +421,10 @@ const REQUIREMENTS = [
 				markers: [
 					"buildContextPack",
 					"contextPackSha256",
-					"contextArtifactHashes",
-					"verifyContextPackResume",
+						"contextArtifactHashes",
+						"memory_store_report",
+						"memory_injection_packet",
+						"verifyContextPackResume",
 					"buildExactResumeContextPack",
 					"buildReconCompactionSummary",
 					"buildReconCompactionResumeContract",
@@ -449,7 +451,7 @@ const REQUIREMENTS = [
 				id: "context_docs_contract",
 				description: "公开文档记录 context/resume pack、owned compaction 和 audit harness，不依赖 upstream compact 说明。",
 				files: ["docs/reverse-agent/README.md"],
-				markers: ["Context/resume pack 闭环", "REPI owned compaction kernel update", "context-compact-audit.mjs"],
+					markers: ["Context/resume pack 闭环", "REPI owned compaction kernel update", "context-compact-audit.mjs", "memory/injection-packet.json"],
 			},
 			{
 				id: "memory_v3_distiller_quarantine",
@@ -490,12 +492,31 @@ const REQUIREMENTS = [
 					"memory_auto_writeback",
 				],
 			},
-			{
-				id: "memory_v5_store_gate",
-				description: "Memory v5 hard-eval 覆盖坏 prevHash 阻断、case-memory repair-index、transaction manifest 和 runtime auto writeback marker。",
-				files: ["scripts/reverse-agent/memory-store-gate.mjs"],
-				markers: ["repi-memory-store-gate", "hash-chain-negative", "repair-index-rebuild", "memory_store_v5"],
-			},
+				{
+					id: "memory_v5_store_gate",
+					description: "Memory v5 hard-eval 覆盖坏 prevHash 阻断、case-memory repair-index、transaction manifest 和 runtime auto writeback marker。",
+					files: ["scripts/reverse-agent/memory-store-gate.mjs"],
+					markers: ["repi-memory-store-gate", "hash-chain-negative", "repair-index-rebuild", "memory_store_v5"],
+				},
+				{
+					id: "runtime_re_swarm_memory_writeback",
+					description: "re_swarm run 的每个已执行 worker 会把 SubagentRuntimeManifestV1、stdout/stderr hash、worker status、命令和 claim/merge artifact 写回 MemoryStoreV5，避免并行 worker 经验只留在 swarm artifact 里。",
+					files: ["packages/coding-agent/src/core/recon-profile.ts"],
+					markers: [
+						"function appendSwarmWorkerMemoryEvents",
+						"appendSwarmWorkerMemoryEvents(swarm)",
+						"memory-swarm-writeback",
+						"memory_swarm_writeback:",
+						"SubagentRuntimeManifestV1",
+						"MemoryStoreV5",
+					],
+				},
+				{
+					id: "runtime_re_swarm_memory_writeback_gate",
+					description: "re_swarm memory writeback gate 验证写回数量、artifact 捕获、非 run 模式跳过和文档/顶级 harness 接线。",
+					files: ["scripts/reverse-agent/memory-swarm-writeback-gate.mjs"],
+					markers: ["repi-memory-swarm-writeback-gate", "fixture:writeback-count", "fixture:artifact-capture", "gate:memory-swarm-writeback"],
+				},
 			{
 				id: "memory_usefulness_eval_runtime",
 				description: "Memory usefulness eval 把长期记忆从“能写”提升到“可度量地召回正确经验并阻断污染经验”，覆盖 hit@k、MRR、forbiddenHitIds、同进程并发写和 child-process 并发写压力。",
@@ -519,7 +540,7 @@ const REQUIREMENTS = [
 		hardeningNeeded: [
 			"knowledge graph/latest artifact 查询继续按 mission/session/workspace/target 做更严格过滤，避免跨任务污染。",
 			"compact resume ledger 继续扩展 queue 状态机：running/done/blocked/exhausted、auto-resume budget 和多次 compact 幂等回放。",
-			"Memory v5 后续继续补真正 embedding/vector rerank、跨 session contamination 负例和 re_swarm live worker memory writeback 压力回归。",
+				"Memory v5 后续继续补真正 embedding/vector rerank、跨 session contamination 负例和 re_swarm 多进程 worker memory writeback 压力回归。",
 		],
 		recommendedWork: [
 			"保持 ContextPackV2 / ResumeContractV2 runtime markers 与 context-compact-audit.mjs 同步。",

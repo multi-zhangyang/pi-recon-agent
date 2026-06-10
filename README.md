@@ -66,7 +66,7 @@ re_kernel → re_decision_core → re_map → re_operation → re_delegate
 - Memory usefulness eval：`re_memory eval` 会生成 `usefulness-eval.json`，度量 hit@1、hit@k、MRR、forbiddenLeakRate 和空召回率；`npm run gate:memory-usefulness` 用 authz / pwn 正召回、失败/跨 route forbidden memory 不进 topK、child-process 并发 append 保持 hash-chain 的 hard-eval 保护“记忆真的有用”。
 - Memory v3 distiller：`re_memory distill` 会把 `events.jsonl` 中高置信、已复现、同 route 的经验蒸馏进 `distillation-report.json` / `pattern-book.md`，产出 `command_template`、`verifier_rule`、`worker_routing_hint`，并强制记录 `mandatory_memory_injection_chain=retrieve -> rank -> inject -> execute -> verify -> feedback`。跨 route/cross target/高置信矛盾/陈旧失败会进入 `quarantine.json`，避免把脏经验继续注入计划。`npm run gate:memory-distiller` 用 promote、quarantine、hash drift、低置信负例保护该能力。
 - Memory v4 sedimentation：`re_memory sediment` 会在 Memory v3 之上生成 `semantic-index.json`、`contradiction-ledger.jsonl`、`injection-packet.json` 和 `sedimentation-report.json`。`re_lane plan` 会强制刷新该沉淀包，并优先注入 `memory-sediment:*` 命令；只有同时具备 artifact sha256、replay/verifier 证据、非 quarantine、grade≥70 的事件才可进入 mandatory injection packet，执行后仍走 `memory_reuse_feedback` 写回。`npm run gate:memory-sedimentation` 验证 artifact/verifier/quarantine/feedback/hash-chain 负例。
-- Memory v5 store：`appendMemoryEvent` 不再直接拼接 JSONL，而是先拿 `~/.repi/agent/recon/memory/.store.lock`，校验 hash-chain/seq/parse，再写 `transactions/*.json` transaction manifest，最后原子替换 `events.jsonl` 与 `case-memory.jsonl`。`re_memory verify` 写 `store-report.json`，`re_memory repair-index` 从事件链重建 case-memory，`re_memory snapshot` 写 `store-snapshot.json`；普通 `re_lane run` 的高价值 runtime 结果也会自动写入 `memory_auto_writeback`。`npm run gate:memory-store` 验证锁、坏 prevHash 阻断、case index 修复和 live writeback marker。
+- Memory v5 store：`appendMemoryEvent` 不再直接拼接 JSONL，而是先拿 `~/.repi/agent/recon/memory/.store.lock`，校验 hash-chain/seq/parse，再写 `transactions/*.json` transaction manifest，最后原子替换 `events.jsonl` 与 `case-memory.jsonl`。`re_memory verify` 写 `store-report.json`，`re_memory repair-index` 从事件链重建 case-memory，`re_memory snapshot` 写 `store-snapshot.json`；普通 `re_lane run` 的高价值 runtime 结果会自动写入 `memory_auto_writeback`，`re_swarm run` 的 worker 结果会写入 `memory-swarm-writeback`。`npm run gate:memory-store` 验证锁、坏 prevHash 阻断、case index 修复和 live writeback marker；`npm run gate:memory-swarm-writeback` 验证并行 worker 写回 MemoryStoreV5。
 - strict claim gate：`gate:claim-release` 使用严格 claim ledger validation，不把 orchestration 成功误报成平台 claim 成功；执行后会写 `~/.repi/agent/recon/evidence/claim-release/<timestamp>/result.json`，供 supervisor/compiler/complete 三段 runtime 读取。
 - failure/repair runtime ledger：`FailureLedgerEventV1`、`RepairQueueItemV1` strict schema、strict fixture、duplicate signature/attempt 去重检查、hard-eval 离线样例，`re_replayer` / `re_autofix` / `re_operator` / `re_proof_loop` failed|blocked row 到 `~/.repi/agent/recon/evidence/failures/ledger.jsonl`、`~/.repi/agent/recon/evidence/repairs/queue.jsonl` 的 append-only 写入 hooks，以及 compound-frontier、agent-dogfood role retry、plan-only invalid fixture 的 failure/repair 输出。
 - AutonomousRuntimeBatchV1 strict gate：`schemas/reverse-agent/autonomous-runtime-contract.schema.json` 与 `fixtures/reverse-agent/autonomous-runtime-contract.fixture.json` 覆盖 subagent runtime manifest、parallel shard state、compact resume transition、repair budget 和 runtime claim promotion；`npm run gate:autonomous-runtime` 会拒绝 duplicate subagent attempt、非法 resume transition 和 loose claim-gate 字段。
@@ -372,6 +372,7 @@ pack 中包含：
 - `schema_version: 2`
 - `artifact_index` 与每个 artifact 的 sha256 / size / mtime / exists
 - `artifactHashes`
+- MemoryStoreV5 / sedimentation hash：`memory_events`、`memory_case_memory`、`memory_store_report`、`memory_store_snapshot`、`memory_usefulness_eval`、`memory_distillation_report`、`memory_injection_packet`、`memory_sedimentation_report`
 - `scope`：session、workspace、target、branch
 - `resumeQueueStatus`
 - `closure`
@@ -436,6 +437,7 @@ re_memory { "action": "sediment" }
 - `re_reflect write` 会把 supervisor lessons / failure patterns / reuse rules / repair commands 同时写入 playbook 和 `events.jsonl`；`re_replayer` / `re_autofix` / `re_proof_loop` / `re_complete` 会把 replay 结果、修复队列、证明闭环和完成审计自动写回 MemoryEventV1。
 - `appendMemoryEvent` 走 Memory v5 transaction path：先抢 `.store.lock`，再验证 `events.jsonl` parse/seq/prevHash/entryHash，写入 `transactions/memtx:*.json`，最后原子替换 `events.jsonl` 与 `case-memory.jsonl`。如果事件链损坏，追加会被阻断并要求先 `re_memory verify` / 手动恢复；如果只是 case index 缺失或落后，`re_memory repair-index` 会从事件链重建。
 - `re_lane run` 现在不只在复用旧记忆时写 feedback；只要运行结果有强/中等证据、明显 findings 或可修复失败，也会自动追加一条 `memory_auto_writeback` 事件，把 lane、runtime artifact sha256、evidence_quality、self-heal 和 verifier 候选写回 MemoryStoreV5。
+- `re_swarm run` 现在会对每个已执行 worker 自动追加 `memory-swarm-writeback` 事件，把 worker role/status、SubagentRuntimeManifestV1、stdout/stderr/toolCallDigest、claim ledger、structured claim merge、manifest index 和执行命令写回 MemoryStoreV5；plan/merge 模式只保留 artifact，不重复写入长期记忆。
 - `re_lane plan` 会读取 playbook、knowledge graph 和 `events.jsonl`，把高分结构化历史命令合入命令包，并在 notes 中显示 `memory_event_reuse`。
 - `re_lane run` 执行到结构化记忆命令后会写 `memory_reuse_feedback`：成功/强证据形成 promote 事件，失败/弱证据形成 demote 事件；后续 `search-events` 会把同 case 的 `reuseCount/failureCount/decay/replayVerified` 作为在线学习闭环纳入排序和命令建议。
 - `re_memory search-events` 已接入 hybrid retrieval：精确 token 命中之外，还会用 `memory_semantic_hybrid_reuse`、`case-memory-hybrid`、`artifact-hybrid` 三类原因解释召回，覆盖术语不一致但工程语义相同的场景。
@@ -452,6 +454,7 @@ re_memory { "action": "sediment" }
 - Memory v3 distiller hard-eval 由 `fixtures/reverse-agent/memory-distiller.fixture.json` 与 `npm run gate:memory-distiller` 保护：它验证 promoted pattern、污染隔离、mandatory injection chain、hash drift 阻断、低置信不提升。
 - Memory v4 sedimentation hard-eval 由 `fixtures/reverse-agent/memory-sedimentation.fixture.json` 与 `npm run gate:memory-sedimentation` 保护：它验证 `artifact_sha256_required`、`promotion_requires_verifier_or_replay`、`quarantine_blocks_injection`、`feedback_writeback_required_after_execution` 和 `memory_sedimentation_grade>=70`，防止记忆只是日志而不进入调度。
 - Memory v5 store hard-eval 由 `fixtures/reverse-agent/memory-store.fixture.json` 与 `npm run gate:memory-store` 保护：它验证 `hash_chain_verified_before_append`、`transaction_manifest_committed`、坏 `prevHash` 负例阻断、case-memory 缺失时 `repair-index` 可重建，以及 `re_lane run` 的 `memory_auto_writeback` marker。
+- re_swarm memory writeback hard-eval 由 `fixtures/reverse-agent/memory-swarm-writeback.fixture.json` 与 `npm run gate:memory-swarm-writeback` 保护：它验证 `memory-swarm-writeback` 事件数量、SubagentRuntimeManifestV1/stdout/stderr/claim artifact 捕获、blocked/success outcome 捕获，以及 plan/merge 非 run 模式不重复写入。
 
 恢复时可以直接指定原始 pack：
 
@@ -698,6 +701,8 @@ npm run gate:memory-hybrid
 npm run gate:memory-usefulness
 npm run gate:memory-distiller
 npm run gate:memory-sedimentation
+npm run gate:memory-store
+npm run gate:memory-swarm-writeback
 npm run gate:repi-harness
 npm run gate:repi-product
 npm run gate:repi-isolation

@@ -1291,6 +1291,8 @@ describe("REPI kernel profile", () => {
 		expect(swarmRun.content[0]?.text).toContain("execution_audit:");
 		expect(swarmRun.content[0]?.text).toContain("coverage_matrix:");
 		expect(swarmRun.content[0]?.text).toContain("retry_queue:");
+		expect(swarmRun.content[0]?.text).toContain("memory_swarm_writeback:");
+		expect(swarmRun.content[0]?.text).toContain("status=pass");
 		expect(swarmRun.content[0]?.text).toContain("next_swarm_command: re_swarm merge");
 		const swarmRunPath = /swarm_artifact: (.+)/.exec(swarmRun.content[0]?.text ?? "")?.[1]?.trim();
 		expect(swarmRunPath).toBeDefined();
@@ -1299,6 +1301,10 @@ describe("REPI kernel profile", () => {
 		expect(readFileSync(swarmRunPath!, "utf-8")).toContain("execution_audit:");
 		expect(readFileSync(swarmRunPath!, "utf-8")).toContain("coverage_matrix:");
 		expect(readFileSync(swarmRunPath!, "utf-8")).toContain("retry_queue:");
+		expect(readFileSync(join(agentDir, "recon", "memory", "events.jsonl"), "utf-8")).toContain(
+			"memory-swarm-writeback",
+		);
+		expect(readFileSync(join(agentDir, "recon", "memory", "store-report.json"), "utf-8")).toContain("MemoryStoreV5");
 		expect(swarmRun.content[0]?.text).toContain("structured_claim_merge:");
 		expect(swarmRun.content[0]?.text).toContain("status=blocked");
 		const structuredClaimMergePath = swarmRunPath!.replace(/\.md$/i, "-structured-claim-merge.json");

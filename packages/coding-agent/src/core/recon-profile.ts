@@ -1542,6 +1542,10 @@ type SwarmArtifact = {
 	subagentRuntimeManifests: SwarmSubagentRuntimeManifestRow[];
 	subagentRuntimeManifestCount: number;
 	subagentRuntimeManifestsCaptured: boolean;
+	memoryWritebackEvents: string[];
+	memoryWritebackCount: number;
+	memoryWritebackStatus: "pending" | "pass" | "skipped" | "blocked";
+	memoryWritebackErrors: string[];
 	sourceArtifacts: string[];
 };
 
@@ -15291,6 +15295,10 @@ function buildSwarm(options: { target?: string; task?: string; mode?: "plan" | "
 		subagentRuntimeManifests: [],
 		subagentRuntimeManifestCount: 0,
 		subagentRuntimeManifestsCaptured: false,
+		memoryWritebackEvents: [],
+		memoryWritebackCount: 0,
+		memoryWritebackStatus: "pending",
+		memoryWritebackErrors: [],
 		sourceArtifacts: Array.from(
 			new Set([
 				delegationArtifact,
@@ -15898,6 +15906,9 @@ async function runSwarm(
 		swarm = refreshSwarmSubagentRuntimeManifestCapture(swarm);
 	}
 	swarm = refreshSwarmRunDerivedFields(swarm);
+	writeSwarmArtifact(swarm);
+	swarm = appendSwarmWorkerMemoryEvents(swarm);
+	swarm = refreshSwarmRunDerivedFields(swarm);
 	const path = writeSwarmArtifact(swarm);
 	return formatSwarm(swarm, path);
 }
@@ -16003,6 +16014,15 @@ function formatSwarm(swarm: SwarmArtifact, path?: string): string {
 							`- worker=${manifest.workerId} role=${manifest.roleId} status=${manifest.status} pid=${manifest.pid ?? "null"} sessionDir=${manifest.sessionDir} runtimeManifestFile=${manifest.runtimeManifestFile} stdoutSha256=${manifest.stdoutSha256.slice(0, 16)} stderrSha256=${manifest.stderrSha256.slice(0, 16)} toolCallDigest=${manifest.toolCallDigest.slice(0, 16)}`,
 					)
 			: ["- none"]),
+		"memory_swarm_writeback:",
+		`- status=${swarm.memoryWritebackStatus ?? "pending"}`,
+		`- events=${swarm.memoryWritebackCount ?? 0}`,
+		...(swarm.memoryWritebackEvents?.length
+			? swarm.memoryWritebackEvents.map((eventId) => `- memory_event=${eventId}`)
+			: ["- memory_event=none"]),
+		...(swarm.memoryWritebackErrors?.length
+			? swarm.memoryWritebackErrors.slice(0, 8).map((error) => `- error=${error}`)
+			: ["- errors=none"]),
 		`next_swarm_command: ${
 			swarm.mode === "merge"
 				? "re_supervisor review"
@@ -17029,6 +17049,7 @@ function parseReflectionArtifact(path: string): ReflectionArtifact | undefined {
 const CONTEXT_HASH_OMIT = new Set(["contextSha256", "exactResumeVerification", "resumedFromContextPath"]);
 
 function contextEvidenceRank(kind: string): string {
+	if (/^memory_/i.test(kind)) return "persisted_state";
 	if (/browser|web_authz|mobile_runtime|native_runtime|exploit_lab|run|replayer|proof_loop/i.test(kind)) return "runtime_artifact";
 	if (/map|knowledge|harness|decision_core|kernel/i.test(kind)) return "process_config";
 	if (/compiler|verifier|supervisor|swarm|delegation|operation|reflection|operator|autofix/i.test(kind))
@@ -17037,6 +17058,14 @@ function contextEvidenceRank(kind: string): string {
 }
 
 function contextSourceCommand(kind: string): string {
+	if (/^memory_(?:events|case_memory|retrieval|store|snapshot|usefulness|distillation|quarantine|semantic|contradiction|injection|sedimentation)/i.test(kind)) {
+		if (/store_report/i.test(kind)) return "re_memory verify";
+		if (/store_snapshot/i.test(kind)) return "re_memory snapshot";
+		if (/usefulness/i.test(kind)) return "re_memory eval";
+		if (/distillation|quarantine/i.test(kind)) return "re_memory distill";
+		if (/semantic|contradiction|injection|sedimentation/i.test(kind)) return "re_memory sediment";
+		return "re_memory events";
+	}
 	return `re_${kind.replace(/-/g, "_")} show`;
 }
 
@@ -17144,6 +17173,18 @@ function contextArtifactIndex(): ContextArtifactIndexEntry[] {
 		["proof_loop", latestProofLoopArtifactPath()],
 		["knowledge", latestKnowledgeGraphArtifactPath()],
 		["harness", latestHarnessArtifactPath()],
+		["memory_events", memoryEventsPath()],
+		["memory_case_memory", caseMemoryPath()],
+		["memory_retrieval_report", memoryRetrievalReportPath()],
+		["memory_store_report", memoryStoreReportPath()],
+		["memory_store_snapshot", memoryStoreSnapshotPath()],
+		["memory_usefulness_eval", memoryUsefulnessEvalReportPath()],
+		["memory_distillation_report", memoryDistillationReportPath()],
+		["memory_quarantine", memoryQuarantinePath()],
+		["memory_semantic_index", memorySemanticIndexPath()],
+		["memory_contradiction_ledger", memoryContradictionLedgerPath()],
+		["memory_injection_packet", memoryInjectionPacketPath()],
+		["memory_sedimentation_report", memorySedimentationReportPath()],
 	];
 	return pairs.filter((pair): pair is [string, string] => Boolean(pair[1])).map(([kind, path]) => contextArtifactEntry(kind, path));
 }
@@ -17290,7 +17331,7 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume" }
 		sourceArtifacts: Array.from(
 			new Set(
 				[
-					...artifactIndex.map((artifact) => artifact.path),
+					...artifactIndex.filter((artifact) => artifact.exists).map((artifact) => artifact.path),
 					swarmRetry.path,
 					autonomousBudget.dispatcherBoardPath,
 					autonomousBudget.promotionPlaybookPath,
@@ -18021,24 +18062,6 @@ function verifyContextPackResume(
 	const contextSha256 =
 		!pack.contextSha256 ? "missing" : pack.contextSha256 === actualContextHash ? "pass" : "drift";
 	if (contextSha256 !== "pass") blocked.push(`contextSha256 ${contextSha256}`);
-	let artifactHashes: ContextResumeVerification["artifactHashes"] = "pass";
-	if (!pack.artifactHashes?.length) {
-		artifactHashes = "missing";
-		blocked.push("artifactHashes missing");
-	} else {
-		for (const artifact of pack.artifactHashes.filter((item) => item.required)) {
-			if (!existsSync(artifact.path)) {
-				artifactHashes = "drift";
-				blocked.push(`artifact missing: ${artifact.path}`);
-				continue;
-			}
-			const current = createHash("sha256").update(readFileSync(artifact.path)).digest("hex");
-			if (artifact.sha256 && current !== artifact.sha256) {
-				artifactHashes = "drift";
-				blocked.push(`artifact hash drift: ${artifact.path}`);
-			}
-		}
-	}
 	let scope: ContextResumeVerification["scope"] = "pass";
 	if (!pack.scope) {
 		scope = "missing";
@@ -18056,6 +18079,24 @@ function verifyContextPackResume(
 		if (pack.scope.branchId && pack.scope.branchId !== currentBranchId) {
 			scope = "mismatch";
 			blocked.push(`branch mismatch: ${pack.scope.branchId} != ${currentBranchId}`);
+		}
+	}
+	let artifactHashes: ContextResumeVerification["artifactHashes"] = "pass";
+	if (!pack.artifactHashes?.length) {
+		artifactHashes = "missing";
+		blocked.push("artifactHashes missing");
+	} else {
+		for (const artifact of pack.artifactHashes.filter((item) => item.required)) {
+			if (!existsSync(artifact.path)) {
+				artifactHashes = "drift";
+				blocked.push(`artifact missing: ${artifact.path}`);
+				continue;
+			}
+			const current = createHash("sha256").update(readFileSync(artifact.path)).digest("hex");
+			if (artifact.sha256 && current !== artifact.sha256) {
+				artifactHashes = "drift";
+				blocked.push(`artifact hash drift: ${artifact.path}`);
+			}
 		}
 	}
 	return { ref, sourcePath, loadedBy, contextSha256, artifactHashes, scope, blocked: Array.from(new Set(blocked)), warnings };
@@ -24968,6 +25009,127 @@ function appendLaneRunMemoryEvent(
 		verifierRuleCandidate: analysis.critic.score >= 45,
 		workerRoutingHint: pack.lane,
 	});
+}
+
+function appendSwarmWorkerMemoryEvents(swarm: SwarmArtifact): SwarmArtifact {
+	if (swarm.mode !== "run") {
+		return {
+			...swarm,
+			memoryWritebackStatus: "skipped",
+			memoryWritebackCount: swarm.memoryWritebackCount ?? 0,
+			memoryWritebackEvents: swarm.memoryWritebackEvents ?? [],
+			memoryWritebackErrors: swarm.memoryWritebackErrors ?? [],
+		};
+	}
+	if ((swarm.memoryWritebackEvents ?? []).length > 0 && swarm.memoryWritebackStatus === "pass") return swarm;
+	const executionsByWorker = new Map<string, SwarmWorkerExecution[]>();
+	for (const execution of swarm.executions) {
+		executionsByWorker.set(execution.workerId, [...(executionsByWorker.get(execution.workerId) ?? []), execution]);
+	}
+	if (executionsByWorker.size === 0) {
+		return {
+			...swarm,
+			memoryWritebackStatus: "skipped",
+			memoryWritebackCount: 0,
+			memoryWritebackEvents: [],
+			memoryWritebackErrors: ["no_worker_executions"],
+		};
+	}
+	const manifestsByWorker = new Map((swarm.subagentRuntimeManifests ?? []).map((manifest) => [manifest.workerId, manifest]));
+	const events: MemoryEventV1[] = [];
+	const errors: string[] = [];
+	for (const worker of swarm.workers.filter((candidate) => executionsByWorker.has(candidate.id)).slice(0, 8)) {
+		const executions = executionsByWorker.get(worker.id) ?? [];
+		const manifest = manifestsByWorker.get(worker.id);
+		const blocked = executions.some((execution) => execution.status === "blocked");
+		const outcome: MemoryOutcome = blocked ? "blocked" : "success";
+		const artifactPaths = uniqueNonEmpty(
+			[
+				swarm.claimLedgerPath,
+				swarm.structuredClaimMergePath,
+				swarm.subagentRuntimeManifestPath,
+				manifest?.runtimeManifestFile,
+				manifest?.stdoutPath,
+				manifest?.stderrPath,
+				...worker.sourceArtifacts,
+				...executions.flatMap((execution) => execution.sourceArtifacts),
+			],
+			40,
+		);
+		try {
+			const event = appendMemoryEvent({
+				source: "operator",
+				task: `re_swarm worker ${worker.worker} ${worker.id}`,
+				route: swarm.route ?? worker.worker,
+				target: swarm.target,
+				domainTags: uniqueNonEmpty(
+					[
+						"swarm-worker",
+						"memory-swarm-writeback",
+						"MemoryStoreV5",
+						worker.worker,
+						`worker-status:${worker.status}`,
+						`runtime-status:${manifest?.status ?? (blocked ? "blocked" : "done")}`,
+					],
+					24,
+				),
+				outcome,
+				lessons: uniqueNonEmpty(
+					[
+						`re_swarm worker ${worker.id} (${worker.worker}) executed ${executions.length} command(s), status=${worker.status}, runtime=${manifest?.status ?? "unknown"}.`,
+						manifest ? `SubagentRuntimeManifestV1 stdout=${manifest.stdoutSha256} stderr=${manifest.stderrSha256} toolCallDigest=${manifest.toolCallDigest}.` : undefined,
+						...(swarm.workerResults.filter((result) => result.includes(worker.id)).slice(0, 3)),
+					],
+					20,
+				),
+				failurePatterns: uniqueNonEmpty(
+					blocked
+						? executions
+								.filter((execution) => execution.status === "blocked")
+								.map(
+									(execution) =>
+										`re_swarm_worker_blocked worker=${worker.id} exit=${execution.exitCode ?? "unknown"} command=${truncateMiddle(execution.command, 160)} output=${truncateMiddle(execution.output, 220)}`,
+								)
+						: [],
+					20,
+				),
+				reuseRules: uniqueNonEmpty(
+					[
+						`Route future ${worker.worker} tasks to worker=${worker.id} when merge_keys=${worker.mergeKeys.join("|") || "none"} and evidence contract matches.`,
+						"Before final claim promotion, require runtime claim ledger, structured claim merge, verifier matrix, and replay/proof-loop closure.",
+						...worker.evidenceContract.slice(0, 8).map((item) => `evidence_contract:${item}`),
+					],
+					20,
+				),
+				commands: uniqueNonEmpty(executions.map((execution) => execution.command), 16),
+				artifactPaths,
+				confidence: blocked ? 0.38 : 0.76,
+				replayVerified: false,
+				playbookCandidate: !blocked,
+				verifierRuleCandidate: true,
+				workerRoutingHint: worker.worker,
+			});
+			events.push(event);
+		} catch (error) {
+			errors.push(`memory_swarm_writeback_failed:${worker.id}:${String(error).slice(0, 180)}`);
+		}
+	}
+	return {
+		...swarm,
+		memoryWritebackEvents: events.map((event) => event.id),
+		memoryWritebackCount: events.length,
+		memoryWritebackStatus: errors.length ? "blocked" : events.length ? "pass" : "skipped",
+		memoryWritebackErrors: errors,
+		sourceArtifacts: Array.from(
+			new Set([
+				...swarm.sourceArtifacts,
+				memoryEventsPath(),
+				caseMemoryPath(),
+				memoryStoreReportPath(),
+				...events.flatMap((event) => event.artifactHashes.map((artifact) => artifact.path)),
+			]),
+		).slice(0, 80),
+	};
 }
 
 function appendMemoryEventTransaction(input: MemoryEventInput): {

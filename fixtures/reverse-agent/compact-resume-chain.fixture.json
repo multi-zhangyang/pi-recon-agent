@@ -14,6 +14,18 @@
       "content": "# runtime proof\ncommand: re_lane run authz https://target.example.local\nverify: status=pass\nhash: runtime-proof\n",
       "sha256": "41891505ca7b0197f79d98e661c7a6dc4c1d394aeb96013ca18c6f01429fc3c9",
       "required": true
+    },
+    {
+      "path": "/tmp/repi-fixture/memory/store-report.json",
+      "content": "{\"kind\":\"repi-memory-store-verification\",\"schemaVersion\":1,\"storeGrade\":\"pass\",\"hashChainOk\":true,\"seqOk\":true,\"caseIndexOk\":true}\n",
+      "sha256": "cd76e6f7e8fc3606a7b0989e4b562cbe5636e23a3b457a464f31e2513b970531",
+      "required": true
+    },
+    {
+      "path": "/tmp/repi-fixture/memory/injection-packet.json",
+      "content": "{\"kind\":\"repi-memory-injection-packet\",\"schemaVersion\":1,\"entries\":[],\"requiredGates\":[\"memory_sedimentation_grade>=70\"]}\n",
+      "sha256": "b27d38ad250489facfde29a01ba922be7532c284a424fba46de362a8f89e192e",
+      "required": true
     }
   ],
   "contextPack": {
@@ -49,6 +61,28 @@
         "sha256": "41891505ca7b0197f79d98e661c7a6dc4c1d394aeb96013ca18c6f01429fc3c9",
         "evidenceRank": "runtime_artifact",
         "sourceCommand": "re_lane run authz"
+      },
+      {
+        "artifactId": "memory_store_report:909a189e2f6c5493",
+        "kind": "memory_store_report",
+        "path": "/tmp/repi-fixture/memory/store-report.json",
+        "exists": true,
+        "size": 131,
+        "mtime": "2026-06-10T22:00:00.000Z",
+        "sha256": "cd76e6f7e8fc3606a7b0989e4b562cbe5636e23a3b457a464f31e2513b970531",
+        "evidenceRank": "persisted_state",
+        "sourceCommand": "re_memory verify"
+      },
+      {
+        "artifactId": "memory_injection_packet:c55e99431d9a4813",
+        "kind": "memory_injection_packet",
+        "path": "/tmp/repi-fixture/memory/injection-packet.json",
+        "exists": true,
+        "size": 122,
+        "mtime": "2026-06-10T22:00:00.000Z",
+        "sha256": "b27d38ad250489facfde29a01ba922be7532c284a424fba46de362a8f89e192e",
+        "evidenceRank": "persisted_state",
+        "sourceCommand": "re_memory sediment"
       }
     ],
     "artifactHashes": [
@@ -56,6 +90,18 @@
         "artifactId": "run:authz-proof",
         "path": "/tmp/repi-fixture/evidence/runs/authz-proof.md",
         "sha256": "41891505ca7b0197f79d98e661c7a6dc4c1d394aeb96013ca18c6f01429fc3c9",
+        "required": true
+      },
+      {
+        "artifactId": "memory_store_report:909a189e2f6c5493",
+        "path": "/tmp/repi-fixture/memory/store-report.json",
+        "sha256": "cd76e6f7e8fc3606a7b0989e4b562cbe5636e23a3b457a464f31e2513b970531",
+        "required": true
+      },
+      {
+        "artifactId": "memory_injection_packet:c55e99431d9a4813",
+        "path": "/tmp/repi-fixture/memory/injection-packet.json",
+        "sha256": "b27d38ad250489facfde29a01ba922be7532c284a424fba46de362a8f89e192e",
         "required": true
       }
     ],
@@ -92,7 +138,7 @@
     ],
     "missionSnapshot": "mission_id: mission-compact-fixture\nroute: web-api\nactive lane: authz-proof",
     "evidenceTail": "runtime artifact path=/tmp/repi-fixture/evidence/runs/authz-proof.md hash=41891505ca7b0197f79d98e661c7a6dc4c1d394aeb96013ca18c6f01429fc3c9",
-    "memoryTail": "compact_resume_case_memory: status=done route=web-api command=re_context resume",
+    "memoryTail": "compact_resume_case_memory: status=done route=web-api command=re_context resume\nMemoryStoreV5 store-report=/tmp/repi-fixture/memory/store-report.json\nmandatory_memory_injection_packet=/tmp/repi-fixture/memory/injection-packet.json",
     "toolDigest": "tool-index: re_context re_operator re_proof_loop available",
     "completionAudit": "blocked: pending gate completion_ready until report scaffold",
     "repairQueue": [
@@ -160,14 +206,16 @@
     ],
     "sourceArtifacts": [
       "/tmp/repi-fixture/evidence/runs/authz-proof.md",
-      "/tmp/repi-fixture/memory/compaction-auto-resume-board.md"
+      "/tmp/repi-fixture/memory/compaction-auto-resume-board.md",
+      "/tmp/repi-fixture/memory/store-report.json",
+      "/tmp/repi-fixture/memory/injection-packet.json"
     ],
     "resumeContract": {
       "contractId": "resume-contract/web-api/fixture",
       "schemaVersion": 2,
       "compactionEntryId": "81ea2ed4de5116bfbb257d468a4dc6ac9aaf35dd037a7f11364cba5cf5798ae3",
       "contextPath": "/tmp/repi-fixture/evidence/contexts/resume-pack.md",
-      "contextSha256": "a0837ac1ed4a84fb3c1a320696cd2b034c7032e6316f4729afae2e9b5ac7d795",
+      "contextSha256": "1530534e19d9f07b40a136cd1a4226439616d333ff5d885ae8306ff537da37d4",
       "cwd": "/workspaces/repi-target",
       "missionId": "mission-compact-fixture",
       "sessionId": "sess-compact-fixture",
@@ -177,6 +225,18 @@
           "artifactId": "run:authz-proof",
           "path": "/tmp/repi-fixture/evidence/runs/authz-proof.md",
           "sha256": "41891505ca7b0197f79d98e661c7a6dc4c1d394aeb96013ca18c6f01429fc3c9",
+          "required": true
+        },
+        {
+          "artifactId": "memory_store_report:909a189e2f6c5493",
+          "path": "/tmp/repi-fixture/memory/store-report.json",
+          "sha256": "cd76e6f7e8fc3606a7b0989e4b562cbe5636e23a3b457a464f31e2513b970531",
+          "required": true
+        },
+        {
+          "artifactId": "memory_injection_packet:c55e99431d9a4813",
+          "path": "/tmp/repi-fixture/memory/injection-packet.json",
+          "sha256": "b27d38ad250489facfde29a01ba922be7532c284a424fba46de362a8f89e192e",
           "required": true
         }
       ],
@@ -195,7 +255,7 @@
         "verifiedBy": "compact-resume-chain-gate"
       }
     },
-    "contextSha256": "a0837ac1ed4a84fb3c1a320696cd2b034c7032e6316f4729afae2e9b5ac7d795"
+    "contextSha256": "1530534e19d9f07b40a136cd1a4226439616d333ff5d885ae8306ff537da37d4"
   },
   "ledgerRows": [
     {
