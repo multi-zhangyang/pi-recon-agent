@@ -57,7 +57,14 @@ export async function getLatestPiRelease(
 	currentVersion: string,
 	options: { timeoutMs?: number } = {},
 ): Promise<LatestPiRelease | undefined> {
-	if (process.env.PI_RECON_PRODUCT === "1" || process.env.PI_SKIP_VERSION_CHECK || process.env.PI_OFFLINE)
+	if (
+		process.env.REPI_PRODUCT === "1" ||
+		process.env.PI_RECON_PRODUCT === "1" ||
+		process.env.REPI_SKIP_VERSION_CHECK ||
+		process.env.PI_SKIP_VERSION_CHECK ||
+		process.env.REPI_OFFLINE ||
+		process.env.PI_OFFLINE
+	)
 		return undefined;
 
 	const response = await fetch(LATEST_VERSION_URL, {

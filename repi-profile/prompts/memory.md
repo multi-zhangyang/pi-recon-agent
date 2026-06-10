@@ -1,8 +1,8 @@
 ---
-description: 整理当前任务并写入 Pi-RECON 长期记忆
+description: 整理当前任务并写入 REPI 长期记忆
 argument-hint: "[scene/title]"
 ---
-将当前会话中有复用价值的逆向/渗透经验写入 `.pi/memory/field-journal.md` 和 `.pi/memory/case-index.md`。
+将当前会话中有复用价值的逆向/渗透经验写入 `~/.repi/agent/recon/memory/field-journal.md` 和 `~/.repi/agent/recon/memory/case-index.md`。
 
 要求：
 - 场景/标题：$ARGUMENTS

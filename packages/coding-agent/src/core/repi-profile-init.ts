@@ -143,11 +143,11 @@ export function initializeRepiProfile(options: { repoRoot?: string; verbose?: bo
 	writeJson(settingsPath, settings, 0o600);
 
 	for (const [rel, body] of [
-		["recon/memory/field-journal.md", "# Pi-RECON Field Journal\n\n"],
-		["recon/memory/case-index.md", "# Pi-RECON Case Index\n\n"],
-		["recon/memory/evolution-log.md", "# Pi-RECON Evolution Log\n\n"],
-		["recon/evidence/ledger.md", "# Pi-RECON Evidence Ledger\n\n"],
-		["recon/tools/tool-index.md", "# Pi-RECON Tool Index\n\n"],
+		["recon/memory/field-journal.md", "# REPI Field Journal\n\n"],
+		["recon/memory/case-index.md", "# REPI Case Index\n\n"],
+		["recon/memory/evolution-log.md", "# REPI Evolution Log\n\n"],
+		["recon/evidence/ledger.md", "# REPI Evidence Ledger\n\n"],
+		["recon/tools/tool-index.md", "# REPI Tool Index\n\n"],
 	] as const) {
 		const path = join(agentDir, rel);
 		if (!existsSync(path)) writeFileSync(path, body, "utf8");
@@ -158,7 +158,7 @@ export function initializeRepiProfile(options: { repoRoot?: string; verbose?: bo
 		manifestPath,
 		{
 			name: "repi",
-			kind: "isolated-pi-recon-profile",
+			kind: "isolated-repi-profile",
 			repoRoot: options.repoRoot ?? process.env.REPI_REPO_ROOT ?? getPackageDir(),
 			agentDir,
 			legacyPiImported: {

@@ -79,11 +79,18 @@ export function bootstrapRepiCli(args: readonly string[]): string[] {
 	process.env.REPI_CODING_AGENT_CONFIG_DIR = process.env.REPI_CODING_AGENT_CONFIG_DIR || ".repi";
 	process.env.PI_CODING_AGENT_APP_NAME = process.env.PI_CODING_AGENT_APP_NAME || "repi";
 	process.env.PI_CODING_AGENT_CONFIG_DIR = process.env.PI_CODING_AGENT_CONFIG_DIR || ".repi";
+	process.env.REPI_PRIMARY = "1";
+	process.env.REPI_PRODUCT = "1";
 	process.env.PI_RECON_PRIMARY = "1";
 	process.env.PI_RECON_PRODUCT = "1";
-	process.env.PI_SKIP_VERSION_CHECK = process.env.PI_SKIP_VERSION_CHECK || "1";
-	process.env.PI_SKIP_PACKAGE_UPDATE_CHECK = process.env.PI_SKIP_PACKAGE_UPDATE_CHECK || "1";
-	process.env.PI_TELEMETRY = process.env.PI_TELEMETRY || "0";
+	process.env.REPI_SKIP_VERSION_CHECK = process.env.REPI_SKIP_VERSION_CHECK || "1";
+	process.env.REPI_SKIP_PACKAGE_UPDATE_CHECK = process.env.REPI_SKIP_PACKAGE_UPDATE_CHECK || "1";
+	process.env.REPI_TELEMETRY = process.env.REPI_TELEMETRY || "0";
+	process.env.REPI_OFFLINE = process.env.REPI_OFFLINE || process.env.PI_OFFLINE || "0";
+	process.env.PI_SKIP_VERSION_CHECK = process.env.PI_SKIP_VERSION_CHECK || process.env.REPI_SKIP_VERSION_CHECK;
+	process.env.PI_SKIP_PACKAGE_UPDATE_CHECK =
+		process.env.PI_SKIP_PACKAGE_UPDATE_CHECK || process.env.REPI_SKIP_PACKAGE_UPDATE_CHECK;
+	process.env.PI_TELEMETRY = process.env.PI_TELEMETRY || process.env.REPI_TELEMETRY;
 
 	const stripped = stripRepiWrapperFlags(args);
 	initializeRepiProfile();

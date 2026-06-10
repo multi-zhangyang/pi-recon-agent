@@ -129,7 +129,7 @@ describe("AgentSession compaction characterization", () => {
 		expect(harness.session.messages[0]?.role).toBe("compactionSummary");
 	});
 
-	it("manually compacts through Pi-RECON and writes the resume-contract audit entry", async () => {
+	it("manually compacts through REPI and writes the resume-contract audit entry", async () => {
 		const previousAgentDir = process.env[ENV_AGENT_DIR];
 		const agentDir = join(tmpdir(), `pi-recon-compact-suite-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(agentDir, { recursive: true });
@@ -163,7 +163,7 @@ describe("AgentSession compaction characterization", () => {
 						entry.type === "custom" && entry.customType === "pi-recon-compaction-resume-telemetry",
 				);
 
-			expect(result.summary).toContain("# Pi-RECON Compaction Summary");
+			expect(result.summary).toContain("# REPI Compaction Summary");
 			expect(result.summary).toContain("kind: pi-recon-compaction");
 			expect(result.summary).toContain("re_context resume");
 			expect(result.details).toMatchObject({ kind: "pi-recon-compaction" });

@@ -60,7 +60,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pi-recon.local/schemas/autonomous-runtime-contract.schema.json",
-  "title": "Pi-RECON Autonomous Runtime Contracts",
+  "title": "REPI Autonomous Runtime Contracts",
   "description": "Strict contracts for independent sub-agent runtime manifests, shard scheduling, compact/resume state, failure repair budgets, and runtime claim promotion gates.",
   "$defs": {
     "ResourceLimits": {

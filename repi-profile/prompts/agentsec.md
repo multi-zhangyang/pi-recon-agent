@@ -1,9 +1,9 @@
 ---
-description: 启动 Pi-RECON Agent/LLM prompt-tool-memory 边界验证工作流
+description: 启动 REPI Agent/LLM prompt-tool-memory 边界验证工作流
 argument-hint: "<agent-app-or-workspace>"
 ---
 
-Pi-RECON agent security task: $ARGUMENTS
+REPI agent security task: $ARGUMENTS
 
 1. 路由到 `Agent / LLM security`，确认 lanes：surface → tool-boundary → memory → injection → delegation → report。
 2. 运行 `agent-prompt-surface-map`，枚举 system/developer/user/tool/memory/RAG/MCP 输入边界和不可信内容入口。

@@ -1,8 +1,8 @@
 ---
-description: 启动 Pi-RECON PCAP/DFIR 流量取证工作流
+description: 启动 REPI PCAP/DFIR 流量取证工作流
 argument-hint: "<capture.pcapng>"
 ---
-Pi-RECON PCAP/DFIR task: $ARGUMENTS
+REPI PCAP/DFIR task: $ARGUMENTS
 
 必须执行：
 1. 元数据：capinfos/file/sha256sum，确认时间范围、包数量和文件 hash。

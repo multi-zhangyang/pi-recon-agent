@@ -565,7 +565,7 @@ function buildResult(root) {
 
 function formatMarkdown(result) {
 	const lines = [
-		"# Pi-RECON Autonomous Contracts Audit",
+		"# REPI Autonomous Contracts Audit",
 		"",
 		`generated_at: ${result.generatedAt}`,
 		`mode: ${result.mode}`,
@@ -600,7 +600,7 @@ function writeOutputs(root, result) {
 }
 
 function printHelp() {
-	console.log(`Usage: node scripts/reverse-agent/autonomous-contracts.mjs [root] [--json] [--write] [--strict]\n\nValidates Pi-RECON autonomous control contracts offline: parallel plan, ResumeContractV2 schema, role/claim ledger, failure/repair ledger, and context compact markers.`);
+	console.log(`Usage: node scripts/reverse-agent/autonomous-contracts.mjs [root] [--json] [--write] [--strict]\n\nValidates REPI autonomous control contracts offline: parallel plan, ResumeContractV2 schema, role/claim ledger, failure/repair ledger, and context compact markers.`);
 }
 
 function main(argv) {

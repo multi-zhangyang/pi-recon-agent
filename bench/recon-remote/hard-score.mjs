@@ -20,7 +20,7 @@ let latestSameWindowCache = undefined;
 
 
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
-  console.log(`Pi-RECON remote hard-score evaluator\n\nUsage:\n  node bench/recon-remote/hard-score.mjs [.repi-harness/evidence/remote] [--all]\n\nScores latest remote benchmark artifacts across:\n  - signature_rebuild\n  - signed_replay\n  - anti_bot_challenge\n  - cdn_media_probe\n  - runtime_capture_depth\n  - exploit_chain\n  - bundle_trace\n  - regression_readiness\n\nOutput:\n  .repi-harness/evidence/remote/hard-score/<timestamp>/scoreboard.json\n  .repi-harness/evidence/remote/hard-score/<timestamp>/scoreboard.md\n`);
+  console.log(`REPI remote hard-score evaluator\n\nUsage:\n  node bench/recon-remote/hard-score.mjs [.repi-harness/evidence/remote] [--all]\n\nScores latest remote benchmark artifacts across:\n  - signature_rebuild\n  - signed_replay\n  - anti_bot_challenge\n  - cdn_media_probe\n  - runtime_capture_depth\n  - exploit_chain\n  - bundle_trace\n  - regression_readiness\n\nOutput:\n  .repi-harness/evidence/remote/hard-score/<timestamp>/scoreboard.json\n  .repi-harness/evidence/remote/hard-score/<timestamp>/scoreboard.md\n`);
   process.exit(0);
 }
 
@@ -470,7 +470,7 @@ const outDir = join('.repi-harness', 'evidence', 'remote', 'hard-score', timesta
 await mkdir(outDir, { recursive: true });
 await writeFile(join(outDir, 'scoreboard.json'), `${JSON.stringify(summary, null, 2)}\n`);
 const md = [
-  '# Pi-RECON Remote Hard Scoreboard',
+  '# REPI Remote Hard Scoreboard',
   '',
   `generated_at: ${summary.generatedAt}`,
   `mode: ${summary.mode}`,

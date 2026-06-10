@@ -24,7 +24,7 @@ for (const key of ['extensions', 'skills', 'prompts']) {
   }
 }
 if (Array.isArray(s.enabledModels)) {
-  // Keep user model cycling only when it is not the old Pi-RECON broken 2go-only scope.
+  // Keep user model cycling only when it is not the old file-profile broken 2go-only scope.
   const joined = s.enabledModels.join('\n');
   if (/2go-(anthropic|openai)\/moonshot\/kimi-k2\.6/.test(joined)) delete s.enabledModels;
 }
@@ -45,7 +45,7 @@ move_if_exists() {
 move_if_contains_recon() {
   local src="$1"
   local dst="$BACKUP/$2"
-  if [ -f "$src" ] && grep -Eqi 'Pi-RECON|逆向渗透|reverse/pentest|reverse-pentest' "$src"; then
+  if [ -f "$src" ] && grep -Eqi 'REPI|逆向渗透|reverse/pentest|reverse-pentest' "$src"; then
     mkdir -p "$(dirname "$dst")"
     mv "$src" "$dst"
     echo "moved $src -> $dst"
@@ -83,9 +83,9 @@ if [ -d "$AGENT_DIR/tools" ]; then
 fi
 
 cat > "$BACKUP/README.txt" <<MSG
-Pi-RECON legacy global resources were moved here so normal 'pi' and isolated 'repi' do not collide.
+REPI legacy global resources were moved here so normal 'pi' and isolated 'repi' do not collide.
 To restore manually, copy files back into $AGENT_DIR.
 Created: $STAMP
 MSG
 
-echo "Cleaned global pi Pi-RECON file-profile pollution. Backup: $BACKUP"
+echo "Cleaned global pi REPI file-profile pollution. Backup: $BACKUP"

@@ -16,7 +16,7 @@ const targets = {
 };
 
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
-  console.log(`Pi-RECON remote proof gate\n\nUsage:\n  node bench/recon-remote/proof-gate/run.mjs\n  node bench/recon-remote/proof-gate/run.mjs --use-latest\n\nLive default tracks:\n  - Bilibili WBI + optional CDP signer trace\n  - Xiaohongshu x-s runtime signer/replay challenge\n  - Douyin a_bogus/no-watermark/CDP/API probe\n  - Agent dogfood rerun when RECON_AGENT_MODEL or ANTHROPIC_MODEL is configured; RECON_GATE_AGENT=0 scores latest dogfood evidence only\n\nEnvironment:\n  RECON_GATE_TIMEOUT_MS=600000\n  RECON_GATE_AGENT=auto|1|0     1 forces dogfood rerun; 0 skips rerun but can score latest evidence\n  RECON_GATE_LATEST=1          Score latest artifacts without rerunning live targets\n  RECON_GATE_BILI_URL=<url>\n  RECON_GATE_XHS_URL=<url>\n  RECON_GATE_DOUYIN_URL=<url>\n\nOutput:\n  .repi-harness/evidence/remote/proof-gate/<timestamp>/\n`);
+  console.log(`REPI remote proof gate\n\nUsage:\n  node bench/recon-remote/proof-gate/run.mjs\n  node bench/recon-remote/proof-gate/run.mjs --use-latest\n\nLive default tracks:\n  - Bilibili WBI + optional CDP signer trace\n  - Xiaohongshu x-s runtime signer/replay challenge\n  - Douyin a_bogus/no-watermark/CDP/API probe\n  - Agent dogfood rerun when RECON_AGENT_MODEL or ANTHROPIC_MODEL is configured; RECON_GATE_AGENT=0 scores latest dogfood evidence only\n\nEnvironment:\n  RECON_GATE_TIMEOUT_MS=600000\n  RECON_GATE_AGENT=auto|1|0     1 forces dogfood rerun; 0 skips rerun but can score latest evidence\n  RECON_GATE_LATEST=1          Score latest artifacts without rerunning live targets\n  RECON_GATE_BILI_URL=<url>\n  RECON_GATE_XHS_URL=<url>\n  RECON_GATE_DOUYIN_URL=<url>\n\nOutput:\n  .repi-harness/evidence/remote/proof-gate/<timestamp>/\n`);
   process.exit(0);
 }
 
@@ -106,7 +106,7 @@ if (!useLatest) {
   runs.push({ label: 'xiaohongshu-note', run: await run('node', ['bench/recon-remote/real-platform/run.mjs', targets.xhs, 'xiaohongshu-note'], { timeoutMs: 180000, env: { RECON_TIMEOUT_MS: process.env.RECON_GATE_XHS_TIMEOUT_MS || '45000', RECON_QUIET_MS: process.env.RECON_GATE_XHS_QUIET_MS || '5000' } }) });
   runs.push({ label: 'douyin-nowatermark', run: await run('node', ['bench/recon-remote/douyin-nowatermark/run.mjs', targets.douyin], { timeoutMs: 180000, env: { RECON_BROWSER: process.env.RECON_GATE_DOUYIN_BROWSER || '1', RECON_API_PROBE: process.env.RECON_GATE_DOUYIN_API_PROBE || '1', RECON_PROBE_LIMIT: process.env.RECON_GATE_DOUYIN_PROBE_LIMIT || '8', RECON_BROWSER_TIMEOUT_MS: process.env.RECON_GATE_DOUYIN_TIMEOUT_MS || '20000', RECON_BROWSER_QUIET_MS: process.env.RECON_GATE_DOUYIN_QUIET_MS || '2000' } }) });
   if (runAgent) {
-    const prompt = process.env.RECON_AGENT_PROMPT || 'Pi-RECON proof-gate quick gate. Execute node bench/recon-remote/hard-score.mjs, then output Outcome / Key Evidence / Verification / Next Step. Cover Bilibili WBI, Xiaohongshu x-s, Douyin a_bogus with one evidence line and one next command each. Do not edit files.';
+    const prompt = process.env.RECON_AGENT_PROMPT || 'REPI proof-gate quick gate. Execute node bench/recon-remote/hard-score.mjs, then output Outcome / Key Evidence / Verification / Next Step. Cover Bilibili WBI, Xiaohongshu x-s, Douyin a_bogus with one evidence line and one next command each. Do not edit files.';
     runs.push({ label: 'agent-dogfood', run: await run('node', ['bench/recon-remote/agent-dogfood/run.mjs'], { timeoutMs: Number(process.env.RECON_GATE_AGENT_TIMEOUT_MS || 420000), env: { RECON_AGENT_PROMPT: prompt, RECON_AGENT_TIMEOUT_MS: process.env.RECON_AGENT_TIMEOUT_MS || '420000' } }) });
   }
 }
@@ -143,7 +143,7 @@ if (runAgent || rows.agent) {
 const passed = gates.every((item) => item.passed);
 const verdict = passed ? 'proof-gate-passed' : 'proof-gate-failed';
 const result = {
-  target: 'Bilibili + Xiaohongshu + Douyin + Pi-RECON dogfood remote gate',
+  target: 'Bilibili + Xiaohongshu + Douyin + REPI dogfood remote gate',
   profile: 'proof-gate',
   verdict,
   generatedAt: new Date().toISOString(),
@@ -167,7 +167,7 @@ for (const item of runs) {
   await writeFile(join(outDir, `${item.label}.stderr.txt`), redact(item.run?.stderr || ''));
 }
 const md = [
-  '# Pi-RECON Remote Proof Gate',
+  '# REPI Remote Proof Gate',
   '',
   `verdict: ${verdict}`,
   `mode: ${result.mode}`,

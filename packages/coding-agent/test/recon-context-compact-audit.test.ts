@@ -22,7 +22,7 @@ function runAudit(): ContextCompactAudit {
 	) as ContextCompactAudit;
 }
 
-describe("Pi-RECON context compact audit harness", () => {
+describe("REPI context compact audit harness", () => {
 	it("keeps context, compact, evidence summary, budget, and continuation markers wired", () => {
 		const audit = runAudit();
 		const categoryIds = audit.categories.map((category) => category.id);

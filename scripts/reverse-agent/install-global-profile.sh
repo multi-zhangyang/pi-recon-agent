@@ -69,7 +69,16 @@ if (fs.existsSync(path)) {
 const unique = (items) => Array.from(new Set(items));
 settings.defaultThinkingLevel = settings.defaultThinkingLevel ?? 'high';
 settings.enableSkillCommands = true;
-settings.compaction = { enabled: true, reserveTokens: 32768, keepRecentTokens: 36000, ...(settings.compaction ?? {}) };
+const existingCompaction = settings.compaction ?? {};
+const migratedLegacyReserveTokens = existingCompaction.triggerPercent === undefined && existingCompaction.warningPercent === undefined && existingCompaction.reserveTokens === 32768 ? 16384 : existingCompaction.reserveTokens;
+settings.compaction = {
+  ...existingCompaction,
+  enabled: existingCompaction.enabled ?? true,
+  triggerPercent: existingCompaction.triggerPercent ?? 85,
+  warningPercent: existingCompaction.warningPercent ?? 80,
+  reserveTokens: migratedLegacyReserveTokens ?? 16384,
+  keepRecentTokens: existingCompaction.keepRecentTokens ?? 36000,
+};
 settings.branchSummary = { reserveTokens: 24576, skipPrompt: true, ...(settings.branchSummary ?? {}) };
 settings.extensions = unique([...(settings.extensions ?? []), 'extensions/reverse-pentest-core.ts']);
 settings.skills = unique([...(settings.skills ?? []), 'skills/reverse-pentest-orchestrator/SKILL.md']);
@@ -80,6 +89,6 @@ NODE
 
 "$ROOT/scripts/reverse-agent/install-repi.sh" "$ROOT" >/dev/null
 
-echo "Installed isolated Pi-RECON profile into $AGENT_DIR"
+echo "Installed isolated REPI profile into $AGENT_DIR"
 echo "Normal pi is not modified. Run: repi"
 echo "Run: scripts/reverse-agent/refresh-tool-index.sh \"$ROOT\""

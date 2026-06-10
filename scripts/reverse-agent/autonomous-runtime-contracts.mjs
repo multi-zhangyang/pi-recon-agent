@@ -434,7 +434,7 @@ export function validateAutonomousRuntimeContracts(root = process.cwd()) {
 
 function formatMarkdown(result) {
 	const lines = [
-		"# Pi-RECON Autonomous Runtime Contract Gate",
+		"# REPI Autonomous Runtime Contract Gate",
 		"",
 		`generated_at: ${result.generatedAt}`,
 		`ok: ${result.ok}`,

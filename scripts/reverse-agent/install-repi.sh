@@ -19,7 +19,7 @@ cleanup_stale_recon_pi() {
   resolved_recon="$(readlink -f "$ROOT/pi" 2>/dev/null || printf '%s' "$ROOT/pi")"
   if [ "$resolved_candidate" = "$resolved_recon" ]; then
     rm -f "$candidate"
-    echo "removed stale Pi-RECON pi shim: $candidate"
+    echo "removed stale REPI pi shim: $candidate"
   fi
 }
 
@@ -33,11 +33,11 @@ fi
 ln -sfn "$ROOT/repi" "$BIN_DIR/repi"
 REPI_INIT_VERBOSE=1 "$ROOT/repi" --offline --help >/dev/null 2>&1
 cat <<MSG
-Installed REPI / Pi-RECON launcher:
+Installed REPI launcher:
   $BIN_DIR/repi -> $ROOT/repi
 
 Command ownership:
-  repi  -> Pi-RECON reverse/pentest agent
+  repi  -> REPI reverse/pentest agent
   pi    -> upstream Pi only; this installer does not install, delete, or overwrite it
 
 Isolated profile:

@@ -1,6 +1,6 @@
-# Pi-RECON Model Provider Configuration
+# REPI Model Provider Configuration
 
-Pi-RECON 通过 `models.json` 接入不同的模型服务。本文说明 provider 的配置结构、主流 API adapter 的选择方式、常见兼容参数，以及文本响应和工具调用的验证流程。
+REPI 通过 `models.json` 接入不同的模型服务。本文说明 provider 的配置结构、主流 API adapter 的选择方式、常见兼容参数，以及文本响应和工具调用的验证流程。
 
 支持的接入形态包括：
 
@@ -543,7 +543,7 @@ repi --offline \
   -p "Use bash to run: printf TOOL_OK. Then answer with the exact observed output."
 ```
 
-## 16. Pi-RECON provider 验证顺序
+## 16. REPI provider 验证顺序
 
 新增或变更 provider 后按这个顺序验：
 

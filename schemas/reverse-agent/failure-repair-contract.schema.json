@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pi-recon.local/schemas/reverse-agent/failure-repair-contract.schema.json",
-  "title": "Pi-RECON Failure and Repair Contracts",
+  "title": "REPI Failure and Repair Contracts",
   "type": "object",
   "x-piReconStrictFixture": "fixtures/reverse-agent/failure-repair-strict.fixture.json",
   "x-piReconDedupWindow": {
@@ -121,7 +121,7 @@
       "additionalProperties": false
     },
     "FailureLedgerEventV1": {
-      "title": "Pi-RECON Failure Ledger Event V1",
+      "title": "REPI Failure Ledger Event V1",
       "type": "object",
       "required": [
         "id",
@@ -177,7 +177,7 @@
       ]
     },
     "RepairQueueItemV1": {
-      "title": "Pi-RECON Repair Queue Item V1",
+      "title": "REPI Repair Queue Item V1",
       "type": "object",
       "required": [
         "repairId",

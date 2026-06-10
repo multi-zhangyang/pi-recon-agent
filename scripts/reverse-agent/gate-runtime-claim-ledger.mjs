@@ -159,7 +159,7 @@ export function buildResult(root, options = {}) {
 
 function formatText(result) {
 	const lines = [
-		"Pi-RECON runtime claim ledger gate",
+		"REPI runtime claim ledger gate",
 		`status: ${result.ok ? "pass" : "fail"}`,
 		`complete: ${result.complete}`,
 		`coverage: ${result.coverage}`,

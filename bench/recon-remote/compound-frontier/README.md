@@ -1,9 +1,9 @@
 # Compound frontier live-swarm gate
 
-Binds or reruns the two hardest Pi-RECON release-frontier proofs:
+Binds or reruns the two hardest REPI release-frontier proofs:
 
 1. `same-window-live`: Bilibili + Xiaohongshu + Douyin real-platform runtime proof.
-2. `agent-parallel-dogfood`: real Pi-RECON multi-agent worker/synthesizer proof with process/tool-result evidence.
+2. `agent-parallel-dogfood`: real REPI multi-agent worker/synthesizer proof with process/tool-result evidence.
 
 It also runs the context/compact audit and hard-score recognition check, then fails if the result depends on stale gaps or text-only self-assessment.
 

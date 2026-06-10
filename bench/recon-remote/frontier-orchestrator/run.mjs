@@ -358,7 +358,7 @@ function makePlan(selectedCases, options, latest) {
 function printMarkdown(output) {
   if (output.mode === 'plan') {
     console.log([
-      '# Pi-RECON Frontier Orchestrator Plan',
+      '# REPI Frontier Orchestrator Plan',
       '',
       '## Outcome',
       `- strategy=${output.strategy} live=${output.live} strict=${output.strict} fresh=${output.fresh}`,
@@ -383,7 +383,7 @@ function printMarkdown(output) {
     return;
   }
   console.log([
-    '# Pi-RECON Frontier Orchestrator Summary',
+    '# REPI Frontier Orchestrator Summary',
     '',
     '## Outcome',
     `- verdict=${output.verdict} score=${output.matrixScore}/${output.matrixMaxScore} percent=${output.matrixPercent}% grade=${output.grade}`,
@@ -407,7 +407,7 @@ function printMarkdown(output) {
   ].join('\n'));
 }
 function usage() {
-  console.log(`Pi-RECON frontier orchestrator\n\nUsage:\n  node bench/recon-remote/frontier-orchestrator/run.mjs --plan\n  node bench/recon-remote/frontier-orchestrator/run.mjs --live --strict\n  node bench/recon-remote/frontier-orchestrator/run.mjs --summarize-latest --json\n\nModes:\n  default            Select cases, run frontier-matrix, summarize positive/negative evidence.\n  --plan             Print selected cases and per-agent shard commands only; no evidence writes.\n  --summarize-latest Read latest frontier-matrix result and compact it; no matrix run.\n\nSelection:\n  --strategy=hardest|failed-first|balanced|quick   default: hardest\n  --cases=<a,b>                                  explicit matrix case ids\n  --max-cases=N                                  default: all known cases\n  --shards=N                                     emit parallel-agent shard commands\n\nExecution:\n  --live              Pass --live to frontier-matrix.\n  --strict            Pass --strict and exit non-zero when the matrix fails.\n  --timeout-ms=N      default: RECON_ORCH_TIMEOUT_MS or 900000\n  --json              Emit JSON instead of markdown.\n\nKnown cases:\n${caseCatalog.map((item) => `  - ${item.id} (${item.polarity}, ${item.platform}, difficulty=${item.difficulty})`).join('\n')}\n`);
+  console.log(`REPI frontier orchestrator\n\nUsage:\n  node bench/recon-remote/frontier-orchestrator/run.mjs --plan\n  node bench/recon-remote/frontier-orchestrator/run.mjs --live --strict\n  node bench/recon-remote/frontier-orchestrator/run.mjs --summarize-latest --json\n\nModes:\n  default            Select cases, run frontier-matrix, summarize positive/negative evidence.\n  --plan             Print selected cases and per-agent shard commands only; no evidence writes.\n  --summarize-latest Read latest frontier-matrix result and compact it; no matrix run.\n\nSelection:\n  --strategy=hardest|failed-first|balanced|quick   default: hardest\n  --cases=<a,b>                                  explicit matrix case ids\n  --max-cases=N                                  default: all known cases\n  --shards=N                                     emit parallel-agent shard commands\n\nExecution:\n  --live              Pass --live to frontier-matrix.\n  --strict            Pass --strict and exit non-zero when the matrix fails.\n  --timeout-ms=N      default: RECON_ORCH_TIMEOUT_MS or 900000\n  --json              Emit JSON instead of markdown.\n\nKnown cases:\n${caseCatalog.map((item) => `  - ${item.id} (${item.polarity}, ${item.platform}, difficulty=${item.difficulty})`).join('\n')}\n`);
 }
 
 if (hasFlag('help') || hasFlag('h')) {

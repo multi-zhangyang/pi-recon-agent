@@ -19,7 +19,7 @@ const targets = {
 };
 
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
-  console.log(`Pi-RECON same-window live frontier gate\n\nUsage:\n  node bench/recon-remote/same-window-live/run.mjs\n  node bench/recon-remote/same-window-live/run.mjs --strict\n  node bench/recon-remote/same-window-live/run.mjs --use-latest\n\nPurpose:\n  Reruns or binds Bilibili, Xiaohongshu, and Douyin evidence inside one freshness window,\n  then separates proven live facts from frontier gaps. This gate is intentionally harder than\n  hard-score: Bilibili must prove per-page WBI plus CDN range/body evidence, Xiaohongshu\n  must prove target note/feed x-s 2xx, and Douyin must prove structured replay plus media-byte\n  no-watermark evidence. Partial/failure verdicts are expected and useful.\n\nEnvironment:\n  RECON_SAME_WINDOW_BILI_URL=<url>\n  RECON_SAME_WINDOW_XHS_URL=<url>\n  RECON_SAME_WINDOW_XHS_AUTO_DISCOVER=1\n  RECON_SAME_WINDOW_XHS_DISCOVERY_LIMIT=1\n  RECON_SAME_WINDOW_DOUYIN_URL=<url>\n  RECON_SAME_WINDOW_PARALLEL=1\n  RECON_SAME_WINDOW_TIMEOUT_MS=900000\n  RECON_SAME_WINDOW_MAX_SPAN_MS=900000\n  RECON_SAME_WINDOW_MAX_AGE_MS=1800000\n  RECON_SAME_WINDOW_STRICT=1\n  RECON_SAME_WINDOW_USE_LATEST=1\n\nOutput:\n  .repi-harness/evidence/remote/same-window-live/<timestamp>/\n`);
+  console.log(`REPI same-window live frontier gate\n\nUsage:\n  node bench/recon-remote/same-window-live/run.mjs\n  node bench/recon-remote/same-window-live/run.mjs --strict\n  node bench/recon-remote/same-window-live/run.mjs --use-latest\n\nPurpose:\n  Reruns or binds Bilibili, Xiaohongshu, and Douyin evidence inside one freshness window,\n  then separates proven live facts from frontier gaps. This gate is intentionally harder than\n  hard-score: Bilibili must prove per-page WBI plus CDN range/body evidence, Xiaohongshu\n  must prove target note/feed x-s 2xx, and Douyin must prove structured replay plus media-byte\n  no-watermark evidence. Partial/failure verdicts are expected and useful.\n\nEnvironment:\n  RECON_SAME_WINDOW_BILI_URL=<url>\n  RECON_SAME_WINDOW_XHS_URL=<url>\n  RECON_SAME_WINDOW_XHS_AUTO_DISCOVER=1\n  RECON_SAME_WINDOW_XHS_DISCOVERY_LIMIT=1\n  RECON_SAME_WINDOW_DOUYIN_URL=<url>\n  RECON_SAME_WINDOW_PARALLEL=1\n  RECON_SAME_WINDOW_TIMEOUT_MS=900000\n  RECON_SAME_WINDOW_MAX_SPAN_MS=900000\n  RECON_SAME_WINDOW_MAX_AGE_MS=1800000\n  RECON_SAME_WINDOW_STRICT=1\n  RECON_SAME_WINDOW_USE_LATEST=1\n\nOutput:\n  .repi-harness/evidence/remote/same-window-live/<timestamp>/\n`);
   process.exit(0);
 }
 
@@ -285,7 +285,7 @@ for (const item of runs.concat([{ label: 'hard-score', run: scoreRun }])) {
   await writeFile(join(outDir, `${item.label}.stderr.txt`), redact(item.run?.stderr || ''));
 }
 const md = [
-  '# Pi-RECON Same-Window Live Frontier Gate',
+  '# REPI Same-Window Live Frontier Gate',
   '',
   `verdict: ${verdict}`,
   `mode: ${result.mode}`,

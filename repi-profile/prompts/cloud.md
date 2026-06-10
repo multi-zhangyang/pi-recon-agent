@@ -1,8 +1,8 @@
 ---
-description: 启动 Pi-RECON Cloud/K8s identity 与权限边工作流
+description: 启动 REPI Cloud/K8s identity 与权限边工作流
 argument-hint: "<workspace-or-context>"
 ---
-Pi-RECON Cloud/K8s task: $ARGUMENTS
+REPI Cloud/K8s task: $ARGUMENTS
 
 必须执行：
 1. 路由到 Cloud / container，并确认当前 lane：identity → runtime-config → metadata → privilege → report。

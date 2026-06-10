@@ -21,8 +21,13 @@ function runRepi(args) {
 		env: {
 			...process.env,
 			HOME: home,
+			REPI_OFFLINE: "1",
+			REPI_PRODUCT: "1",
 			PI_OFFLINE: "1",
 			PI_RECON_PRODUCT: "1",
+			REPI_SKIP_VERSION_CHECK: "1",
+			REPI_SKIP_PACKAGE_UPDATE_CHECK: "1",
+			REPI_TELEMETRY: "0",
 			PI_SKIP_VERSION_CHECK: "1",
 			PI_SKIP_PACKAGE_UPDATE_CHECK: "1",
 			PI_TELEMETRY: "0",
@@ -45,7 +50,7 @@ try {
 	const help = runRepi(["--offline", "--help"]);
 	if (help.status !== 0) fail("repi --offline --help failed", { code: help.status, stderr: help.stderr.slice(-4000) });
 	const combinedHelp = `${help.stdout}\n${help.stderr}`;
-	if (!combinedHelp.includes("repi - Pi-RECON reverse/pentest autonomous agent")) {
+	if (!combinedHelp.includes("repi - REPI reverse/pentest autonomous agent")) {
 		fail("help output did not use repi product app name", { head: combinedHelp.slice(0, 1600) });
 	}
 	if (!combinedHelp.includes("built-in reverse/pentest kernel is enabled")) {

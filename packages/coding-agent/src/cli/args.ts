@@ -213,12 +213,13 @@ export function parseArgs(args: string[]): Args {
 }
 
 export function printHelp(extensionFlags?: ExtensionFlag[]): void {
-	const isReconPrimary = process.env.PI_RECON_PRIMARY === "1";
+	const isReconPrimary =
+		process.env.REPI_PRIMARY === "1" || process.env.REPI_PRODUCT === "1" || process.env.PI_RECON_PRIMARY === "1";
 	const description = isReconPrimary
-		? "Pi-RECON reverse/pentest autonomous agent with read, bash, edit, write tools"
+		? "REPI reverse/pentest autonomous agent with read, bash, edit, write tools"
 		: "AI coding assistant with read, bash, edit, write tools";
 	const reconBanner = isReconPrimary
-		? `${chalk.bold("Pi-RECON:")} built-in reverse/pentest kernel is enabled by the REPI product entrypoint. Runtime storage: ~/${CONFIG_DIR_NAME}/agent.\n\n`
+		? `${chalk.bold("REPI:")} independent product; built-in reverse/pentest kernel is enabled. Runtime storage: ~/${CONFIG_DIR_NAME}/agent.\n\n`
 		: "";
 	const extensionFlagsText =
 		extensionFlags && extensionFlags.length > 0
@@ -260,7 +261,7 @@ ${chalk.bold("Options:")}
   --api-key <key>                API key (defaults to env vars)
   --system-prompt <text>         System prompt (default: coding assistant prompt)
   --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
-  --recon, --reverse-pentest     Enable built-in Pi-RECON reverse/pentest kernel profile
+  --recon, --reverse-pentest     Enable built-in REPI reverse/pentest kernel profile
   --mode <mode>                  Output mode: text (default), json, or rpc
   --print, -p                    Non-interactive mode: process prompt and exit
   --continue, -c                 Continue previous session
@@ -294,7 +295,7 @@ ${chalk.bold("Options:")}
   --verbose                      Force verbose startup (overrides quietStartup setting)
   --approve, -a                  Trust project-local files for this run
   --no-approve, -na              Ignore project-local files for this run
-  --offline                      Disable startup network operations (same as PI_OFFLINE=1)
+  --offline                      Disable startup network operations (same as REPI_OFFLINE=1)
   --help, -h                     Show this help
   --version, -v                  Show version number
 
@@ -395,8 +396,10 @@ ${chalk.bold("Environment Variables:")}
   ${ENV_AGENT_DIR.padEnd(32)} - Config directory (default: ~/${CONFIG_DIR_NAME}/agent)
   ${ENV_SESSION_DIR.padEnd(32)} - Session storage directory (overridden by --session-dir)
   REPI_PACKAGE_DIR                 - Override package directory (PI_PACKAGE_DIR is accepted as compatibility fallback)
-  PI_OFFLINE                       - Disable startup network operations when set to 1/true/yes
-  PI_TELEMETRY                     - Override install telemetry when set to 1/true/yes or 0/false/no
+  REPI_OFFLINE                     - Disable startup network operations when set to 1/true/yes
+  REPI_TELEMETRY                   - Override install telemetry when set to 1/true/yes or 0/false/no
+  REPI_SKIP_VERSION_CHECK          - Disable REPI version checks when set
+  REPI_SKIP_PACKAGE_UPDATE_CHECK   - Disable REPI package update checks when set
 ${shareViewerLine}
 
 ${chalk.bold("Built-in Tool Names:")}

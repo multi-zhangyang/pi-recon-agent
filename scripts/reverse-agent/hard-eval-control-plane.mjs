@@ -531,7 +531,7 @@ function writeOutputs(root, result) {
 
 function formatMarkdown(result) {
 	const lines = [
-		"# Pi-RECON Hard Eval Control Plane",
+		"# REPI Hard Eval Control Plane",
 		"",
 		`generated_at: ${result.generatedAt}`,
 		`mode: ${result.mode}`,

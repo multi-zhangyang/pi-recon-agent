@@ -1,4 +1,4 @@
-# Pi-RECON Evolution Log
+# REPI Evolution Log
 
 记录智能体自身配置、路由、工具索引、记忆策略的改进。
 

@@ -184,7 +184,13 @@ function staticContractChecks() {
 			"REPI_CODING_AGENT_CONFIG_DIR",
 			"PI_CODING_AGENT_APP_NAME",
 			"PI_CODING_AGENT_CONFIG_DIR",
+			"REPI_PRIMARY=1",
+			"REPI_PRODUCT=1",
 			"PI_RECON_PRODUCT=1",
+			"REPI_SKIP_VERSION_CHECK",
+			"REPI_SKIP_PACKAGE_UPDATE_CHECK",
+			"REPI_TELEMETRY",
+			"REPI_OFFLINE",
 			"PI_SKIP_VERSION_CHECK",
 			"PI_SKIP_PACKAGE_UPDATE_CHECK",
 			"PI_TELEMETRY",
@@ -206,7 +212,7 @@ function staticContractChecks() {
 	checks.push(
 		markerCheck("code:repi-profile-init-core", "packages/coding-agent/src/core/repi-profile-init.ts", [
 			"initializeRepiProfile",
-			"isolated-pi-recon-profile",
+			"isolated-repi-profile",
 			"legacyPiImported",
 			'join(homedir(), ".pi", "agent")',
 			"settings.compaction",
@@ -215,7 +221,7 @@ function staticContractChecks() {
 			"warningPercent: existingCompaction.warningPercent ?? 80",
 		], []),
 	);
-	checks.push(markerCheck("launcher:pi-non-owning-shim", "pi", ["no longer owns the `pi` command", "exec \"$candidate\" \"$@\""], ["ARGS=(--recon", "PI_RECON_PRODUCT=1", "PI_RECON_PRIMARY=1"]));
+	checks.push(markerCheck("launcher:pi-non-owning-shim", "pi", ["no longer owns the `pi` command", "exec \"$candidate\" \"$@\""], ["ARGS=(--recon", "REPI_PRODUCT=1", "REPI_PRIMARY=1", "PI_RECON_PRODUCT=1", "PI_RECON_PRIMARY=1"]));
 	checks.push(
 		markerCheck(
 			"installer:repi-no-pi-takeover",
@@ -227,8 +233,8 @@ function staticContractChecks() {
 	checks.push(markerCheck("installer:legacy-no-takeover", "scripts/reverse-agent/install-recon-pi.sh", ["deprecated", 'exec "$ROOT/scripts/reverse-agent/install-repi.sh'], [/ln\s+-s.*\$ROOT\/pi/, /rm\s+-rf/, /deleted upstream/],));
 	checks.push(markerCheck("release:binary-archives-repi", "scripts/build-binaries.sh", ["repi-linux-x64.tar.gz", '--outfile "$OUTPUT_DIR/$platform/repi', "repi-$platform.tar.gz", "repi-$platform.zip"], [/\bpi-linux-x64\.tar\.gz/, /--outfile .*\/pi(?:\.exe)?"/, /\bpi-\$platform\.(?:zip|tar\.gz)/]));
 	checks.push(markerCheck("release:local-shims-repi", "scripts/local-release.mjs", ["createRepiShim", '"repi.cmd"', '"repi"', "repi-${platform}.tar.gz"], ["createPiShim", /node_modules\/\.bin\/pi\b/, /\bpi\.cmd\b/, /\bpi-\$\{platform\}\.tar\.gz/]));
-	checks.push(markerCheck("code:repi-product-switch", "packages/coding-agent/src/config.ts", ["IS_REPI_PRODUCT", "PI_RECON_PRODUCT", "APP_NAME === \"repi\"", "https://gist.github.com/"], []));
-	checks.push(markerCheck("code:update-branding-disabled", "packages/coding-agent/src/modes/interactive/interactive-mode.ts", ["if (!IS_REPI_PRODUCT)", "PI_SKIP_PACKAGE_UPDATE_CHECK", "if (IS_REPI_PRODUCT) return;", "Pi-RECON Changelog"], []));
+	checks.push(markerCheck("code:repi-product-switch", "packages/coding-agent/src/config.ts", ["IS_REPI_PRODUCT", "REPI_PRODUCT", "PI_RECON_PRODUCT", "APP_NAME === \"repi\"", "https://gist.github.com/"], []));
+	checks.push(markerCheck("code:update-branding-disabled", "packages/coding-agent/src/modes/interactive/interactive-mode.ts", ["if (!IS_REPI_PRODUCT)", "PI_SKIP_PACKAGE_UPDATE_CHECK", "if (IS_REPI_PRODUCT) return;", "REPI Changelog"], []));
 	checks.push(markerCheck("code:auto-compact-threshold", "packages/coding-agent/src/core/compaction/compaction.ts", ["compactionTriggerTokens", "triggerPercent", "contextWindow * triggerPercent", "contextWindow - reserveTokens"], []));
 	checks.push(markerCheck("code:provider-attribution-rebranded", "packages/coding-agent/src/core/provider-attribution.ts", ["IS_REPI_PRODUCT", "X-OpenRouter-Title", "repi-coding-agent", "x-opencode-client"], []));
 	checks.push(markerCheck("kernel:false-refusal-rewrite-source", "packages/coding-agent/src/core/recon-profile.ts", ["authorized_task_bias", "public_target_no_auto_refusal", "scope_gap_to_passive_mapping", "authorization_context_missing", "public_target_request"], []));
@@ -239,7 +245,9 @@ function staticContractChecks() {
 	checks.push(markerCheck("docs:runtime-configuration", "docs/reverse-agent/repi-runtime-configuration.md", ["model_provider_configuration_runtime", "~/.repi/agent/models.json", "repi --offline", "openai-completions", "triggerPercent"], []));
 	checks.push(markerCheck("npm:top-harness-script", "package.json", ["gate:repi-harness", "gate:repi-product", "gate:repi-isolation", "install:repi"], []));
 	checks.push(markerCheck("ci:repi-harness-template", "docs/reverse-agent/repi-harness.github-actions.yml", ["REPI Independent Harness", "npm ci --ignore-scripts", "npm run gate:repi-harness", "npm run check", "git diff --exit-code"], []));
-	checks.push(markerCheck("docs:independent-entry", "README.md", ["repi  -> Pi-RECON", "pi    -> 你本机安装的原版 Pi", "npm run install:repi", "npm run gate:repi-harness"], ["npm run install:recon-pi\n", "npm run gate:pi-recon-primary\n"]));
+	checks.push(markerCheck("docs:independent-entry", "README.md", ["repi  -> REPI", "pi    -> 你本机安装的原版 Pi", "npm run install:repi", "npm run gate:repi-harness"], ["npm run install:recon-pi\n", "npm run gate:pi-recon-primary\n"]));
+	checks.push(markerCheck("runtime:repi-storage-path-language", "repi-profile/SYSTEM.md", ["REPI", "~/.repi/agent/recon/evidence", "~/.repi/agent/recon/memory", "~/.repi/agent/recon/mission"], [/\.pi\/(?:evidence|memory|mission|reports)/]));
+	checks.push(markerCheck("runtime:repi-built-in-storage-language", "packages/coding-agent/src/core/recon-profile.ts", ["REPI harness", "~/.repi/agent/models.json", "model_provider_configuration_runtime"], [/Pi harness/, /\.pi\/(?:evidence|memory|mission|reports)/]));
 	checks.push(...packageIdentityChecks());
 	return checks;
 }
@@ -345,7 +353,7 @@ function runtimeInstallProbe() {
 	checks.push(resultCheck("runtime:pi-stub-preserved", piProbe.stdout.includes("UPSTREAM_PI_STUB") ? "pass" : "fail", { stdout: piProbe.stdout.trim(), code: piProbe.code }));
 	checks.push(resultCheck("runtime:stale-recon-pi-shims-removed", !existsSync(join(home, ".local", "bin", "pi")) && !existsSync(join(npmPrefix, "bin", "pi")) ? "pass" : "fail", { homeLocalPiExists: existsSync(join(home, ".local", "bin", "pi")), npmPiExists: existsSync(join(npmPrefix, "bin", "pi")) }));
 	checks.push(resultCheck("runtime:normal-pi-profile-unchanged", beforePiHash === afterPiHash ? "pass" : "fail", { beforePiHash, afterPiHash }));
-	checks.push(resultCheck("runtime:repi-help-product", help.code === 0 && help.combined.includes("repi - Pi-RECON reverse/pentest autonomous agent") && help.combined.includes("built-in reverse/pentest kernel is enabled") ? "pass" : "fail", { code: help.code, head: help.combined.slice(0, 1200) }));
+	checks.push(resultCheck("runtime:repi-help-product", help.code === 0 && help.combined.includes("repi - REPI reverse/pentest autonomous agent") && help.combined.includes("built-in reverse/pentest kernel is enabled") ? "pass" : "fail", { code: help.code, head: help.combined.slice(0, 1200) }));
 	checks.push(resultCheck("runtime:repi-update-help-independent", updateHelp.code === 0 && updateHelp.combined.includes("repi update [source]") && !/--self|--force|Update pi|source\|self\|pi/i.test(updateHelp.combined) ? "pass" : "fail", { code: updateHelp.code, text: updateHelp.combined.slice(0, 1200) }));
 	checks.push(resultCheck("runtime:repi-list-models", listModels.code === 0 ? "pass" : "fail", { code: listModels.code, stdout: listModels.stdout.trim().slice(0, 1200), stderrTail: listModels.stderr.slice(-1000) }));
 	checks.push(resultCheck("runtime:no-upstream-warning-leak", forbidden.length === 0 ? "pass" : "fail", { forbidden: forbidden.map(String) }));
@@ -355,7 +363,7 @@ function runtimeInstallProbe() {
 		resultCheck(
 			"runtime:package-bin-defaults-to-recon",
 			packageCliHelp.code === 0 &&
-				packageCliHelp.combined.includes("repi - Pi-RECON reverse/pentest autonomous agent") &&
+				packageCliHelp.combined.includes("repi - REPI reverse/pentest autonomous agent") &&
 				packageCliHelp.combined.includes("built-in reverse/pentest kernel is enabled") &&
 				packageProfile?.agentDir === join(packageHome, ".repi", "agent") &&
 				!packageModelsDefaultCopied

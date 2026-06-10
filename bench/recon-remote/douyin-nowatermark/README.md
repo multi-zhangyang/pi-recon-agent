@@ -1,6 +1,6 @@
 # Douyin no-watermark live benchmark
 
-A live Pi-RECON benchmark for short-video media URL reverse analysis. Given a Douyin share/video URL, the harness records redirect behavior, captures browser/CDP runtime traffic when static extraction is weak, extracts `aweme_id` / media IDs / state JSON hints, inventories `a_bogus` / `msToken` / webid / `X-Bogus` style anti-bot parameters, records signer-bundle hints, ranks media URL candidates, builds `playwm -> play` style no-watermark hypotheses, verifies candidates with `HEAD` plus bounded `Range` body-hash probes, and attempts exact replay of browser-observed signed aweme APIs.
+A live REPI benchmark for short-video media URL reverse analysis. Given a Douyin share/video URL, the harness records redirect behavior, captures browser/CDP runtime traffic when static extraction is weak, extracts `aweme_id` / media IDs / state JSON hints, inventories `a_bogus` / `msToken` / webid / `X-Bogus` style anti-bot parameters, records signer-bundle hints, ranks media URL candidates, builds `playwm -> play` style no-watermark hypotheses, verifies candidates with `HEAD` plus bounded `Range` body-hash probes, and attempts exact replay of browser-observed signed aweme APIs.
 
 It writes evidence only under `.repi-harness/evidence/remote/douyin-nowatermark/`; those runtime artifacts are git-ignored.
 
@@ -96,7 +96,7 @@ Captured cookies and raw replay headers stay in memory for replay and are redact
 
 Runtime-observed structured aweme JSON is partial evidence. The hard frontier only passes when `bestReplayedStructuredApi` exists and is a structured 2xx response.
 
-## Pi-RECON follow-up
+## REPI follow-up
 
 Use the generated `artifact.md` as input to:
 

@@ -415,7 +415,7 @@ function validateRuntimeClaimLedgerMarkers(root) {
 
 function formatMarkdown(result) {
 	const lines = [
-		"# Pi-RECON Parallel Plan Audit",
+		"# REPI Parallel Plan Audit",
 		"",
 		`generated_at: ${result.generatedAt}`,
 		`mode: ${result.mode}`,

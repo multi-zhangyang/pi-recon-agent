@@ -390,7 +390,7 @@ const REQUIREMENTS = [
 		normalChecks: [
 			{
 				id: "context_pack_runtime",
-				description: "内核和文件型 profile 都由 Pi-RECON 自有 context pack/resume/compaction contract 接管。",
+				description: "内核和文件型 profile 都由 REPI 自有 context pack/resume/compaction contract 接管。",
 				files: RUNTIME_MIRRORS,
 				markers: [
 					"buildContextPack",
@@ -421,9 +421,9 @@ const REQUIREMENTS = [
 			},
 			{
 				id: "context_docs_contract",
-				description: "公开文档记录 context/resume pack、owned compaction 和 audit harness，不依赖 Pi 默认 compact 说明。",
+				description: "公开文档记录 context/resume pack、owned compaction 和 audit harness，不依赖 upstream compact 说明。",
 				files: ["docs/reverse-agent/README.md"],
-				markers: ["Context/resume pack 闭环", "Pi-RECON owned compaction kernel update", "context-compact-audit.mjs"],
+				markers: ["Context/resume pack 闭环", "REPI owned compaction kernel update", "context-compact-audit.mjs"],
 			},
 		],
 		hardeningNeeded: [
@@ -873,7 +873,7 @@ function buildManifest(root) {
 
 function formatMarkdown(manifest) {
 	const lines = [
-		"# Pi-RECON Autonomy Control Plane",
+		"# REPI Autonomy Control Plane",
 		"",
 		`generated_at: ${manifest.generatedAt}`,
 		`audit_mode: ${manifest.auditMode}`,
@@ -885,8 +885,8 @@ function formatMarkdown(manifest) {
 		"## Outcome",
 		"",
 		manifest.normalUseGuarantee
-			? "Pi-RECON 当前具备专业逆向/渗透任务组织能力：能把任务压入 map→operation→delegate→swarm→supervisor→context→operator→verifier→compiler→replayer→autofix→proof-loop 的控制面。"
-			: "Pi-RECON 当前组织能力 marker 不完整，需要先修复 failed checks。",
+			? "REPI 当前具备专业逆向/渗透任务组织能力：能把任务压入 map→operation→delegate→swarm→supervisor→context→operator→verifier→compiler→replayer→autofix→proof-loop 的控制面。"
+			: "REPI 当前组织能力 marker 不完整，需要先修复 failed checks。",
 		"",
 		"它还不是完整 autonomous red-team agent；下面的 hardening_needed 是必须继续工程化的缺口，不作为本静态门槛的失败条件。",
 		"",
@@ -951,7 +951,7 @@ function writeManifest(root, manifest) {
 }
 
 function printHelp() {
-	console.log(`Usage: node scripts/reverse-agent/autonomy-control-plane.mjs [root] [--json] [--write] [--strict]\n\nStatic Pi-RECON organization-control audit. It does not run real-platform benchmarks, provider/model calls, or live network tests.`);
+	console.log(`Usage: node scripts/reverse-agent/autonomy-control-plane.mjs [root] [--json] [--write] [--strict]\n\nStatic REPI organization-control audit. It does not run real-platform benchmarks, provider/model calls, or live network tests.`);
 }
 
 function main(argv) {

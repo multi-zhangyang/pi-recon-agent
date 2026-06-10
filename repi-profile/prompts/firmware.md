@@ -1,8 +1,8 @@
 ---
-description: 启动 Pi-RECON Firmware/IoT rootfs 逆向渗透工作流
+description: 启动 REPI Firmware/IoT rootfs 逆向渗透工作流
 argument-hint: "<firmware.bin|rootfs>"
 ---
-Pi-RECON firmware/IoT task: $ARGUMENTS
+REPI firmware/IoT task: $ARGUMENTS
 
 必须执行：
 1. 路由到 `Firmware / IoT`，确认 lanes：inventory → extract → filesystem → services → emulate → report。

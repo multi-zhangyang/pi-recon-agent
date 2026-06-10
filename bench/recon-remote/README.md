@@ -1,13 +1,13 @@
 # Remote live benchmarks
 
-Reproducible public-network benchmark harnesses for Pi-RECON. Runtime evidence is written under `.repi-harness/evidence/remote/` and is git-ignored.
+Reproducible public-network benchmark harnesses for REPI. Runtime evidence is written under `.repi-harness/evidence/remote/` and is git-ignored.
 
 | Benchmark | Purpose |
 |---|---|
 | `douyin-nowatermark/` | Short-video media URL reverse analysis: redirect/CDP/state extraction, `playwm -> play` no-watermark candidate transform, `a_bogus`/`msToken`/webid anti-bot surface inventory, signer-bundle hints, HEAD/range verification. |
 | `public-webapp/` | Public webapp surface mapping and replay-safe vulnerability confirmation for profiles such as OWASP Juice Shop and Altoro Mutual/TestFire. |
 | `real-platform/` | Hard-mode real-platform reverse benchmark for Bilibili WBI/media APIs/CDN probes/self-test/browser signer trace and Xiaohongshu CDP anti-bot/API signed replay, runtime signer hooks, signer-bundle trace, replay-divergence capture. |
-| `agent-dogfood/` | Runs the Pi-RECON agent itself through `./pi-test.sh --recon` against latest remote evidence, requiring a real provider/model call, tool execution, platform coverage, and reproducible dogfood artifacts. |
+| `agent-dogfood/` | Runs the REPI agent itself through `./pi-test.sh --recon` against latest remote evidence, requiring a real provider/model call, tool execution, platform coverage, and reproducible dogfood artifacts. |
 | `same-window-live/` | Same freshness-window live gate for Bilibili, Xiaohongshu, and Douyin; blocks stale best-artifact self-delusion by requiring all platform proofs inside one time span. |
 | `compound-frontier/` | Hardest release-frontier binder/runner: same-window real platforms + parallel multi-agent dogfood + context/compact audit + hard-score recognition. |
 | `proof-gate/` | Cross-platform live proof gate: reruns Bilibili WBI, Xiaohongshu x-s, Douyin `a_bogus`/no-watermark, optional agent dogfood, then enforces hard-score gates. |
@@ -33,7 +33,7 @@ The evaluator scores latest artifacts across `signature_rebuild`, `signed_replay
 
 ## Agent dogfood
 
-Run the actual Pi-RECON agent against the latest remote evidence:
+Run the actual REPI agent against the latest remote evidence:
 
 ```bash
 RECON_AGENT_PROVIDER=openai RECON_AGENT_MODEL=gpt-4.1 \

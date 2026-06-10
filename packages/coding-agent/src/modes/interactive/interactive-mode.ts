@@ -5334,7 +5334,7 @@ export class InteractiveMode {
 		if (IS_REPI_PRODUCT) {
 			this.chatContainer.addChild(new Spacer(1));
 			this.chatContainer.addChild(new DynamicBorder());
-			this.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "Pi-RECON Changelog")), 1, 0));
+			this.chatContainer.addChild(new Text(theme.bold(theme.fg("accent", "REPI Changelog")), 1, 0));
 			this.chatContainer.addChild(new Spacer(1));
 			this.chatContainer.addChild(
 				new Text("repi is served from this repository. Use git log or README.md for local release notes.", 1, 1),

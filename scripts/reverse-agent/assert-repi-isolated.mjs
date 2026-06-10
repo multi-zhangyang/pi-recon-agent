@@ -121,7 +121,7 @@ write(
 	),
 );
 write(join(fakePiAgent, "extensions", "reverse-pentest-core.ts"), "export default {};\n");
-write(join(fakePiAgent, "prompts", "wr.md"), "# stale Pi-RECON prompt\n");
+write(join(fakePiAgent, "prompts", "wr.md"), "# stale REPI prompt\n");
 write(join(fakePiAgent, "tools", "legacy-tool"), "#!/usr/bin/env bash\n");
 write(join(fakePiAgent, "auth.json"), JSON.stringify({ fake: { apiKey: "not-real" } }, null, 2));
 write(join(fakePiAgent, "models.json"), JSON.stringify({ models: [{ provider: "fake", id: "fake-model" }] }, null, 2));
@@ -129,7 +129,7 @@ write(join(fakePiAgent, "models.json"), JSON.stringify({ models: [{ provider: "f
 const beforePiHash = treeHash(fakePiAgent);
 const help = run(["--offline", "--help"], cleanEnv({ REPI_INIT_VERBOSE: "1" }));
 if (help.code !== 0) fail("repi --offline --help failed", { code: help.code, stderr: help.stderr.slice(-4000) });
-if (!help.combined.includes("repi - Pi-RECON reverse/pentest autonomous agent")) {
+if (!help.combined.includes("repi - REPI reverse/pentest autonomous agent")) {
 	fail("help output did not use repi app name", { combined: help.combined.slice(0, 2000) });
 }
 

@@ -9,7 +9,7 @@ while [ -L "$SOURCE" ]; do
 done
 SELF="$(readlink -f "$SOURCE" 2>/dev/null || printf '%s' "$SOURCE")"
 
-# This repository no longer claims the `pi` command. `repi` is the Pi-RECON
+# This repository no longer claims the `pi` command. `repi` is the REPI
 # product entrypoint; `pi` should resolve to the upstream Pi installation.
 IFS=':' read -r -a PATH_PARTS <<< "${PATH:-}"
 for dir in "${PATH_PARTS[@]}"; do
@@ -23,6 +23,6 @@ done
 
 cat >&2 <<'MSG'
 This checkout no longer owns the `pi` command.
-Use `repi` for Pi-RECON, and install/keep upstream Pi separately if you need `pi`.
+Use `repi` for REPI, and install/keep upstream Pi separately if you need `pi`.
 MSG
 exit 127

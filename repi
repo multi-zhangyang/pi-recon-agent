@@ -9,7 +9,7 @@ while [ -L "$SOURCE" ]; do
 done
 ROOT="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 
-# REPI is the independent Pi-RECON product entrypoint. It never owns the
+# REPI is the independent product entrypoint. It never owns the
 # upstream `pi` command and keeps all runtime state in ~/.repi/agent.
 export REPI_CODING_AGENT_APP_NAME="${REPI_CODING_AGENT_APP_NAME:-repi}"
 export REPI_CODING_AGENT_CONFIG_DIR="${REPI_CODING_AGENT_CONFIG_DIR:-.repi}"
@@ -17,11 +17,19 @@ export PI_CODING_AGENT_APP_NAME="${PI_CODING_AGENT_APP_NAME:-repi}"
 export PI_CODING_AGENT_CONFIG_DIR="${PI_CODING_AGENT_CONFIG_DIR:-.repi}"
 export REPI_CODING_AGENT_DIR="${REPI_CODING_AGENT_DIR:-${REPI_AGENT_DIR:-$HOME/.repi/agent}}"
 export REPI_CODING_AGENT_SESSION_DIR="${REPI_CODING_AGENT_SESSION_DIR:-$REPI_CODING_AGENT_DIR/sessions}"
+export REPI_PRIMARY=1
+export REPI_PRODUCT=1
 export PI_RECON_PRIMARY=1
 export PI_RECON_PRODUCT=1
-export PI_SKIP_VERSION_CHECK="${PI_SKIP_VERSION_CHECK:-1}"
-export PI_SKIP_PACKAGE_UPDATE_CHECK="${PI_SKIP_PACKAGE_UPDATE_CHECK:-1}"
-export PI_TELEMETRY="${PI_TELEMETRY:-0}"
+export REPI_SKIP_VERSION_CHECK="${REPI_SKIP_VERSION_CHECK:-1}"
+export REPI_SKIP_PACKAGE_UPDATE_CHECK="${REPI_SKIP_PACKAGE_UPDATE_CHECK:-1}"
+export REPI_TELEMETRY="${REPI_TELEMETRY:-0}"
+export REPI_OFFLINE="${REPI_OFFLINE:-${PI_OFFLINE:-0}}"
+# Compatibility for inherited upstream internals; user-facing REPI docs prefer REPI_* names.
+export PI_SKIP_VERSION_CHECK="${PI_SKIP_VERSION_CHECK:-$REPI_SKIP_VERSION_CHECK}"
+export PI_SKIP_PACKAGE_UPDATE_CHECK="${PI_SKIP_PACKAGE_UPDATE_CHECK:-$REPI_SKIP_PACKAGE_UPDATE_CHECK}"
+export PI_TELEMETRY="${PI_TELEMETRY:-$REPI_TELEMETRY}"
+export PI_OFFLINE="${PI_OFFLINE:-$REPI_OFFLINE}"
 export REPI_REPO_ROOT="$ROOT"
 
 exec "$ROOT/node_modules/.bin/tsx" --tsconfig "$ROOT/tsconfig.json" "$ROOT/packages/coding-agent/src/cli.ts" "$@"

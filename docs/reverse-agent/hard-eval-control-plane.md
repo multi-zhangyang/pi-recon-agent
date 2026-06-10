@@ -1,6 +1,6 @@
-# Pi-RECON Hard Eval Control Plane
+# REPI Hard Eval Control Plane
 
-`hard-eval-control-plane.mjs` 是 Pi-RECON 的离线严苛评测控制面。它不访问真实网站、不调用模型 provider、不重跑 benchmark，而是读取当前 `.repi-harness/evidence/remote/*` 已有证据，把“agent 编排是否成功”和“平台 claim 是否被证明”拆开。
+`hard-eval-control-plane.mjs` 是 REPI 的离线严苛评测控制面。它不访问真实网站、不调用模型 provider、不重跑 benchmark，而是读取当前 `.repi-harness/evidence/remote/*` 已有证据，把“agent 编排是否成功”和“平台 claim 是否被证明”拆开。
 
 目的：避免把 agent 并行运行成功、hard-score 高分或旧证据成功，误写成当前 B站 / 小红书 / 抖音 same-window claim 全绿。
 
@@ -133,7 +133,7 @@ orchestration success cannot be reported as platform success
 - `re_compiler`
 - `re_proof_loop`
 
-完成后，Pi-RECON 的评测结果才能从“文本复盘”升级为“artifact-backed claim verification”。
+完成后，REPI 的评测结果才能从“文本复盘”升级为“artifact-backed claim verification”。
 
 ## Hard-score integration
 

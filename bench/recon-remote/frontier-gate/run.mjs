@@ -26,7 +26,7 @@ const maxArtifactAgeMs = Number(argValue('max-artifact-age-ms', process.env.RECO
 const maxClockSkewMs = Number(argValue('max-clock-skew-ms', process.env.RECON_FRONTIER_MAX_CLOCK_SKEW_MS || process.env.RECON_EVIDENCE_MAX_CLOCK_SKEW_MS || 300000));
 
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
-  console.log(`Pi-RECON frontier gate\n\nUsage:\n  node bench/recon-remote/frontier-gate/run.mjs\n  node bench/recon-remote/frontier-gate/run.mjs --live\n  node bench/recon-remote/frontier-gate/run.mjs --strict\n\nPurpose:\n  Measures the next frontier beyond proof-gate: Douyin a_bogus rebuild/structured 2xx API,\n  Xiaohongshu x-s 2xx signed replay, Bilibili runtime WBI signer bundle trace, and agent\n  frontier planning. Non-strict mode exits 0 with verdict frontier-incomplete so it can track\n  hard gaps without pretending they are solved.\n\nEnvironment:\n  RECON_FRONTIER_LIVE=1          Rerun live proof-gate before assessment\n  RECON_FRONTIER_STRICT=1        Exit nonzero unless all frontier gates pass\n  RECON_FRONTIER_TIMEOUT_MS=900000\n\nOutput:\n  .repi-harness/evidence/remote/frontier-gate/<timestamp>/\n`);
+  console.log(`REPI frontier gate\n\nUsage:\n  node bench/recon-remote/frontier-gate/run.mjs\n  node bench/recon-remote/frontier-gate/run.mjs --live\n  node bench/recon-remote/frontier-gate/run.mjs --strict\n\nPurpose:\n  Measures the next frontier beyond proof-gate: Douyin a_bogus rebuild/structured 2xx API,\n  Xiaohongshu x-s 2xx signed replay, Bilibili runtime WBI signer bundle trace, and agent\n  frontier planning. Non-strict mode exits 0 with verdict frontier-incomplete so it can track\n  hard gaps without pretending they are solved.\n\nEnvironment:\n  RECON_FRONTIER_LIVE=1          Rerun live proof-gate before assessment\n  RECON_FRONTIER_STRICT=1        Exit nonzero unless all frontier gates pass\n  RECON_FRONTIER_TIMEOUT_MS=900000\n\nOutput:\n  .repi-harness/evidence/remote/frontier-gate/<timestamp>/\n`);
   process.exit(0);
 }
 
@@ -402,7 +402,7 @@ const dimensions = {
   regression_readiness: passed ? 8 : proofLiveBound(proofLive) ? 5 : proofLatest?.verdict === 'proof-gate-passed' ? 4 : 0,
 };
 const result = {
-  target: 'Bilibili WBI runtime trace + Xiaohongshu x-s 2xx replay + Douyin a_bogus structured API + Pi-RECON dogfood frontier',
+  target: 'Bilibili WBI runtime trace + Xiaohongshu x-s 2xx replay + Douyin a_bogus structured API + REPI dogfood frontier',
   profile: 'frontier-gate',
   verdict: passed ? 'frontier-passed' : 'frontier-incomplete',
   generatedAt: new Date().toISOString(),
@@ -436,7 +436,7 @@ const result = {
 };
 await writeFile(join(outDir, 'result.json'), `${JSON.stringify(result, null, 2)}\n`);
 const md = [
-  '# Pi-RECON Frontier Gate',
+  '# REPI Frontier Gate',
   '',
   `verdict: ${result.verdict}`,
   `mode: ${result.mode}`,

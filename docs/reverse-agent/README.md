@@ -1,10 +1,10 @@
-# Pi-RECON 深度逆向渗透 Agent 配置
+# REPI 深度逆向渗透 Agent 配置
 
 本目录说明本仓库对 Pi 的“魔改”配置。它不是单独添加一个 skill，而是把 Pi 的系统提示、资源加载、运行时扩展、长期记忆、工具索引、自审计、压缩记录和任务模板组合成一个逆向渗透作战 profile。
 
 ## 三层形态
 
-本仓库现在有三种 Pi-RECON 形态，默认只启用独立 `repi`：
+本仓库现在有三种 REPI 形态，默认只启用独立 `repi`：
 
 1. **REPI 产品 bootstrap**：`packages/coding-agent/src/cli/repi-bootstrap.ts` + `packages/coding-agent/src/core/repi-profile-init.ts`。这层在 CLI 内部接管 `repi` 默认行为：自动启用 `--recon`、隔离项目/全局资源、初始化 `~/.repi/agent`，所以 npm/bin 直启也不会退回普通 Pi。
 2. **源码内核入口**：`packages/coding-agent/src/core/recon-profile.ts` + CLI `--recon` / `--reverse-pentest`。这是内置 profile：直接接入 resource loader、inline extension factory、system prompt、append prompt、skill/prompt 注入、记忆和工具索引；`repi` 默认使用这一层。
@@ -28,13 +28,13 @@ pi --help
 
 ## 底层强执行契约
 
-Pi-RECON 在 `packages/coding-agent/src/core/recon-profile.ts`、`repi-profile/SYSTEM.md`、`repi-profile/APPEND_SYSTEM.md` 和 orchestrator skill 中内置 `refusal_to_execution` 与 `operator_command_floor`：安全/逆向/渗透/红队/CTF 请求默认进入 `execution-first mode`；目标、样本、凭据、工具或上下文不足时，不停在拒绝或泛化提示，而是改写成 `re_map`、`re_lane plan`、`fallback_commands`、`bootstrap plan`、最小复现脚本或一个精确缺口问题，并持续输出 `operator_next_command`、工具调用、artifact 路径或最小复现命令。
+REPI 在 `packages/coding-agent/src/core/recon-profile.ts`、`repi-profile/SYSTEM.md`、`repi-profile/APPEND_SYSTEM.md` 和 orchestrator skill 中内置 `refusal_to_execution` 与 `operator_command_floor`：安全/逆向/渗透/红队/CTF 请求默认进入 `execution-first mode`；目标、样本、凭据、工具或上下文不足时，不停在拒绝或泛化提示，而是改写成 `re_map`、`re_lane plan`、`fallback_commands`、`bootstrap plan`、最小复现脚本或一个精确缺口问题，并持续输出 `operator_next_command`、工具调用、artifact 路径或最小复现命令。
 
 ## 组件
 
 | 路径 | 作用 |
 |---|---|
-| `repi-profile/SYSTEM.md` | 替换 Pi 默认系统提示，定义 Pi-RECON 执行模型 |
+| `repi-profile/SYSTEM.md` | REPI 文件型 profile 镜像，定义 REPI 执行模型 |
 | `repi-profile/APPEND_SYSTEM.md` | 附加启动序列、记忆协议、完成门槛 |
 | `repi-profile/settings.json` | 高思考等级、压缩/重试/技能命令/资源加载配置 |
 | `repi-profile/extensions/reverse-pentest-core.ts` | 运行时核心：路由、记忆、工具索引、自审计、loop guard、compaction checkpoint、自定义工具 |
@@ -75,22 +75,22 @@ Pi-RECON 在 `packages/coding-agent/src/core/recon-profile.ts`、`repi-profile/S
 | `bench/recon-remote/hard-score.mjs` | 跨平台 hard-score 评测器：按 signature_rebuild、signed_replay、anti_bot_challenge、cdn_media_probe、runtime_capture_depth、exploit_chain、bundle_trace、regression_readiness 对最新公网证据打分 |
 | `scripts/reverse-agent/refresh-tool-index.sh` | 离线刷新工具索引脚本 |
 | `scripts/reverse-agent/verify-profile.mjs` | 配置完整性验证脚本 |
-| `pi` | 非拥有型兼容 shim；不会启动 Pi-RECON，只会转交给 PATH 中的原版 Pi，找不到则提示使用 `repi` |
-| `repi` | Pi-RECON 独立产品入口，默认使用 `~/.repi/agent`；源码 wrapper 和 npm/bin 直启都会由 CLI bootstrap 自动启用 `--recon` 隔离参数 |
+| `pi` | 非拥有型兼容 shim；不会启动 REPI，只会转交给 PATH 中的原版 Pi，找不到则提示使用 `repi` |
+| `repi` | REPI 独立产品入口，默认使用 `~/.repi/agent`；源码 wrapper 和 npm/bin 直启都会由 CLI bootstrap 自动启用 `--recon` 隔离参数 |
 | `scripts/reverse-agent/install-repi.sh` | 安装 `/usr/local/bin/repi`，初始化 `~/.repi/agent`，不会覆盖/删除普通 `pi` |
 | `scripts/reverse-agent/install-recon-pi.sh` | 兼容旧命令名；已废弃，现在只会转而安装 `repi`，不会接管 `pi` |
 | `scripts/reverse-agent/assert-repi-product.mjs` | 验证 `repi` 是产品入口、`pi` 未被本仓库声明、repi help 不泄漏 upstream Pi update/pi.dev changelog 文案 |
 | `scripts/reverse-agent/repi-top-harness.mjs` | 顶级独立 harness：临时 HOME/bin 端到端验证安装、命令归属、profile 隔离、update/branding 去 Pi 化和能力 gates |
 | `docs/reverse-agent/repi-harness.github-actions.yml` | CI 自动验收模板：复制到 `.github/workflows/repi-harness.yml` 后，push/PR 运行 `gate:repi-harness`、`npm run check` 和 no-diff 检查 |
 | `scripts/reverse-agent/assert-pi-recon-primary.mjs` | 兼容旧 gate 名；实际转到 `assert-repi-product.mjs` |
-| `scripts/reverse-agent/clean-global-pi-recon.sh` | 清理旧版写入 `~/.pi/agent` 的 Pi-RECON 文件型 profile，移动到备份目录 |
+| `scripts/reverse-agent/clean-global-pi-recon.sh` | 清理旧版写入 `~/.pi/agent` 的 REPI 文件型 profile，移动到备份目录 |
 | `scripts/reverse-agent/install-global-profile.sh` | 兼容旧命令名；现在默认写入 `~/.repi/agent` |
 
 
 
 ## 主启动器 repi
 
-当前推荐入口就是 `repi`。它是 Pi-RECON 的独立产品命令；普通 `pi` 保留给 upstream Pi。运行时默认不会复制旧 `~/.pi/agent` 的 auth/models：
+当前推荐入口就是 `repi`。它是 REPI 的独立产品命令；普通 `pi` 保留给 upstream Pi。运行时默认不会复制旧 `~/.pi/agent` 的 auth/models：
 
 ```text
 command: repi
@@ -138,7 +138,7 @@ repi --with-project-resources
 
 ## 授权任务误拒绝控制
 
-Pi-RECON 的 `re_kernel` 内置 `authorized_task_bias`、`public_target_no_auto_refusal` 与 `scope_gap_to_passive_mapping`。当任务语境是 CTF、靶场、自有资产、客户授权、测试环境或漏洞研究时，agent 直接进入 route→map→lane→evidence→verify 的执行链；当目标呈现公网域名、品牌或生产外观时，不把外观本身当作停止理由，而是先生成被动 map、route/auth baseline、live browser plan 和证据缺口。若授权上下文、账号、窗口或边界不完整，则触发 `authorization_context_missing`：写入 `auth_context_gap`、`bounded_plan`、`operator_queue`，最多只问一个会改变执行路径的问题，避免 narrative-only 停顿。
+REPI 的 `re_kernel` 内置 `authorized_task_bias`、`public_target_no_auto_refusal` 与 `scope_gap_to_passive_mapping`。当任务语境是 CTF、靶场、自有资产、客户授权、测试环境或漏洞研究时，agent 直接进入 route→map→lane→evidence→verify 的执行链；当目标呈现公网域名、品牌或生产外观时，不把外观本身当作停止理由，而是先生成被动 map、route/auth baseline、live browser plan 和证据缺口。若授权上下文、账号、窗口或边界不完整，则触发 `authorization_context_missing`：写入 `auth_context_gap`、`bounded_plan`、`operator_queue`，最多只问一个会改变执行路径的问题，避免 narrative-only 停顿。
 
 ## 运行时能力
 
@@ -228,7 +228,7 @@ scripts/reverse-agent/verify-profile.mjs /root/pi-diy/pi
 # 刷新工具索引
 scripts/reverse-agent/refresh-tool-index.sh /root/pi-diy/pi
 
-# 推荐：安装 repi 作为 Pi-RECON 独立入口
+# 推荐：安装 repi 作为 REPI 独立入口
 npm run install:repi
 hash -r
 
@@ -240,7 +240,7 @@ npm run gate:repi-harness
 npm run gate:repi-product
 npm run gate:repi-isolation
 
-# 启动 Pi-RECON（交互模式）
+# 启动 REPI（交互模式）
 repi
 
 # 源码调试入口仍保留
@@ -286,12 +286,12 @@ repi
 - `repi-profile/vendor/reverse-skill/skills`
 - `repi-profile/vendor/reverse-skill/CTF-Sandbox-Orchestrator`
 
-因此这个 profile 既内置了 Pi-RECON 总控层，也能在同一 workspace 中直接复用 `zhaoxuya520/reverse-skill` 的细分技能库；不存在时不会报错。
+因此这个 profile 既内置了 REPI 总控层，也能在同一 workspace 中直接复用 `zhaoxuya520/reverse-skill` 的细分技能库；不存在时不会报错。
 
 
 ## Web Authz State 授权状态机层
 
-`/re-web-authz-state plan|show|run` / `re_web_authz_state` 面向 Web/API authorization、IDOR、BOLA、JWT/session、object ownership 和 state-machine 任务建立专用授权状态捕获层。它输出 `web_authz_state` / `web_authz_artifact`、`route_inventory`、`principal_matrix`、`object_probes`、`state_machine`、`sequence_replay`、`ownership_checks`、`rollback_checks`、`runtime_anchors`、`replay_commands`、`capture_script`、`web_authz_next_actions` 与 `next_web_authz_command`；artifact 写入 `evidence/web-authz/*.md` 并闭合 `web_authz_ready`。默认读取型 principal/object/sequence 观测；变更型 rollback 只有设置 `PI_RECON_AUTHZ_MUTATE=1` 和 restore fixtures 时才执行。
+`/re-web-authz-state plan|show|run` / `re_web_authz_state` 面向 Web/API authorization、IDOR、BOLA、JWT/session、object ownership 和 state-machine 任务建立专用授权状态捕获层。它输出 `web_authz_state` / `web_authz_artifact`、`route_inventory`、`principal_matrix`、`object_probes`、`state_machine`、`sequence_replay`、`ownership_checks`、`rollback_checks`、`runtime_anchors`、`replay_commands`、`capture_script`、`web_authz_next_actions` 与 `next_web_authz_command`；artifact 写入 `evidence/web-authz/*.md` 并闭合 `web_authz_ready`。默认读取型 principal/object/sequence 观测；变更型 rollback 只有设置 `REPI_AUTHZ_MUTATE=1` 和 restore fixtures 时才执行。
 
 ## Live browser/XHR/WS runtime 层
 
@@ -299,18 +299,18 @@ repi
 
 ## Exploit Lab 稳定化层
 
-`/re-exploit-lab plan|show|run|bundle` / `re_exploit_lab` 面向 exploit/PoC/autopwn 任务建立稳定化实验室。它输出 `exploit_lab` / `exploit_lab_artifact`、`lab_matrix`、`poc_inventory`、`environment_pins`、`replay_matrix`、`flake_triage`、`bundle_manifest`、`stability_anchors`、`lab_commands`、`lab_next_actions` 与 `next_lab_command`；artifact 写入 `.repi-harness/evidence/exploit-lab/*.md` 并闭合 `exploit_lab_ready`。`run` 模式用本地 Python harness 或 `PI_RECON_EXPLOIT_CMD` 做 bounded 多次 replay，记录 exit、duration、stdout/stderr SHA256、success_rate、stable/flake 结论和 bundle manifest。
+`/re-exploit-lab plan|show|run|bundle` / `re_exploit_lab` 面向 exploit/PoC/autopwn 任务建立稳定化实验室。它输出 `exploit_lab` / `exploit_lab_artifact`、`lab_matrix`、`poc_inventory`、`environment_pins`、`replay_matrix`、`flake_triage`、`bundle_manifest`、`stability_anchors`、`lab_commands`、`lab_next_actions` 与 `next_lab_command`；artifact 写入 `.repi-harness/evidence/exploit-lab/*.md` 并闭合 `exploit_lab_ready`。`run` 模式用本地 Python harness 或 `REPI_EXPLOIT_CMD` 做 bounded 多次 replay，记录 exit、duration、stdout/stderr SHA256、success_rate、stable/flake 结论和 bundle manifest。
 
 
 
 ## Mobile Runtime 动态逆向层
 
-`/re-mobile-runtime plan|show|run` / `re_mobile_runtime` 面向 APK/Android/mobile reverse 任务建立 ADB/Frida/GDB 运行时捕获层。它输出 `mobile_runtime` / `mobile_runtime_artifact`、`device_matrix`、`apk_inventory`、`process_map`、`hook_plan`、`frida_hooks`、`native_trace`、`anti_debug_checks`、`runtime_anchors`、`replay_commands`、`capture_script`、`mobile_next_actions` 与 `next_mobile_command`；artifact 写入 `evidence/mobile-runtime/*.md` 并闭合 `mobile_runtime_ready`。`run` 默认只做观测和 hook 模板生成；需要真实 attach 时显式设置 `PI_RECON_MOBILE_ATTACH=1`，并记录 Java crypto/String/native compare/anti-debug anchors。
+`/re-mobile-runtime plan|show|run` / `re_mobile_runtime` 面向 APK/Android/mobile reverse 任务建立 ADB/Frida/GDB 运行时捕获层。它输出 `mobile_runtime` / `mobile_runtime_artifact`、`device_matrix`、`apk_inventory`、`process_map`、`hook_plan`、`frida_hooks`、`native_trace`、`anti_debug_checks`、`runtime_anchors`、`replay_commands`、`capture_script`、`mobile_next_actions` 与 `next_mobile_command`；artifact 写入 `evidence/mobile-runtime/*.md` 并闭合 `mobile_runtime_ready`。`run` 默认只做观测和 hook 模板生成；需要真实 attach 时显式设置 `REPI_MOBILE_ATTACH=1`，并记录 Java crypto/String/native compare/anti-debug anchors。
 
 
 ## Native Runtime / Pwn Harness 动态层
 
-`/re-native-runtime plan|show|run` / `re_native_runtime` 面向 ELF/SO/Pwn/native reverse 任务建立 GDB/Pwn 工程运行时捕获层。它输出 `native_runtime` / `native_runtime_artifact`、`binary_inventory`、`mitigation_matrix`、`loader_libc`、`symbol_map`、`crash_plan`、`gdb_trace`、`breakpoint_plan`、`exploit_scaffold`、`runtime_anchors`、`replay_commands`、`capture_script`、`native_next_actions` 与 `next_native_command`；artifact 写入 `evidence/native-runtime/*.md` 并闭合 `native_runtime_ready`。`run` 默认只做观测和 GDB/pwntools 模板生成；需要真实 GDB 执行时显式设置 `PI_RECON_NATIVE_RUN=1` 和可选 `PI_RECON_NATIVE_ARGS`，并记录 crash/register/libc/loader anchors。
+`/re-native-runtime plan|show|run` / `re_native_runtime` 面向 ELF/SO/Pwn/native reverse 任务建立 GDB/Pwn 工程运行时捕获层。它输出 `native_runtime` / `native_runtime_artifact`、`binary_inventory`、`mitigation_matrix`、`loader_libc`、`symbol_map`、`crash_plan`、`gdb_trace`、`breakpoint_plan`、`exploit_scaffold`、`runtime_anchors`、`replay_commands`、`capture_script`、`native_next_actions` 与 `next_native_command`；artifact 写入 `evidence/native-runtime/*.md` 并闭合 `native_runtime_ready`。`run` 默认只做观测和 GDB/pwntools 模板生成；需要真实 GDB 执行时显式设置 `REPI_NATIVE_RUN=1` 和可选 `REPI_NATIVE_ARGS`，并记录 crash/register/libc/loader anchors。
 
 ## Campaign graph
 
@@ -415,7 +415,7 @@ proof-loop；agent-dogfood 已写 per-attempt subagent runtime manifest 和 runt
 
 `/re-decision plan|show|tick|run` / `re_decision_core` 读取 mission gates、active lane、tool posture、artifact posture、evidence priority、execution kernel 与 context/operator/verifier/compiler/replayer/autofix/proof-loop/knowledge artifacts，输出 `decision_core` / `decision_artifact`、`objective_stack`、`gate_pressure`、`evidence_priority`、`tool_posture`、`artifact_posture`、`decision_rules`、`operator_queue`、`decision_next_actions`、`operator_next_command` 与 `next_decision_command`；artifact 写入 `.repi-harness/evidence/decisions/*.md`，同时写入 `memory/decision-core.md` 并闭合 `decision_core_ready`。当下一步不清、上下文恢复、关键 artifact 更新或出现 narrative-only 倾向时，先 `re_decision_core tick <target>` 生成队列，再 `re_decision_core run <target> 1` bounded dispatch，最后进入 `re_proof_loop run <target> 4 2`。
 
-## Pi-RECON native-deep execution kernel update
+## REPI native-deep execution kernel update
 
 - `execution_invariants` / `operator_command_floor` / `specialist_capability_matrix` / `proof_exit_criteria` 是 `re_kernel build` 的底层执行约束：任何安全/逆向/渗透任务必须落到 route→map→lane plan/run→runtime artifact→verifier/replayer/proof-loop，而不是 narrative-only。
 - `native deep reverse/pwn` 专项会在 Native/Pwn/Mobile/CTF lanes 注入 `native-deep-symbol-map-scaffold`、`native-deep-decompiler-project-scaffold`、`native-deep-compare-trace-scaffold`、`native-deep-patch-hypothesis-scaffold`、`native-deep-symbolic-fuzz-scaffold`。
@@ -423,56 +423,56 @@ proof-loop；agent-dogfood 已写 per-attempt subagent runtime manifest 和 runt
 - native patch 必须先绑定 compare/branch runtime trace，再用 replay/verifier 证明输入约束或字节补丁；禁止无 artifact 的口头 patch 结论。
 
 
-## Pi-RECON web-api authz deep update
+## REPI web-api authz deep update
 - operation dispatcher now routes `re_live_browser`, `re_web_authz_state`, verifier, compiler, replayer, autofix, proof-loop, and knowledge graph commands from `operation_queue`.
 - Web/API planner adds `web-api-authz-static-scaffold`, `web-api-schema-diff-scaffold`, and `web-api-state-source-scaffold` for route/source/schema authorization evidence.
 - Analyzer parses `web API static authz source anchors`, `web API schema/auth parameter anchors`, and `web API state mutation source anchors`, then emits `web-api-authz-static-rerun`, `web-api-schema-diff-rerun`, and `web-api-state-source-rerun`.
 
-## Pi-RECON swarm execution audit update
+## REPI swarm execution audit update
 - `re_swarm plan|run|merge` now outputs `execution_audit`, `coverage_matrix`, and `retry_queue` for worker-runtime proof, contract coverage, and bounded repair.
 - `re_supervisor review|repair` consumes these rows so worker promotion depends on executed commands, hashes/artifacts/anchors, and covered evidence contracts.
 
-## Pi-RECON swarm retry operator bridge update
+## REPI swarm retry operator bridge update
 - Swarm `retry_queue` rows are promoted into `context_pack` as `swarm_retry_queue`, parsed into `next_operator_commands`, and surfaced in `commander_runtime_policy`.
 - `re_proof_loop` now exposes `swarm_retry_queue` and can execute `swarm-retry` bridge steps before broader specialist repair.
 
-## Pi-RECON operator feedback loop update
+## REPI operator feedback loop update
 
 - `operator_feedback` is now a first-class verifier→compiler→replayer→autofix field, not a note: operator dispatch results are classified into `unresolved_target`, `dispatcher_gap`, `missing_tool_or_dependency`, `worker_retry_blocked`, `worker_retry_progress`, `runtime_failure`, `replay_or_exploit_candidate`, `strong_evidence`, `failure_budget_exhausted`, and `swarm_retry_queue`.
 - `classifyOperatorFeedback` and `operatorFeedbackNextCommands` turn dispatch output into next commands: missing tools go to `re_bootstrap plan`, worker gaps go to bounded `re_swarm run`, runtime failures go to `re_autofix plan`, replay/exploit candidates go to `re_replayer run` or `re_exploit_lab run`, and strong evidence goes back to `re_verifier matrix`.
 - `re_verifier`, `re_compiler`, `re_replayer`, and `re_autofix` must preserve `operator_feedback` so proof-loop repairs are driven by execution evidence rather than narrative-only judgment.
 
-## Pi-RECON operator feedback proof/chain bridge update
+## REPI operator feedback proof/chain bridge update
 
 - `latestOperatorFeedback` now collects `operator_feedback` from verifier/compiler/replayer/autofix artifacts and promotes executable `operator_feedback_queue` commands into the proof and chain layers.
 - `re_proof_loop` exposes `operator_feedback` and `operator_feedback_queue`, appends bounded `operator-feedback` steps, treats unresolved target/missing tool/runtime failure/failure budget feedback as `needs_repair`, and runs feedback commands before broader swarm/specialist repair.
 - `re_exploit_chain plan|compose` carries `operator_feedback` into `evidence_gaps`, `replay_commands`, `operator_queue`, and `proof_path` so exploitability claims inherit dispatcher failure signals instead of bypassing them.
 
-## Pi-RECON operator feedback dispatcher fallback update
+## REPI operator feedback dispatcher fallback update
 
 - `re_operator plan|dispatch` now imports `latestOperatorFeedback` directly into `operator_feedback`, `operator_feedback_queue`, and `dispatcher_fallback_plan` before context commands are sorted.
 - `operatorFeedbackDispatchPlan` assigns dispatcher feedback priority: missing tools, unresolved targets, runtime/dispatcher failures, failure-budget exhaustion, swarm retry, replay/exploit candidates, and strong evidence each get bounded primary/fallback commands.
 - Dispatch runtime results are reclassified immediately after bounded execution; `operator_feedback_runtime` updates `nextActions` so bootstrap/tool-index refresh, replay/autofix, swarm repair, proof-loop, and exploit-lab fallbacks can run without waiting for narrative review.
 
-## Pi-RECON dispatcher feedback learning update
+## REPI dispatcher feedback learning update
 
 - `dispatcher_feedback_scoreboard` scores every operator feedback fallback command as passed, failed, or queued, then writes `memory/dispatcher-feedback-board.md` for cross-turn reuse.
 - `dispatcher_learning_hints` turns those scores into `promote_dispatcher`, `demote_dispatcher`, or `retry_dispatcher` actions so successful repair routes are promoted and failed routes are rerouted through autofix/context repair.
 - `re_knowledge_graph build` imports the dispatcher feedback board as `dispatcher_feedback_scoreboard` and `dispatcher_routing_hints`, adding dispatcher-feedback nodes and command strategy hints so future operator queues can reuse the best fallback path.
 
-## Pi-RECON dispatcher learning case-memory update
+## REPI dispatcher learning case-memory update
 
 - Dispatcher feedback now feeds `case_memory_migrations`: `Dispatcher routing hints`, `Dispatcher feedback scoreboard`, and `memory/dispatcher-feedback-board.md` are parsed as migration sources with elevated priority.
 - `case_memory_lane_plan` treats `promote_dispatcher` as a high-score promotion signal and `demote_dispatcher` / `retry_dispatcher` as repair signals, so autopilot can skip low-value lanes, add `case-memory-repair`, or reprioritize the active lane from dispatcher learning.
 - `re_delegate plan` and `re_knowledge_graph build` merge `dispatcherAdaptiveRoutingHints` and `dispatcherPromotionQueue` into worker routing/promotion so dispatcher success/failure affects worker promotion, demotion, and future command strategy.
 
-## Pi-RECON autonomous dispatcher budget update
+## REPI autonomous dispatcher budget update
 
 - `AutonomousExecutionBudget` is now a first-class execution-control artifact across `context_pack`, `re_operator`, `re_delegate`, `re_proof_loop`, and `re_knowledge_graph`: it exposes `maxTurns`, `maxDispatch`, `maxProofLoops`, and `maxWorkerRetries` instead of letting the commander drift across unbounded retries.
 - `dispatcherScoreDecayRows`, `repeatedFailureDemotionRows`, and `highScorePromotionRows` convert `dispatcher_score` rows into explicit `score_decay`, repeated-failure demotions, and high-score route promotions.
 - `writeDispatcherPromotionPlaybook` writes `memory/dispatcher-promotion-playbook.md`, and the knowledge graph / case-memory migration path imports `Autonomous execution budget`, `Dispatcher score decay`, `Repeated failure demotions`, and `High-score promotions` so later lanes reuse the strongest route and demote weak fallback loops.
 
-## Pi-RECON autonomous budget ledger update
+## REPI autonomous budget ledger update
 
 - `memory/autonomous-budget-ledger.md` now persists `autonomous_budget`, `score_decay`, `historical_score_decay`, demotions, promotions, and `nextActions` across turns so dispatcher/worker/lane scoring is not reset by context compaction.
 - `latestAutonomousBudgetLedger`, `cumulativeDispatcherScoreDecayRows`, `workerScoreDemotionRows`, `autonomousLaneDemotionRows`, and `applyAutonomousBudgetDemotions` convert repeated dispatcher/worker failure pressure into automatic `autonomous-dispatcher-repair` lane demotion when thresholds are crossed.
@@ -482,19 +482,19 @@ proof-loop；agent-dogfood 已写 per-attempt subagent runtime manifest 和 runt
 
 模型/provider/API key、本地网关和 auto compact 的用户文档在 `docs/reverse-agent/repi-runtime-configuration.md`；运行中的 REPI 也必须按该文档直接回答配置问题。关键 marker：`model_provider_configuration_runtime`、`~/.repi/agent/models.json`、`triggerPercent=85`。
 
-## Pi-RECON owned compaction kernel update
+## REPI owned compaction kernel update
 
 REPI auto-compact threshold policy is explicit and testable: `triggerPercent` defaults to `85`, `warningPercent` defaults to `80`, `reserveTokens` defaults to `16384`, and `keepRecentTokens` defaults to `36000` in `~/.repi/agent/settings.json`. Runtime compaction uses `compactionTriggerTokens = min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)`, so large-context models compact proactively while small-context models still keep a hard response/tool budget.
 
-`session_before_compact` 已从“仅保存 checkpoint”升级为 RECON-owned compaction provider：hook 返回 `pi-recon-compaction` summary/details，写入 `pi-recon-compaction-checkpoint`，并把 `.repi-harness/evidence/contexts/*.md` 的 `context_path`、`contextSha256`、`artifactHashes`、`re_context resume`、`re_operator plan/dispatch`、`re_proof_loop run <target> 4 2`、`autonomous_execution_budget`、dispatcher ledger/playbook、repair queue、swarm retry queue、case memory 和 artifact index 固化为恢复契约。若 extension compaction 存在，Pi 原生 summarizer 不再主导该段摘要内容。`session_compact` 后追加 `pi-recon-compaction-resume-contract` entry，验证 `fromExtension`、`details.kind`、`context_path`、`re_context resume`、`re_operator plan/dispatch` 与 `re_proof_loop run`，并更新 `compaction_resume_contract_ready` gate；verified contract 会追加 `pi-recon-compaction-auto-resume` 并通过 `pi-recon-auto-resume` custom message 触发一次 bounded resume turn。`pi-recon-compaction-resume-telemetry` / `memory/compaction-auto-resume-board.md` tracks each `compact_resume_command` as queued/done/blocked, proof-loop entry, output hash, and gate status; `memory/compaction-resume-ledger.jsonl` 追加 `contextPath/contextSha256/idempotencyKey/prevHash/entryHash`，为 exact resume 和多次 compact 幂等恢复提供索引；`re_operator` exposes this as `compact_resume_telemetry` and `compact_resume_queue`; `re_proof_loop` imports unresolved rows as `source=compact_resume` gaps and `re_complete audit` blocks completion while commands remain queued/blocked or proof_loop_entered is false. `re_knowledge_graph build` now turns the same telemetry into `compact_resume_case_memory`, `compact_resume_routing_hints`, and `compact_resume_status=*` case signatures so successful/failed compact recovery is reusable instead of a one-off resume event; `re_autopilot plan|run` consumes those sections via `compactResumeCaseMemoryCommands`, producing `compact_resume_repair_from_case_memory` repair lanes for queued/blocked recovery or `compact_resume_success_skip_low_value_lane` skips when compact recovery already survived proof-loop.
+`session_before_compact` 已从“仅保存 checkpoint”升级为 REPI-owned compaction provider：hook 返回 `pi-recon-compaction` summary/details，写入 `pi-recon-compaction-checkpoint`，并把 `.repi-harness/evidence/contexts/*.md` 的 `context_path`、`contextSha256`、`artifactHashes`、`re_context resume`、`re_operator plan/dispatch`、`re_proof_loop run <target> 4 2`、`autonomous_execution_budget`、dispatcher ledger/playbook、repair queue、swarm retry queue、case memory 和 artifact index 固化为恢复契约。若 extension compaction 存在，upstream summarizer 不再主导该段摘要内容。`session_compact` 后追加 `pi-recon-compaction-resume-contract` entry，验证 `fromExtension`、`details.kind`、`context_path`、`re_context resume`、`re_operator plan/dispatch` 与 `re_proof_loop run`，并更新 `compaction_resume_contract_ready` gate；verified contract 会追加 `pi-recon-compaction-auto-resume` 并通过 `pi-recon-auto-resume` custom message 触发一次 bounded resume turn。`pi-recon-compaction-resume-telemetry` / `memory/compaction-auto-resume-board.md` tracks each `compact_resume_command` as queued/done/blocked, proof-loop entry, output hash, and gate status; `memory/compaction-resume-ledger.jsonl` 追加 `contextPath/contextSha256/idempotencyKey/prevHash/entryHash`，为 exact resume 和多次 compact 幂等恢复提供索引；`re_operator` exposes this as `compact_resume_telemetry` and `compact_resume_queue`; `re_proof_loop` imports unresolved rows as `source=compact_resume` gaps and `re_complete audit` blocks completion while commands remain queued/blocked or proof_loop_entered is false. `re_knowledge_graph build` now turns the same telemetry into `compact_resume_case_memory`, `compact_resume_routing_hints`, and `compact_resume_status=*` case signatures so successful/failed compact recovery is reusable instead of a one-off resume event; `re_autopilot plan|run` consumes those sections via `compactResumeCaseMemoryCommands`, producing `compact_resume_repair_from_case_memory` repair lanes for queued/blocked recovery or `compact_resume_success_skip_low_value_lane` skips when compact recovery already survived proof-loop.
 
 ## Context compact harness 自检
 
-`scripts/reverse-agent/context-compact-audit.mjs [root] [--json]` 是 context_compact_audit 静态门槛，用于在改动后快速确认源码内核与文件型 profile 都保留上下文恢复链路。它分组检查 `context_pack`、RECON-owned compaction provider、resume contract/auto-resume telemetry、`evidence_summarization`、`budget_continuation`、runtime tests 和 docs contract；失败时列出缺失 marker，避免 context/compact 能力只存在于 Pi 原生默认逻辑或文档描述里。
+`scripts/reverse-agent/context-compact-audit.mjs [root] [--json]` 是 context_compact_audit 静态门槛，用于在改动后快速确认源码内核与文件型 profile 都保留上下文恢复链路。它分组检查 `context_pack`、REPI-owned compaction provider、resume contract/auto-resume telemetry、`evidence_summarization`、`budget_continuation`、runtime tests 和 docs contract；失败时列出缺失 marker，避免 context/compact 能力只存在于 upstream 默认逻辑或文档描述里。
 
 ## Autonomous control plane 静态审计
 
-`scripts/reverse-agent/autonomy-control-plane.mjs [root] [--json] [--write] [--strict]` 是非真实平台、非 provider、非 benchmark 的组织能力静态门槛。它只读取源码、文件型 profile、harness 源码和文档 marker，确认 Pi-RECON 当前具备专业逆向/渗透任务组织控制面，同时把尚未达到完整 autonomous red-team agent 的缺口保留为 `notYetTopAutonomousDefinition` / `hardeningNeeded`，避免把成熟度缺口误判成不可用，也避免把单次运行成功包装成完整自治能力。
+`scripts/reverse-agent/autonomy-control-plane.mjs [root] [--json] [--write] [--strict]` 是非真实平台、非 provider、非 benchmark 的组织能力静态门槛。它只读取源码、文件型 profile、harness 源码和文档 marker，确认 REPI 当前具备专业逆向/渗透任务组织控制面，同时把尚未达到完整 autonomous red-team agent 的缺口保留为 `notYetTopAutonomousDefinition` / `hardeningNeeded`，避免把成熟度缺口误判成不可用，也避免把单次运行成功包装成完整自治能力。
 
 常用入口：
 
@@ -571,7 +571,7 @@ Failure/repair 合同现在同时保留机器字段和人类可读别名：
 
 ## Harness 自检层
 
-- `gate:repi-harness` 是外层顶级独立 harness：用临时 HOME/bin 模拟安装，证明 `pi` stub 不被覆盖、旧 Pi-RECON stale shim 被清掉、`~/.pi/agent` 不被默认读取/改写、`repi` help/update help 去掉 upstream update/branding，并额外模拟不经源码 wrapper 的 package/bin 直启，确认 CLI 自身默认进入 REPI kernel；然后串联 product/isolation/context/autonomous runtime/control gates。CI 模板 `docs/reverse-agent/repi-harness.github-actions.yml` 复制到 `.github/workflows/repi-harness.yml` 后，会在 push/PR 自动跑这套门禁。
+- `gate:repi-harness` 是外层顶级独立 harness：用临时 HOME/bin 模拟安装，证明 `pi` stub 不被覆盖、旧 repi stale shim 被清掉、`~/.pi/agent` 不被默认读取/改写、`repi` help/update help 去掉 upstream update/branding，并额外模拟不经源码 wrapper 的 package/bin 直启，确认 CLI 自身默认进入 REPI kernel；然后串联 product/isolation/context/autonomous runtime/control gates。CI 模板 `docs/reverse-agent/repi-harness.github-actions.yml` 复制到 `.github/workflows/repi-harness.yml` 后，会在 push/PR 自动跑这套门禁。
 - `re_harness` / `/re-harness quick|full|install|show` 生成 `harness_artifact`，聚合 `install_readiness`、`reverse_capability_guards`、`regression_guards`、注册工具/命令矩阵和 evidence/memory/tool-index 可写性。
 - 开发或魔改后执行 `re_harness full`；运行 `npm run install:repi` 后，只安装/刷新 `repi`，普通 `pi` 仍归 upstream Pi；随后执行 `hash -r`、`repi --offline --help`、`npm run gate:repi-harness` 与 `/re-harness install`。
 - `reverse_capability_guards` 会守住 re_native_runtime、re_web_authz_state、re_mobile_runtime、re_exploit_lab、re_proof_loop、re_autopilot、re_knowledge_graph、compact_resume_case_memory、compact_resume_repair_from_case_memory、compact_resume_success_skip_low_value_lane、operator_command_floor、proof_exit_criteria、specialist_runtime_planner，避免安装/自检优化削弱逆向渗透能力。

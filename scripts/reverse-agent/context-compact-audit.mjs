@@ -32,7 +32,7 @@ export const CONTEXT_COMPACT_REQUIREMENTS = [
 	},
 	{
 		id: "owned_compaction_provider",
-		description: "session_before_compact is owned by Pi-RECON and returns a structured pi-recon-compaction summary/details block.",
+		description: "session_before_compact is owned by REPI and returns a structured pi-recon-compaction summary/details block.",
 		checks: RUNTIME_MIRRORS.map((file) => ({
 			file,
 			markers: [
@@ -43,7 +43,7 @@ export const CONTEXT_COMPACT_REQUIREMENTS = [
 				"buildReconCompactionDetails",
 				"pi-recon-compaction-checkpoint",
 				"kind: \"pi-recon-compaction\"",
-				"# Pi-RECON Compaction Summary",
+				"# REPI Compaction Summary",
 				"## Evidence / artifacts",
 				"autonomous_execution_budget:",
 				"resumeCommand: \"re_context resume\"",
@@ -134,7 +134,7 @@ export const CONTEXT_COMPACT_REQUIREMENTS = [
 				file: "packages/coding-agent/src/core/recon-profile.ts",
 				markers: [
 					"return { loadedBy: \"missing\" }",
-					"PI_RECON_BRANCH_ID",
+					"REPI_BRANCH_ID",
 					"context pack not found",
 					"target mismatch",
 					"branch mismatch",
@@ -147,7 +147,7 @@ export const CONTEXT_COMPACT_REQUIREMENTS = [
 				file: "repi-profile/extensions/reverse-pentest-core.ts",
 				markers: [
 					"return { loadedBy: \"missing\" }",
-					"PI_RECON_BRANCH_ID",
+					"REPI_BRANCH_ID",
 					"context pack not found",
 					"target mismatch",
 					"branch mismatch",
@@ -210,7 +210,7 @@ export const CONTEXT_COMPACT_REQUIREMENTS = [
 			{
 				file: "packages/coding-agent/test/recon-profile.test.ts",
 				markers: [
-					"returns a Pi-RECON owned compaction result with a resume contract",
+					"returns a REPI owned compaction result with a resume contract",
 					"pi-recon-compaction-resume-contract",
 					"pi-recon-compaction-resume-telemetry",
 					"compact_resume_telemetry:",
@@ -221,7 +221,7 @@ export const CONTEXT_COMPACT_REQUIREMENTS = [
 			{
 				file: "packages/coding-agent/test/suite/agent-session-compaction.test.ts",
 				markers: [
-					"manually compacts through Pi-RECON",
+					"manually compacts through REPI",
 					"pi-recon-compaction-auto-resume",
 					"pi-recon-compaction-resume-telemetry",
 					"auto resumed from compaction contract",
@@ -237,7 +237,7 @@ export const CONTEXT_COMPACT_REQUIREMENTS = [
 				file: "docs/reverse-agent/README.md",
 				markers: [
 					"Context/resume pack 闭环",
-					"Pi-RECON owned compaction kernel update",
+					"REPI owned compaction kernel update",
 					"autonomous budget ledger update",
 					"context-compact-audit.mjs",
 					"context_compact_audit",
@@ -293,7 +293,7 @@ export function auditContextCompact(root = process.cwd()) {
 
 export function formatContextCompactAuditReport(audit) {
 	const lines = [
-		"Pi-RECON context_compact_audit",
+		"REPI context_compact_audit",
 		`status: ${audit.ok ? "pass" : "fail"}`,
 		`root: ${audit.root}`,
 		`summary: categories=${audit.summary.categories} passed=${audit.summary.passed} failed=${audit.summary.failed} markers=${audit.summary.markers}`,
@@ -317,7 +317,7 @@ export function formatContextCompactAuditReport(audit) {
 }
 
 function printHelp() {
-	console.log(`Usage: node scripts/reverse-agent/context-compact-audit.mjs [root] [--json]\n\nChecks Pi-RECON context pack, owned compaction, resume contract, evidence summarization, budget continuation, test coverage, and docs markers.`);
+	console.log(`Usage: node scripts/reverse-agent/context-compact-audit.mjs [root] [--json]\n\nChecks REPI context pack, owned compaction, resume contract, evidence summarization, budget continuation, test coverage, and docs markers.`);
 }
 
 function main(argv) {

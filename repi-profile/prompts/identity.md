@@ -1,8 +1,8 @@
 ---
-description: 启动 Pi-RECON Identity/AD graph 与凭据可用性工作流
+description: 启动 REPI Identity/AD graph 与凭据可用性工作流
 argument-hint: "<domain/dc/target>"
 ---
-Pi-RECON Identity/AD task: $ARGUMENTS
+REPI Identity/AD task: $ARGUMENTS
 
 必须执行：
 1. 路由到 Identity / Windows / AD，并确认当前 lane：principals → credentials → graph → pivot-proof → report。

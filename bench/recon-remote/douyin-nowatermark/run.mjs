@@ -21,7 +21,7 @@ const userAgent = process.env.RECON_USER_AGENT ||
   'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Mobile Safari/537.36';
 
 if (!targetUrl || targetUrl === '--help' || targetUrl === '-h') {
-  console.log(`Pi-RECON Douyin no-watermark live benchmark\n\nUsage:\n  DOUYIN_SHARE_URL=<share-url> node bench/recon-remote/douyin-nowatermark/run.mjs\n  node bench/recon-remote/douyin-nowatermark/run.mjs <share-url>\n\nEnvironment:\n  RECON_BROWSER=auto|1|0        CDP capture through local Chrome; auto runs when static extraction is weak\n  RECON_BROWSER_TIMEOUT_MS=45000\n  RECON_BROWSER_QUIET_MS=2500\n  RECON_PROBE_LIMIT=28          Probe top media candidates with HEAD/range requests\n  RECON_PROBE_BODY_BYTES=4096   Bounded prefix bytes to hash for media Range probes\n  RECON_API_PROBE=1             Probe generated aweme detail endpoint hypotheses\n  RECON_MAX_REDIRECTS=10        Manual redirect chain limit\n  RECON_MAX_BODY_BYTES=5000000\n  RECON_USER_AGENT=<ua>\n  RECON_COOKIE=<cookie>         Optional runtime cookie, redacted in artifacts by default\n  RECON_EXTRA_HEADERS_JSON='{"x-foo":"bar"}'\n  RECON_CHROME_BIN=<path>\n\nOutput:\n  .repi-harness/evidence/remote/douyin-nowatermark/<timestamp>/\n`);
+  console.log(`REPI Douyin no-watermark live benchmark\n\nUsage:\n  DOUYIN_SHARE_URL=<share-url> node bench/recon-remote/douyin-nowatermark/run.mjs\n  node bench/recon-remote/douyin-nowatermark/run.mjs <share-url>\n\nEnvironment:\n  RECON_BROWSER=auto|1|0        CDP capture through local Chrome; auto runs when static extraction is weak\n  RECON_BROWSER_TIMEOUT_MS=45000\n  RECON_BROWSER_QUIET_MS=2500\n  RECON_PROBE_LIMIT=28          Probe top media candidates with HEAD/range requests\n  RECON_PROBE_BODY_BYTES=4096   Bounded prefix bytes to hash for media Range probes\n  RECON_API_PROBE=1             Probe generated aweme detail endpoint hypotheses\n  RECON_MAX_REDIRECTS=10        Manual redirect chain limit\n  RECON_MAX_BODY_BYTES=5000000\n  RECON_USER_AGENT=<ua>\n  RECON_COOKIE=<cookie>         Optional runtime cookie, redacted in artifacts by default\n  RECON_EXTRA_HEADERS_JSON='{"x-foo":"bar"}'\n  RECON_CHROME_BIN=<path>\n\nOutput:\n  .repi-harness/evidence/remote/douyin-nowatermark/<timestamp>/\n`);
   process.exit(targetUrl ? 0 : 2);
 }
 
@@ -1081,7 +1081,7 @@ await writeFile(join(outDir, 'body.html'), staticResult.body);
 await writeFile(join(outDir, 'result.json'), `${JSON.stringify(json, null, 2)}\n`);
 
 const md = [
-  '# Pi-RECON Douyin No-Watermark Interface Artifact',
+  '# REPI Douyin No-Watermark Interface Artifact',
   '',
   `target: ${targetUrl}`,
   `final_url: ${staticResult.finalUrl}`,

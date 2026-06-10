@@ -1,8 +1,8 @@
 ---
-description: 启动 Pi-RECON JS 签名/加密参数逆向工作流
+description: 启动 REPI JS 签名/加密参数逆向工作流
 argument-hint: "<url/request/param>"
 ---
-Pi-RECON JS reverse task: $ARGUMENTS
+REPI JS reverse task: $ARGUMENTS
 
 按 Observe → Capture → Normalize → Rebuild → First-Divergence → Replay → DeepDive 执行：
 1. Observe：定位目标请求、initiator、脚本 URL、候选函数。

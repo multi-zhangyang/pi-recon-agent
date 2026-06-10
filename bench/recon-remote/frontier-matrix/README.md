@@ -1,6 +1,6 @@
 # Real frontier matrix
 
-Multi-scenario live matrix for Pi-RECON real-platform capability. This sits above `frontier-gate/`: instead of scoring only the latest artifact per family, it runs or selects distinct positive and negative cases and checks that the harness does not inflate generic 2xx or blocked states into target-note success.
+Multi-scenario live matrix for REPI real-platform capability. This sits above `frontier-gate/`: instead of scoring only the latest artifact per family, it runs or selects distinct positive and negative cases and checks that the harness does not inflate generic 2xx or blocked states into target-note success.
 
 ## Usage
 

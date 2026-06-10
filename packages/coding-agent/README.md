@@ -9,9 +9,9 @@
 
 ---
 
-REPI / Pi-RECON is an independent reverse-engineering and penetration-testing task harness. It is not a `pi` profile skin: the product command is `repi`, runtime state lives in `~/.repi/agent`, and normal upstream `pi` stays separate.
+REPI / REPI is an independent reverse-engineering and penetration-testing task harness. It is not a `pi` profile skin: the product command is `repi`, runtime state lives in `~/.repi/agent`, and normal upstream `pi` stays separate.
 
-The npm/bin entry itself defaults into the Pi-RECON kernel: `--recon`, clean-room resource isolation, context compaction/resume support, evidence ledgers, verifier/compiler/replayer/autofix/proof-loop commands, and the REPI profile initializer are applied inside the CLI. A shell wrapper is only a convenience for source checkouts.
+The npm/bin entry itself defaults into the REPI kernel: `--recon`, clean-room resource isolation, context compaction/resume support, evidence ledgers, verifier/compiler/replayer/autofix/proof-loop commands, and the REPI profile initializer are applied inside the CLI. A shell wrapper is only a convenience for source checkouts.
 
 REPI still supports the extension, skill, prompt-template, theme, RPC and SDK surfaces inherited from the harness, but the default product path is the reverse/pentest control plane documented in the repository root README.
 
@@ -72,7 +72,7 @@ repi
 /login  # Then select provider
 ```
 
-Then start with `/re-harness quick`, `/re-kernel build <target>`, `/re-map <target> 2`, `/re-operator plan <target>`, `/re-verifier matrix`, and `/re-complete audit`. REPI still exposes the standard `read`, `write`, `edit`, and `bash` tools, but its default system prompt and commands are the Pi-RECON reverse/pentest control plane.
+Then start with `/re-harness quick`, `/re-kernel build <target>`, `/re-map <target> 2`, `/re-operator plan <target>`, `/re-verifier matrix`, and `/re-complete audit`. REPI still exposes the standard `read`, `write`, `edit`, and `bash` tools, but its default system prompt and commands are the REPI reverse/pentest control plane.
 
 **Platform notes:** [Windows](docs/windows.md) | [Termux (Android)](docs/termux.md) | [tmux](docs/tmux.md) | [Terminal setup](docs/terminal-setup.md) | [Shell aliases](docs/shell-aliases.md)
 

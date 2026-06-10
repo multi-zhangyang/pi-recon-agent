@@ -1,8 +1,8 @@
 ---
-description: 启动 Pi-RECON Web/API 渗透验证工作流
+description: 启动 REPI Web/API 渗透验证工作流
 argument-hint: "<url-or-project>"
 ---
-Pi-RECON web/api task: $ARGUMENTS
+REPI web/api task: $ARGUMENTS
 
 必须执行：
 1. 路由：Web/API/GraphQL/WebSocket/前端/worker 的证据面。

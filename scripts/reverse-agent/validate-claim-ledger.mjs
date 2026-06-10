@@ -203,7 +203,7 @@ function printHelp() {
 
 function formatText(report) {
   const lines = [
-    "Pi-RECON claim ledger validation",
+    "REPI claim ledger validation",
     `status: ${report.ok ? "pass" : "fail"}`,
     `mode: ${report.mode}`,
     "",

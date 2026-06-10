@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pi-recon.local/schemas/reverse-agent/context-resume-contract.schema.json",
-  "title": "Pi-RECON Context and Resume Contracts",
+  "title": "REPI Context and Resume Contracts",
   "$defs": {
     "ContextPackV2": {
-      "title": "Pi-RECON Context Pack V2",
+      "title": "REPI Context Pack V2",
       "type": "object",
       "required": [
         "contractId",
@@ -89,7 +89,7 @@
       ]
     },
     "ResumeContractV2": {
-      "title": "Pi-RECON Resume Contract V2",
+      "title": "REPI Resume Contract V2",
       "type": "object",
       "required": [
         "contractId",

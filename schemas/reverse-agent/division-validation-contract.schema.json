@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pi-recon.local/schemas/reverse-agent/division-validation-contract.schema.json",
-  "title": "Pi-RECON Division Validation Contract",
+  "title": "REPI Division Validation Contract",
   "$defs": {
     "DivisionValidationContractV1": {
-      "title": "Pi-RECON Division Validation Contract V1",
+      "title": "REPI Division Validation Contract V1",
       "type": "object",
       "required": [
         "contractVersion",

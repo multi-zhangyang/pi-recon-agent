@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pi-recon.local/schemas/reverse-agent/claim-ledger-event.schema.json",
-  "title": "Pi-RECON Claim Ledger Event",
+  "title": "REPI Claim Ledger Event",
   "type": "object",
   "required": ["seq", "type", "prevHash", "eventHash"],
   "properties": {

@@ -1,8 +1,8 @@
-# Pi-RECON Autonomous Control Plane
+# REPI Autonomous Control Plane
 
-Pi-RECON 当前目标不是把一次 benchmark 分数包装成能力结论，而是把逆向/渗透任务组织成可恢复、可分工、可验证、可修复的控制面。
+REPI 当前目标不是把一次 benchmark 分数包装成能力结论，而是把逆向/渗透任务组织成可恢复、可分工、可验证、可修复的控制面。
 
-当前状态：Pi-RECON 已能正常使用，并具备专业逆向/渗透任务组织能力。它可以把任务推进到 `map → operation → delegate → swarm → supervisor → context → operator → verifier → compiler → replayer → autofix → proof-loop` 这条工程链路。
+当前状态：REPI 已能正常使用，并具备专业逆向/渗透任务组织能力。它可以把任务推进到 `map → operation → delegate → swarm → supervisor → context → operator → verifier → compiler → replayer → autofix → proof-loop` 这条工程链路。
 
 同时，它还没有达到完整 autonomous red-team agent 的定义。以下四个方向是继续硬化的工程任务，不应被静态审计、单次 live 通过或模型输出文本替代。
 
@@ -179,7 +179,7 @@ claim ledger、hard-eval score split 和 autonomous contracts gate，输出
 已有能力：
 
 - `re_context pack|resume` 生成 `context_pack`，包含 mission、evidence tail、memory tail、artifact index、repair queue、autonomous budget 和 next operator commands。
-- `session_before_compact` 已由 Pi-RECON 接管，返回 `pi-recon-compaction` summary/details。
+- `session_before_compact` 已由 REPI 接管，返回 `pi-recon-compaction` summary/details。
 - `session_compact` 会验证 resume contract，写 auto-resume telemetry，并触发 bounded resume turn。
 - `re_operator`、`re_proof_loop`、`re_knowledge_graph` 会消费 compact resume telemetry/queue。
 - `scripts/reverse-agent/context-compact-audit.mjs` 已作为独立静态 gate 检查 context pack、owned compaction、resume contract、negative fixtures、evidence summarization 和 budget continuation。
@@ -288,4 +288,4 @@ They validate these contract families without running live benchmarks or provide
 
 `hard-eval-control-plane.mjs` 的离线 failure/repair 输出也已补齐 `signature`、`artifactHashes`、`budget`、`rollback`、`expectedGates`、`rollbackCriteria`；role contract 已补齐 `ledgerPolicy`、`conflictPolicy`、`claimGatePolicy`、`handoffTargets`、`evidenceContract`。
 
-This means Pi-RECON now has a usable professional control plane with machine-readable schemas, validators, agent-dogfood subagent runtime manifests plus agent-dogfood / re_swarm / compound runtime claim ledger rows, exact-resume negative fixtures, strict failure/repair fixtures, failure/repair writeback hooks, strict claim release markers, and runtime final-path gates. Remaining work is limited to hardening such as generic re_swarm independent sub-agent runtime, cross-session/multi-compact fixtures, strict validator regression, and runtime ledger regression wiring.
+This means REPI now has a usable professional control plane with machine-readable schemas, validators, agent-dogfood subagent runtime manifests plus agent-dogfood / re_swarm / compound runtime claim ledger rows, exact-resume negative fixtures, strict failure/repair fixtures, failure/repair writeback hooks, strict claim release markers, and runtime final-path gates. Remaining work is limited to hardening such as generic re_swarm independent sub-agent runtime, cross-session/multi-compact fixtures, strict validator regression, and runtime ledger regression wiring.

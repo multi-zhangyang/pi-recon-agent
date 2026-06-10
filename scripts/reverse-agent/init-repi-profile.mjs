@@ -81,7 +81,21 @@ settings.defaultThinkingLevel = settings.defaultThinkingLevel ?? "high";
 settings.enableSkillCommands = true;
 settings.quietStartup = settings.quietStartup ?? false;
 settings.collapseChangelog = settings.collapseChangelog ?? true;
-settings.compaction = { enabled: true, reserveTokens: 32768, keepRecentTokens: 36000, ...(settings.compaction ?? {}) };
+const existingCompaction = settings.compaction ?? {};
+const migratedLegacyReserveTokens =
+	existingCompaction.triggerPercent === undefined &&
+	existingCompaction.warningPercent === undefined &&
+	existingCompaction.reserveTokens === 32768
+		? 16384
+		: existingCompaction.reserveTokens;
+settings.compaction = {
+	...existingCompaction,
+	enabled: existingCompaction.enabled ?? true,
+	triggerPercent: existingCompaction.triggerPercent ?? 85,
+	warningPercent: existingCompaction.warningPercent ?? 80,
+	reserveTokens: migratedLegacyReserveTokens ?? 16384,
+	keepRecentTokens: existingCompaction.keepRecentTokens ?? 36000,
+};
 settings.branchSummary = { reserveTokens: 24576, skipPrompt: true, ...(settings.branchSummary ?? {}) };
 settings.retry = {
 	enabled: true,
@@ -100,21 +114,20 @@ for (const key of ["extensions", "skills", "prompts", "enabledModels"]) {
 writeJson(settingsPath, settings, 0o600);
 
 for (const [rel, body] of [
-	["recon/memory/field-journal.md", "# Pi-RECON Field Journal\n\n"],
-	["recon/memory/case-index.md", "# Pi-RECON Case Index\n\n"],
-	["recon/memory/evolution-log.md", "# Pi-RECON Evolution Log\n\n"],
-	["recon/evidence/ledger.md", "# Pi-RECON Evidence Ledger\n\n"],
-	["recon/tools/tool-index.md", "# Pi-RECON Tool Index\n\n"],
+	["recon/memory/field-journal.md", "# REPI Field Journal\n\n"],
+	["recon/memory/case-index.md", "# REPI Case Index\n\n"],
+	["recon/memory/evolution-log.md", "# REPI Evolution Log\n\n"],
+	["recon/evidence/ledger.md", "# REPI Evidence Ledger\n\n"],
+	["recon/tools/tool-index.md", "# REPI Tool Index\n\n"],
 ]) {
 	const path = join(agentDir, rel);
 	if (!existsSync(path)) writeFileSync(path, body, "utf8");
 }
 
 const manifestPath = join(agentDir, "recon", "profile.json");
-const profileName = process.env.PI_CODING_AGENT_APP_NAME === "pi" ? "pi-recon" : "repi";
 writeJson(manifestPath, {
-	name: profileName,
-	kind: "isolated-pi-recon-profile",
+	name: "repi",
+	kind: "isolated-repi-profile",
 	repoRoot,
 	agentDir,
 	legacyPiImported: { requested: importLegacyPiProfile, source: legacyPiAgentDir, models: copiedModels, auth: copiedAuth },

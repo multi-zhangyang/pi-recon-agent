@@ -12,7 +12,7 @@ TOOLS=(
   burpsuite mitmproxy playwright
 )
 {
-  echo '# Pi-RECON Tool Index'
+  echo '# REPI Tool Index'
   echo
   echo "Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo

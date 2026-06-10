@@ -1,6 +1,6 @@
 # Frontier gate
 
-Hard frontier tracker for Pi-RECON real-platform capability. This is intentionally stricter than `proof-gate/`: it measures the unsolved frontier instead of declaring victory after advanced evidence passes.
+Hard frontier tracker for REPI real-platform capability. This is intentionally stricter than `proof-gate/`: it measures the unsolved frontier instead of declaring victory after advanced evidence passes.
 
 ## Usage
 

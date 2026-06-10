@@ -130,7 +130,7 @@ if (planJsonPath && !parallelPlanValidation.valid) {
 
 
 if (argv.includes('--help') || argv.includes('-h') || (!model && !planOnly)) {
-  console.log(`Pi-RECON parallel agent dogfood benchmark\n\nUsage:\n  RECON_AGENT_PROVIDER=openai RECON_AGENT_MODEL=gpt-4.1 node bench/recon-remote/agent-dogfood/parallel-run.mjs\n  node bench/recon-remote/agent-dogfood/parallel-run.mjs <provider> <model>\n  node bench/recon-remote/agent-dogfood/parallel-run.mjs --plan-json plan.json --plan-only --json\n\nPurpose:\n  Launches multiple real Pi-RECON --recon agents in parallel against the latest real-platform evidence,\n  then runs a synthesizer agent that reconciles worker disagreements. The harness gates real model calls,\n  tool calls, parallel overlap, platform coverage, artifact paths, and anti-self-delusion review.\n\nEnvironment:\n  RECON_AGENT_PROVIDER=<provider>       default: aigateway\n  RECON_AGENT_MODEL=<model>             required unless argv[3] or ANTHROPIC_MODEL is set\n  RECON_AGENT_THINKING=low\n  RECON_AGENT_TOOLS=read,grep,find,ls,bash\n  RECON_AGENT_TIMEOUT_MS=300000\n  RECON_AGENT_CMD=./pi-test.sh\n  RECON_AGENT_EXTRA_ARGS='--offline'    optional extra Pi CLI args\n  RECON_PARALLEL_ROLES=a,b              optional subset: mapper,verifier,adversary,planner\n  RECON_PARALLEL_MAX_TOOL_CALLS=4        prompt-level cap to prevent runaway workers\n  RECON_PARALLEL_MAX_WORDS=500           prompt-level output cap per worker\n  RECON_SYNTHESIZER=1                    run the sequential conflict-synthesizer; set 0 to skip\n  RECON_ROLE_RETRIES=1                   retry failed/flaky role runs before judging the gate\n  RECON_PARALLEL_PLAN_JSON=<path>        optional ReconParallelPlanV1 manifest.\n  RECON_PARALLEL_PLAN_ONLY=1             print normalized plan without launching providers.\n\nOutput:\n  .repi-harness/evidence/remote/agent-parallel-dogfood/<timestamp>/\n`);
+  console.log(`REPI parallel agent dogfood benchmark\n\nUsage:\n  RECON_AGENT_PROVIDER=openai RECON_AGENT_MODEL=gpt-4.1 node bench/recon-remote/agent-dogfood/parallel-run.mjs\n  node bench/recon-remote/agent-dogfood/parallel-run.mjs <provider> <model>\n  node bench/recon-remote/agent-dogfood/parallel-run.mjs --plan-json plan.json --plan-only --json\n\nPurpose:\n  Launches multiple real REPI --recon agents in parallel against the latest real-platform evidence,\n  then runs a synthesizer agent that reconciles worker disagreements. The harness gates real model calls,\n  tool calls, parallel overlap, platform coverage, artifact paths, and anti-self-delusion review.\n\nEnvironment:\n  RECON_AGENT_PROVIDER=<provider>       default: aigateway\n  RECON_AGENT_MODEL=<model>             required unless argv[3] or ANTHROPIC_MODEL is set\n  RECON_AGENT_THINKING=low\n  RECON_AGENT_TOOLS=read,grep,find,ls,bash\n  RECON_AGENT_TIMEOUT_MS=300000\n  RECON_AGENT_CMD=./pi-test.sh\n  RECON_AGENT_EXTRA_ARGS='--offline'    optional extra Pi CLI args\n  RECON_PARALLEL_ROLES=a,b              optional subset: mapper,verifier,adversary,planner\n  RECON_PARALLEL_MAX_TOOL_CALLS=4        prompt-level cap to prevent runaway workers\n  RECON_PARALLEL_MAX_WORDS=500           prompt-level output cap per worker\n  RECON_SYNTHESIZER=1                    run the sequential conflict-synthesizer; set 0 to skip\n  RECON_ROLE_RETRIES=1                   retry failed/flaky role runs before judging the gate\n  RECON_PARALLEL_PLAN_JSON=<path>        optional ReconParallelPlanV1 manifest.\n  RECON_PARALLEL_PLAN_ONLY=1             print normalized plan without launching providers.\n\nOutput:\n  .repi-harness/evidence/remote/agent-parallel-dogfood/<timestamp>/\n`);
   process.exit(model || planOnly ? 0 : 2);
 }
 
@@ -153,7 +153,7 @@ const builtinRoles = [
   {
     id: 'mapper',
     title: 'Evidence Mapper',
-    prompt: `Role: evidence mapper. Build a precise map of the latest real-platform Pi-RECON evidence.\n\nRequired actions:\n1. Use ls/read/grep/find tools to inspect the supplied artifact paths, latest hard-score artifact, and same-window-live artifact first.\n2. Identify the decisive fields for Bilibili WBI/per-page CID, Xiaohongshu x-s/signed replay, Douyin a_bogus/structured replay, and same-window freshness/gaps.\n3. Separate live same-window runtime evidence from stale, inferred, or weak evidence.\n4. Output exactly these sections: Outcome / Key Evidence / Verification / Next Step.\n5. Do not edit files.`,
+    prompt: `Role: evidence mapper. Build a precise map of the latest real-platform REPI evidence.\n\nRequired actions:\n1. Use ls/read/grep/find tools to inspect the supplied artifact paths, latest hard-score artifact, and same-window-live artifact first.\n2. Identify the decisive fields for Bilibili WBI/per-page CID, Xiaohongshu x-s/signed replay, Douyin a_bogus/structured replay, and same-window freshness/gaps.\n3. Separate live same-window runtime evidence from stale, inferred, or weak evidence.\n4. Output exactly these sections: Outcome / Key Evidence / Verification / Next Step.\n5. Do not edit files.`,
   },
   {
     id: 'verifier',
@@ -168,7 +168,7 @@ const builtinRoles = [
   {
     id: 'planner',
     title: 'Hard Frontier Planner',
-    prompt: `Role: hard frontier planner. Design the next hardest benchmark step for a top-tier reverse/pentest agent.\n\nRequired actions:\n1. Use read/grep/ls tools to inspect current score/evidence before proposing work, including same-window-live.\n2. Propose a concrete multi-agent benchmark plan that raises difficulty without self-delusion.\n3. Include commands, pass/fail gates, artifact invariants, context/compact requirements, and rollback criteria.\n4. Cover same-window freshness, Bilibili WBI/per-page CID, Xiaohongshu x-s, Douyin a_bogus/no-watermark transform, and Pi-RECON agent orchestration.\n5. Output exactly these sections: Outcome / Key Evidence / Verification / Next Step.\n6. Do not edit files.`,
+    prompt: `Role: hard frontier planner. Design the next hardest benchmark step for a top-tier reverse/pentest agent.\n\nRequired actions:\n1. Use read/grep/ls tools to inspect current score/evidence before proposing work, including same-window-live.\n2. Propose a concrete multi-agent benchmark plan that raises difficulty without self-delusion.\n3. Include commands, pass/fail gates, artifact invariants, context/compact requirements, and rollback criteria.\n4. Cover same-window freshness, Bilibili WBI/per-page CID, Xiaohongshu x-s, Douyin a_bogus/no-watermark transform, and REPI agent orchestration.\n5. Output exactly these sections: Outcome / Key Evidence / Verification / Next Step.\n6. Do not edit files.`,
   },
 ];
 const allRoles = loadedParallelPlan?.workers?.length ? loadedParallelPlan.workers.map(roleFromPlanWorker) : builtinRoles;
@@ -190,7 +190,7 @@ function normalizedPlanSummary() {
     planJson: planJsonPath || '',
     source: loadedParallelPlan?.source || 'builtin-agent-dogfood',
     planId: loadedParallelPlan?.planId || '',
-    target: loadedParallelPlan?.target || 'Pi-RECON parallel dogfood',
+    target: loadedParallelPlan?.target || 'REPI parallel dogfood',
     validation: parallelPlanValidation,
     workerCount: roles.length,
     workers: roles.map((role) => ({
@@ -299,7 +299,7 @@ if (planOnly) {
   const summary = { ...planPreview, planOnly: true, willLaunchProvider: false };
   if (hasArgFlag('json')) console.log(JSON.stringify(summary, null, 2));
   else {
-    console.log(`# Pi-RECON Parallel Plan Only\n\n- source=${summary.source}\n- plan_id=${summary.planId || 'none'}\n- workers=${summary.workerCount}\n- merge=${summary.merge.strategy || 'none'}\n\n## Workers`);
+    console.log(`# REPI Parallel Plan Only\n\n- source=${summary.source}\n- plan_id=${summary.planId || 'none'}\n- workers=${summary.workerCount}\n- merge=${summary.merge.strategy || 'none'}\n\n## Workers`);
     for (const worker of summary.workers) console.log(`- ${worker.id}: ${worker.title} commands=${worker.commands.length} evidence=${worker.evidenceContract.length}`);
   }
   process.exit(0);
@@ -855,7 +855,7 @@ async function launchSynthesizer(workerSummaryPath, workerRuns, attempt = 0) {
   }]));
   const workerNames = expectedWorkerRoleIds.join(', ');
   const retryHint = attempt ? `\n\nRetry attempt ${attempt}: the previous synthesizer attempt did not satisfy the harness gates. Mention these worker IDs (${workerNames}) and explicitly accept/reject/downgrade disputed claims.\n` : '';
-  const prompt = `Role: conflict synthesizer. You are the sequential supervisor after the parallel Pi-RECON workers.\n\nRequired actions:\n1. Use tools to read ${workerSummaryPath} and inspect the worker outputs: ${JSON.stringify(workerOutputPaths)}.\n2. Reconcile worker disagreements across: ${workerNames}. Explicitly say which claims are accepted, rejected, or downgraded.\n3. Use the evidence order to resolve conflicts: live same-window runtime > platform runtime artifacts > network traffic > served assets > config > persisted artifacts/source/comments.\n4. Cover plan focus (${platformFocus.join(', ')}), same-window freshness/gaps when applicable, and Pi-RECON orchestration.\n5. Cite the hard-score/scoreboard artifact when applicable, same-window-live artifact when applicable, and at least one .repi-harness/evidence/remote artifact path per plan focus.\n6. Output exactly these sections: Outcome / Key Evidence / Verification / Next Step.\n7. Do not edit files.${retryHint}${boundedWork}${requiredCitations}`;
+  const prompt = `Role: conflict synthesizer. You are the sequential supervisor after the parallel REPI workers.\n\nRequired actions:\n1. Use tools to read ${workerSummaryPath} and inspect the worker outputs: ${JSON.stringify(workerOutputPaths)}.\n2. Reconcile worker disagreements across: ${workerNames}. Explicitly say which claims are accepted, rejected, or downgraded.\n3. Use the evidence order to resolve conflicts: live same-window runtime > platform runtime artifacts > network traffic > served assets > config > persisted artifacts/source/comments.\n4. Cover plan focus (${platformFocus.join(', ')}), same-window freshness/gaps when applicable, and REPI orchestration.\n5. Cite the hard-score/scoreboard artifact when applicable, same-window-live artifact when applicable, and at least one .repi-harness/evidence/remote artifact path per plan focus.\n6. Output exactly these sections: Outcome / Key Evidence / Verification / Next Step.\n7. Do not edit files.${retryHint}${boundedWork}${requiredCitations}`;
   const args = [
     '--recon',
     '--provider', provider,
@@ -1213,7 +1213,7 @@ const roleFailureRepairRows = allRuns
 const failureLedgerEvents = roleFailureRepairRows.map((row) => row.failure);
 const repairQueue = roleFailureRepairRows.map((row) => row.repair);
 const result = {
-  target: 'Pi-RECON multi-agent parallel dogfood against hardest real-platform evidence',
+  target: 'REPI multi-agent parallel dogfood against hardest real-platform evidence',
   profile: 'agent-parallel-dogfood',
   verdict,
   generatedAt: new Date().toISOString(),
@@ -1235,7 +1235,7 @@ const result = {
     planJson: planJsonPath || '',
     planId: loadedParallelPlan?.planId || '',
     source: loadedParallelPlan?.source || 'builtin-agent-dogfood',
-    target: loadedParallelPlan?.target || 'Pi-RECON parallel dogfood',
+    target: loadedParallelPlan?.target || 'REPI parallel dogfood',
     workerCount: roles.length,
     workerIds: roles.map((role) => role.id),
     merge: loadedParallelPlan?.merge || defaultMergeContract(),
@@ -1321,7 +1321,7 @@ await writeFile(join(outDir, 'result.json'), `${JSON.stringify(result, null, 2)}
 await writeFile(join(outDir, 'failure-ledger.jsonl'), `${failureLedgerEvents.map((event) => JSON.stringify(event)).join('\n')}${failureLedgerEvents.length ? '\n' : ''}`);
 await writeFile(join(outDir, 'repair-queue.jsonl'), `${repairQueue.map((item) => JSON.stringify(item)).join('\n')}${repairQueue.length ? '\n' : ''}`);
 const md = [
-  '# Pi-RECON Parallel Agent Dogfood Artifact',
+  '# REPI Parallel Agent Dogfood Artifact',
   '',
   `verdict: ${verdict}`,
   `provider: ${provider}`,

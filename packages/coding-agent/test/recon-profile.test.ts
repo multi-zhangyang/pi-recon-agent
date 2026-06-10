@@ -12,9 +12,9 @@ import {
 } from "../src/core/recon-profile.ts";
 
 const ENV_AGENT_DIR = "REPI_CODING_AGENT_DIR";
-const ENV_BRANCH_ID = "PI_RECON_BRANCH_ID";
+const ENV_BRANCH_ID = "REPI_BRANCH_ID";
 
-describe("Pi-RECON kernel profile", () => {
+describe("REPI kernel profile", () => {
 	let tempDir: string;
 	let agentDir: string;
 	let previousAgentDir: string | undefined;
@@ -190,7 +190,7 @@ describe("Pi-RECON kernel profile", () => {
 		expect(result.errors).toEqual([]);
 	});
 
-	it("returns a Pi-RECON owned compaction result with a resume contract", async () => {
+	it("returns a REPI owned compaction result with a resume contract", async () => {
 		const commands = new Map<string, unknown>();
 		const tools = new Map<string, unknown>();
 		const handlers = new Map<string, unknown[]>();
@@ -254,7 +254,7 @@ describe("Pi-RECON kernel profile", () => {
 		expect(compaction).toBeDefined();
 		expect(compaction?.firstKeptEntryId).toBe("entry-keep");
 		expect(compaction?.tokensBefore).toBe(4242);
-		expect(compaction?.summary).toContain("# Pi-RECON Compaction Summary");
+		expect(compaction?.summary).toContain("# REPI Compaction Summary");
 		expect(compaction?.summary).toContain("kind: pi-recon-compaction");
 		expect(compaction?.summary).toContain("re_context resume");
 		expect(compaction?.summary).toContain("re_operator plan");
@@ -306,7 +306,7 @@ describe("Pi-RECON kernel profile", () => {
 		expect(String(telemetry?.details.path)).toContain("compaction-auto-resume-board.md");
 		expect(sentMessages).toHaveLength(1);
 		expect(sentMessages[0]?.message.customType).toBe("pi-recon-auto-resume");
-		expect(sentMessages[0]?.message.content).toContain("Pi-RECON Auto Resume Trigger");
+		expect(sentMessages[0]?.message.content).toContain("REPI Auto Resume Trigger");
 		expect(sentMessages[0]?.message.content).toContain("bounded_resume_commands");
 		expect(sentMessages[0]?.options?.triggerTurn).toBe(true);
 
@@ -649,7 +649,7 @@ describe("Pi-RECON kernel profile", () => {
 		const kernelPath = /kernel_artifact: (.+)/.exec(kernelResult.content[0]?.text ?? "")?.[1]?.trim();
 		expect(kernelPath).toBeDefined();
 		expect(existsSync(kernelPath!)).toBe(true);
-		expect(readFileSync(kernelPath!, "utf-8")).toContain("Pi-RECON Execution Kernel Artifact");
+		expect(readFileSync(kernelPath!, "utf-8")).toContain("REPI Execution Kernel Artifact");
 		expect(readFileSync(join(agentDir, "recon", "memory", "execution-kernel.md"), "utf-8")).toContain(
 			"Execution Kernel",
 		);
@@ -679,7 +679,7 @@ describe("Pi-RECON kernel profile", () => {
 		const decisionPath = /decision_artifact: (.+)/.exec(decisionResult.content[0]?.text ?? "")?.[1]?.trim();
 		expect(decisionPath).toBeDefined();
 		expect(existsSync(decisionPath!)).toBe(true);
-		expect(readFileSync(decisionPath!, "utf-8")).toContain("Pi-RECON Decision Core Artifact");
+		expect(readFileSync(decisionPath!, "utf-8")).toContain("REPI Decision Core Artifact");
 		expect(readFileSync(join(agentDir, "recon", "memory", "decision-core.md"), "utf-8")).toContain("Decision Core");
 		const missionAfterDecision = JSON.parse(
 			readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8"),
@@ -698,7 +698,7 @@ describe("Pi-RECON kernel profile", () => {
 		const decisionRunPath = /decision_artifact: (.+)/.exec(decisionRun.content[0]?.text ?? "")?.[1]?.trim();
 		expect(decisionRunPath).toBeDefined();
 		expect(existsSync(decisionRunPath!)).toBe(true);
-		expect(readFileSync(decisionRunPath!, "utf-8")).toContain("Pi-RECON Decision Core Artifact");
+		expect(readFileSync(decisionRunPath!, "utf-8")).toContain("REPI Decision Core Artifact");
 		expect(readFileSync(join(agentDir, "recon", "memory", "decision-core.md"), "utf-8")).toContain("## Executed");
 
 		const liveBrowserTool = tools.get("re_live_browser") as {
@@ -722,7 +722,7 @@ describe("Pi-RECON kernel profile", () => {
 		const browserPath = /browser_artifact: (.+)/.exec(browserPlan.content[0]?.text ?? "")?.[1]?.trim();
 		expect(browserPath).toBeDefined();
 		expect(existsSync(browserPath!)).toBe(true);
-		expect(readFileSync(browserPath!, "utf-8")).toContain("Pi-RECON Live Browser Artifact");
+		expect(readFileSync(browserPath!, "utf-8")).toContain("REPI Live Browser Artifact");
 		const missionAfterBrowser = JSON.parse(
 			readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8"),
 		) as { gates: Array<{ name: string; status: string }> };
@@ -752,7 +752,7 @@ describe("Pi-RECON kernel profile", () => {
 		const webAuthzPath = /web_authz_artifact: (.+)/.exec(webAuthzPlan.content[0]?.text ?? "")?.[1]?.trim();
 		expect(webAuthzPath).toBeDefined();
 		expect(existsSync(webAuthzPath!)).toBe(true);
-		expect(readFileSync(webAuthzPath!, "utf-8")).toContain("Pi-RECON Web Authz State Artifact");
+		expect(readFileSync(webAuthzPath!, "utf-8")).toContain("REPI Web Authz State Artifact");
 		const missionAfterWebAuthz = JSON.parse(
 			readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8"),
 		) as { gates: Array<{ name: string; status: string }> };
@@ -781,7 +781,7 @@ describe("Pi-RECON kernel profile", () => {
 		const exploitLabPath = /exploit_lab_artifact: (.+)/.exec(exploitLabPlan.content[0]?.text ?? "")?.[1]?.trim();
 		expect(exploitLabPath).toBeDefined();
 		expect(existsSync(exploitLabPath!)).toBe(true);
-		expect(readFileSync(exploitLabPath!, "utf-8")).toContain("Pi-RECON Exploit Lab Artifact");
+		expect(readFileSync(exploitLabPath!, "utf-8")).toContain("REPI Exploit Lab Artifact");
 		const missionAfterExploitLab = JSON.parse(
 			readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8"),
 		) as { gates: Array<{ name: string; status: string }> };
@@ -812,7 +812,7 @@ describe("Pi-RECON kernel profile", () => {
 		const mobilePath = /mobile_runtime_artifact: (.+)/.exec(mobilePlan.content[0]?.text ?? "")?.[1]?.trim();
 		expect(mobilePath).toBeDefined();
 		expect(existsSync(mobilePath!)).toBe(true);
-		expect(readFileSync(mobilePath!, "utf-8")).toContain("Pi-RECON Mobile Runtime Artifact");
+		expect(readFileSync(mobilePath!, "utf-8")).toContain("REPI Mobile Runtime Artifact");
 		const missionAfterMobile = JSON.parse(
 			readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8"),
 		) as { gates: Array<{ name: string; status: string }> };
@@ -843,7 +843,7 @@ describe("Pi-RECON kernel profile", () => {
 		const nativePath = /native_runtime_artifact: (.+)/.exec(nativePlan.content[0]?.text ?? "")?.[1]?.trim();
 		expect(nativePath).toBeDefined();
 		expect(existsSync(nativePath!)).toBe(true);
-		expect(readFileSync(nativePath!, "utf-8")).toContain("Pi-RECON Native Runtime Artifact");
+		expect(readFileSync(nativePath!, "utf-8")).toContain("REPI Native Runtime Artifact");
 		const missionAfterNative = JSON.parse(
 			readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8"),
 		) as { gates: Array<{ name: string; status: string }> };
@@ -900,7 +900,7 @@ describe("Pi-RECON kernel profile", () => {
 		const artifactPath = /evidence_artifact: (.+)/.exec(laneRun.content[0]?.text ?? "")?.[1]?.trim();
 		expect(artifactPath).toBeDefined();
 		expect(existsSync(artifactPath!)).toBe(true);
-		expect(readFileSync(artifactPath!, "utf-8")).toContain("Pi-RECON Lane Run Artifact");
+		expect(readFileSync(artifactPath!, "utf-8")).toContain("REPI Lane Run Artifact");
 		expect(readFileSync(artifactPath!, "utf-8")).toContain("## Auto analysis");
 		expect(readFileSync(join(agentDir, "recon", "evidence", "ledger.md"), "utf-8")).toContain(
 			"lane-run control-flow exit 0",
@@ -935,7 +935,7 @@ describe("Pi-RECON kernel profile", () => {
 		const playbookPath = /playbook_path: (.+)/.exec(laneRunAuto.content[0]?.text ?? "")?.[1]?.trim();
 		expect(playbookPath).toBeDefined();
 		expect(existsSync(playbookPath!)).toBe(true);
-		expect(readFileSync(playbookPath!, "utf-8")).toContain("Pi-RECON Auto Playbook");
+		expect(readFileSync(playbookPath!, "utf-8")).toContain("REPI Auto Playbook");
 		expect(readFileSync(playbookPath!, "utf-8")).toContain("quality_score:");
 		expect(readFileSync(playbookPath!, "utf-8")).toContain("auto_advance_count:");
 		expect(readFileSync(join(agentDir, "recon", "memory", "field-journal.md"), "utf-8")).toContain(
@@ -986,7 +986,7 @@ describe("Pi-RECON kernel profile", () => {
 		const mapArtifactPath = /map_artifact: (.+)/.exec(passiveMap.content[0]?.text ?? "")?.[1]?.trim();
 		expect(mapArtifactPath).toBeDefined();
 		expect(existsSync(mapArtifactPath!)).toBe(true);
-		expect(readFileSync(mapArtifactPath!, "utf-8")).toContain("Pi-RECON Passive Map Artifact");
+		expect(readFileSync(mapArtifactPath!, "utf-8")).toContain("REPI Passive Map Artifact");
 		expect(readFileSync(join(agentDir, "recon", "evidence", "ledger.md"), "utf-8")).toContain("passive-map");
 
 		const mapInferredPlan = await laneTool.execute("tool-call-id", {
@@ -1008,7 +1008,7 @@ describe("Pi-RECON kernel profile", () => {
 		writeFileSync(
 			join(agentDir, "recon", "tools", "tool-index.md"),
 			[
-				"# Pi-RECON Tool Index",
+				"# REPI Tool Index",
 				"",
 				"| Tool | Present | Path | Version probe |",
 				"|---|---:|---|---|",
@@ -1093,11 +1093,11 @@ describe("Pi-RECON kernel profile", () => {
 		const graphPath = /graph_artifact: (.+)/.exec(graphResult.content[0]?.text ?? "")?.[1]?.trim();
 		expect(graphPath).toBeDefined();
 		expect(existsSync(graphPath!)).toBe(true);
-		expect(readFileSync(graphPath!, "utf-8")).toContain("Pi-RECON Attack Graph Artifact");
+		expect(readFileSync(graphPath!, "utf-8")).toContain("REPI Attack Graph Artifact");
 		expect(readFileSync(graphPath!, "utf-8")).toContain("## Nodes");
 		expect(readFileSync(join(agentDir, "recon", "evidence", "ledger.md"), "utf-8")).toContain("attack-graph");
 		const graphShow = await graphTool.execute("tool-call-id", { action: "show" });
-		expect(graphShow.content[0]?.text).toContain("Pi-RECON Attack Graph Artifact");
+		expect(graphShow.content[0]?.text).toContain("REPI Attack Graph Artifact");
 
 		const chainTool = tools.get("re_exploit_chain") as {
 			execute: (
@@ -1123,7 +1123,7 @@ describe("Pi-RECON kernel profile", () => {
 		const chainPath = /chain_artifact: (.+)/.exec(chainPlan.content[0]?.text ?? "")?.[1]?.trim();
 		expect(chainPath).toBeDefined();
 		expect(existsSync(chainPath!)).toBe(true);
-		expect(readFileSync(chainPath!, "utf-8")).toContain("Pi-RECON Exploit Chain Artifact");
+		expect(readFileSync(chainPath!, "utf-8")).toContain("REPI Exploit Chain Artifact");
 		expect(readFileSync(chainPath!, "utf-8")).toContain("primitive_or_state_transition");
 		const missionAfterChain = JSON.parse(
 			readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8"),
@@ -1160,11 +1160,11 @@ describe("Pi-RECON kernel profile", () => {
 		const campaignPath = /campaign_artifact: (.+)/.exec(campaignResult.content[0]?.text ?? "")?.[1]?.trim();
 		expect(campaignPath).toBeDefined();
 		expect(existsSync(campaignPath!)).toBe(true);
-		expect(readFileSync(campaignPath!, "utf-8")).toContain("Pi-RECON Campaign Artifact");
+		expect(readFileSync(campaignPath!, "utf-8")).toContain("REPI Campaign Artifact");
 		expect(readFileSync(campaignPath!, "utf-8")).toContain("campaign_graph:");
 		expect(readFileSync(join(agentDir, "recon", "evidence", "ledger.md"), "utf-8")).toContain("campaign-plan");
 		const campaignShow = await campaignTool.execute("tool-call-id", { action: "show" });
-		expect(campaignShow.content[0]?.text).toContain("Pi-RECON Campaign Artifact");
+		expect(campaignShow.content[0]?.text).toContain("REPI Campaign Artifact");
 
 		const operationTool = tools.get("re_operation") as {
 			execute: (
@@ -1192,7 +1192,7 @@ describe("Pi-RECON kernel profile", () => {
 		const operationPlanPath = /operation_artifact: (.+)/.exec(operationPlan.content[0]?.text ?? "")?.[1]?.trim();
 		expect(operationPlanPath).toBeDefined();
 		expect(existsSync(operationPlanPath!)).toBe(true);
-		expect(readFileSync(operationPlanPath!, "utf-8")).toContain("Pi-RECON Operation Artifact");
+		expect(readFileSync(operationPlanPath!, "utf-8")).toContain("REPI Operation Artifact");
 
 		const operationRun = await operationTool.execute("tool-call-id", {
 			action: "run",
@@ -1208,7 +1208,7 @@ describe("Pi-RECON kernel profile", () => {
 		const operationRunPath = /operation_artifact: (.+)/.exec(operationRun.content[0]?.text ?? "")?.[1]?.trim();
 		expect(operationRunPath).toBeDefined();
 		expect(existsSync(operationRunPath!)).toBe(true);
-		expect(readFileSync(operationRunPath!, "utf-8")).toContain("Pi-RECON Operation Artifact");
+		expect(readFileSync(operationRunPath!, "utf-8")).toContain("REPI Operation Artifact");
 		expect(readFileSync(join(agentDir, "recon", "evidence", "ledger.md"), "utf-8")).toContain("operation-run");
 		const missionAfterOperation = JSON.parse(
 			readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8"),
@@ -1238,7 +1238,7 @@ describe("Pi-RECON kernel profile", () => {
 		const delegatePath = /delegation_artifact: (.+)/.exec(delegatePlan.content[0]?.text ?? "")?.[1]?.trim();
 		expect(delegatePath).toBeDefined();
 		expect(existsSync(delegatePath!)).toBe(true);
-		expect(readFileSync(delegatePath!, "utf-8")).toContain("Pi-RECON Delegation Artifact");
+		expect(readFileSync(delegatePath!, "utf-8")).toContain("REPI Delegation Artifact");
 		expect(readFileSync(delegatePath!, "utf-8")).toContain("worker_packets:");
 		const delegateMerge = await delegateTool.execute("tool-call-id", { action: "merge" });
 		expect(delegateMerge.content[0]?.text).toContain("delegation_plan:");
@@ -1276,7 +1276,7 @@ describe("Pi-RECON kernel profile", () => {
 		const swarmPath = /swarm_artifact: (.+)/.exec(swarmPlan.content[0]?.text ?? "")?.[1]?.trim();
 		expect(swarmPath).toBeDefined();
 		expect(existsSync(swarmPath!)).toBe(true);
-		expect(readFileSync(swarmPath!, "utf-8")).toContain("Pi-RECON Swarm Artifact");
+		expect(readFileSync(swarmPath!, "utf-8")).toContain("REPI Swarm Artifact");
 		const swarmRun = await swarmTool.execute("tool-call-id", {
 			action: "run",
 			target: "https://target.local/app",
@@ -1344,7 +1344,7 @@ describe("Pi-RECON kernel profile", () => {
 		const supervisorPath = /supervisor_artifact: (.+)/.exec(supervisorReview.content[0]?.text ?? "")?.[1]?.trim();
 		expect(supervisorPath).toBeDefined();
 		expect(existsSync(supervisorPath!)).toBe(true);
-		expect(readFileSync(supervisorPath!, "utf-8")).toContain("Pi-RECON Supervisor Artifact");
+		expect(readFileSync(supervisorPath!, "utf-8")).toContain("REPI Supervisor Artifact");
 		expect(readFileSync(supervisorPath!, "utf-8")).toContain("worker_reviews:");
 		expect(readFileSync(supervisorPath!, "utf-8")).toContain("commander_merge_queue:");
 		expect(readFileSync(supervisorPath!, "utf-8")).toContain("commander_merge_budget:");
@@ -1380,7 +1380,7 @@ describe("Pi-RECON kernel profile", () => {
 		const reflectPlanPath = /reflection_artifact: (.+)/.exec(reflectPlan.content[0]?.text ?? "")?.[1]?.trim();
 		expect(reflectPlanPath).toBeDefined();
 		expect(existsSync(reflectPlanPath!)).toBe(true);
-		expect(readFileSync(reflectPlanPath!, "utf-8")).toContain("Pi-RECON Reflection Artifact");
+		expect(readFileSync(reflectPlanPath!, "utf-8")).toContain("REPI Reflection Artifact");
 
 		const reflectWrite = await reflectTool.execute("tool-call-id", { action: "write" });
 		expect(reflectWrite.content[0]?.text).toContain("reflection_cycle:");
@@ -1393,7 +1393,7 @@ describe("Pi-RECON kernel profile", () => {
 		const reflectPlaybookPath = /playbook_path: (.+)/.exec(reflectWrite.content[0]?.text ?? "")?.[1]?.trim();
 		expect(reflectPlaybookPath).toBeDefined();
 		expect(existsSync(reflectPlaybookPath!)).toBe(true);
-		expect(readFileSync(reflectPlaybookPath!, "utf-8")).toContain("Pi-RECON Reflection Playbook");
+		expect(readFileSync(reflectPlaybookPath!, "utf-8")).toContain("REPI Reflection Playbook");
 		expect(readFileSync(reflectPlaybookPath!, "utf-8")).toContain("Worker routing / promotion");
 		expect(readFileSync(join(agentDir, "recon", "memory", "field-journal.md"), "utf-8")).toContain(
 			"supervisor-reflection",
@@ -1435,7 +1435,7 @@ describe("Pi-RECON kernel profile", () => {
 		const contextPackPath = /context_artifact: (.+)/.exec(contextPack.content[0]?.text ?? "")?.[1]?.trim();
 		expect(contextPackPath).toBeDefined();
 		expect(existsSync(contextPackPath!)).toBe(true);
-		expect(readFileSync(contextPackPath!, "utf-8")).toContain("Pi-RECON Context Pack Artifact");
+		expect(readFileSync(contextPackPath!, "utf-8")).toContain("REPI Context Pack Artifact");
 		expect(readFileSync(contextPackPath!, "utf-8")).toContain("## Mission snapshot");
 
 		const contextResume = await contextTool.execute("tool-call-id", { action: "resume" });
@@ -1475,7 +1475,7 @@ describe("Pi-RECON kernel profile", () => {
 		const operatorPlanPath = /operator_artifact: (.+)/.exec(operatorPlan.content[0]?.text ?? "")?.[1]?.trim();
 		expect(operatorPlanPath).toBeDefined();
 		expect(existsSync(operatorPlanPath!)).toBe(true);
-		expect(readFileSync(operatorPlanPath!, "utf-8")).toContain("Pi-RECON Operator Artifact");
+		expect(readFileSync(operatorPlanPath!, "utf-8")).toContain("REPI Operator Artifact");
 
 		const operatorDispatch = await operatorTool.execute("tool-call-id", { action: "dispatch", maxSteps: 1 });
 		expect(operatorDispatch.content[0]?.text).toContain("operator_queue:");
@@ -1509,7 +1509,7 @@ describe("Pi-RECON kernel profile", () => {
 		const verifierPath = /verifier_artifact: (.+)/.exec(verifierCheck.content[0]?.text ?? "")?.[1]?.trim();
 		expect(verifierPath).toBeDefined();
 		expect(existsSync(verifierPath!)).toBe(true);
-		expect(readFileSync(verifierPath!, "utf-8")).toContain("Pi-RECON Verifier Artifact");
+		expect(readFileSync(verifierPath!, "utf-8")).toContain("REPI Verifier Artifact");
 
 		const verifierMatrix = await verifierTool.execute("tool-call-id", { action: "matrix" });
 		expect(verifierMatrix.content[0]?.text).toContain("mode: matrix");
@@ -1542,7 +1542,7 @@ describe("Pi-RECON kernel profile", () => {
 		const compilerPath = /compiler_artifact: (.+)/.exec(compilerDraft.content[0]?.text ?? "")?.[1]?.trim();
 		expect(compilerPath).toBeDefined();
 		expect(existsSync(compilerPath!)).toBe(true);
-		expect(readFileSync(compilerPath!, "utf-8")).toContain("Pi-RECON Compiler Artifact");
+		expect(readFileSync(compilerPath!, "utf-8")).toContain("REPI Compiler Artifact");
 		const missionAfterCompiler = JSON.parse(
 			readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8"),
 		) as { gates: Array<{ name: string; status: string }> };
@@ -1566,7 +1566,7 @@ describe("Pi-RECON kernel profile", () => {
 		const replayPlanPath = /replay_artifact: (.+)/.exec(replayPlan.content[0]?.text ?? "")?.[1]?.trim();
 		expect(replayPlanPath).toBeDefined();
 		expect(existsSync(replayPlanPath!)).toBe(true);
-		expect(readFileSync(replayPlanPath!, "utf-8")).toContain("Pi-RECON Replayer Artifact");
+		expect(readFileSync(replayPlanPath!, "utf-8")).toContain("REPI Replayer Artifact");
 
 		const replayRun = await replayerTool.execute("tool-call-id", { action: "run", maxSteps: 2 });
 		expect(replayRun.content[0]?.text).toContain("replay_matrix:");
@@ -1577,7 +1577,7 @@ describe("Pi-RECON kernel profile", () => {
 		const replayRunPath = /replay_artifact: (.+)/.exec(replayRun.content[0]?.text ?? "")?.[1]?.trim();
 		expect(replayRunPath).toBeDefined();
 		expect(existsSync(replayRunPath!)).toBe(true);
-		expect(readFileSync(replayRunPath!, "utf-8")).toContain("Pi-RECON Replayer Artifact");
+		expect(readFileSync(replayRunPath!, "utf-8")).toContain("REPI Replayer Artifact");
 		const missionAfterReplay = JSON.parse(
 			readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8"),
 		) as { gates: Array<{ name: string; status: string }> };
@@ -1603,7 +1603,7 @@ describe("Pi-RECON kernel profile", () => {
 		const autofixPath = /autofix_artifact: (.+)/.exec(autofixPlan.content[0]?.text ?? "")?.[1]?.trim();
 		expect(autofixPath).toBeDefined();
 		expect(existsSync(autofixPath!)).toBe(true);
-		expect(readFileSync(autofixPath!, "utf-8")).toContain("Pi-RECON Autofix Artifact");
+		expect(readFileSync(autofixPath!, "utf-8")).toContain("REPI Autofix Artifact");
 		const missionAfterAutofix = JSON.parse(
 			readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8"),
 		) as { gates: Array<{ name: string; status: string }> };
@@ -1695,7 +1695,7 @@ describe("Pi-RECON kernel profile", () => {
 		const proofLoopPlanPath = /proof_loop_artifact: (.+)/.exec(proofLoopPlan.content[0]?.text ?? "")?.[1]?.trim();
 		expect(proofLoopPlanPath).toBeDefined();
 		expect(existsSync(proofLoopPlanPath!)).toBe(true);
-		expect(readFileSync(proofLoopPlanPath!, "utf-8")).toContain("Pi-RECON Proof Loop Artifact");
+		expect(readFileSync(proofLoopPlanPath!, "utf-8")).toContain("REPI Proof Loop Artifact");
 		expect(readFileSync(proofLoopPlanPath!, "utf-8")).toContain("specialist_queue:");
 
 		const proofLoopRun = await proofLoopTool.execute("tool-call-id", {
@@ -1726,7 +1726,7 @@ describe("Pi-RECON kernel profile", () => {
 		const proofLoopRunPath = /proof_loop_artifact: (.+)/.exec(proofLoopRun.content[0]?.text ?? "")?.[1]?.trim();
 		expect(proofLoopRunPath).toBeDefined();
 		expect(existsSync(proofLoopRunPath!)).toBe(true);
-		expect(readFileSync(proofLoopRunPath!, "utf-8")).toContain("Pi-RECON Proof Loop Artifact");
+		expect(readFileSync(proofLoopRunPath!, "utf-8")).toContain("REPI Proof Loop Artifact");
 		expect(readFileSync(proofLoopRunPath!, "utf-8")).toContain("swarm_bridge:");
 		const missionAfterProofLoop = JSON.parse(
 			readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8"),
@@ -1770,7 +1770,7 @@ describe("Pi-RECON kernel profile", () => {
 		const knowledgePath = /knowledge_artifact: (.+)/.exec(knowledgeGraph.content[0]?.text ?? "")?.[1]?.trim();
 		expect(knowledgePath).toBeDefined();
 		expect(existsSync(knowledgePath!)).toBe(true);
-		expect(readFileSync(knowledgePath!, "utf-8")).toContain("Pi-RECON Knowledge Graph Artifact");
+		expect(readFileSync(knowledgePath!, "utf-8")).toContain("REPI Knowledge Graph Artifact");
 		expect(readFileSync(join(agentDir, "recon", "memory", "knowledge-graph-index.md"), "utf-8")).toContain(
 			"Knowledge Graph Index",
 		);
@@ -1810,7 +1810,7 @@ describe("Pi-RECON kernel profile", () => {
 		const harnessPath = /harness_artifact: (.+)/.exec(harness.content[0]?.text ?? "")?.[1]?.trim();
 		expect(harnessPath).toBeDefined();
 		expect(existsSync(harnessPath!)).toBe(true);
-		expect(readFileSync(harnessPath!, "utf-8")).toContain("Pi-RECON Harness Artifact");
+		expect(readFileSync(harnessPath!, "utf-8")).toContain("REPI Harness Artifact");
 
 		const migratedLanePlan = await laneTool.execute("tool-call-id", {
 			action: "plan",
@@ -2044,7 +2044,7 @@ describe("Pi-RECON kernel profile", () => {
 		const artifactPath = /exploit_lab_artifact: (.+)/.exec(result.content[0]?.text ?? "")?.[1]?.trim();
 		expect(artifactPath).toBeDefined();
 		expect(existsSync(artifactPath!)).toBe(true);
-		expect(readFileSync(artifactPath!, "utf-8")).toContain("Pi-RECON Exploit Lab Artifact");
+		expect(readFileSync(artifactPath!, "utf-8")).toContain("REPI Exploit Lab Artifact");
 		const missionAfterLab = JSON.parse(readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8")) as {
 			gates: Array<{ name: string; status: string }>;
 		};
@@ -2125,7 +2125,7 @@ describe("Pi-RECON kernel profile", () => {
 		const artifactPath = /mobile_runtime_artifact: (.+)/.exec(result.content[0]?.text ?? "")?.[1]?.trim();
 		expect(artifactPath).toBeDefined();
 		expect(existsSync(artifactPath!)).toBe(true);
-		expect(readFileSync(artifactPath!, "utf-8")).toContain("Pi-RECON Mobile Runtime Artifact");
+		expect(readFileSync(artifactPath!, "utf-8")).toContain("REPI Mobile Runtime Artifact");
 		const missionAfterMobile = JSON.parse(
 			readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8"),
 		) as {
@@ -2160,7 +2160,7 @@ describe("Pi-RECON kernel profile", () => {
 						"[web-authz-run] [web-authz-matrix] route=/api/users/123 principals=anon,A,B states=3 same_status=false unique_bodies=3 vector=anon:401:aaa,A:200:bbb,B:200:ccc",
 						"[web-authz-run] [web-authz-object] route=/api/users/123 owner=A principal_a_status=200 principal_b_status=200 same_body_ab=false alt_status=200 potential_bola=true",
 						"[web-authz-run] [web-authz-sequence] principal=A steps=2 statuses=200,200 hashes=bbb,ddd",
-						"[web-authz-run] [web-authz-rollback] status=skipped reason=set_PI_RECON_AUTHZ_MUTATE=1_and_PI_RECON_MUTATION_URL",
+						"[web-authz-run] [web-authz-rollback] status=skipped reason=set_REPI_AUTHZ_MUTATE=1_and_REPI_MUTATION_URL",
 						"[web-authz-run] [web-authz-artifact] /tmp/pi-recon-web-authz-state.json",
 					].join("\n"),
 					stderr: "",
@@ -2206,7 +2206,7 @@ describe("Pi-RECON kernel profile", () => {
 		const artifactPath = /web_authz_artifact: (.+)/.exec(result.content[0]?.text ?? "")?.[1]?.trim();
 		expect(artifactPath).toBeDefined();
 		expect(existsSync(artifactPath!)).toBe(true);
-		expect(readFileSync(artifactPath!, "utf-8")).toContain("Pi-RECON Web Authz State Artifact");
+		expect(readFileSync(artifactPath!, "utf-8")).toContain("REPI Web Authz State Artifact");
 		const missionAfterWebAuthz = JSON.parse(
 			readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8"),
 		) as {
@@ -2291,7 +2291,7 @@ describe("Pi-RECON kernel profile", () => {
 		const artifactPath = /native_runtime_artifact: (.+)/.exec(result.content[0]?.text ?? "")?.[1]?.trim();
 		expect(artifactPath).toBeDefined();
 		expect(existsSync(artifactPath!)).toBe(true);
-		expect(readFileSync(artifactPath!, "utf-8")).toContain("Pi-RECON Native Runtime Artifact");
+		expect(readFileSync(artifactPath!, "utf-8")).toContain("REPI Native Runtime Artifact");
 		const missionAfterNative = JSON.parse(
 			readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8"),
 		) as {

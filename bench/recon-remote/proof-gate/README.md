@@ -1,6 +1,6 @@
 # Remote proof gate
 
-Cross-platform live gate for Pi-RECON remote capability. It reruns Bilibili, Xiaohongshu, Douyin, and optionally agent-dogfood, then generates a hard-score scoreboard and checks concrete gates.
+Cross-platform live gate for REPI remote capability. It reruns Bilibili, Xiaohongshu, Douyin, and optionally agent-dogfood, then generates a hard-score scoreboard and checks concrete gates.
 
 ## Usage
 

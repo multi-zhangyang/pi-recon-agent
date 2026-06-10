@@ -1,6 +1,6 @@
 # Agent dogfood benchmark
 
-Runs the actual Pi-RECON agent (`./pi-test.sh --recon`) against the latest remote benchmark evidence. This is the harness for proving the agent can call a real provider/model, use tools, read evidence, run hard-score, understand the current `same-window-live` frontier, and produce a platform-specific reverse/pentest roadmap instead of relying on external manual analysis.
+Runs the actual REPI agent (`./pi-test.sh --recon`) against the latest remote benchmark evidence. This is the harness for proving the agent can call a real provider/model, use tools, read evidence, run hard-score, understand the current `same-window-live` frontier, and produce a platform-specific reverse/pentest roadmap instead of relying on external manual analysis.
 
 ## Usage
 

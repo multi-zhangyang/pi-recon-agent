@@ -5,6 +5,6 @@ ROOT="$(cd "$ROOT" && pwd)"
 BIN_DIR="${2:-/usr/local/bin}"
 cat >&2 <<'MSG'
 install-recon-pi.sh is deprecated.
-Pi-RECON no longer takes over the `pi` command. Installing the independent `repi` launcher instead.
+REPI no longer takes over the `pi` command. Installing the independent `repi` launcher instead.
 MSG
 exec "$ROOT/scripts/reverse-agent/install-repi.sh" "$ROOT" "$BIN_DIR"

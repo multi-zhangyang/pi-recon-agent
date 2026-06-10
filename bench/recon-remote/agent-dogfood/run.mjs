@@ -16,7 +16,7 @@ const extraArgs = (process.env.RECON_AGENT_EXTRA_ARGS || '').split(/\s+/).filter
 const prompt = process.env.RECON_AGENT_PROMPT || '';
 
 if (process.argv.includes('--help') || process.argv.includes('-h') || !model) {
-  console.log(`Pi-RECON agent dogfood benchmark\n\nUsage:\n  RECON_AGENT_PROVIDER=openai RECON_AGENT_MODEL=gpt-4.1 node bench/recon-remote/agent-dogfood/run.mjs\n  node bench/recon-remote/agent-dogfood/run.mjs <provider> <model>\n\nPurpose:\n  Runs the Pi-RECON agent itself against latest remote benchmark evidence, requiring a real model/provider call.\n\nEnvironment:\n  RECON_AGENT_PROVIDER=<provider>       default: aigateway\n  RECON_AGENT_MODEL=<model>             required unless argv[3] or ANTHROPIC_MODEL is set\n  RECON_AGENT_THINKING=low\n  RECON_AGENT_TOOLS=read,grep,find,ls,bash\n  RECON_AGENT_TIMEOUT_MS=240000\n  RECON_AGENT_CMD=./pi-test.sh\n  RECON_AGENT_EXTRA_ARGS='--offline'    optional extra CLI args\n  RECON_AGENT_PROMPT='<custom prompt>'  optional prompt override\n\nOutput:\n  .repi-harness/evidence/remote/agent-dogfood/<timestamp>/\n`);
+  console.log(`REPI agent dogfood benchmark\n\nUsage:\n  RECON_AGENT_PROVIDER=openai RECON_AGENT_MODEL=gpt-4.1 node bench/recon-remote/agent-dogfood/run.mjs\n  node bench/recon-remote/agent-dogfood/run.mjs <provider> <model>\n\nPurpose:\n  Runs the REPI agent itself against latest remote benchmark evidence, requiring a real model/provider call.\n\nEnvironment:\n  RECON_AGENT_PROVIDER=<provider>       default: aigateway\n  RECON_AGENT_MODEL=<model>             required unless argv[3] or ANTHROPIC_MODEL is set\n  RECON_AGENT_THINKING=low\n  RECON_AGENT_TOOLS=read,grep,find,ls,bash\n  RECON_AGENT_TIMEOUT_MS=240000\n  RECON_AGENT_CMD=./pi-test.sh\n  RECON_AGENT_EXTRA_ARGS='--offline'    optional extra CLI args\n  RECON_AGENT_PROMPT='<custom prompt>'  optional prompt override\n\nOutput:\n  .repi-harness/evidence/remote/agent-dogfood/<timestamp>/\n`);
   process.exit(model ? 0 : 2);
 }
 
@@ -98,7 +98,7 @@ const scoreRun = await run('node', ['bench/recon-remote/hard-score.mjs'], { time
 const scoreJson = safeJson(scoreRun.stdout);
 const scoreArtifact = scoreJson?.artifactDir || '';
 
-const dogfoodPrompt = prompt || `Pi-RECON dogfood benchmark. You are running inside the Pi-RECON --recon profile.\n\nRequired actions:\n1. Execute: node bench/recon-remote/hard-score.mjs\n2. Read the latest remote evidence and the scoreboard artifact ${scoreArtifact || '<latest hard-score>'}.\n3. Produce Outcome → Key Evidence → Verification → Next Step.\n4. Cover exactly these real-platform tracks: Bilibili WBI, Xiaohongshu x-s, Douyin a_bogus.\n5. Include concrete artifact paths and commands for the next hardest benchmark step.\n6. Do not edit files in this dogfood run.`;
+const dogfoodPrompt = prompt || `REPI dogfood benchmark. You are running inside the REPI --recon profile.\n\nRequired actions:\n1. Execute: node bench/recon-remote/hard-score.mjs\n2. Read the latest remote evidence and the scoreboard artifact ${scoreArtifact || '<latest hard-score>'}.\n3. Produce Outcome → Key Evidence → Verification → Next Step.\n4. Cover exactly these real-platform tracks: Bilibili WBI, Xiaohongshu x-s, Douyin a_bogus.\n5. Include concrete artifact paths and commands for the next hardest benchmark step.\n6. Do not edit files in this dogfood run.`;
 
 const agentArgs = [
   '--recon',
@@ -127,7 +127,7 @@ const verdict = agentRun.code === 0 && modelCalled && sectionsOk && platformsOk 
     ? 'agent-dogfood-partial'
     : 'agent-dogfood-failed';
 const result = {
-  target: 'Pi-RECON agent against latest remote benchmark evidence',
+  target: 'REPI agent against latest remote benchmark evidence',
   profile: 'agent-dogfood',
   verdict,
   generatedAt: new Date().toISOString(),
@@ -164,7 +164,7 @@ await writeFile(join(outDir, 'result.json'), `${JSON.stringify(result, null, 2)}
 await writeFile(join(outDir, 'stdout.txt'), redact(agentRun.stdout));
 await writeFile(join(outDir, 'stderr.txt'), redact(agentRun.stderr));
 const md = [
-  '# Pi-RECON Agent Dogfood Artifact',
+  '# REPI Agent Dogfood Artifact',
   '',
   `verdict: ${verdict}`,
   `provider: ${provider}`,
