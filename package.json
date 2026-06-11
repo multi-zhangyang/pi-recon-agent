@@ -72,7 +72,9 @@
 		"gate:repi-harness": "node scripts/reverse-agent/repi-top-harness.mjs . --strict",
 		"gate:repi-top-harness": "node scripts/reverse-agent/repi-top-harness.mjs . --strict",
 		"clean:repi-legacy-profile": "bash scripts/reverse-agent/clean-global-repi-profile.sh",
-		"gate:repi-product-surface": "node scripts/reverse-agent/repi-product-surface-audit.mjs . --strict"
+		"gate:repi-product-surface": "node scripts/reverse-agent/repi-product-surface-audit.mjs . --strict",
+		"gate:artifact-scope-filter": "node scripts/reverse-agent/artifact-scope-filter-gate.mjs . --strict",
+		"gate:memory-orchestrator": "node scripts/reverse-agent/memory-orchestrator-gate.mjs . --strict"
 	},
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "0.0.26",

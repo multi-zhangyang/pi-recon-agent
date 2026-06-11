@@ -1,0 +1,53 @@
+{
+  "kind": "repi-memory-orchestrator-fixture",
+  "schemaVersion": 1,
+  "description": "Fixture for MemoryOrchestratorV6 mandatory control loop coverage.",
+  "requiredGates": [
+    "MemoryOrchestratorV6",
+    "mandatory_memory_control_loop",
+    "pre_task_retrieve_before_operator",
+    "scope_filter_before_memory_injection",
+    "post_tool_writeback_contract",
+    "failure_success_feedback_closure",
+    "pre_compact_memory_snapshot",
+    "post_compact_resume_memory_injection",
+    "final_supervise_before_claim",
+    "memory_orchestrator_report_in_context_pack"
+  ],
+  "phases": [
+    "pre-task",
+    "pre-operator",
+    "post-tool",
+    "post-failure",
+    "post-success",
+    "pre-compact",
+    "post-compact",
+    "final"
+  ],
+  "scenarios": [
+    {
+      "id": "pre-task-retrieval-before-operator",
+      "phase": "pre-task",
+      "mustHaveStepIds": ["pre_task_retrieve", "scope_filter_before_injection"],
+      "mustHaveCommands": ["re_memory search-events", "re_memory sediment", "re_memory orchestrate pre-operator"]
+    },
+    {
+      "id": "post-tool-writeback-contract",
+      "phase": "post-tool",
+      "mustHaveStepIds": ["post_tool_writeback_contract"],
+      "mustHaveCommands": ["re_memory append outcome=partial"]
+    },
+    {
+      "id": "compact-resume-memory-injection",
+      "phase": "post-compact",
+      "mustHaveStepIds": ["pre_compact_snapshot", "post_compact_resume_memory_injection"],
+      "mustHaveCommands": ["re_context resume", "re_memory orchestrate pre-operator"]
+    },
+    {
+      "id": "final-supervise-before-claim",
+      "phase": "final",
+      "mustHaveStepIds": ["final_supervise_before_claim"],
+      "mustHaveCommands": ["re_memory supervise", "re_complete audit"]
+    }
+  ]
+}

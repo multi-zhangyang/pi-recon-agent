@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repi.local/schemas/reverse-agent/memory-orchestrator.schema.json",
+  "title": "REPI Memory Orchestrator V6",
+  "description": "MemoryOrchestratorV6 makes memory a mandatory harness control loop: pre_task_retrieve_before_operator, scope_filter_before_memory_injection, post_tool_writeback_contract, pre_compact_memory_snapshot, post_compact_resume_memory_injection, final_supervise_before_claim.",
+  "$defs": {
+    "MemoryScopeV1": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "sessionId", "cwd", "workspaceRoot", "branchId"],
+      "properties": {
+        "kind": { "const": "repi-memory-scope" },
+        "schemaVersion": { "const": 1 },
+        "missionId": { "type": "string" },
+        "sessionId": { "type": "string", "minLength": 1 },
+        "cwd": { "type": "string", "minLength": 1 },
+        "workspaceRoot": { "type": "string", "minLength": 1 },
+        "branchId": { "type": "string", "minLength": 1 },
+        "route": { "type": "string" },
+        "target": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "MemoryOrchestratorStepV6": {
+      "type": "object",
+      "required": ["id", "phase", "status", "title", "command", "reason", "blocking"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "phase": { "$ref": "#/$defs/MemoryOrchestratorPhaseV6" },
+        "status": { "enum": ["pass", "warn", "blocked", "pending"] },
+        "title": { "type": "string", "minLength": 1 },
+        "command": { "type": "string", "minLength": 1 },
+        "evidencePath": { "type": "string" },
+        "reason": { "type": "string", "minLength": 1 },
+        "blocking": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "MemoryOrchestratorPhaseV6": {
+      "enum": ["pre-task", "pre-operator", "post-tool", "post-failure", "post-success", "pre-compact", "post-compact", "final", "full"]
+    },
+    "MemoryOrchestratorReportV6": {
+      "type": "object",
+      "required": [
+        "kind",
+        "schemaVersion",
+        "generatedAt",
+        "MemoryOrchestratorV6",
+        "mandatory_memory_control_loop",
+        "phase",
+        "reportPath",
+        "currentScope",
+        "query",
+        "storeGrade",
+        "hashChainOk",
+        "retrievalReportPath",
+        "retrievalHitIds",
+        "vectorSearchReportPath",
+        "vectorHitIds",
+        "scopeIsolationReportPath",
+        "scopeBlockedEventIds",
+        "scopeWarnEventIds",
+        "artifactScopeFilterReportPath",
+        "artifactScopeBlockedArtifacts",
+        "injectionPacketPath",
+        "injectionEventIds",
+        "injectionCommands",
+        "feedbackClosureReportPath",
+        "feedbackPendingEventIds",
+        "supervisorReportPath",
+        "promotionEventIds",
+        "demotionEventIds",
+        "compactResumeLedgerPath",
+        "compactResumeStatus",
+        "steps",
+        "nextCommands",
+        "requiredGates",
+        "policy"
+      ],
+      "properties": {
+        "kind": { "const": "repi-memory-orchestrator-report" },
+        "schemaVersion": { "const": 1 },
+        "generatedAt": { "type": "string", "format": "date-time" },
+        "MemoryOrchestratorV6": { "const": true },
+        "mandatory_memory_control_loop": { "const": true },
+        "phase": { "$ref": "#/$defs/MemoryOrchestratorPhaseV6" },
+        "reportPath": { "type": "string", "minLength": 1 },
+        "currentScope": { "$ref": "#/$defs/MemoryScopeV1" },
+        "query": { "type": "string" },
+        "route": { "type": "string" },
+        "target": { "type": "string" },
+        "storeGrade": { "enum": ["pass", "repairable", "blocked"] },
+        "hashChainOk": { "type": "boolean" },
+        "retrievalReportPath": { "type": "string" },
+        "retrievalHitIds": { "type": "array", "items": { "type": "string" } },
+        "vectorSearchReportPath": { "type": "string" },
+        "vectorHitIds": { "type": "array", "items": { "type": "string" } },
+        "scopeIsolationReportPath": { "type": "string" },
+        "scopeBlockedEventIds": { "type": "array", "items": { "type": "string" } },
+        "scopeWarnEventIds": { "type": "array", "items": { "type": "string" } },
+        "artifactScopeFilterReportPath": { "type": "string" },
+        "artifactScopeBlockedArtifacts": { "type": "array", "items": { "type": "string" } },
+        "injectionPacketPath": { "type": "string" },
+        "injectionEventIds": { "type": "array", "items": { "type": "string" } },
+        "injectionCommands": { "type": "array", "items": { "type": "string" } },
+        "feedbackClosureReportPath": { "type": "string" },
+        "feedbackPendingEventIds": { "type": "array", "items": { "type": "string" } },
+        "supervisorReportPath": { "type": "string" },
+        "promotionEventIds": { "type": "array", "items": { "type": "string" } },
+        "demotionEventIds": { "type": "array", "items": { "type": "string" } },
+        "compactResumeLedgerPath": { "type": "string" },
+        "compactResumeStatus": { "enum": ["pass", "missing", "corrupt"] },
+        "steps": { "type": "array", "minItems": 7, "items": { "$ref": "#/$defs/MemoryOrchestratorStepV6" } },
+        "nextCommands": { "type": "array", "items": { "type": "string" } },
+        "requiredGates": { "type": "array", "items": { "type": "string" } },
+        "policy": {
+          "type": "object",
+          "required": [
+            "MemoryOrchestratorV6",
+            "preTaskRetrieveBeforeOperator",
+            "scopeFilterBeforeMemoryInjection",
+            "postToolWritebackContract",
+            "failureSuccessFeedbackClosure",
+            "preCompactMemorySnapshot",
+            "postCompactResumeMemoryInjection",
+            "finalSuperviseBeforeClaim"
+          ],
+          "properties": {
+            "MemoryOrchestratorV6": { "const": true },
+            "preTaskRetrieveBeforeOperator": { "const": true },
+            "scopeFilterBeforeMemoryInjection": { "const": true },
+            "postToolWritebackContract": { "const": true },
+            "failureSuccessFeedbackClosure": { "const": true },
+            "preCompactMemorySnapshot": { "const": true },
+            "postCompactResumeMemoryInjection": { "const": true },
+            "finalSuperviseBeforeClaim": { "const": true }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

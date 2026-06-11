@@ -1659,6 +1659,10 @@ type ContextArtifactIndexEntry = {
 	sha256?: string | null;
 	evidenceRank?: string;
 	sourceCommand?: string;
+	scopeVerdict?: MemoryScopeIsolationVerdict;
+	scopeReasons?: string[];
+	scopeEventId?: string;
+	scopeFilterReportPath?: string;
 };
 
 type ContextResumeVerification = {
@@ -1727,6 +1731,8 @@ type ContextPackArtifact = {
 	toolDigest: string;
 	completionAudit: string;
 	artifactIndex: ContextArtifactIndexEntry[];
+	artifactScopeFilter?: ArtifactScopeFilterReportV1;
+	memoryOrchestrator?: MemoryOrchestratorReportV6;
 	repairQueue: string[];
 	commanderMergeBudget: string[];
 	workerScoreboard: string[];
@@ -2733,6 +2739,131 @@ type KnowledgeScopeIsolationV1 = {
 	requiredGates: string[];
 };
 
+type ArtifactScopeFilterDecisionV1 = {
+	kind: "repi-artifact-scope-filter-decision";
+	schemaVersion: 1;
+	path: string;
+	artifactKind: string;
+	requestedBy: string;
+	eventId?: string;
+	caseSignature?: string;
+	verdict: MemoryScopeIsolationVerdict;
+	reasons: string[];
+	blocksArtifactReuse: boolean;
+	recommendedAction: "allow" | "retain" | "quarantine" | "manual-review";
+	matchedBy: "artifact-hash" | "text-reference" | "untracked";
+};
+
+type ArtifactScopeFilterReportV1 = {
+	kind: "repi-artifact-scope-filter-report";
+	schemaVersion: 1;
+	generatedAt: string;
+	ArtifactScopeFilterV1: true;
+	MemoryScopeIsolationV1: true;
+	latest_artifact_side_channel_scope_filter: true;
+	reportPath: string;
+	requestedBy: string;
+	currentScope: MemoryScopeV1;
+	checkedArtifactCount: number;
+	blockedArtifactCount: number;
+	warnArtifactCount: number;
+	allowedArtifactCount: number;
+	quarantinedArtifacts: string[];
+	warnArtifacts: string[];
+	allowedArtifacts: string[];
+	decisions: ArtifactScopeFilterDecisionV1[];
+	requiredGates: string[];
+};
+
+type ArtifactScopeFilterOptions = {
+	route?: string;
+	target?: string;
+	requestedBy?: string;
+	scanLimit?: number;
+	write?: boolean;
+};
+
+type MemoryOrchestratorPhaseV6 =
+	| "pre-task"
+	| "pre-operator"
+	| "post-tool"
+	| "post-failure"
+	| "post-success"
+	| "pre-compact"
+	| "post-compact"
+	| "final"
+	| "full";
+
+type MemoryOrchestratorStepStatusV6 = "pass" | "warn" | "blocked" | "pending";
+
+type MemoryOrchestratorStepV6 = {
+	id: string;
+	phase: MemoryOrchestratorPhaseV6;
+	status: MemoryOrchestratorStepStatusV6;
+	title: string;
+	command: string;
+	evidencePath?: string;
+	reason: string;
+	blocking: boolean;
+};
+
+type MemoryOrchestratorReportV6 = {
+	kind: "repi-memory-orchestrator-report";
+	schemaVersion: 1;
+	generatedAt: string;
+	MemoryOrchestratorV6: true;
+	mandatory_memory_control_loop: true;
+	phase: MemoryOrchestratorPhaseV6;
+	reportPath: string;
+	currentScope: MemoryScopeV1;
+	query: string;
+	route?: string;
+	target?: string;
+	storeGrade: "pass" | "repairable" | "blocked";
+	hashChainOk: boolean;
+	retrievalReportPath: string;
+	retrievalHitIds: string[];
+	vectorSearchReportPath: string;
+	vectorHitIds: string[];
+	scopeIsolationReportPath: string;
+	scopeBlockedEventIds: string[];
+	scopeWarnEventIds: string[];
+	artifactScopeFilterReportPath: string;
+	artifactScopeBlockedArtifacts: string[];
+	injectionPacketPath: string;
+	injectionEventIds: string[];
+	injectionCommands: string[];
+	feedbackClosureReportPath: string;
+	feedbackPendingEventIds: string[];
+	supervisorReportPath: string;
+	promotionEventIds: string[];
+	demotionEventIds: string[];
+	compactResumeLedgerPath: string;
+	compactResumeStatus: "pass" | "missing" | "corrupt";
+	steps: MemoryOrchestratorStepV6[];
+	nextCommands: string[];
+	requiredGates: string[];
+	policy: {
+		MemoryOrchestratorV6: true;
+		preTaskRetrieveBeforeOperator: true;
+		scopeFilterBeforeMemoryInjection: true;
+		postToolWritebackContract: true;
+		failureSuccessFeedbackClosure: true;
+		preCompactMemorySnapshot: true;
+		postCompactResumeMemoryInjection: true;
+		finalSuperviseBeforeClaim: true;
+	};
+};
+
+type MemoryOrchestratorOptions = {
+	phase?: string;
+	query?: string;
+	route?: string;
+	target?: string;
+	artifactScopeFilter?: ArtifactScopeFilterReportV1;
+	write?: boolean;
+};
+
 type KnowledgeGraphArtifact = {
 	timestamp: string;
 	missionId?: string;
@@ -3277,7 +3408,7 @@ const RECON_PROMPTS = [
 		description: "整理当前任务并写入 REPI 长期记忆",
 		argumentHint: "[scene/title]",
 		content:
-			"将当前会话中可复用的逆向/渗透经验写入 REPI Memory v5：目标、路由、证据、有效方法、失败路线、复现命令、下次复用；写入后可调用 re_memory verify / repair-index / snapshot / eval / search-events / consolidate / distill / sediment / supervise，生成 store-report、store-snapshot、usefulness-eval、distillation-report、pattern-book、quarantine、injection-packet、supervisor-report 与 lifecycle-board。",
+			"将当前会话中可复用的逆向/渗透经验写入 REPI Memory v5/v6：目标、路由、证据、有效方法、失败路线、复现命令、下次复用；写入后可调用 re_memory orchestrate / pre-task / pre-operator / post-tool / post-failure / post-success / pre-compact / post-compact / final / verify / repair-index / snapshot / eval / search-events / consolidate / distill / sediment / supervise，生成 orchestrator-report、store-report、store-snapshot、usefulness-eval、distillation-report、pattern-book、quarantine、injection-packet、supervisor-report 与 lifecycle-board。",
 	},
 ];
 
@@ -3372,6 +3503,14 @@ function memoryFeedbackClosureReportPath(): string {
 
 function memoryScopeIsolationReportPath(): string {
 	return memoryPath("scope-isolation-report.json");
+}
+
+function memoryArtifactScopeFilterReportPath(): string {
+	return memoryPath("artifact-scope-filter-report.json");
+}
+
+function memoryOrchestratorReportPath(): string {
+	return memoryPath("orchestrator-report.json");
 }
 
 function memoryVectorIndexPath(): string {
@@ -3622,6 +3761,14 @@ function ensureReconStorage(): void {
 		[
 			memoryScopeIsolationReportPath(),
 			`${JSON.stringify({ kind: "repi-memory-scope-isolation-report", schemaVersion: 1, MemoryScopeIsolationV1: true, rows: [] }, null, 2)}\n`,
+		],
+		[
+			memoryArtifactScopeFilterReportPath(),
+			`${JSON.stringify({ kind: "repi-artifact-scope-filter-report", schemaVersion: 1, ArtifactScopeFilterV1: true, MemoryScopeIsolationV1: true, decisions: [] }, null, 2)}\n`,
+		],
+		[
+			memoryOrchestratorReportPath(),
+			`${JSON.stringify({ kind: "repi-memory-orchestrator-report", schemaVersion: 1, MemoryOrchestratorV6: true, mandatory_memory_control_loop: true, steps: [] }, null, 2)}\n`,
 		],
 		[
 			memoryVectorIndexPath(),
@@ -9299,8 +9446,8 @@ async function runPassiveMap(pi: ExtensionAPI, params: { target?: string; depth?
 		.join("\n");
 }
 
-function latestLiveBrowserArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceBrowserDir(), 1)[0];
+function latestLiveBrowserArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("browser", evidenceBrowserDir(), options);
 }
 
 function inferBrowserUrl(target?: string): string | undefined {
@@ -9616,8 +9763,8 @@ function buildLiveBrowserOutput(
 	return formatLiveBrowser(browser, path);
 }
 
-function latestWebAuthzStateArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceWebAuthzDir(), 1)[0];
+function latestWebAuthzStateArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("web_authz", evidenceWebAuthzDir(), options);
 }
 
 function inferWebAuthzUrl(target?: string): string | undefined {
@@ -10003,8 +10150,8 @@ function buildWebAuthzStateOutput(
 	return formatWebAuthzState(authz, path);
 }
 
-function latestExploitLabArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceExploitLabDir(), 1)[0];
+function latestExploitLabArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("exploit_lab", evidenceExploitLabDir(), options);
 }
 
 function inferExploitLabTarget(target?: string): string | undefined {
@@ -10407,8 +10554,8 @@ function buildExploitLabOutput(
 	return formatExploitLab(lab, path);
 }
 
-function latestMobileRuntimeArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceMobileRuntimeDir(), 1)[0];
+function latestMobileRuntimeArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("mobile_runtime", evidenceMobileRuntimeDir(), options);
 }
 
 function inferMobilePackageName(target?: string, packageName?: string): string | undefined {
@@ -10804,8 +10951,8 @@ function buildMobileRuntimeOutput(
 	return formatMobileRuntime(mobile, path);
 }
 
-function latestNativeRuntimeArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceNativeRuntimeDir(), 1)[0];
+function latestNativeRuntimeArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("native_runtime", evidenceNativeRuntimeDir(), options);
 }
 
 function inferNativeRuntimeTarget(target?: string): string | undefined {
@@ -12295,8 +12442,8 @@ function recentMarkdownArtifacts(dir: string, limit: number): string[] {
 	}
 }
 
-function latestAttackGraphArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceGraphsDir(), 1)[0];
+function latestAttackGraphArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("attack_graph", evidenceGraphsDir(), options);
 }
 
 function artifactBasename(path: string): string {
@@ -12563,8 +12710,8 @@ function buildAttackGraphOutput(action: "build" | "show" = "build"): string {
 	return formatAttackGraph(graph, path);
 }
 
-function latestExploitChainArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceChainsDir(), 1)[0];
+function latestExploitChainArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("exploit_chain", evidenceChainsDir(), options);
 }
 
 function exploitChainSourceArtifacts(): string[] {
@@ -12940,8 +13087,8 @@ function buildExploitChainOutput(
 	return formatExploitChain(chain, path);
 }
 
-function latestCampaignArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceCampaignsDir(), 1)[0];
+function latestCampaignArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("campaign", evidenceCampaignsDir(), options);
 }
 
 function textHasAny(text: string, patterns: RegExp[]): boolean {
@@ -13332,8 +13479,8 @@ function buildCampaignOutput(
 	return formatCampaign(campaign, path);
 }
 
-function latestOperationArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceOperationsDir(), 1)[0];
+function latestOperationArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("operation", evidenceOperationsDir(), options);
 }
 
 function parseCampaignArtifact(path: string): CampaignArtifact | undefined {
@@ -13732,8 +13879,8 @@ function buildOperationOutput(
 	return formatOperation(operation, path);
 }
 
-function latestDelegateArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceDelegationsDir(), 1)[0];
+function latestDelegateArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("delegation", evidenceDelegationsDir(), options);
 }
 
 function parseOperationArtifact(path: string): OperationArtifact | undefined {
@@ -14849,8 +14996,8 @@ function buildDelegateOutput(
 	return `${formatDelegate(delegate, path)}${mergeSummary}`;
 }
 
-function latestSwarmArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceSwarmsDir(), 1)[0];
+function latestSwarmArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("swarm", evidenceSwarmsDir(), options);
 }
 
 function swarmArtifactPath(swarm: Pick<SwarmArtifact, "timestamp" | "route" | "mode">): string {
@@ -16504,8 +16651,8 @@ function buildSwarmOutput(
 	return formatSwarm(swarm, path);
 }
 
-function latestSupervisorArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceSupervisorsDir(), 1)[0];
+function latestSupervisorArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("supervisor", evidenceSupervisorsDir(), options);
 }
 
 function parseDelegateArtifact(path: string): DelegateArtifact | undefined {
@@ -17104,8 +17251,8 @@ function buildSupervisorOutput(
 	return formatSupervisor(supervisor, path);
 }
 
-function latestReflectionArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceReflectionsDir(), 1)[0];
+function latestReflectionArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("reflection", evidenceReflectionsDir(), options);
 }
 
 function parseSupervisorArtifact(path: string): SupervisorArtifact | undefined {
@@ -17362,8 +17509,8 @@ function buildReflectOutput(
 	return formatReflection(reflection, path);
 }
 
-function latestContextPackArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceContextsDir(), 1)[0];
+function latestContextPackArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("context", evidenceContextsDir(), options);
 }
 
 function parseReflectionArtifact(path: string): ReflectionArtifact | undefined {
@@ -17379,6 +17526,7 @@ function parseReflectionArtifact(path: string): ReflectionArtifact | undefined {
 const CONTEXT_HASH_OMIT = new Set(["contextSha256", "exactResumeVerification", "resumedFromContextPath"]);
 
 function contextEvidenceRank(kind: string): string {
+	if (kind === "artifact_scope_filter") return "persisted_state";
 	if (/^memory_/i.test(kind)) return "persisted_state";
 	if (/browser|web_authz|mobile_runtime|native_runtime|exploit_lab|run|replayer|proof_loop/i.test(kind)) return "runtime_artifact";
 	if (/map|knowledge|harness|decision_core|kernel/i.test(kind)) return "process_config";
@@ -17388,12 +17536,13 @@ function contextEvidenceRank(kind: string): string {
 }
 
 function contextSourceCommand(kind: string): string {
-	if (/^memory_(?:events|case_memory|retrieval|store|snapshot|usefulness|feedback|scope|vector|distillation|quarantine|semantic|contradiction|injection|sedimentation|supervisor|lifecycle)/i.test(kind)) {
+	if (/^memory_(?:events|case_memory|retrieval|store|snapshot|usefulness|feedback|scope|orchestrator|vector|distillation|quarantine|semantic|contradiction|injection|sedimentation|supervisor|lifecycle)/i.test(kind)) {
 		if (/store_report/i.test(kind)) return "re_memory verify";
 		if (/store_snapshot/i.test(kind)) return "re_memory snapshot";
 		if (/usefulness/i.test(kind)) return "re_memory eval";
 		if (/feedback/i.test(kind)) return "re_memory feedback";
 		if (/scope/i.test(kind)) return "re_memory scope";
+		if (/orchestrator/i.test(kind)) return "re_memory orchestrate";
 		if (/vector/i.test(kind)) return "re_memory vector";
 		if (/distillation|quarantine/i.test(kind)) return "re_memory distill";
 		if (/semantic|contradiction|injection|sedimentation/i.test(kind)) return "re_memory sediment";
@@ -17403,7 +17552,11 @@ function contextSourceCommand(kind: string): string {
 	return `re_${kind.replace(/-/g, "_")} show`;
 }
 
-function contextArtifactEntry(kind: string, path: string): ContextArtifactIndexEntry {
+function contextArtifactEntry(
+	kind: string,
+	path: string,
+	scopeDecision?: ArtifactScopeFilterDecisionV1,
+): ContextArtifactIndexEntry {
 	let exists = false;
 	let size = 0;
 	let mtime = "";
@@ -17427,6 +17580,10 @@ function contextArtifactEntry(kind: string, path: string): ContextArtifactIndexE
 		sha256: sha,
 		evidenceRank: contextEvidenceRank(kind),
 		sourceCommand: contextSourceCommand(kind),
+		scopeVerdict: scopeDecision?.verdict,
+		scopeReasons: scopeDecision?.reasons,
+		scopeEventId: scopeDecision?.eventId,
+		scopeFilterReportPath: scopeDecision?.requestedBy ? memoryArtifactScopeFilterReportPath() : undefined,
 	};
 }
 
@@ -17496,33 +17653,67 @@ function contextCompactionLedger(timestamp: string): { path: string; appendOnly:
 	return { path, appendOnly: true, prevHash, entryHash };
 }
 
-function contextArtifactIndex(): ContextArtifactIndexEntry[] {
+function scopedContextArtifactIndex(options: ArtifactScopeFilterOptions = {}): {
+	entries: ContextArtifactIndexEntry[];
+	artifactScopeFilter: ArtifactScopeFilterReportV1;
+} {
 	const existingPath = (path: string): string | undefined => (existsSync(path) ? path : undefined);
-	const pairs: Array<[string, string | undefined]> = [
-		["map", recentMarkdownArtifacts(evidenceMapsDir(), 1)[0]],
-		["browser", latestLiveBrowserArtifactPath()],
-		["web_authz", latestWebAuthzStateArtifactPath()],
-		["exploit_lab", latestExploitLabArtifactPath()],
-		["mobile_runtime", latestMobileRuntimeArtifactPath()],
-		["native_runtime", latestNativeRuntimeArtifactPath()],
-		["run", recentMarkdownArtifacts(evidenceRunsDir(), 1)[0]],
-		["attack_graph", latestAttackGraphArtifactPath()],
-		["exploit_chain", latestExploitChainArtifactPath()],
-		["decision_core", latestDecisionCoreArtifactPath()],
-		["campaign", latestCampaignArtifactPath()],
-		["operation", latestOperationArtifactPath()],
-		["delegation", latestDelegateArtifactPath()],
-		["swarm", latestSwarmArtifactPath()],
-		["supervisor", latestSupervisorArtifactPath()],
-		["reflection", latestReflectionArtifactPath()],
-		["operator", latestOperatorArtifactPath()],
-		["verifier", latestVerifierArtifactPath()],
-		["compiler", latestCompilerArtifactPath()],
-		["replayer", latestReplayerArtifactPath()],
-		["autofix", latestAutofixArtifactPath()],
-		["proof_loop", latestProofLoopArtifactPath()],
-		["knowledge", latestKnowledgeGraphArtifactPath()],
-		["harness", latestHarnessArtifactPath()],
+	const scope = artifactScopeDefaultOptions({
+		...options,
+		requestedBy: options.requestedBy ?? "context_artifact_index",
+	});
+	const artifactSpecs: Array<[string, string]> = [
+		["map", evidenceMapsDir()],
+		["browser", evidenceBrowserDir()],
+		["web_authz", evidenceWebAuthzDir()],
+		["exploit_lab", evidenceExploitLabDir()],
+		["mobile_runtime", evidenceMobileRuntimeDir()],
+		["native_runtime", evidenceNativeRuntimeDir()],
+		["run", evidenceRunsDir()],
+		["attack_graph", evidenceGraphsDir()],
+		["exploit_chain", evidenceChainsDir()],
+		["decision_core", evidenceDecisionsDir()],
+		["campaign", evidenceCampaignsDir()],
+		["operation", evidenceOperationsDir()],
+		["delegation", evidenceDelegationsDir()],
+		["swarm", evidenceSwarmsDir()],
+		["supervisor", evidenceSupervisorsDir()],
+		["reflection", evidenceReflectionsDir()],
+		["operator", evidenceOperatorsDir()],
+		["verifier", evidenceVerifiersDir()],
+		["compiler", evidenceCompilersDir()],
+		["replayer", evidenceReplayersDir()],
+		["autofix", evidenceAutofixDir()],
+		["proof_loop", evidenceProofLoopsDir()],
+		["knowledge", evidenceKnowledgeDir()],
+		["harness", evidenceHarnessDir()],
+	];
+	const scanLimit = scope.scanLimit ?? 8;
+	const candidateSources = artifactSpecs.flatMap(([kind, dir]) =>
+		recentMarkdownArtifacts(dir, scanLimit).map((path) => ({
+			kind,
+			path,
+			text: truncateMiddle(readText(path), 7000),
+		})),
+	);
+	const artifactScopeFilter = buildArtifactScopeFilterReport({
+		route: scope.route,
+		target: scope.target,
+		requestedBy: scope.requestedBy,
+		artifacts: candidateSources,
+		write: scope.write,
+	});
+	const decisions = artifactScopeDecisionMap(artifactScopeFilter);
+	const pairs: Array<[string, string | undefined, ArtifactScopeFilterDecisionV1 | undefined]> = artifactSpecs.map(
+		([kind, dir]) => {
+			const path = recentMarkdownArtifacts(dir, scanLimit).find(
+				(candidate) => decisions.get(knowledgeScopePathKey(candidate))?.blocksArtifactReuse !== true,
+			);
+			return [kind, path, path ? decisions.get(knowledgeScopePathKey(path)) : undefined];
+		},
+	);
+	const memoryPairs: Array<[string, string | undefined]> = [
+		["artifact_scope_filter", existingPath(memoryArtifactScopeFilterReportPath())],
 		["memory_events", existingPath(memoryEventsPath())],
 		["memory_case_memory", existingPath(caseMemoryPath())],
 		["memory_retrieval_report", existingPath(memoryRetrievalReportPath())],
@@ -17531,6 +17722,7 @@ function contextArtifactIndex(): ContextArtifactIndexEntry[] {
 		["memory_usefulness_eval", existingPath(memoryUsefulnessEvalReportPath())],
 		["memory_feedback_closure", existingPath(memoryFeedbackClosureReportPath())],
 		["memory_scope_isolation", existingPath(memoryScopeIsolationReportPath())],
+		["memory_orchestrator", existingPath(memoryOrchestratorReportPath())],
 		["memory_vector_index", existingPath(memoryVectorIndexPath())],
 		["memory_vector_search", existingPath(memoryVectorSearchReportPath())],
 		["memory_distillation_report", existingPath(memoryDistillationReportPath())],
@@ -17542,7 +17734,19 @@ function contextArtifactIndex(): ContextArtifactIndexEntry[] {
 		["memory_supervisor_report", existingPath(memorySupervisorReportPath())],
 		["memory_lifecycle_board", existingPath(memoryLifecycleBoardPath())],
 	];
-	return pairs.filter((pair): pair is [string, string] => Boolean(pair[1])).map(([kind, path]) => contextArtifactEntry(kind, path));
+	const entries = [
+		...pairs
+			.filter((pair): pair is [string, string, ArtifactScopeFilterDecisionV1 | undefined] => Boolean(pair[1]))
+			.map(([kind, path, decision]) => contextArtifactEntry(kind, path, decision)),
+		...memoryPairs
+			.filter((pair): pair is [string, string] => Boolean(pair[1]))
+			.map(([kind, path]) => contextArtifactEntry(kind, path)),
+	];
+	return { entries, artifactScopeFilter };
+}
+
+function contextArtifactIndex(options: ArtifactScopeFilterOptions = {}): ContextArtifactIndexEntry[] {
+	return scopedContextArtifactIndex(options).entries;
 }
 
 function commandTargetSuffix(target?: string): string {
@@ -17581,10 +17785,19 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume" }
 	const swarmRetryQueue = swarmRetry.rows;
 	const caseMemoryPlan = currentCaseMemoryLanePlan(target);
 	const caseMemoryNextCommands = caseMemoryOperatorCommands(caseMemoryPlan, target);
-	const artifactIndex = contextArtifactIndex();
 	const reflectionReuseRules = Array.from(new Set(reflection?.reuseRules ?? [])).slice(0, 24);
 	const route = mission?.route.domain ?? reflection?.route ?? supervisor?.route;
 	const mode = options.mode ?? "pack";
+	const memoryOrchestrator = buildMemoryOrchestratorReport({
+		phase: mode === "resume" ? "post-compact" : "pre-compact",
+		query: target ?? route ?? mission?.task,
+		route,
+		target,
+		write: true,
+	});
+	const artifactSelection = scopedContextArtifactIndex({ target, route, requestedBy: "context_artifact_index" });
+	const artifactIndex = artifactSelection.entries;
+	const artifactScopeFilter = artifactSelection.artifactScopeFilter;
 	const contextPath = contextPackArtifactPathFor({ timestamp, route, target, mode });
 	const scope = {
 		missionId: mission?.id ?? reflection?.missionId ?? supervisor?.missionId,
@@ -17614,6 +17827,7 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume" }
 			...repairCommands,
 			...caseMemoryNextCommands,
 			...autonomousBudget.nextActions,
+			memoryOrchestratorPhaseCommand(mode === "resume" ? "post-compact" : "pre-task", target),
 			`re_decision_core tick${commandTargetSuffix(target)}`,
 			...laneCommands,
 			supervisorPath ? "re_supervisor repair" : `re_supervisor review${commandTargetSuffix(target)}`,
@@ -17704,8 +17918,10 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume" }
 		memoryTail: truncateMiddle(buildMemoryDigest(), 6000),
 		toolDigest: truncateMiddle(buildToolDigest(), 5000),
 		completionAudit: truncateMiddle(formatCompletionAudit(), 5000),
-		artifactIndex,
-		repairQueue,
+			artifactIndex,
+			artifactScopeFilter,
+			memoryOrchestrator,
+			repairQueue,
 		commanderMergeBudget,
 		workerScoreboard,
 		swarmRetryQueue,
@@ -17728,6 +17944,7 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume" }
 					autonomousBudget.ledgerPath,
 					autonomousBudget.formalPlaybookPath,
 					existsSync(compactionResumeTelemetryPath()) ? compactionResumeTelemetryPath() : undefined,
+					existsSync(memoryOrchestrator.reportPath) ? memoryOrchestrator.reportPath : undefined,
 				].filter(Boolean) as string[],
 			),
 		),
@@ -17777,8 +17994,30 @@ function formatContextPack(pack: ContextPackArtifact, path?: string): string {
 		...(pack.gateSummary.length ? pack.gateSummary.map((item) => `- ${item}`) : ["- none"]),
 		"artifact_index:",
 		...(pack.artifactIndex.length
-			? pack.artifactIndex.map((item) => `- ${item.kind}: ${item.path} exists=${item.exists ?? "unknown"} sha256=${item.sha256 ?? "none"}`)
+			? pack.artifactIndex.map(
+					(item) =>
+						`- ${item.kind}: ${item.path} exists=${item.exists ?? "unknown"} sha256=${item.sha256 ?? "none"} scope=${item.scopeVerdict ?? "untracked"}`,
+				)
 			: ["- none"]),
+		"artifact_scope_filter:",
+		`- ArtifactScopeFilterV1=${pack.artifactScopeFilter?.ArtifactScopeFilterV1 ?? false}`,
+		`- latest_artifact_side_channel_scope_filter=${pack.artifactScopeFilter?.latest_artifact_side_channel_scope_filter ?? false}`,
+		`- checked=${pack.artifactScopeFilter?.checkedArtifactCount ?? 0}`,
+		`- blocked=${pack.artifactScopeFilter?.blockedArtifactCount ?? 0}`,
+		`- warn=${pack.artifactScopeFilter?.warnArtifactCount ?? 0}`,
+		`- report=${pack.artifactScopeFilter?.reportPath ?? "none"}`,
+		"artifact_scope_quarantine:",
+		...(pack.artifactScopeFilter?.quarantinedArtifacts.length
+			? pack.artifactScopeFilter.quarantinedArtifacts.map((item) => `- ${item}`)
+			: ["- none"]),
+		"memory_orchestrator:",
+		`- MemoryOrchestratorV6=${pack.memoryOrchestrator?.MemoryOrchestratorV6 ?? false}`,
+		`- mandatory_memory_control_loop=${pack.memoryOrchestrator?.mandatory_memory_control_loop ?? false}`,
+		`- phase=${pack.memoryOrchestrator?.phase ?? "none"}`,
+		`- report=${pack.memoryOrchestrator?.reportPath ?? "none"}`,
+		`- retrieval_hits=${pack.memoryOrchestrator?.retrievalHitIds.length ?? 0}`,
+		`- injection_events=${pack.memoryOrchestrator?.injectionEventIds.length ?? 0}`,
+		`- compact_resume_status=${pack.memoryOrchestrator?.compactResumeStatus ?? "unknown"}`,
 		"repair_queue:",
 		...(pack.repairQueue.length ? pack.repairQueue.map((item) => `- ${item}`) : ["- none"]),
 		"commander_merge_budget:",
@@ -17884,7 +18123,7 @@ function writeContextPackArtifact(pack: ContextPackArtifact): string {
 	appendEvidence({
 		kind: "artifact",
 		title: `context-pack-${pack.mode} ${pack.missionId ?? "no-mission"}`,
-		fact: `Context pack captured ${pack.artifactIndex.length} artifact(s), ${pack.repairQueue.length} repair item(s), ${pack.nextCommands.length} next command(s), context_sha256=${pack.contextSha256 ?? "missing"}, exact_resume=${pack.exactResumeVerification?.contextSha256 ?? "none"}, swarm_retry_queue=${pack.swarmRetryQueue.length}, autonomous_budget=${pack.autonomousBudget.maxTurns}/${pack.autonomousBudget.maxDispatch}, score_decay=${pack.dispatcherScoreDecay.length}, demotions=${pack.repeatedFailureDemotions.length}, promotions=${pack.highScorePromotions.length}, case_memory_lane_plan=${pack.caseMemoryLanePlan?.action ?? "none"}`,
+		fact: `Context pack captured ${pack.artifactIndex.length} artifact(s), ${pack.repairQueue.length} repair item(s), ${pack.nextCommands.length} next command(s), context_sha256=${pack.contextSha256 ?? "missing"}, exact_resume=${pack.exactResumeVerification?.contextSha256 ?? "none"}, artifact_scope_blocked=${pack.artifactScopeFilter?.blockedArtifactCount ?? 0}, memory_orchestrator=${pack.memoryOrchestrator?.phase ?? "missing"}:${pack.memoryOrchestrator?.MemoryOrchestratorV6 ?? false}, swarm_retry_queue=${pack.swarmRetryQueue.length}, autonomous_budget=${pack.autonomousBudget.maxTurns}/${pack.autonomousBudget.maxDispatch}, score_decay=${pack.dispatcherScoreDecay.length}, demotions=${pack.repeatedFailureDemotions.length}, promotions=${pack.highScorePromotions.length}, case_memory_lane_plan=${pack.caseMemoryLanePlan?.action ?? "none"}`,
 		command: `re_context ${pack.mode}`,
 		path,
 		verify: `cat ${path}`,
@@ -18550,8 +18789,8 @@ function buildContextOutput(action: "pack" | "show" | "resume" = "pack", options
 	return formatContextPack(pack, path);
 }
 
-function latestDecisionCoreArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceDecisionsDir(), 1)[0];
+function latestDecisionCoreArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("decision_core", evidenceDecisionsDir(), options);
 }
 
 function decisionEvidencePriority(): string[] {
@@ -18936,8 +19175,8 @@ function buildDecisionCoreOutput(action: "plan" | "show" | "tick" = "plan", opti
 	return formatDecisionCore(decision, path);
 }
 
-function latestOperatorArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceOperatorsDir(), 1)[0];
+function latestOperatorArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("operator", evidenceOperatorsDir(), options);
 }
 
 function parseContextPackArtifact(path: string): ContextPackArtifact | undefined {
@@ -19877,8 +20116,8 @@ function buildOperatorOutput(
 	return formatOperator(operator, path);
 }
 
-function latestVerifierArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceVerifiersDir(), 1)[0];
+function latestVerifierArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("verifier", evidenceVerifiersDir(), options);
 }
 
 function parseOperatorArtifact(path: string): OperatorArtifact | undefined {
@@ -20395,8 +20634,8 @@ function buildVerifierOutput(action: "check" | "show" | "matrix" = "check", opti
 	return formatVerifier(verifier, path);
 }
 
-function latestCompilerArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceCompilersDir(), 1)[0];
+function latestCompilerArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("compiler", evidenceCompilersDir(), options);
 }
 
 function parseVerifierArtifact(path: string): VerifierArtifact | undefined {
@@ -20861,8 +21100,8 @@ function buildCompilerOutput(action: "draft" | "show" | "final" = "draft", optio
 	return formatCompiler(compiler, path);
 }
 
-function latestReplayerArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceReplayersDir(), 1)[0];
+function latestReplayerArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("replayer", evidenceReplayersDir(), options);
 }
 
 function parseCompilerArtifact(path: string): CompilerArtifact | undefined {
@@ -21102,8 +21341,8 @@ function buildReplayerOutput(action: "plan" | "show" = "plan", options: { target
 	return formatReplayer(replay, path);
 }
 
-function latestAutofixArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceAutofixDir(), 1)[0];
+function latestAutofixArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("autofix", evidenceAutofixDir(), options);
 }
 
 function parseReplayArtifact(path: string): ReplayArtifact | undefined {
@@ -21441,8 +21680,8 @@ function buildAutofixOutput(action: "plan" | "show" | "apply" = "plan", options:
 	return formatAutofix(autofix, path);
 }
 
-function latestProofLoopArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceProofLoopsDir(), 1)[0];
+function latestProofLoopArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("proof_loop", evidenceProofLoopsDir(), options);
 }
 
 function proofLoopSourceArtifacts(): string[] {
@@ -22289,8 +22528,8 @@ function buildProofLoopOutput(
 	return formatProofLoop(proof, path);
 }
 
-function latestKnowledgeGraphArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceKnowledgeDir(), 1)[0];
+function latestKnowledgeGraphArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("knowledge", evidenceKnowledgeDir(), options);
 }
 
 function compactResumeKnowledgeSignals(target?: string): {
@@ -23179,8 +23418,8 @@ function buildKnowledgeGraphOutput(
 	return formatKnowledgeGraph(graph, path);
 }
 
-function latestHarnessArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceHarnessDir(), 1)[0];
+function latestHarnessArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("harness", evidenceHarnessDir(), options);
 }
 
 function harnessWorkspacePath(relativePath: string): string {
@@ -23584,8 +23823,8 @@ function buildHarnessOutput(action: HarnessMode | "show" = "quick"): string {
 	return formatHarnessArtifact(harness, path);
 }
 
-function latestKernelArtifactPath(): string | undefined {
-	return recentMarkdownArtifacts(evidenceKernelDir(), 1)[0];
+function latestKernelArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("kernel", evidenceKernelDir(), options);
 }
 
 function kernelSourceArtifacts(): string[] {
@@ -24272,6 +24511,9 @@ function buildMemoryDigest(): string {
 		"<memory_scope_isolation>",
 		truncateMiddle(readText(memoryScopeIsolationReportPath()), 1800),
 		"</memory_scope_isolation>",
+		"<memory_orchestrator_v6>",
+		truncateMiddle(readText(memoryOrchestratorReportPath()), 2200),
+		"</memory_orchestrator_v6>",
 		"<memory_vector_search>",
 		truncateMiddle(readText(memoryVectorSearchReportPath()), 1800),
 		"</memory_vector_search>",
@@ -27505,6 +27747,208 @@ function formatMemoryScopeIsolation(report = buildMemoryScopeIsolationReport()):
 	].join("\n");
 }
 
+function artifactScopeInferTarget(text?: string): string | undefined {
+	const value = String(text ?? "");
+	const url = value.match(/https?:\/\/[^\s'"`<>)]+/i)?.[0];
+	if (url) return url.replace(/[),.;]+$/, "");
+	const host = value.match(/\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?\b/i)?.[0];
+	return host;
+}
+
+function artifactScopeDefaultOptions(options: ArtifactScopeFilterOptions = {}): Required<Pick<ArtifactScopeFilterOptions, "requestedBy">> &
+	Pick<ArtifactScopeFilterOptions, "route" | "target" | "scanLimit" | "write"> {
+	const mission = readCurrentMission();
+	return {
+		route: options.route ?? mission?.route.domain,
+		target: options.target ?? artifactScopeInferTarget(mission?.task),
+		requestedBy: options.requestedBy ?? "latest_artifact_side_channel",
+		scanLimit: options.scanLimit,
+		write: options.write,
+	};
+}
+
+function artifactScopeMatchForSource(
+	source: { path: string; text?: string },
+	rows: MemoryScopeIsolationRowV1[],
+	byArtifactPath: Map<string, MemoryScopeIsolationRowV1>,
+): { row?: MemoryScopeIsolationRowV1; matchedBy: ArtifactScopeFilterDecisionV1["matchedBy"] } {
+	const direct = byArtifactPath.get(knowledgeScopePathKey(source.path));
+	if (direct) return { row: direct, matchedBy: "artifact-hash" };
+	const text = `${source.path}\n${source.text ?? ""}`;
+	const matches = rows.filter(
+		(row) =>
+			text.includes(row.eventId) ||
+			text.includes(row.caseSignature) ||
+			(row.eventScope?.target && text.toLowerCase().includes(row.eventScope.target.toLowerCase())),
+	);
+	if (!matches.length) return { matchedBy: "untracked" };
+	return {
+		row:
+			matches.find((row) => row.verdict === "block") ??
+			matches.find((row) => row.verdict === "warn") ??
+			matches[0],
+		matchedBy: "text-reference",
+	};
+}
+
+function buildArtifactScopeFilterReport(options: {
+	route?: string;
+	target?: string;
+	requestedBy: string;
+	artifacts: Array<{ kind: string; path: string; text?: string }>;
+	write?: boolean;
+}): ArtifactScopeFilterReportV1 {
+	ensureReconStorage();
+	const events = readMemoryEvents();
+	const memoryReport = buildMemoryScopeIsolationReport({
+		route: options.route,
+		target: options.target,
+		events,
+		write: options.write,
+	});
+	const rowsByEvent = new Map(memoryReport.rows.map((row) => [row.eventId, row]));
+	const byArtifactPath = new Map<string, MemoryScopeIsolationRowV1>();
+	for (const event of events) {
+		const row = rowsByEvent.get(event.id);
+		if (!row) continue;
+		for (const artifact of event.artifactHashes) {
+			byArtifactPath.set(knowledgeScopePathKey(artifact.path), row);
+		}
+	}
+	const decisions = options.artifacts.map((artifact): ArtifactScopeFilterDecisionV1 => {
+		const match = artifactScopeMatchForSource(artifact, memoryReport.rows, byArtifactPath);
+		const row = match.row;
+		const verdict = row?.verdict ?? "allow";
+		const reasons = row?.reasons ?? ["untracked_artifact_no_memory_scope_binding"];
+		return {
+			kind: "repi-artifact-scope-filter-decision",
+			schemaVersion: 1,
+			path: artifact.path,
+			artifactKind: artifact.kind,
+			requestedBy: options.requestedBy,
+			eventId: row?.eventId,
+			caseSignature: row?.caseSignature,
+			verdict,
+			reasons,
+			blocksArtifactReuse: verdict === "block",
+			recommendedAction:
+				verdict === "block"
+					? "quarantine"
+					: verdict === "warn"
+						? row?.recommendedAction === "manual-review"
+							? "manual-review"
+							: "retain"
+						: "allow",
+			matchedBy: match.matchedBy,
+		};
+	});
+	const report: ArtifactScopeFilterReportV1 = {
+		kind: "repi-artifact-scope-filter-report",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		ArtifactScopeFilterV1: true,
+		MemoryScopeIsolationV1: true,
+		latest_artifact_side_channel_scope_filter: true,
+		reportPath: memoryArtifactScopeFilterReportPath(),
+		requestedBy: options.requestedBy,
+		currentScope: memoryReport.currentScope,
+		checkedArtifactCount: decisions.length,
+		blockedArtifactCount: decisions.filter((row) => row.verdict === "block").length,
+		warnArtifactCount: decisions.filter((row) => row.verdict === "warn").length,
+		allowedArtifactCount: decisions.filter((row) => row.verdict === "allow").length,
+		quarantinedArtifacts: decisions.filter((row) => row.verdict === "block").map((row) => row.path),
+		warnArtifacts: decisions.filter((row) => row.verdict === "warn").map((row) => row.path),
+		allowedArtifacts: decisions.filter((row) => row.verdict === "allow").map((row) => row.path),
+		decisions,
+		requiredGates: [
+			"ArtifactScopeFilterV1",
+			"MemoryScopeIsolationV1",
+			"latest_artifact_side_channel_scope_filter",
+			"artifact_hash_path_matches_memory_scope",
+			"blocked_latest_artifact_quarantined",
+			"context_artifact_index_excludes_scope_blocked_artifacts",
+			"artifact_scope_filter_report_in_context_pack",
+		],
+	};
+	if (options.write !== false) writeFileAtomic(memoryArtifactScopeFilterReportPath(), `${JSON.stringify(report, null, 2)}\n`);
+	return report;
+}
+
+function artifactScopeDecisionMap(
+	report: ArtifactScopeFilterReportV1,
+): Map<string, ArtifactScopeFilterDecisionV1> {
+	return new Map(report.decisions.map((decision) => [knowledgeScopePathKey(decision.path), decision]));
+}
+
+function formatArtifactScopeFilter(report: ArtifactScopeFilterReportV1): string {
+	return [
+		"artifact_scope_filter:",
+		`ArtifactScopeFilterV1=${report.ArtifactScopeFilterV1}`,
+		`MemoryScopeIsolationV1=${report.MemoryScopeIsolationV1}`,
+		`latest_artifact_side_channel_scope_filter=${report.latest_artifact_side_channel_scope_filter}`,
+		`requested_by=${report.requestedBy}`,
+		`current_target=${report.currentScope.target ?? "none"}`,
+		`checked=${report.checkedArtifactCount}`,
+		`blocked=${report.blockedArtifactCount}`,
+		`warn=${report.warnArtifactCount}`,
+		`allowed=${report.allowedArtifactCount}`,
+		`report=${report.reportPath}`,
+		"quarantined_artifacts:",
+		...(report.quarantinedArtifacts.length ? report.quarantinedArtifacts.map((item) => `- ${item}`) : ["- none"]),
+		"decisions:",
+		...(report.decisions.length
+			? report.decisions
+					.slice(0, 24)
+					.map(
+						(row) =>
+							`- kind=${row.artifactKind} verdict=${row.verdict} matched_by=${row.matchedBy} action=${row.recommendedAction} path=${row.path} reasons=${row.reasons.join(",") || "none"}`,
+					)
+			: ["- none"]),
+		"required_gates:",
+		...report.requiredGates.map((gate) => `- ${gate}`),
+	].join("\n");
+}
+
+function scopedMarkdownArtifacts(
+	kind: string,
+	dir: string,
+	limit: number,
+	options: ArtifactScopeFilterOptions = {},
+): string[] {
+	const scope = artifactScopeDefaultOptions(options);
+	const scanLimit = Math.max(limit, scope.scanLimit ?? Math.max(8, limit * 4));
+	const artifacts = recentMarkdownArtifacts(dir, scanLimit).map((path) => ({
+		kind,
+		path,
+		text: truncateMiddle(readText(path), 7000),
+	}));
+	if (artifacts.length === 0) return [];
+	const report = buildArtifactScopeFilterReport({
+		route: scope.route,
+		target: scope.target,
+		requestedBy: scope.requestedBy ?? `latest_artifact:${kind}`,
+		artifacts,
+		write: scope.write,
+	});
+	const decisions = artifactScopeDecisionMap(report);
+	return artifacts
+		.filter((artifact) => decisions.get(knowledgeScopePathKey(artifact.path))?.blocksArtifactReuse !== true)
+		.slice(0, limit)
+		.map((artifact) => artifact.path);
+}
+
+function latestScopedMarkdownArtifact(
+	kind: string,
+	dir: string,
+	options: ArtifactScopeFilterOptions = {},
+): string | undefined {
+	return scopedMarkdownArtifacts(kind, dir, 1, {
+		...options,
+		requestedBy: options.requestedBy ?? `latest_artifact:${kind}`,
+		write: options.write ?? false,
+	})[0];
+}
+
 function memorySupervisorTtlDays(action: MemorySupervisorAction): number {
 	if (action === "promote") return 180;
 	if (action === "retain" || action === "merge") return 90;
@@ -27823,6 +28267,332 @@ function formatMemorySupervisor(report = superviseMemoryLifecycle()): string {
 			: ["- none"]),
 		"recommended_commands:",
 		...report.recommendedCommands.map((command) => `- ${command}`),
+		"required_gates:",
+		...report.requiredGates.map((gate) => `- ${gate}`),
+	].join("\n");
+}
+
+function normalizeMemoryOrchestratorPhase(phase?: string): MemoryOrchestratorPhaseV6 {
+	const normalized = String(phase ?? "full")
+		.trim()
+		.toLowerCase()
+		.replaceAll("_", "-");
+	if (
+		normalized === "pre-task" ||
+		normalized === "pre-operator" ||
+		normalized === "post-tool" ||
+		normalized === "post-failure" ||
+		normalized === "post-success" ||
+		normalized === "pre-compact" ||
+		normalized === "post-compact" ||
+		normalized === "final" ||
+		normalized === "full"
+	) {
+		return normalized;
+	}
+	if (normalized === "orchestrate" || normalized === "orchestrator") return "full";
+	if (normalized === "finalize" || normalized === "complete") return "final";
+	return "full";
+}
+
+function memoryOrchestratorStep(input: {
+	id: string;
+	phase: MemoryOrchestratorPhaseV6;
+	status: MemoryOrchestratorStepStatusV6;
+	title: string;
+	command: string;
+	evidencePath?: string;
+	reason: string;
+	blocking?: boolean;
+}): MemoryOrchestratorStepV6 {
+	return {
+		id: input.id,
+		phase: input.phase,
+		status: input.status,
+		title: input.title,
+		command: input.command,
+		evidencePath: input.evidencePath,
+		reason: truncateMiddle(input.reason, 420),
+		blocking: input.blocking ?? input.status === "blocked",
+	};
+}
+
+function memoryOrchestratorPhaseCommand(phase: MemoryOrchestratorPhaseV6, target?: string): string {
+	const suffix = target?.trim() ? ` ${target.trim()}` : "";
+	if (phase === "pre-task") return `re_memory orchestrate pre-task${suffix}`;
+	if (phase === "pre-operator") return `re_memory orchestrate pre-operator${suffix}`;
+	if (phase === "post-tool") return `re_memory orchestrate post-tool${suffix}`;
+	if (phase === "post-failure") return `re_memory orchestrate post-failure${suffix}`;
+	if (phase === "post-success") return `re_memory orchestrate post-success${suffix}`;
+	if (phase === "pre-compact") return `re_memory orchestrate pre-compact${suffix}`;
+	if (phase === "post-compact") return `re_memory orchestrate post-compact${suffix}`;
+	if (phase === "final") return `re_memory orchestrate final${suffix}`;
+	return `re_memory orchestrate full${suffix}`;
+}
+
+function memoryOrchestratorNextCommands(report: Pick<MemoryOrchestratorReportV6, "phase" | "target" | "injectionCommands" | "promotionEventIds" | "demotionEventIds" | "scopeBlockedEventIds" | "storeGrade" | "compactResumeStatus">): string[] {
+	const target = report.target;
+	const suffix = target?.trim() ? ` ${target.trim()}` : "";
+	const phase = report.phase;
+	const commands = new Set<string>();
+	if (report.storeGrade === "repairable") commands.add("re_memory repair-index");
+	if (report.storeGrade === "blocked") commands.add("re_memory verify");
+	if (report.scopeBlockedEventIds.length) commands.add(`re_memory scope${suffix}`);
+	if (phase === "pre-task" || phase === "full") {
+		commands.add(`re_memory search-events${suffix}`);
+		commands.add(`re_memory sediment${suffix}`);
+		commands.add(memoryOrchestratorPhaseCommand("pre-operator", target));
+	}
+	if (phase === "pre-operator" || phase === "full") {
+		for (const command of report.injectionCommands.slice(0, 4)) commands.add(command);
+		commands.add(`re_operator plan${suffix}`);
+		commands.add(memoryOrchestratorPhaseCommand("post-tool", target));
+	}
+	if (phase === "post-tool" || phase === "full") {
+		commands.add('re_memory append outcome=partial artifactPath=<artifact> "tool result + evidence hash + next reuse rule"');
+		commands.add(memoryOrchestratorPhaseCommand("post-success", target));
+		commands.add(memoryOrchestratorPhaseCommand("post-failure", target));
+	}
+	if (phase === "post-failure" || phase === "full") {
+		commands.add('re_memory append outcome=failure confidence=0.7 "failure signature + stderr + repair queue"');
+		commands.add("re_autofix plan");
+	}
+	if (phase === "post-success" || phase === "full") {
+		commands.add('re_memory append outcome=success replayVerified=true playbookCandidate=true "verified replay/proof evidence"');
+		if (report.promotionEventIds.length) commands.add("re_memory playbooks");
+	}
+	if (phase === "pre-compact" || phase === "full") {
+		commands.add("re_memory snapshot");
+		commands.add("re_context pack");
+	}
+	if (phase === "post-compact" || phase === "full") {
+		if (report.compactResumeStatus !== "pass") commands.add("re_context resume");
+		commands.add(memoryOrchestratorPhaseCommand("pre-operator", target));
+	}
+	if (phase === "final" || phase === "full") {
+		commands.add("re_memory supervise");
+		commands.add("re_memory feedback");
+		if (report.demotionEventIds.length) commands.add("re_memory prune-playbooks");
+		commands.add("re_complete audit");
+	}
+	return Array.from(commands).slice(0, 18);
+}
+
+function buildMemoryOrchestratorReport(options: MemoryOrchestratorOptions = {}): MemoryOrchestratorReportV6 {
+	ensureReconStorage();
+	const mission = readCurrentMission();
+	const phase = normalizeMemoryOrchestratorPhase(options.phase);
+	const route = options.route ?? mission?.route.domain;
+	const target = options.target ?? artifactScopeInferTarget(options.query) ?? artifactScopeInferTarget(mission?.task);
+	const query = uniqueNonEmpty([options.query, target, route, mission?.task], 4).join(" ") || "REPI memory orchestration";
+	const store = verifyMemoryStore();
+	const scope = buildMemoryScopeIsolationReport({ route, target, write: options.write });
+	const retrievalHits = searchMemoryEvents(query, { route, target, limit: 8 });
+	const vector = searchMemoryVectors(query, { route, target, limit: 8 });
+	const sedimentation = buildMemorySemanticIndex({ route, target, maxEntries: 32 });
+	const feedback = buildMemoryFeedbackClosureReport({ sedimentation });
+	const supervisor = superviseMemoryLifecycle();
+	const artifactScopeFilter =
+		options.artifactScopeFilter ??
+		buildArtifactScopeFilterReport({
+			route,
+			target,
+			requestedBy: `memory_orchestrator:${phase}`,
+			artifacts: [],
+			write: options.write,
+		});
+	const compact = verifyCompactionResumeLedger();
+	const injectionEventIds = uniqueNonEmpty(sedimentation.injectionPacket.entries.map((entry) => entry.eventId), 64);
+	const injectionCommands = uniqueNonEmpty(sedimentation.injectionPacket.commands, 24);
+	const promotionEventIds = uniqueNonEmpty(supervisor.promotionQueue.flatMap((decision) => decision.eventIds), 64);
+	const demotionEventIds = uniqueNonEmpty(
+		[...supervisor.demotionQueue, ...supervisor.quarantineQueue, ...supervisor.expireQueue].flatMap((decision) => decision.eventIds),
+		64,
+	);
+	const feedbackPendingEventIds = uniqueNonEmpty(feedback.pendingFeedbackEventIds, 64);
+	const stepRows: MemoryOrchestratorStepV6[] = [
+		memoryOrchestratorStep({
+			id: "pre_task_retrieve",
+			phase: "pre-task",
+			status:
+				store.storeGrade === "blocked"
+					? "blocked"
+					: retrievalHits.length || vector.hits.length || readMemoryEvents().length === 0
+						? "pass"
+						: "warn",
+			title: "任务开始前强制检索同 scope memory",
+			command: `re_memory search-events ${query}`,
+			evidencePath: memoryRetrievalReportPath(),
+			reason: `store=${store.storeGrade} retrieval_hits=${retrievalHits.length} vector_hits=${vector.hits.length}`,
+		}),
+		memoryOrchestratorStep({
+			id: "scope_filter_before_injection",
+			phase: "pre-operator",
+			status: scope.blockedEventIds.length || artifactScopeFilter.blockedArtifactCount ? "blocked" : "pass",
+			title: "注入前 scope isolation + artifact side-channel 过滤",
+			command: `re_memory scope${target ? ` ${target}` : ""} && re_memory artifact-scope${target ? ` ${target}` : ""}`,
+			evidencePath: scope.scopeIsolationReportPath,
+			reason: `scope_blocked=${scope.blockedEventIds.length} artifact_blocked=${artifactScopeFilter.blockedArtifactCount}`,
+		}),
+		memoryOrchestratorStep({
+			id: "pre_operator_injection",
+			phase: "pre-operator",
+			status: injectionEventIds.length ? "pass" : readMemoryEvents().length ? "warn" : "pending",
+			title: "把可复用 memory 编译成 operator 可执行注入包",
+			command: "re_memory sediment",
+			evidencePath: sedimentation.injectionPacketPath,
+			reason: `injection_events=${injectionEventIds.length} injection_commands=${injectionCommands.length}`,
+		}),
+		memoryOrchestratorStep({
+			id: "post_tool_writeback_contract",
+			phase: "post-tool",
+			status: "pending",
+			title: "每个关键 tool/runtime artifact 后写回 MemoryStoreV5",
+			command: 're_memory append outcome=partial artifactPath=<artifact> "tool result + evidence hash + next reuse rule"',
+			evidencePath: memoryEventsPath(),
+			reason: "post-tool hook contract is explicit; runtime writers append replayer/autofix/proof/operator/swarm artifacts when executed",
+		}),
+		memoryOrchestratorStep({
+			id: "post_failure_writeback",
+			phase: "post-failure",
+			status: demotionEventIds.length ? "pass" : "pending",
+			title: "失败路线写入 failure memory 并进入 demotion/repair",
+			command: 're_memory append outcome=failure confidence=0.7 "failure signature + stderr + repair queue"',
+			evidencePath: memoryFeedbackClosureReportPath(),
+			reason: `demotion_or_quarantine_events=${demotionEventIds.length}`,
+		}),
+		memoryOrchestratorStep({
+			id: "post_success_promote",
+			phase: "post-success",
+			status: promotionEventIds.length ? "pass" : "pending",
+			title: "成功路线写入 verified feedback 并进入 promotion/playbook",
+			command: 're_memory append outcome=success replayVerified=true playbookCandidate=true "verified replay/proof evidence"',
+			evidencePath: memorySupervisorReportPath(),
+			reason: `promotion_events=${promotionEventIds.length}`,
+		}),
+		memoryOrchestratorStep({
+			id: "pre_compact_snapshot",
+			phase: "pre-compact",
+			status: store.storeGrade === "blocked" ? "blocked" : "pass",
+			title: "compact 前持久化 memory snapshot 与 injection packet",
+			command: "re_memory snapshot && re_context pack",
+			evidencePath: memoryStoreSnapshotPath(),
+			reason: `snapshot=${memoryStoreSnapshotPath()} injection_packet=${memoryInjectionPacketPath()}`,
+		}),
+		memoryOrchestratorStep({
+			id: "post_compact_resume_memory_injection",
+			phase: "post-compact",
+			status: compact.status === "corrupt" ? "blocked" : compact.status === "missing" ? "warn" : "pass",
+			title: "compact 后按 resume ledger 恢复 memory hints / operator queue",
+			command: "re_context resume && re_memory orchestrate pre-operator",
+			evidencePath: compact.path,
+			reason: `compact_resume_ledger=${compact.status} rows=${compact.rows}`,
+		}),
+		memoryOrchestratorStep({
+			id: "final_supervise_before_claim",
+			phase: "final",
+			status: supervisor.storeGrade === "blocked" || feedback.closureStatus === "fail" ? "blocked" : "pass",
+			title: "最终输出前强制 supervise / feedback closure",
+			command: "re_memory supervise && re_memory feedback && re_complete audit",
+			evidencePath: supervisor.supervisorReportPath,
+			reason: `supervisor_store=${supervisor.storeGrade} feedback=${feedback.closureStatus} pending_feedback=${feedbackPendingEventIds.length}`,
+		}),
+	];
+	const reportBase = {
+		kind: "repi-memory-orchestrator-report" as const,
+		schemaVersion: 1 as const,
+		generatedAt: new Date().toISOString(),
+		MemoryOrchestratorV6: true as const,
+		mandatory_memory_control_loop: true as const,
+		phase,
+		reportPath: memoryOrchestratorReportPath(),
+		currentScope: scope.currentScope,
+		query,
+		route,
+		target,
+		storeGrade: store.storeGrade,
+		hashChainOk: store.hashChainOk,
+		retrievalReportPath: memoryRetrievalReportPath(),
+		retrievalHitIds: retrievalHits.map((hit) => hit.event.id),
+		vectorSearchReportPath: vector.reportPath,
+		vectorHitIds: vector.hits.map((hit) => hit.eventId),
+		scopeIsolationReportPath: scope.scopeIsolationReportPath,
+		scopeBlockedEventIds: scope.blockedEventIds,
+		scopeWarnEventIds: scope.warnEventIds,
+		artifactScopeFilterReportPath: artifactScopeFilter.reportPath,
+		artifactScopeBlockedArtifacts: artifactScopeFilter.quarantinedArtifacts,
+		injectionPacketPath: sedimentation.injectionPacketPath,
+		injectionEventIds,
+		injectionCommands,
+		feedbackClosureReportPath: feedback.feedbackClosureReportPath,
+		feedbackPendingEventIds,
+		supervisorReportPath: supervisor.supervisorReportPath,
+		promotionEventIds,
+		demotionEventIds,
+		compactResumeLedgerPath: compact.path,
+		compactResumeStatus: compact.status,
+		steps: stepRows,
+		requiredGates: [
+			"MemoryOrchestratorV6",
+			"mandatory_memory_control_loop",
+			"pre_task_retrieve_before_operator",
+			"scope_filter_before_memory_injection",
+			"post_tool_writeback_contract",
+			"failure_success_feedback_closure",
+			"pre_compact_memory_snapshot",
+			"post_compact_resume_memory_injection",
+			"final_supervise_before_claim",
+			"memory_orchestrator_report_in_context_pack",
+		],
+		policy: {
+			MemoryOrchestratorV6: true as const,
+			preTaskRetrieveBeforeOperator: true as const,
+			scopeFilterBeforeMemoryInjection: true as const,
+			postToolWritebackContract: true as const,
+			failureSuccessFeedbackClosure: true as const,
+			preCompactMemorySnapshot: true as const,
+			postCompactResumeMemoryInjection: true as const,
+			finalSuperviseBeforeClaim: true as const,
+		},
+	};
+	const report: MemoryOrchestratorReportV6 = {
+		...reportBase,
+		nextCommands: memoryOrchestratorNextCommands(reportBase),
+	};
+	if (options.write !== false) writeFileAtomic(memoryOrchestratorReportPath(), `${JSON.stringify(report, null, 2)}\n`);
+	return report;
+}
+
+function formatMemoryOrchestrator(report = buildMemoryOrchestratorReport()): string {
+	return [
+		"memory_orchestrator_v6:",
+		`MemoryOrchestratorV6=${report.MemoryOrchestratorV6}`,
+		`mandatory_memory_control_loop=${report.mandatory_memory_control_loop}`,
+		`phase=${report.phase}`,
+		`query=${report.query}`,
+		`route=${report.route ?? "none"}`,
+		`target=${report.target ?? "none"}`,
+		`store_grade=${report.storeGrade}`,
+		`hash_chain_ok=${report.hashChainOk}`,
+		`retrieval_hits=${report.retrievalHitIds.length}`,
+		`vector_hits=${report.vectorHitIds.length}`,
+		`scope_blocked=${report.scopeBlockedEventIds.length}`,
+		`artifact_scope_blocked=${report.artifactScopeBlockedArtifacts.length}`,
+		`injection_events=${report.injectionEventIds.length}`,
+		`feedback_pending=${report.feedbackPendingEventIds.length}`,
+		`promotion_events=${report.promotionEventIds.length}`,
+		`demotion_events=${report.demotionEventIds.length}`,
+		`compact_resume_status=${report.compactResumeStatus}`,
+		`report=${report.reportPath}`,
+		"steps:",
+		...report.steps.map(
+			(step) =>
+				`- id=${step.id} phase=${step.phase} status=${step.status} blocking=${step.blocking} command=${step.command} reason=${step.reason}`,
+		),
+		"injection_commands:",
+		...(report.injectionCommands.length ? report.injectionCommands.slice(0, 12).map((command) => `- ${command}`) : ["- none"]),
+		"next_commands:",
+		...(report.nextCommands.length ? report.nextCommands.map((command) => `- ${command}`) : ["- none"]),
 		"required_gates:",
 		...report.requiredGates.map((gate) => `- ${gate}`),
 	].join("\n");
@@ -28242,9 +29012,31 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 	});
 	pi.registerCommand("re-memory", {
 		description:
-			"Read, append, evolve, search, verify, repair, snapshot, eval, feedback, vector, distill, sediment, supervise, or maintain REPI memory: /re-memory [show|events|search|vector|append|evolve|verify|repair-index|snapshot|eval|feedback|consolidate|distill|sediment|supervise|playbooks|prune-playbooks] ...",
+			"Read, append, evolve, search, orchestrate, verify, repair, snapshot, eval, feedback, vector, distill, sediment, supervise, or maintain REPI memory: /re-memory [show|events|search|orchestrate|pre-task|pre-operator|post-tool|post-failure|post-success|pre-compact|post-compact|final|vector|append|evolve|verify|repair-index|snapshot|eval|feedback|consolidate|distill|sediment|supervise|playbooks|prune-playbooks] ...",
 		handler: async (args) => {
 			const trimmed = args.trim();
+			const memoryOrchestratorMatch =
+				/^(orchestrate|orchestrator|pre-task|pre-operator|post-tool|post-failure|post-success|pre-compact|post-compact|final|finalize|full)(?:\s+([\s\S]*))?$/i.exec(
+					trimmed,
+				);
+			if (memoryOrchestratorMatch) {
+				const action = memoryOrchestratorMatch[1] ?? "full";
+				const rest = (memoryOrchestratorMatch[2] ?? "").trim();
+				const parts = rest.split(/\s+/).filter(Boolean);
+				const phase =
+					/^(?:orchestrate|orchestrator)$/i.test(action) && parts[0]
+						? normalizeMemoryOrchestratorPhase(parts.shift())
+						: normalizeMemoryOrchestratorPhase(action);
+				const query = parts.join(" ") || rest || undefined;
+				const report = buildMemoryOrchestratorReport({ phase, query, target: artifactScopeInferTarget(query) });
+				updateMissionGate(
+					"memory_checked",
+					report.steps.some((step) => step.blocking) ? "blocked" : "done",
+					`MemoryOrchestratorV6 phase=${report.phase} blocking=${report.steps.filter((step) => step.blocking).length}`,
+				);
+				sendDisplayMessage(pi, "REPI Memory Orchestrator", formatMemoryOrchestrator(report));
+				return;
+			}
 			if (trimmed.startsWith("append ")) {
 				const body = trimmed.slice("append ".length);
 				const directives = parseMemoryAppendDirectives(body);
@@ -29063,15 +29855,27 @@ function installReconTools(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "re_memory",
 		label: "RE Memory",
-		description: "Read, search, vector-rerank, append, evolve, verify, evaluate, distill, sediment, supervise, or maintain REPI long-term memory and playbooks.",
-		promptSnippet: "Use long-term reverse/pentest memory for reusable evidence and lessons.",
-		promptGuidelines: ["Before repeating a known security workflow, inspect re_memory for similar cases."],
+		description: "Read, search, vector-rerank, orchestrate, append, evolve, verify, evaluate, distill, sediment, supervise, or maintain REPI long-term memory and playbooks.",
+		promptSnippet: "Use MemoryOrchestratorV6 to retrieve, inject, write back, compact-resume, and supervise long-term reverse/pentest memory.",
+		promptGuidelines: ["Before repeating a known security workflow, call re_memory orchestrate/pre-task for similar cases and scope-safe injection hints."],
 		parameters: Type.Object({
 			action: Type.Union([
 				Type.Literal("show"),
 				Type.Literal("search"),
 				Type.Literal("events"),
 				Type.Literal("search-events"),
+				Type.Literal("orchestrate"),
+				Type.Literal("orchestrator"),
+				Type.Literal("pre-task"),
+				Type.Literal("pre-operator"),
+				Type.Literal("post-tool"),
+				Type.Literal("post-failure"),
+				Type.Literal("post-success"),
+				Type.Literal("pre-compact"),
+				Type.Literal("post-compact"),
+				Type.Literal("final"),
+				Type.Literal("finalize"),
+				Type.Literal("full"),
 				Type.Literal("vector"),
 				Type.Literal("vectors"),
 				Type.Literal("rerank"),
@@ -29089,6 +29893,8 @@ function installReconTools(pi: ExtensionAPI): void {
 				Type.Literal("feedback-closure"),
 				Type.Literal("scope"),
 				Type.Literal("scope-isolation"),
+				Type.Literal("artifact-scope"),
+				Type.Literal("artifact-scope-filter"),
 				Type.Literal("consolidate"),
 				Type.Literal("distill"),
 				Type.Literal("sediment"),
@@ -29101,11 +29907,46 @@ function installReconTools(pi: ExtensionAPI): void {
 				Type.Literal("prune-playbooks"),
 			]),
 			query: Type.Optional(Type.String()),
+			phase: Type.Optional(Type.String()),
+			route: Type.Optional(Type.String()),
+			target: Type.Optional(Type.String()),
 			scene: Type.Optional(Type.String()),
 			title: Type.Optional(Type.String()),
 			text: Type.Optional(Type.String()),
 		}),
 		async execute(_toolCallId, params) {
+			if (
+				params.action === "orchestrate" ||
+				params.action === "orchestrator" ||
+				params.action === "pre-task" ||
+				params.action === "pre-operator" ||
+				params.action === "post-tool" ||
+				params.action === "post-failure" ||
+				params.action === "post-success" ||
+				params.action === "pre-compact" ||
+				params.action === "post-compact" ||
+				params.action === "final" ||
+				params.action === "finalize" ||
+				params.action === "full"
+			) {
+				const phase = normalizeMemoryOrchestratorPhase(params.phase ?? params.action);
+				const report = buildMemoryOrchestratorReport({
+					phase,
+					query: params.query ?? params.text,
+					route: params.route,
+					target: params.target ?? artifactScopeInferTarget(params.query ?? params.text),
+				});
+				const blocking = report.steps.filter((step) => step.blocking);
+				updateMissionGate(
+					"memory_checked",
+					blocking.length ? "blocked" : "done",
+					`MemoryOrchestratorV6 phase=${report.phase} blocking=${blocking.length}`,
+				);
+				return {
+					content: [{ type: "text" as const, text: formatMemoryOrchestrator(report) }],
+					details: report as unknown as Record<string, unknown>,
+				};
+			}
 			if (params.action === "append") {
 				const text = params.text ?? "";
 				const directives = parseMemoryAppendDirectives(text);
@@ -29211,6 +30052,22 @@ function installReconTools(pi: ExtensionAPI): void {
 				return {
 					content: [{ type: "text" as const, text }],
 					details: report as unknown as Record<string, unknown>,
+				};
+			}
+			if (params.action === "artifact-scope" || params.action === "artifact-scope-filter") {
+				const selection = scopedContextArtifactIndex({
+					target: params.query,
+					requestedBy: "re_memory_artifact_scope_filter",
+				});
+				const text = formatArtifactScopeFilter(selection.artifactScopeFilter);
+				updateMissionGate(
+					"memory_checked",
+					selection.artifactScopeFilter.blockedArtifactCount ? "blocked" : "done",
+					`ArtifactScopeFilterV1 blocked=${selection.artifactScopeFilter.blockedArtifactCount}`,
+				);
+				return {
+					content: [{ type: "text" as const, text }],
+					details: selection.artifactScopeFilter as unknown as Record<string, unknown>,
 				};
 			}
 			if (params.action === "consolidate") {
@@ -29807,11 +30664,12 @@ function installReconTools(pi: ExtensionAPI): void {
 			const action = params.action ?? "pack";
 			const contextRef = params.contextPath ?? params.compactionEntryId;
 			const text = buildContextOutput(action, { target: params.target, contextRef });
+			const contextPath = /^context_artifact:\s*(.+)$/m.exec(text)?.[1]?.trim() ?? latestContextPackArtifactPath({ target: params.target });
 			return {
 				content: [{ type: "text" as const, text }],
 				details: {
 					action,
-					path: latestContextPackArtifactPath(),
+					path: contextPath,
 					target: params.target,
 					contextPath: params.contextPath,
 					compactionEntryId: params.compactionEntryId,
@@ -30027,12 +30885,10 @@ function installReconTools(pi: ExtensionAPI): void {
 		async execute(_toolCallId, params) {
 			const action = params.action ?? "build";
 			const text = buildKnowledgeGraphOutput(action, { query: params.query, target: params.target });
+			const path = /^knowledge_artifact:\s*(.+)$/m.exec(text)?.[1]?.trim() ?? latestKnowledgeGraphArtifactPath({ target: params.target });
 			return {
 				content: [{ type: "text" as const, text }],
-				details: { action, path: latestKnowledgeGraphArtifactPath(), query: params.query } as Record<
-					string,
-					unknown
-				>,
+				details: { action, path, query: params.query } as Record<string, unknown>,
 			};
 		},
 	});

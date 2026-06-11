@@ -47,7 +47,7 @@ re_kernel → re_decision_core → re_map → re_operation → re_delegate
 - `re_operation` / `re_delegate` / `re_swarm`：把大任务拆成 phase、worker packet、parallel plan。
 - `re_supervisor`：审查 worker 输出，生成冲突表、claim gate policy 和修复队列。
 - `re_reflect` / `re_knowledge_graph`：沉淀经验、case signature、playbook 和跨任务知识；`re_knowledge_graph` 会消费 `KnowledgeScopeIsolationV1`，阻断跨 workspace/target/route 污染 artifact 进入 similarity / command hints。
-- `re_memory events/search-events/verify/repair-index/snapshot/eval/feedback/scope/vector/consolidate/distill/sediment/supervise`：读取结构化长期记忆、检索可复用 case、校验/修复事务化 store、汇总高质量经验，把事件蒸馏为 command template / verifier rule / worker routing hint，并生成 Memory v4 semantic-index、contradiction-ledger、mandatory injection packet，以及 Memory Supervisor 的 supervisor-report / lifecycle-board。
+- `re_memory events/search-events/verify/repair-index/snapshot/eval/feedback/scope/artifact-scope/vector/consolidate/distill/sediment/supervise`：读取结构化长期记忆、检索可复用 case、校验/修复事务化 store、汇总高质量经验，把事件蒸馏为 command template / verifier rule / worker routing hint，并生成 Memory v4 semantic-index、contradiction-ledger、mandatory injection packet，以及 Memory Supervisor 的 supervisor-report / lifecycle-board；`artifact-scope` 会输出 `ArtifactScopeFilterV1`，检查 latest artifact/context index 是否会绕过 scope 隔离。
 - `re_context`：生成可恢复上下文包，支持 exact resume。
 - `re_operator`：把 next commands 转成 bounded operator queue。
 - `re_verifier` / `re_compiler` / `re_replayer` / `re_autofix` / `re_proof_loop`：验证、报告编译、复现、修复、闭环证明。
@@ -63,7 +63,7 @@ re_kernel → re_decision_core → re_map → re_operation → re_delegate
 - Memory utility hard-eval：`npm run gate:memory-utility` 用跨目标 authz 与 pwn 负例 fixture 验证“正确召回”——高置信、已复现、同 route 的成功经验应排第一并给出可迁移命令；失败、过旧、跨 route 的噪声不能进入高位或污染命令建议。
 - Memory reuse feedback：`re_lane run` 复用 `memory-event:*` 命令后会自动写回在线学习闭环；强证据会追加 `memory_reuse_feedback_promote` 事件并提升同 case，弱证据/失败会追加 `memory_reuse_feedback_demote` 事件并让后续检索降权。`npm run gate:memory-feedback` 用成功提升和失败降权双场景保护该行为。
 - Memory feedback closure：`re_memory feedback` 会读取 `memory/injection-packet.json`，把已注入记忆的后续反馈固化到 `memory/feedback-closure-report.json`；成功反馈进入 `promotionReadyEventIds`，失败反馈进入 `demotionRequiredEventIds` 并让 `re_memory supervise` 降权，未反馈的 injected memory 保持 `pendingFeedbackEventIds`。`npm run gate:memory-feedback-closure` 真实调用 `re_memory feedback/supervise` 验证 promote / demote / pending 三类闭环。
-- Memory scope isolation：每条 `MemoryEventV1` 现在带 `MemoryScopeV1`（mission/session/workspace/branch/route/target）。`re_memory scope [target]` 写 `memory/scope-isolation-report.json`，按 `scope_filter_by_mission_session_workspace_target` 判断 allow/warn/block；跨 workspace/target/route 的记忆会 `blocksInjection=true` 并在 `re_memory sediment` 前 quarantine，legacy 无 scope 的旧记忆只 warn/manual-review。`re_knowledge_graph build/query` 继续生成 `KnowledgeScopeIsolationV1`，把 scope-blocked artifact 从 `command_strategy_hints` / `similarity_index` 剔除，只保留 `scope_quarantine` 证据节点。`npm run gate:memory-scope-isolation` 真实调用 `re_memory scope/sediment` 和 `re_context pack`；`npm run gate:knowledge-scope-isolation` 真实调用 `re_knowledge_graph build`，验证 blocked artifact 不进入 command hints/similarity、allowed artifact 仍可复用。
+- Memory scope isolation：每条 `MemoryEventV1` 现在带 `MemoryScopeV1`（mission/session/workspace/branch/route/target）。`re_memory scope [target]` 写 `memory/scope-isolation-report.json`，按 `scope_filter_by_mission_session_workspace_target` 判断 allow/warn/block；跨 workspace/target/route 的记忆会 `blocksInjection=true` 并在 `re_memory sediment` 前 quarantine，legacy 无 scope 的旧记忆只 warn/manual-review。`re_knowledge_graph build/query` 继续生成 `KnowledgeScopeIsolationV1`，把 scope-blocked artifact 从 `command_strategy_hints` / `similarity_index` 剔除，只保留 `scope_quarantine` 证据节点。`re_context pack` 还会生成 `ArtifactScopeFilterV1` / `memory/artifact-scope-filter-report.json`，把同一 verdict 传播到 latest artifact side-channel：如果最新 run/browser/verifier 等 artifact 属于其它 workspace/target/route，会被跳过并在 context artifact_index 中保留较旧但同 scope 的 artifact。`npm run gate:memory-scope-isolation` 真实调用 `re_memory scope/sediment` 和 `re_context pack`；`npm run gate:knowledge-scope-isolation` 真实调用 `re_knowledge_graph build`；`npm run gate:artifact-scope-filter` 验证 blocked latest artifact 不进入 context index、allowed older artifact 仍可复用。
 - Memory hybrid retrieval：`re_memory search-events` 不再只靠精确 token；它会结合语义轻量召回、case-memory 文本、artifact path/tier 和在线反馈一起打分。`npm run gate:memory-hybrid` 用 `idor/bola/acl`→authz ownership、PCAP artifact 召回等场景保护该能力。Memory Vector rerank：`re_memory vector <query>` 会生成 `memory/vector-index.json` 与 `memory/vector-search-report.json`，默认使用本地 deterministic `repi-local-hash-embedding-v1` 做 64 维 hash embedding/rerank；也可通过 `REPI_MEMORY_EMBEDDING_PROVIDER=openai-compatible`、`REPI_MEMORY_EMBEDDING_BASE_URL`、`REPI_MEMORY_EMBEDDING_MODEL`、`REPI_MEMORY_EMBEDDING_API_KEY_ENV` 和显式 `REPI_MEMORY_EMBEDDING_ALLOW_REMOTE=1` 切到 OpenAI-compatible embedding 后端，缺配置时自动 `local_hash_embedding_fallback`。它会把 `MemoryEmbeddingProviderV1` 和 `memory_vector_rerank` reason 接入 `search-events` 排序；`npm run gate:memory-vector` 真实调用 vector/search-events，验证 index/search schema、provider fallback、跨 route forbidden leak 和 quality-weighted rerank。
 - Memory usefulness eval：`re_memory eval` 会生成 `usefulness-eval.json`，度量 hit@1、hit@k、MRR、forbiddenLeakRate 和空召回率；`npm run gate:memory-usefulness` 用 authz / pwn 正召回、失败/跨 route forbidden memory 不进 topK、child-process 并发 append 保持 hash-chain 的 hard-eval 保护“记忆真的有用”。
 - Memory v3 distiller：`re_memory distill` 会把 `events.jsonl` 中高置信、已复现、同 route 的经验蒸馏进 `distillation-report.json` / `pattern-book.md`，产出 `command_template`、`verifier_rule`、`worker_routing_hint`，并强制记录 `mandatory_memory_injection_chain=retrieve -> rank -> inject -> execute -> verify -> feedback`。跨 route/cross target/高置信矛盾/陈旧失败会进入 `quarantine.json`，避免把脏经验继续注入计划。`npm run gate:memory-distiller` 用 promote、quarantine、hash drift、低置信负例保护该能力。
@@ -262,6 +262,8 @@ readlink -f "$(command -v repi)"
 repi --offline --help
 repi --offline --list-models
 npm run gate:repi-harness
+# 单独验证 MemoryOrchestratorV6 主循环
+npm run gate:memory-orchestrator
 npm run gate:repi-product
 npm run gate:repi-isolation
 ```
@@ -376,7 +378,7 @@ pack 中包含：
 - `schema_version: 2`
 - `artifact_index` 与每个 artifact 的 sha256 / size / mtime / exists
 - `artifactHashes`
-- MemoryStoreV5 / sedimentation hash：`memory_events`、`memory_case_memory`、`memory_store_report`、`memory_store_snapshot`、`memory_usefulness_eval`、`memory_scope_isolation`、`memory_distillation_report`、`memory_injection_packet`、`memory_sedimentation_report`
+- MemoryStoreV5 / sedimentation hash：`memory_events`、`memory_case_memory`、`memory_store_report`、`memory_store_snapshot`、`memory_usefulness_eval`、`memory_scope_isolation`、`artifact_scope_filter`、`memory_distillation_report`、`memory_injection_packet`、`memory_sedimentation_report`
 - `scope`：session、workspace、target、branch
 - `resumeQueueStatus`
 - `closure`
@@ -447,7 +449,7 @@ re_memory { "action": "sediment" }
 - `appendMemoryEvent` 走 Memory v5 transaction path：先抢 `.store.lock`，再验证 `events.jsonl` parse/seq/prevHash/entryHash，写入 `transactions/memtx:*.json`，最后原子替换 `events.jsonl` 与 `case-memory.jsonl`。如果事件链损坏，追加会被阻断并要求先 `re_memory verify` / 手动恢复；如果只是 case index 缺失或落后，`re_memory repair-index` 会从事件链重建。
 - `re_lane run` 现在不只在复用旧记忆时写 feedback；只要运行结果有强/中等证据、明显 findings 或可修复失败，也会自动追加一条 `memory_auto_writeback` 事件，把 lane、runtime artifact sha256、evidence_quality、self-heal 和 verifier 候选写回 MemoryStoreV5。
 - `re_swarm run` 现在会对每个已执行 worker 自动追加 `memory-swarm-writeback` 事件，把 worker role/status、SubagentRuntimeManifestV1、stdout/stderr/toolCallDigest、claim ledger、structured claim merge、manifest index 和执行命令写回 MemoryStoreV5；plan/merge 模式只保留 artifact，不重复写入长期记忆。
-- `re_lane plan` 会读取 playbook、knowledge graph 和 `events.jsonl`，把高分结构化历史命令合入命令包，并在 notes 中显示 `memory_event_reuse`；knowledge graph 的命令/相似案例已先经过 `KnowledgeScopeIsolationV1` 过滤，避免跨任务 artifact 污染计划。
+- `re_lane plan` 会读取 playbook、knowledge graph 和 `events.jsonl`，把高分结构化历史命令合入命令包，并在 notes 中显示 `memory_event_reuse`；knowledge graph 的命令/相似案例已先经过 `KnowledgeScopeIsolationV1` 过滤，`re_context pack` 的 latest artifact/index 旁路也经过 `ArtifactScopeFilterV1` 过滤，避免跨任务 artifact 污染计划。
 - `re_lane run` 执行到结构化记忆命令后会写 `memory_reuse_feedback`：成功/强证据形成 promote 事件，失败/弱证据形成 demote 事件；后续 `search-events` 会把同 case 的 `reuseCount/failureCount/decay/replayVerified` 作为在线学习闭环纳入排序和命令建议。
 - `re_memory scope` 会生成 `scope-isolation-report.json`，把同 scope 记忆标为 allow，把跨 workspace/target/route 污染记忆标为 block/quarantine，把 legacy 无 scope 记忆标为 manual-review；Memory v4 sedimentation 会读取该报告，阻断 cross-scope 记忆进入 injection packet。
 - `re_memory search-events` 已接入 hybrid retrieval：精确 token 命中之外，还会用 `memory_semantic_hybrid_reuse`、`case-memory-hybrid`、`artifact-hybrid` 三类原因解释召回，覆盖术语不一致但工程语义相同的场景。
@@ -458,7 +460,7 @@ re_memory { "action": "sediment" }
 - 每条 memory event 带 `quality.confidence`、`replayVerified`、`reuseCount`、`failureCount`、`decay`；检索时低置信、失败和衰减记录会降权，带 route 的检索会阻断跨域 command reuse，避免 Web/authz 经验污染 pwn 或相反。
 - 结构化契约由 `schemas/reverse-agent/memory-event.schema.json`、`fixtures/reverse-agent/memory-event.fixture.json` 和 `npm run gate:memory-contract` 保护。
 - Memory utility hard-eval 由 `fixtures/reverse-agent/memory-utility.fixture.json` 与 `npm run gate:memory-utility` 保护：它不只验证能写入，还验证能正确召回高价值事件、降权失败/陈旧噪声、拒绝跨 route 命令建议。
-- Memory reuse feedback hard-eval 由 `fixtures/reverse-agent/memory-feedback.fixture.json` 与 `npm run gate:memory-feedback` 保护：它验证复用成功会提升 case、复用失败会降权 case，且失败 case 不再继续污染命令建议；`npm run gate:memory-feedback-closure` 进一步验证 injected memory 的 feedback closure report、pending writeback 和 supervisor demotion；`npm run gate:memory-scope-isolation` 验证 `MemoryScopeIsolationV1`、cross-session/workspace/target 负例、legacy manual-review、sedimentation 阻断和 context pack 中的 `memory_scope_isolation`；`npm run gate:knowledge-scope-isolation` 验证 `KnowledgeScopeIsolationV1`、blocked artifact quarantine、command hints/similarity 过滤和 allowed artifact 保留。
+- Memory reuse feedback hard-eval 由 `fixtures/reverse-agent/memory-feedback.fixture.json` 与 `npm run gate:memory-feedback` 保护：它验证复用成功会提升 case、复用失败会降权 case，且失败 case 不再继续污染命令建议；`npm run gate:memory-feedback-closure` 进一步验证 injected memory 的 feedback closure report、pending writeback 和 supervisor demotion；`npm run gate:memory-scope-isolation` 验证 `MemoryScopeIsolationV1`、cross-session/workspace/target 负例、legacy manual-review、sedimentation 阻断和 context pack 中的 `memory_scope_isolation`；`npm run gate:knowledge-scope-isolation` 验证 `KnowledgeScopeIsolationV1`、blocked artifact quarantine、command hints/similarity 过滤和 allowed artifact 保留；`npm run gate:artifact-scope-filter` 验证 latest artifact side-channel 不再绕过 scope verdict。
 - Memory hybrid retrieval hard-eval 由 `fixtures/reverse-agent/memory-hybrid.fixture.json` 与 `npm run gate:memory-hybrid` 保护：它验证语义轻量召回、case-memory 辅助召回、artifact path/tier 召回都能进入排序原因，并保持 route 隔离。
 - Memory usefulness eval hard-eval 由 `fixtures/reverse-agent/memory-usefulness.fixture.json` 与 `npm run gate:memory-usefulness` 保护：它验证 authz/pwn 场景的 hit@1、hit@k、MRR、forbidden memory 不进入 topK，并用同进程与 child-process 并发 append probe 验证 lock/transaction/hash-chain 不丢写。
 - Memory v3 distiller hard-eval 由 `fixtures/reverse-agent/memory-distiller.fixture.json` 与 `npm run gate:memory-distiller` 保护：它验证 promoted pattern、污染隔离、mandatory injection chain、hash drift 阻断、低置信不提升。
@@ -714,6 +716,7 @@ npm run gate:memory-feedback
 npm run gate:memory-feedback-closure
 npm run gate:memory-scope-isolation
 npm run gate:knowledge-scope-isolation
+npm run gate:artifact-scope-filter
 npm run gate:memory-hybrid
 npm run gate:memory-vector
 npm run gate:memory-usefulness
