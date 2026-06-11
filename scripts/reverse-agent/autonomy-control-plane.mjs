@@ -544,7 +544,7 @@ const CONTROL_CONTRACTS = [
 		id: "LiveConflictArbitrationMatrixGateV1",
 		pillar: "automatic_division_validation",
 		title: "cross-runtime live conflict arbitration matrix",
-		description: "agent-dogfood、re_swarm、compound-frontier 和 provider-worker 的 claim 必须进入同一个 live conflict arbitration matrix：覆盖 source manifests、runtime claim ledger refs、winner evidence、loser downgrade、synthesizer structured rows 和 orchestration/platform claim split。",
+		description: "agent-dogfood、re_swarm、compound-frontier 和 provider-worker 的 claim 必须进入同一个 live conflict arbitration matrix：覆盖 source manifests、runtime claim ledger refs、winner evidence、loser downgrade、provider-backed same-window multi-worker conflict table、long-run synthesizer topic parsing 和 orchestration/platform claim split。",
 		requiredFields: [
 			"kind",
 			"schemaVersion",
@@ -556,11 +556,13 @@ const CONTROL_CONTRACTS = [
 			"invariants",
 		],
 		nestedRequired: {
-			arbitrationMatrix: ["kind", "schemaVersion", "closureGate", "sources", "claimRows", "conflictRows", "promotionGate", "synthesizerRows"],
+			arbitrationMatrix: ["kind", "schemaVersion", "closureGate", "sources", "claimRows", "conflictRows", "providerBackedConflictTable", "promotionGate", "synthesizerRows", "synthesizerTopicParseMatrix"],
 			sources: ["sourceKind", "runtimeManifestPath", "structuredClaimMergePath", "claimLedgerPath", "claimLedgerQuality"],
 			claimRows: ["claimId", "workerId", "sourceKind", "mergeKey", "status", "artifactRefs", "orchestrationStatus", "platformClaimStatus"],
 			conflictRows: ["conflictId", "topic", "claimIds", "winnerClaimId", "winningEvidenceRefs", "loserDowngrades", "resolutionReason", "runtimeLedgerRefs"],
+			providerBackedConflictTable: ["kind", "tableId", "windowId", "sameWindow", "providerWorkerIds", "winnerClaimId", "loserClaimIds", "providerRuntimeManifestRefs", "requestLogRefs"],
 			promotionGate: ["mode", "finalClaims", "blockedClaims", "policies"],
+			synthesizerTopicParseMatrix: ["kind", "parseId", "longRunWindowIds", "topicRows", "narrativeOnlyBlockedRows"],
 			negativeCases: ["id", "mutates", "expect", "mustNotPromote"],
 		},
 		enumFields: {
@@ -573,6 +575,8 @@ const CONTROL_CONTRACTS = [
 				"orchestration_success_separate_from_platform_claim",
 				"synthesizer_summary_parsed_to_structured_rows",
 				"claim_ledger_refs_hash_chain_quality",
+				"provider_backed_same_window_multi_worker_conflict_table",
+				"long_run_synthesizer_topic_parse_matrix",
 			],
 			"sources.sourceKind": ["agent-dogfood", "re_swarm", "compound-frontier", "provider-worker"],
 			"negativeCases.id": [
@@ -584,6 +588,9 @@ const CONTROL_CONTRACTS = [
 				"claim-ledger-ref-missing",
 				"unresolved-conflict",
 				"final-without-json-query",
+				"provider-backed-conflict-single-worker",
+				"synthesizer-topic-parse-missing",
+				"same-window-conflict-without-provider-worker",
 			],
 		},
 		invariants: [
@@ -595,6 +602,8 @@ const CONTROL_CONTRACTS = [
 			"orchestration_success_separate_from_platform_claim",
 			"synthesizer_summary_parsed_to_structured_rows",
 			"claim_ledger_refs_hash_chain_quality",
+			"provider_backed_same_window_multi_worker_conflict_table",
+			"long_run_synthesizer_topic_parse_matrix",
 		],
 		schemaPath: "schemas/reverse-agent/live-conflict-arbitration-matrix.schema.json",
 		runtimeIntegration: "bounded-cross-runtime-matrix-gate-wired",
@@ -2252,21 +2261,21 @@ const REQUIREMENTS = [
 			},
 			{
 				id: "live_conflict_arbitration_matrix_gate",
-				description: "LiveConflictArbitrationMatrixGateV1 把 agent-dogfood、re_swarm、compound-frontier 和 provider-worker claim 放入同一冲突矩阵，验证多 topic winner/loser、source coverage、runtime ledger refs 和 orchestration/platform split。",
+				description: "LiveConflictArbitrationMatrixGateV1 把 agent-dogfood、re_swarm、compound-frontier 和 provider-worker claim 放入同一冲突矩阵，验证多 topic winner/loser、source coverage、runtime ledger refs、provider-backed same-window table、long-run synthesizer topic parsing 和 orchestration/platform split。",
 				files: ["scripts/reverse-agent/live-conflict-arbitration-matrix-gate.mjs"],
-				markers: ["LiveConflictArbitrationMatrixGateV1", "runtime:source-coverage-all-runtimes", "runtime:winner-evidence-json-query-verifier", "runtime:orchestration-platform-split", "fixture:negative-rejections"],
+				markers: ["LiveConflictArbitrationMatrixGateV1", "runtime:source-coverage-all-runtimes", "runtime:winner-evidence-json-query-verifier", "runtime:provider-backed-same-window-conflict-table", "runtime:long-run-synthesizer-topic-parse-matrix", "runtime:orchestration-platform-split", "fixture:negative-rejections"],
 			},
 			{
 				id: "live_conflict_arbitration_matrix_schema",
-				description: "Live conflict arbitration schema 固化 source coverage、winner evidence、loser downgrade、orchestration/platform split 和 hash-chain quality。",
+				description: "Live conflict arbitration schema 固化 source coverage、winner evidence、loser downgrade、provider-backed same-window multi-worker conflict table、long-run synthesizer topic parsing、orchestration/platform split 和 hash-chain quality。",
 				files: ["schemas/reverse-agent/live-conflict-arbitration-matrix.schema.json"],
-				markers: ["LiveConflictArbitrationMatrixGateV1", "source_coverage_all_runtimes", "winner_evidence_json_query_verifier", "orchestration_success_separate_from_platform_claim"],
+				markers: ["LiveConflictArbitrationMatrixGateV1", "source_coverage_all_runtimes", "winner_evidence_json_query_verifier", "provider_backed_same_window_multi_worker_conflict_table", "long_run_synthesizer_topic_parse_matrix", "orchestration_success_separate_from_platform_claim"],
 			},
 			{
 				id: "live_conflict_arbitration_matrix_fixture",
-				description: "Live conflict arbitration fixture 覆盖四类 runtime source 与 missing winner、loser promoted、plan-only promoted、missing ledger 等负例。",
+				description: "Live conflict arbitration fixture 覆盖四类 runtime source 与 missing winner、loser promoted、plan-only promoted、missing ledger、provider single-worker、missing topic parse 等负例。",
 				files: ["fixtures/reverse-agent/live-conflict-arbitration-matrix.fixture.json"],
-				markers: ["repi-live-conflict-arbitration-matrix-fixture", "agent-dogfood", "re_swarm", "compound-frontier", "provider-worker", "orchestration-implies-platform-pass"],
+				markers: ["repi-live-conflict-arbitration-matrix-fixture", "agent-dogfood", "re_swarm", "compound-frontier", "provider-worker", "provider-backed-conflict-single-worker", "synthesizer-topic-parse-missing", "orchestration-implies-platform-pass"],
 			},
 			{
 				id: "live_conflict_arbitration_matrix_npm_gate",
@@ -2277,7 +2286,7 @@ const REQUIREMENTS = [
 		],
 		hardeningNeeded: [
 			"gate:runtime-claim-ledger 已补 agent-dogfood plan-only native ledger、bounded reSwarmLiveProbe、compound-frontier native/use-latest ledger 和 runtimeLedgerQuality；RuntimeLedgerQualityGateV1 已把 artifact sha256/event type count/tip hash/hash-chain/strict validator 提升为独立质量门禁；ProviderBackedDogfoodReleaseGateV1 已把 provider-backed agent-dogfood 多 worker 真执行做成 opt-in release quality gate，后续继续扩大 live provider 样本与更长链路回归。",
-			"StructuredClaimMergeV1 已接入 bounded re_swarm live gate；AgentDogfoodStructuredClaimMergeGateV1 已把 agent-dogfood role/synthesizer summary 降为 structured claim rows；LiveConflictArbitrationMatrixGateV1 已把 agent-dogfood、re_swarm、compound-frontier 和 provider-worker 的多 topic conflict matrix、winner evidence、loser downgrade、orchestration/platform split 接成 closure gate；后续继续扩大真实 provider-backed multi-worker 冲突样本。",
+			"StructuredClaimMergeV1 已接入 bounded re_swarm live gate；AgentDogfoodStructuredClaimMergeGateV1 已把 agent-dogfood role/synthesizer summary 降为 structured claim rows；LiveConflictArbitrationMatrixGateV1 已把 agent-dogfood、re_swarm、compound-frontier 和 provider-worker 的多 topic conflict matrix、winner evidence、loser downgrade、provider-backed same-window multi-worker conflict table、long-run synthesizer topic parse matrix、orchestration/platform split 接成 closure gate；后续继续扩大真实 provider-backed 长窗口冲突样本。",
 			"synthesizer 输出继续扩展更复杂 conflict table 样本：多 claimIds、冲突主题、胜出证据、降级原因和 loser downgrade。",
 		],
 		recommendedWork: [
@@ -2370,7 +2379,7 @@ const HARDENING_GAP_CATALOG = [
 		priority: 1,
 		ownerRuntime: "StructuredClaimMergeV1 + AgentDogfoodStructuredClaimMergeGateV1 + runtime claim ledger + LiveConflictArbitrationMatrixGateV1",
 		currentEvidence: ["gate:live-conflict-arbitration-matrix", "gate:structured-claim-merge", "gate:agent-dogfood-structured-claims", "gate:runtime-ledger-quality"],
-		missingRuntimeProof: ["broader provider-backed same-window multi-worker conflict tables beyond bounded local matrix", "more synthesizer topics parsed from long live runs"],
+		missingRuntimeProof: ["broader real remote provider-backed conflict windows beyond the bounded same-window multi-worker table", "more synthesizer topics parsed from longer live runs beyond the bounded four-topic matrix"],
 		closureGate: "gate:live-conflict-arbitration-matrix",
 		regressionCommands: ["npm run gate:live-conflict-arbitration-matrix", "npm run gate:structured-claim-merge", "npm run gate:agent-dogfood-structured-claims", "npm run gate:runtime-ledger-quality"],
 		nextCommand: "node scripts/reverse-agent/live-conflict-arbitration-matrix-gate.mjs . --strict",
@@ -2382,6 +2391,8 @@ const HARDENING_GAP_CATALOG = [
 		acceptanceCriteria: [
 			"every finalClaim has artifact sha256, JSON query, verifierPass, and no unresolved challenge",
 			"conflicts name claimIds, topic, winner evidence, loser downgrade, and resolution reason",
+			"provider-backed same-window conflict tables include at least two provider workers, runtime manifest refs, request-log refs, and loser blocked promotion",
+			"long-run synthesizer topic parse matrix covers authz, JS replay, provider timeout, and API rate-limit topics with final winners only",
 			"orchestration success remains separate from platform claim success",
 		],
 	},

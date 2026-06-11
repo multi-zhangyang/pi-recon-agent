@@ -24,6 +24,8 @@ const REQUIRED_GATES = [
 	"orchestration_success_separate_from_platform_claim",
 	"synthesizer_summary_parsed_to_structured_rows",
 	"claim_ledger_refs_hash_chain_quality",
+	"provider_backed_same_window_multi_worker_conflict_table",
+	"long_run_synthesizer_topic_parse_matrix",
 ];
 const REQUIRED_NEGATIVE_CASES = [
 	"missing-winner-evidence",
@@ -34,6 +36,9 @@ const REQUIRED_NEGATIVE_CASES = [
 	"claim-ledger-ref-missing",
 	"unresolved-conflict",
 	"final-without-json-query",
+	"provider-backed-conflict-single-worker",
+	"synthesizer-topic-parse-missing",
+	"same-window-conflict-without-provider-worker",
 ];
 const INVARIANTS = [
 	"live_conflict_arbitration_matrix_gate",
@@ -44,6 +49,8 @@ const INVARIANTS = [
 	"orchestration_success_separate_from_platform_claim",
 	"synthesizer_summary_parsed_to_structured_rows",
 	"claim_ledger_refs_hash_chain_quality",
+	"provider_backed_same_window_multi_worker_conflict_table",
+	"long_run_synthesizer_topic_parse_matrix",
 ];
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
@@ -281,6 +288,53 @@ function buildRuntimeMatrix(tempRoot) {
 			artifactContent: { claimId: "claim-dogfood-provider-plan-only", verifier: "plan_only", timeoutCancelled: false, orchestrationStatus: "pass", platformClaimStatus: "unknown", evidenceQuality: "narrative" },
 			refs: (artifact) => [artifactRef(artifact, "$.orchestrationStatus", "pass", "==", false), artifactRef(artifact, "$.platformClaimStatus", "unknown", "==", false)],
 		}),
+		rateLimitProviderProven: addClaim("provider-worker", {
+			claimId: "claim-provider-worker-rate-limit-proven",
+			workerId: "provider-worker-alpha-ratelimit",
+			artifactName: "provider-worker-rate-limit-proof",
+			mergeKey: "api:rate-limit:abuse-window",
+			reportSection: "API abuse window",
+			status: "proven",
+			statement: "Provider-backed worker replay confirms the abuse window is rate-limited at the 61st request in a 60 second bucket.",
+			artifactContent: { claimId: "claim-provider-worker-rate-limit-proven", verifier: "pass", providerBacked: true, sameWindowId: "window-rate-limit-2026-06-11T00-00Z", rateLimitStatus: "triggered", statusCode: 429, requestCount: 61, windowSeconds: 60, evidenceQuality: "strong", platformClaimStatus: "proven" },
+			refs: (artifact) => [artifactRef(artifact, "$.rateLimitStatus", "triggered"), artifactRef(artifact, "$.statusCode", 429), artifactRef(artifact, "$.providerBacked", true)],
+		}),
+		rateLimitProviderUnderSampled: addClaim("provider-worker", {
+			claimId: "claim-provider-worker-rate-limit-under-sampled",
+			workerId: "provider-worker-beta-ratelimit",
+			artifactName: "provider-worker-rate-limit-under-sampled",
+			mergeKey: "api:rate-limit:abuse-window",
+			reportSection: "API abuse window",
+			status: "gap",
+			statement: "Second provider worker only sampled ten requests in the same window and therefore cannot disprove the 429 boundary.",
+			platformClaimStatus: "unknown",
+			artifactContent: { claimId: "claim-provider-worker-rate-limit-under-sampled", verifier: "under_sampled", providerBacked: true, sameWindowId: "window-rate-limit-2026-06-11T00-00Z", rateLimitStatus: "not_observed", statusCode: 200, requestCount: 10, windowSeconds: 60, evidenceQuality: "weak", platformClaimStatus: "unknown" },
+			refs: (artifact) => [artifactRef(artifact, "$.rateLimitStatus", "triggered", "==", false), artifactRef(artifact, "$.requestCount", 61, "==", false)],
+		}),
+		rateLimitSwarmObservation: addClaim("re_swarm", {
+			claimId: "claim-re-swarm-rate-limit-observation",
+			workerId: "swarm-rate-limit-observer",
+			artifactName: "re-swarm-rate-limit-observation",
+			mergeKey: "api:rate-limit:abuse-window",
+			reportSection: "API abuse window",
+			status: "gap",
+			statement: "Swarm observation saw throttling headers but did not bind the same-window request counter to a provider-backed replay.",
+			platformClaimStatus: "unknown",
+			artifactContent: { claimId: "claim-re-swarm-rate-limit-observation", verifier: "header_only", providerBacked: false, sameWindowId: "window-rate-limit-2026-06-11T00-00Z", rateLimitStatus: "header_observed", statusCode: 200, requestCount: 1, evidenceQuality: "medium", platformClaimStatus: "unknown" },
+			refs: (artifact) => [artifactRef(artifact, "$.providerBacked", true, "==", false), artifactRef(artifact, "$.rateLimitStatus", "triggered", "==", false)],
+		}),
+		rateLimitDogfoodPlanOnly: addClaim("agent-dogfood", {
+			claimId: "claim-dogfood-rate-limit-plan-only",
+			workerId: "dogfood-rate-limit-planner",
+			artifactName: "dogfood-rate-limit-plan-only",
+			mergeKey: "api:rate-limit:abuse-window",
+			reportSection: "API abuse window",
+			status: "blocked",
+			statement: "Dogfood planner proposed the abuse-window test but produced no same-window provider-backed replay artifact.",
+			platformClaimStatus: "unknown",
+			artifactContent: { claimId: "claim-dogfood-rate-limit-plan-only", verifier: "plan_only", providerBacked: false, sameWindowId: "window-rate-limit-2026-06-11T00-00Z", orchestrationStatus: "pass", platformClaimStatus: "unknown", evidenceQuality: "narrative" },
+			refs: (artifact) => [artifactRef(artifact, "$.providerBacked", true, "==", false), artifactRef(artifact, "$.orchestrationStatus", "pass", "==", false)],
+		}),
 	};
 	const bySource = new Map();
 	for (const row of claimRows) {
@@ -335,6 +389,25 @@ function buildRuntimeMatrix(tempRoot) {
 			orchestrationStatus: "pass",
 			platformClaimStatus: "proven",
 		},
+		{
+			conflictId: "conflict-rate-limit-abuse-window-live",
+			topic: "API abuse-window rate-limit proof",
+			claimIds: [rows.rateLimitProviderProven.claimId, rows.rateLimitProviderUnderSampled.claimId, rows.rateLimitSwarmObservation.claimId, rows.rateLimitDogfoodPlanOnly.claimId],
+			sourceKinds: [rows.rateLimitProviderProven.sourceKind, rows.rateLimitSwarmObservation.sourceKind, rows.rateLimitDogfoodPlanOnly.sourceKind],
+			status: "resolved",
+			winnerClaimId: rows.rateLimitProviderProven.claimId,
+			winningEvidenceRefs: rows.rateLimitProviderProven.artifactRefs.map((ref) => ref.artifactId),
+			loserDowngrades: [
+				{ claimId: rows.rateLimitProviderUnderSampled.claimId, sourceKind: rows.rateLimitProviderUnderSampled.sourceKind, downgradeReason: "same-window provider worker was under-sampled and does not disprove the boundary", blockedPromotion: true },
+				{ claimId: rows.rateLimitSwarmObservation.claimId, sourceKind: rows.rateLimitSwarmObservation.sourceKind, downgradeReason: "header-only observation lacks provider-backed replay counter", blockedPromotion: true },
+				{ claimId: rows.rateLimitDogfoodPlanOnly.claimId, sourceKind: rows.rateLimitDogfoodPlanOnly.sourceKind, downgradeReason: "plan-only orchestration cannot become platform/runtime proof", blockedPromotion: true },
+			],
+			resolutionReason: "live_conflict_arbitration_matrix requires same-window provider-backed replay before abuse-window promotion",
+			structuredMergeRefs: sourceManifests.filter((source) => [rows.rateLimitProviderProven.sourceKind, rows.rateLimitSwarmObservation.sourceKind, rows.rateLimitDogfoodPlanOnly.sourceKind].includes(source.sourceKind)).map((source) => source.structuredClaimMergePath),
+			runtimeLedgerRefs: sourceManifests.filter((source) => [rows.rateLimitProviderProven.sourceKind, rows.rateLimitSwarmObservation.sourceKind, rows.rateLimitDogfoodPlanOnly.sourceKind].includes(source.sourceKind)).map((source) => source.claimLedgerPath),
+			orchestrationStatus: "pass",
+			platformClaimStatus: "proven",
+		},
 	];
 	const loserIds = new Set(conflictRows.flatMap((row) => row.loserDowngrades.map((loser) => loser.claimId)));
 	const winnerIds = new Set(conflictRows.map((row) => row.winnerClaimId));
@@ -347,6 +420,79 @@ function buildRuntimeMatrix(tempRoot) {
 		const claim = claimById.get(claimId);
 		return { claimId, sourceKind: claim.sourceKind, reason: "lost live conflict arbitration or lacks runtime verifier proof", blockedPromotion: true };
 	});
+	const sourceKindForClaimIds = (claimIds) => [...new Set(claimIds.map((claimId) => claimById.get(claimId)?.sourceKind).filter(Boolean))];
+	const providerBackedConflictTable = [
+		{
+			kind: "ProviderBackedSameWindowConflictTableV1",
+			tableId: "provider-backed-rate-limit-window-table",
+			windowId: "window-rate-limit-2026-06-11T00-00Z",
+			topic: "api:rate-limit:abuse-window",
+			sameWindow: true,
+			conflictIds: ["conflict-rate-limit-abuse-window-live"],
+			workerIds: [rows.rateLimitProviderProven.workerId, rows.rateLimitProviderUnderSampled.workerId, rows.rateLimitSwarmObservation.workerId, rows.rateLimitDogfoodPlanOnly.workerId],
+			providerWorkerIds: [rows.rateLimitProviderProven.workerId, rows.rateLimitProviderUnderSampled.workerId],
+			sourceKinds: sourceKindForClaimIds([rows.rateLimitProviderProven.claimId, rows.rateLimitProviderUnderSampled.claimId, rows.rateLimitSwarmObservation.claimId, rows.rateLimitDogfoodPlanOnly.claimId]),
+			claimIds: [rows.rateLimitProviderProven.claimId, rows.rateLimitProviderUnderSampled.claimId, rows.rateLimitSwarmObservation.claimId, rows.rateLimitDogfoodPlanOnly.claimId],
+			winnerClaimId: rows.rateLimitProviderProven.claimId,
+			winningEvidenceRefs: rows.rateLimitProviderProven.artifactRefs.map((ref) => ref.artifactId),
+			loserClaimIds: [rows.rateLimitProviderUnderSampled.claimId, rows.rateLimitSwarmObservation.claimId, rows.rateLimitDogfoodPlanOnly.claimId],
+			loserDowngradeBlocked: true,
+			jsonQueryVerifierPass: true,
+			providerRuntimeManifestRefs: sourceManifests.filter((source) => source.sourceKind === "provider-worker").map((source) => source.runtimeManifestPath),
+			requestLogRefs: [rows.rateLimitProviderProven, rows.rateLimitProviderUnderSampled].flatMap((row) => row.artifactRefs.map((ref) => ref.path)),
+		},
+	];
+	const synthesizerTopicParseMatrix = {
+		kind: "LongRunSynthesizerTopicParseMatrixV1",
+		parseId: "long-run-synthesizer-topic-parse-001",
+		longRunWindowIds: ["agent-dogfood-long-run-001", "re-swarm-long-run-001", "provider-worker-long-run-001"],
+		topicRows: [
+			{
+				topic: "authz:orders:ownership",
+				conflictId: "conflict-authz-ownership-live",
+				sourceKinds: sourceKindForClaimIds([rows.authzDogfood.claimId, rows.authzSwarm.claimId]),
+				claimIds: [rows.authzDogfood.claimId, rows.authzSwarm.claimId],
+				winnerClaimId: rows.authzDogfood.claimId,
+				parsedToStructuredRows: true,
+				narrativeOnly: false,
+				promotion: "final_pass",
+			},
+			{
+				topic: "js:signature:replay",
+				conflictId: "conflict-js-signature-replay-live",
+				sourceKinds: sourceKindForClaimIds([rows.jsSwarm.claimId, rows.jsCompound.claimId]),
+				claimIds: [rows.jsSwarm.claimId, rows.jsCompound.claimId],
+				winnerClaimId: rows.jsSwarm.claimId,
+				parsedToStructuredRows: true,
+				narrativeOnly: false,
+				promotion: "final_pass",
+			},
+			{
+				topic: "provider:worker:timeout",
+				conflictId: "conflict-provider-timeout-live",
+				sourceKinds: sourceKindForClaimIds([rows.providerTimeout.claimId, rows.providerDogfoodPlanOnly.claimId]),
+				claimIds: [rows.providerTimeout.claimId, rows.providerDogfoodPlanOnly.claimId],
+				winnerClaimId: rows.providerTimeout.claimId,
+				parsedToStructuredRows: true,
+				narrativeOnly: false,
+				promotion: "final_pass",
+			},
+			{
+				topic: "api:rate-limit:abuse-window",
+				conflictId: "conflict-rate-limit-abuse-window-live",
+				sourceKinds: sourceKindForClaimIds([rows.rateLimitProviderProven.claimId, rows.rateLimitProviderUnderSampled.claimId, rows.rateLimitSwarmObservation.claimId, rows.rateLimitDogfoodPlanOnly.claimId]),
+				claimIds: [rows.rateLimitProviderProven.claimId, rows.rateLimitProviderUnderSampled.claimId, rows.rateLimitSwarmObservation.claimId, rows.rateLimitDogfoodPlanOnly.claimId],
+				winnerClaimId: rows.rateLimitProviderProven.claimId,
+				parsedToStructuredRows: true,
+				narrativeOnly: false,
+				promotion: "final_pass",
+			},
+		],
+		narrativeOnlyBlockedRows: [
+			{ sourceKind: rows.jsCompound.sourceKind, topic: "js:signature:replay", claimIds: [rows.jsCompound.claimId], narrativeOnly: true, blockedPromotion: true },
+			{ sourceKind: rows.rateLimitDogfoodPlanOnly.sourceKind, topic: "api:rate-limit:abuse-window", claimIds: [rows.rateLimitDogfoodPlanOnly.claimId], narrativeOnly: true, blockedPromotion: true },
+		],
+	};
 	return {
 		kind: "LiveConflictArbitrationMatrixGateV1",
 		schemaVersion: 1,
@@ -360,6 +506,7 @@ function buildRuntimeMatrix(tempRoot) {
 			sources: sourceManifests,
 			claimRows,
 			conflictRows,
+			providerBackedConflictTable,
 			promotionGate: {
 				mode: "strict_live_conflict_arbitration",
 				finalClaims,
@@ -375,7 +522,10 @@ function buildRuntimeMatrix(tempRoot) {
 			synthesizerRows: [
 				{ sourceKind: "agent-dogfood", parsedToStructuredRows: true, narrativeOnly: false, claimIds: bySource.get("agent-dogfood")?.map((row) => row.claimId) ?? [] },
 				{ sourceKind: "re_swarm", parsedToStructuredRows: true, narrativeOnly: false, claimIds: bySource.get("re_swarm")?.map((row) => row.claimId) ?? [] },
+				{ sourceKind: "compound-frontier", parsedToStructuredRows: true, narrativeOnly: false, claimIds: bySource.get("compound-frontier")?.map((row) => row.claimId) ?? [] },
+				{ sourceKind: "provider-worker", parsedToStructuredRows: true, narrativeOnly: false, claimIds: bySource.get("provider-worker")?.map((row) => row.claimId) ?? [] },
 			],
+			synthesizerTopicParseMatrix,
 		},
 		negativeCases: REQUIRED_NEGATIVE_CASES.map((id) => ({ id, mutates: id, expect: "reject", mustNotPromote: true })),
 		invariants: INVARIANTS,
@@ -432,12 +582,80 @@ function validateSourceCoverage(tempRoot, report) {
 	return errors;
 }
 
+function validateProviderBackedConflictTable(matrix, claims, finalIds, blockedIds) {
+	const errors = [];
+	const conflicts = new Map((matrix?.conflictRows ?? []).map((conflict) => [conflict.conflictId, conflict]));
+	const table = matrix?.providerBackedConflictTable ?? [];
+	if (table.length < 1) errors.push("provider_backed_conflict_table_missing");
+	const providerWorkerIds = new Set(table.flatMap((row) => row.providerWorkerIds ?? []));
+	if (providerWorkerIds.size < 2) errors.push("provider_backed_worker_count_lt_2");
+	for (const row of table) {
+		if (row?.kind !== "ProviderBackedSameWindowConflictTableV1") errors.push(`provider_table_kind:${row?.tableId ?? ""}`);
+		if (row?.sameWindow !== true) errors.push(`provider_table_not_same_window:${row?.tableId ?? ""}`);
+		if ((row?.providerWorkerIds ?? []).length < 2) errors.push(`provider_table_worker_count_lt_2:${row?.tableId ?? ""}`);
+		if (!(row?.sourceKinds ?? []).includes("provider-worker")) errors.push(`provider_table_missing_provider_worker_source:${row?.tableId ?? ""}`);
+		if (!(row?.claimIds ?? []).some((claimId) => claims.get(claimId)?.sourceKind === "provider-worker")) errors.push(`provider_table_missing_provider_worker_claim:${row?.tableId ?? ""}`);
+		if (!(row?.providerRuntimeManifestRefs ?? []).length) errors.push(`provider_table_manifest_refs_missing:${row?.tableId ?? ""}`);
+		if (!(row?.requestLogRefs ?? []).length) errors.push(`provider_table_request_log_refs_missing:${row?.tableId ?? ""}`);
+		if (row?.jsonQueryVerifierPass !== true) errors.push(`provider_table_json_verifier_not_pass:${row?.tableId ?? ""}`);
+		if (!row?.winnerClaimId || !finalIds.has(row.winnerClaimId)) errors.push(`provider_table_winner_not_final:${row?.tableId ?? ""}:${row?.winnerClaimId ?? ""}`);
+		for (const conflictId of row?.conflictIds ?? []) {
+			const conflict = conflicts.get(conflictId);
+			if (!conflict) errors.push(`provider_table_conflict_missing:${row?.tableId ?? ""}:${conflictId}`);
+			if (conflict?.status !== "resolved") errors.push(`provider_table_conflict_unresolved:${row?.tableId ?? ""}:${conflictId}`);
+			if (conflict && !conflict.sourceKinds?.includes("provider-worker")) errors.push(`provider_table_conflict_without_provider_worker:${row?.tableId ?? ""}:${conflictId}`);
+			if (conflict && conflict.winnerClaimId !== row.winnerClaimId) errors.push(`provider_table_winner_mismatch:${row?.tableId ?? ""}:${conflictId}`);
+			if (conflict && !(conflict.winningEvidenceRefs ?? []).every((ref) => (row.winningEvidenceRefs ?? []).includes(ref))) errors.push(`provider_table_winner_evidence_mismatch:${row?.tableId ?? ""}:${conflictId}`);
+		}
+		if (!(row?.loserClaimIds ?? []).length) errors.push(`provider_table_losers_missing:${row?.tableId ?? ""}`);
+		if (row?.loserDowngradeBlocked !== true) errors.push(`provider_table_loser_downgrade_not_blocked:${row?.tableId ?? ""}`);
+		for (const claimId of row?.loserClaimIds ?? []) {
+			if (finalIds.has(claimId)) errors.push(`provider_table_loser_promoted:${row?.tableId ?? ""}:${claimId}`);
+			if (!blockedIds.has(claimId)) errors.push(`provider_table_loser_not_blocked:${row?.tableId ?? ""}:${claimId}`);
+		}
+		for (const claimId of row?.claimIds ?? []) if (!claims.has(claimId)) errors.push(`provider_table_claim_missing:${row?.tableId ?? ""}:${claimId}`);
+	}
+	return errors;
+}
+
+function validateSynthesizerTopicParseMatrix(matrix, claims, finalIds) {
+	const errors = [];
+	const topicMatrix = matrix?.synthesizerTopicParseMatrix;
+	const conflicts = new Map((matrix?.conflictRows ?? []).map((conflict) => [conflict.conflictId, conflict]));
+	const rows = topicMatrix?.topicRows ?? [];
+	if (topicMatrix?.kind !== "LongRunSynthesizerTopicParseMatrixV1") errors.push("synthesizer_topic_matrix_kind");
+	if ((topicMatrix?.longRunWindowIds ?? []).length < 3) errors.push("synthesizer_topic_long_run_windows_lt_3");
+	if (rows.length < 4) errors.push("synthesizer_topic_count_lt_4");
+	const topics = new Set(rows.map((row) => row.topic));
+	for (const requiredTopic of ["authz:orders:ownership", "js:signature:replay", "provider:worker:timeout", "api:rate-limit:abuse-window"]) {
+		if (!topics.has(requiredTopic)) errors.push(`synthesizer_topic_missing:${requiredTopic}`);
+	}
+	for (const row of rows) {
+		const conflict = conflicts.get(row.conflictId);
+		if (!conflict) errors.push(`synthesizer_topic_conflict_missing:${row.conflictId ?? ""}`);
+		if (row.parsedToStructuredRows !== true) errors.push(`synthesizer_topic_not_parsed:${row.topic ?? ""}`);
+		if (row.narrativeOnly === true) errors.push(`synthesizer_topic_narrative_only:${row.topic ?? ""}`);
+		if (row.promotion !== "final_pass") errors.push(`synthesizer_topic_promotion_not_final:${row.topic ?? ""}`);
+		if (!row.winnerClaimId || !finalIds.has(row.winnerClaimId)) errors.push(`synthesizer_topic_winner_not_final:${row.topic ?? ""}:${row.winnerClaimId ?? ""}`);
+		if (conflict && conflict.winnerClaimId !== row.winnerClaimId) errors.push(`synthesizer_topic_winner_mismatch:${row.topic ?? ""}:${row.conflictId ?? ""}`);
+		for (const claimId of row.claimIds ?? []) if (!claims.has(claimId)) errors.push(`synthesizer_topic_claim_missing:${row.topic ?? ""}:${claimId}`);
+		if (conflict && !(conflict.claimIds ?? []).every((claimId) => (row.claimIds ?? []).includes(claimId))) errors.push(`synthesizer_topic_claims_do_not_cover_conflict:${row.topic ?? ""}:${row.conflictId ?? ""}`);
+	}
+	for (const row of topicMatrix?.narrativeOnlyBlockedRows ?? []) {
+		if (row.narrativeOnly !== true || row.blockedPromotion !== true) errors.push(`synthesizer_topic_narrative_block_invalid:${row.topic ?? ""}`);
+		if ((row.claimIds ?? []).some((claimId) => finalIds.has(claimId))) errors.push(`synthesizer_topic_narrative_promoted:${row.topic ?? ""}`);
+	}
+	return errors;
+}
+
 function validateMatrix(tempRoot, report) {
 	const errors = [];
 	if (report?.kind !== "LiveConflictArbitrationMatrixGateV1") errors.push("report.kind");
 	if (report?.LiveConflictArbitrationMatrixGateV1 !== true) errors.push("report.flag");
 	const gates = new Set(report?.requiredGates ?? []);
 	for (const gate of REQUIRED_GATES) if (!gates.has(gate)) errors.push(`missing_required_gate:${gate}`);
+	const invariants = new Set(report?.invariants ?? []);
+	for (const invariant of INVARIANTS) if (!invariants.has(invariant)) errors.push(`missing_invariant:${invariant}`);
 	errors.push(...validateSourceCoverage(tempRoot, report));
 	const matrix = report?.arbitrationMatrix;
 	const claims = new Map((matrix?.claimRows ?? []).map((claim) => [claim.claimId, claim]));
@@ -474,6 +692,8 @@ function validateMatrix(tempRoot, report) {
 		if (row.parsedToStructuredRows !== true) errors.push(`synthesizer_not_parsed:${row.sourceKind}`);
 		if (row.narrativeOnly === true && (row.claimIds ?? []).some((claimId) => finalIds.has(claimId))) errors.push(`narrative_only_promoted:${row.sourceKind}`);
 	}
+	errors.push(...validateProviderBackedConflictTable(matrix, claims, finalIds, blockedIds));
+	errors.push(...validateSynthesizerTopicParseMatrix(matrix, claims, finalIds));
 	const text = JSON.stringify(report);
 	if (/ghp_[A-Za-z0-9]|github_pat_[A-Za-z0-9]|sk-[A-Za-z0-9]{8,}/i.test(text)) errors.push("literal_secret_leak");
 	return { ok: errors.length === 0, errors };
@@ -510,6 +730,14 @@ function mutateReport(report, id) {
 	if (id === "claim-ledger-ref-missing") matrix.sources[0].claimLedgerPath = "missing/claim-ledger.jsonl";
 	if (id === "unresolved-conflict") firstConflict.status = "unresolved";
 	if (id === "final-without-json-query") delete matrix.promotionGate.finalClaims[0].artifactRefs[0].jsonQuery;
+	if (id === "provider-backed-conflict-single-worker") matrix.providerBackedConflictTable[0].providerWorkerIds = matrix.providerBackedConflictTable[0].providerWorkerIds.slice(0, 1);
+	if (id === "synthesizer-topic-parse-missing") matrix.synthesizerTopicParseMatrix.topicRows = matrix.synthesizerTopicParseMatrix.topicRows.filter((topic) => topic.topic !== "api:rate-limit:abuse-window");
+	if (id === "same-window-conflict-without-provider-worker") {
+		const providerConflict = matrix.conflictRows.find((conflict) => conflict.conflictId === "conflict-rate-limit-abuse-window-live");
+		providerConflict.sourceKinds = providerConflict.sourceKinds.filter((sourceKind) => sourceKind !== "provider-worker");
+		matrix.providerBackedConflictTable[0].sourceKinds = matrix.providerBackedConflictTable[0].sourceKinds.filter((sourceKind) => sourceKind !== "provider-worker");
+		matrix.providerBackedConflictTable[0].claimIds = matrix.providerBackedConflictTable[0].claimIds.filter((claimId) => !matrix.claimRows.find((claim) => claim.claimId === claimId && claim.sourceKind === "provider-worker"));
+	}
 	return row;
 }
 
@@ -547,13 +775,15 @@ function main() {
 		const validation = validateMatrix(tempRoot, report);
 		checks.push(check("runtime:live-conflict-arbitration-matrix-validation", validation.ok, validation));
 		checks.push(check("runtime:source-coverage-all-runtimes", REQUIRED_SOURCES.every((source) => report.arbitrationMatrix.sources.some((row) => row.sourceKind === source)), { sources: report.arbitrationMatrix.sources.map((row) => row.sourceKind) }));
-		checks.push(check("runtime:multi-claim-topic-conflict-matrix", report.arbitrationMatrix.conflictRows.length >= 3 && report.arbitrationMatrix.conflictRows.every((row) => row.claimIds.length >= 2 && row.status === "resolved"), { conflicts: report.arbitrationMatrix.conflictRows.map((row) => ({ conflictId: row.conflictId, claimIds: row.claimIds, status: row.status })) }));
+		checks.push(check("runtime:multi-claim-topic-conflict-matrix", report.arbitrationMatrix.conflictRows.length >= 4 && report.arbitrationMatrix.conflictRows.every((row) => row.claimIds.length >= 2 && row.status === "resolved"), { conflicts: report.arbitrationMatrix.conflictRows.map((row) => ({ conflictId: row.conflictId, claimIds: row.claimIds, status: row.status })) }));
 		checks.push(check("runtime:winner-evidence-json-query-verifier", report.arbitrationMatrix.promotionGate.finalClaims.every((claim) => claim.artifactRefs.length && claim.artifactRefs.every((ref) => ref.jsonQuery && ref.verifierPass === true)), { finalClaims: report.arbitrationMatrix.promotionGate.finalClaims.map((claim) => ({ claimId: claim.claimId, artifactRefs: claim.artifactRefs.map((ref) => ({ artifactId: ref.artifactId, jsonQuery: ref.jsonQuery, verifierPass: ref.verifierPass })) })) }));
 		const finalIds = new Set(report.arbitrationMatrix.promotionGate.finalClaims.map((claim) => claim.claimId));
 		const loserIds = new Set(report.arbitrationMatrix.conflictRows.flatMap((row) => row.loserDowngrades.map((loser) => loser.claimId)));
 		checks.push(check("runtime:loser-downgrade-blocks-promotion", [...loserIds].every((claimId) => !finalIds.has(claimId)) && [...loserIds].every((claimId) => report.arbitrationMatrix.promotionGate.blockedClaims.some((blocked) => blocked.claimId === claimId && blocked.blockedPromotion)), { loserIds: [...loserIds], finalIds: [...finalIds] }));
 		checks.push(check("runtime:orchestration-platform-split", report.arbitrationMatrix.promotionGate.finalClaims.every((claim) => claim.platformClaimStatus === "proven") && report.arbitrationMatrix.promotionGate.blockedClaims.some((blocked) => blocked.claimId === "claim-dogfood-provider-plan-only"), { finalPlatformStatuses: report.arbitrationMatrix.promotionGate.finalClaims.map((claim) => ({ claimId: claim.claimId, platformClaimStatus: claim.platformClaimStatus })) }));
 		checks.push(check("runtime:synthesizer-summary-parsed", report.arbitrationMatrix.synthesizerRows.every((row) => row.parsedToStructuredRows === true && row.narrativeOnly === false), { synthesizerRows: report.arbitrationMatrix.synthesizerRows }));
+		checks.push(check("runtime:provider-backed-same-window-conflict-table", report.arbitrationMatrix.providerBackedConflictTable.length >= 1 && report.arbitrationMatrix.providerBackedConflictTable.every((row) => row.sameWindow === true && row.providerWorkerIds.length >= 2 && row.sourceKinds.includes("provider-worker") && row.jsonQueryVerifierPass === true), { providerBackedConflictTable: report.arbitrationMatrix.providerBackedConflictTable }));
+		checks.push(check("runtime:long-run-synthesizer-topic-parse-matrix", report.arbitrationMatrix.synthesizerTopicParseMatrix.topicRows.length >= 4 && report.arbitrationMatrix.synthesizerTopicParseMatrix.topicRows.every((row) => row.parsedToStructuredRows === true && row.narrativeOnly === false && row.promotion === "final_pass"), { synthesizerTopicParseMatrix: report.arbitrationMatrix.synthesizerTopicParseMatrix }));
 		checks.push(check("runtime:claim-ledger-quality", report.arbitrationMatrix.sources.every((source) => source.claimLedgerQuality.hashChainOk && REQUIRED_GATES.includes("claim_ledger_refs_hash_chain_quality")), { sources: report.arbitrationMatrix.sources.map((source) => ({ sourceKind: source.sourceKind, quality: source.claimLedgerQuality })) }));
 		const negativeResults = REQUIRED_NEGATIVE_CASES.map((id) => ({ id, validation: validateMatrix(tempRoot, mutateReport(report, id)) }));
 		checks.push(check("fixture:negative-rejections", negativeResults.every((row) => !row.validation.ok), { negativeResults: negativeResults.map((row) => ({ id: row.id, ok: row.validation.ok, errors: row.validation.errors })) }));

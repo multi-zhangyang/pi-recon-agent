@@ -2,137 +2,472 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://repi.local/schemas/reverse-agent/live-conflict-arbitration-matrix.schema.json",
   "title": "LiveConflictArbitrationMatrixGateV1",
-  "description": "live_conflict_arbitration_matrix_gate: agent-dogfood, re_swarm, compound-frontier, and provider-worker claims must enter a shared conflict matrix with JSON-bound winner evidence, loser downgrade, source coverage, hash-chain quality, and orchestration/platform claim separation.",
+  "description": "LiveConflictArbitrationMatrixGateV1 schema with provider-backed same-window multi-worker conflict tables and long-run synthesizer topic parsing.",
   "$defs": {
     "LiveConflictSourceManifestV1": {
       "type": "object",
-      "required": ["sourceKind", "runtimeManifestPath", "structuredClaimMergePath", "claimLedgerPath", "runtimeManifestSha256", "structuredClaimMergeSha256", "claimLedgerSha256", "claimCount", "claimIds", "claimLedgerQuality"],
+      "required": [
+        "sourceKind",
+        "runtimeManifestPath",
+        "structuredClaimMergePath",
+        "claimLedgerPath",
+        "runtimeManifestSha256",
+        "structuredClaimMergeSha256",
+        "claimLedgerSha256",
+        "claimCount",
+        "claimIds",
+        "claimLedgerQuality"
+      ],
       "additionalProperties": false,
       "properties": {
-        "sourceKind": { "enum": ["agent-dogfood", "re_swarm", "compound-frontier", "provider-worker"] },
-        "runtimeManifestPath": { "type": "string", "minLength": 1 },
-        "structuredClaimMergePath": { "type": "string", "minLength": 1 },
-        "claimLedgerPath": { "type": "string", "minLength": 1 },
-        "runtimeManifestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "structuredClaimMergeSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "claimLedgerSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "claimCount": { "type": "integer", "minimum": 1 },
-        "claimIds": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "sourceKind": {
+          "enum": [
+            "agent-dogfood",
+            "re_swarm",
+            "compound-frontier",
+            "provider-worker"
+          ]
+        },
+        "runtimeManifestPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "structuredClaimMergePath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "claimLedgerPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtimeManifestSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "structuredClaimMergeSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "claimLedgerSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "claimCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "claimIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
         "claimLedgerQuality": {
           "type": "object",
-          "required": ["eventCount", "eventTypes", "hashChainOk", "tipHash"],
+          "required": [
+            "eventCount",
+            "eventTypes",
+            "hashChainOk",
+            "tipHash"
+          ],
           "additionalProperties": false,
           "properties": {
-            "eventCount": { "type": "integer", "minimum": 5 },
+            "eventCount": {
+              "type": "integer",
+              "minimum": 5
+            },
             "eventTypes": {
               "type": "array",
-              "contains": { "const": "artifact_handoff" },
-              "items": { "enum": ["artifact_handoff", "claim", "validation", "challenge", "resolution"] }
+              "contains": {
+                "const": "artifact_handoff"
+              },
+              "items": {
+                "enum": [
+                  "artifact_handoff",
+                  "claim",
+                  "validation",
+                  "challenge",
+                  "resolution"
+                ]
+              }
             },
-            "hashChainOk": { "const": true },
-            "tipHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+            "hashChainOk": {
+              "const": true
+            },
+            "tipHash": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
           }
         }
       }
     },
     "LiveConflictArtifactRefV1": {
       "type": "object",
-      "required": ["artifactId", "path", "sha256", "jsonQuery", "op", "expected", "verifierPass"],
+      "required": [
+        "artifactId",
+        "path",
+        "sha256",
+        "jsonQuery",
+        "op",
+        "expected",
+        "verifierPass"
+      ],
       "additionalProperties": false,
       "properties": {
-        "artifactId": { "type": "string", "minLength": 1 },
-        "path": { "type": "string", "minLength": 1 },
-        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "jsonQuery": { "type": "string", "minLength": 1 },
-        "op": { "enum": ["==", "contains", "includes_all"] },
+        "artifactId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "jsonQuery": {
+          "type": "string",
+          "minLength": 1
+        },
+        "op": {
+          "enum": [
+            "==",
+            "contains",
+            "includes_all"
+          ]
+        },
         "expected": {},
-        "verifierPass": { "type": "boolean" }
+        "verifierPass": {
+          "type": "boolean"
+        }
       }
     },
     "LiveConflictClaimRowV1": {
       "type": "object",
-      "required": ["claimId", "workerId", "sourceKind", "mergeKey", "status", "statement", "artifactRefs", "challenges", "orchestrationStatus", "platformClaimStatus"],
+      "required": [
+        "claimId",
+        "workerId",
+        "sourceKind",
+        "mergeKey",
+        "status",
+        "statement",
+        "artifactRefs",
+        "challenges",
+        "orchestrationStatus",
+        "platformClaimStatus"
+      ],
       "additionalProperties": true,
       "properties": {
-        "claimId": { "type": "string", "minLength": 1 },
-        "workerId": { "type": "string", "minLength": 1 },
-        "sourceKind": { "enum": ["agent-dogfood", "re_swarm", "compound-frontier", "provider-worker"] },
-        "mergeKey": { "type": "string", "minLength": 1 },
-        "status": { "enum": ["proven", "gap", "pending", "blocked"] },
-        "statement": { "type": "string", "minLength": 1 },
-        "artifactRefs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/LiveConflictArtifactRefV1" } },
-        "challenges": { "type": "array", "items": { "type": "object" } },
-        "orchestrationStatus": { "enum": ["pass", "partial", "blocked", "failed"] },
-        "platformClaimStatus": { "enum": ["proven", "unknown", "gap", "blocked"] }
+        "claimId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceKind": {
+          "enum": [
+            "agent-dogfood",
+            "re_swarm",
+            "compound-frontier",
+            "provider-worker"
+          ]
+        },
+        "mergeKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "proven",
+            "gap",
+            "pending",
+            "blocked"
+          ]
+        },
+        "statement": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifactRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/LiveConflictArtifactRefV1"
+          }
+        },
+        "challenges": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "orchestrationStatus": {
+          "enum": [
+            "pass",
+            "partial",
+            "blocked",
+            "failed"
+          ]
+        },
+        "platformClaimStatus": {
+          "enum": [
+            "proven",
+            "unknown",
+            "gap",
+            "blocked"
+          ]
+        }
       }
     },
     "LiveConflictLoserDowngradeV1": {
       "type": "object",
-      "required": ["claimId", "sourceKind", "downgradeReason", "blockedPromotion"],
+      "required": [
+        "claimId",
+        "sourceKind",
+        "downgradeReason",
+        "blockedPromotion"
+      ],
       "additionalProperties": false,
       "properties": {
-        "claimId": { "type": "string", "minLength": 1 },
-        "sourceKind": { "enum": ["agent-dogfood", "re_swarm", "compound-frontier", "provider-worker"] },
-        "downgradeReason": { "type": "string", "minLength": 1 },
-        "blockedPromotion": { "const": true }
+        "claimId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceKind": {
+          "enum": [
+            "agent-dogfood",
+            "re_swarm",
+            "compound-frontier",
+            "provider-worker"
+          ]
+        },
+        "downgradeReason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "blockedPromotion": {
+          "const": true
+        }
       }
     },
     "LiveConflictArbitrationConflictRowV1": {
       "type": "object",
-      "required": ["conflictId", "topic", "claimIds", "sourceKinds", "status", "winnerClaimId", "winningEvidenceRefs", "loserDowngrades", "resolutionReason", "structuredMergeRefs", "runtimeLedgerRefs", "orchestrationStatus", "platformClaimStatus"],
+      "required": [
+        "conflictId",
+        "topic",
+        "claimIds",
+        "sourceKinds",
+        "status",
+        "winnerClaimId",
+        "winningEvidenceRefs",
+        "loserDowngrades",
+        "resolutionReason",
+        "structuredMergeRefs",
+        "runtimeLedgerRefs",
+        "orchestrationStatus",
+        "platformClaimStatus"
+      ],
       "additionalProperties": false,
       "properties": {
-        "conflictId": { "type": "string", "minLength": 1 },
-        "topic": { "type": "string", "minLength": 1 },
-        "claimIds": { "type": "array", "minItems": 2, "items": { "type": "string" } },
-        "sourceKinds": { "type": "array", "minItems": 2, "items": { "enum": ["agent-dogfood", "re_swarm", "compound-frontier", "provider-worker"] } },
-        "status": { "const": "resolved" },
-        "winnerClaimId": { "type": "string", "minLength": 1 },
-        "winningEvidenceRefs": { "type": "array", "minItems": 1, "items": { "type": "string" } },
-        "loserDowngrades": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/LiveConflictLoserDowngradeV1" } },
-        "resolutionReason": { "type": "string", "pattern": "live_conflict_arbitration_matrix" },
-        "structuredMergeRefs": { "type": "array", "minItems": 1, "items": { "type": "string" } },
-        "runtimeLedgerRefs": { "type": "array", "minItems": 1, "items": { "type": "string" } },
-        "orchestrationStatus": { "enum": ["pass", "partial", "blocked", "failed"] },
-        "platformClaimStatus": { "enum": ["proven", "unknown", "gap", "blocked"] }
+        "conflictId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "topic": {
+          "type": "string",
+          "minLength": 1
+        },
+        "claimIds": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "string"
+          }
+        },
+        "sourceKinds": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "enum": [
+              "agent-dogfood",
+              "re_swarm",
+              "compound-frontier",
+              "provider-worker"
+            ]
+          }
+        },
+        "status": {
+          "const": "resolved"
+        },
+        "winnerClaimId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "winningEvidenceRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "loserDowngrades": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/LiveConflictLoserDowngradeV1"
+          }
+        },
+        "resolutionReason": {
+          "type": "string",
+          "pattern": "live_conflict_arbitration_matrix"
+        },
+        "structuredMergeRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "runtimeLedgerRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "orchestrationStatus": {
+          "enum": [
+            "pass",
+            "partial",
+            "blocked",
+            "failed"
+          ]
+        },
+        "platformClaimStatus": {
+          "enum": [
+            "proven",
+            "unknown",
+            "gap",
+            "blocked"
+          ]
+        }
       }
     },
     "LiveConflictFinalClaimV1": {
       "type": "object",
-      "required": ["claimId", "sourceKind", "promotion", "reportSection", "verifierPass", "platformClaimStatus", "artifactRefs"],
+      "required": [
+        "claimId",
+        "sourceKind",
+        "promotion",
+        "reportSection",
+        "verifierPass",
+        "platformClaimStatus",
+        "artifactRefs"
+      ],
       "additionalProperties": false,
       "properties": {
-        "claimId": { "type": "string", "minLength": 1 },
-        "sourceKind": { "enum": ["agent-dogfood", "re_swarm", "compound-frontier", "provider-worker"] },
-        "promotion": { "const": "final_pass" },
-        "reportSection": { "type": "string", "minLength": 1 },
-        "verifierPass": { "const": true },
-        "platformClaimStatus": { "const": "proven" },
-        "artifactRefs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/LiveConflictArtifactRefV1" } }
+        "claimId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceKind": {
+          "enum": [
+            "agent-dogfood",
+            "re_swarm",
+            "compound-frontier",
+            "provider-worker"
+          ]
+        },
+        "promotion": {
+          "const": "final_pass"
+        },
+        "reportSection": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verifierPass": {
+          "const": true
+        },
+        "platformClaimStatus": {
+          "const": "proven"
+        },
+        "artifactRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/LiveConflictArtifactRefV1"
+          }
+        }
       }
     },
     "LiveConflictBlockedClaimV1": {
       "type": "object",
-      "required": ["claimId", "sourceKind", "reason", "blockedPromotion"],
+      "required": [
+        "claimId",
+        "sourceKind",
+        "reason",
+        "blockedPromotion"
+      ],
       "additionalProperties": false,
       "properties": {
-        "claimId": { "type": "string", "minLength": 1 },
-        "sourceKind": { "enum": ["agent-dogfood", "re_swarm", "compound-frontier", "provider-worker"] },
-        "reason": { "type": "string", "minLength": 1 },
-        "blockedPromotion": { "const": true }
+        "claimId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceKind": {
+          "enum": [
+            "agent-dogfood",
+            "re_swarm",
+            "compound-frontier",
+            "provider-worker"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "blockedPromotion": {
+          "const": true
+        }
       }
     },
     "LiveConflictPromotionGateV1": {
       "type": "object",
-      "required": ["mode", "finalClaims", "blockedClaims", "policies"],
+      "required": [
+        "mode",
+        "finalClaims",
+        "blockedClaims",
+        "policies"
+      ],
       "additionalProperties": false,
       "properties": {
-        "mode": { "const": "strict_live_conflict_arbitration" },
-        "finalClaims": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/LiveConflictFinalClaimV1" } },
-        "blockedClaims": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/LiveConflictBlockedClaimV1" } },
+        "mode": {
+          "const": "strict_live_conflict_arbitration"
+        },
+        "finalClaims": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/LiveConflictFinalClaimV1"
+          }
+        },
+        "blockedClaims": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/LiveConflictBlockedClaimV1"
+          }
+        },
         "policies": {
           "type": "array",
-          "contains": { "const": "orchestration_success_separate_from_platform_claim" },
+          "contains": {
+            "const": "orchestration_success_separate_from_platform_claim"
+          },
           "items": {
             "enum": [
               "final_pass_requires_json_query",
@@ -147,42 +482,133 @@
     },
     "LiveConflictSynthesizerRowV1": {
       "type": "object",
-      "required": ["sourceKind", "parsedToStructuredRows", "narrativeOnly", "claimIds"],
+      "required": [
+        "sourceKind",
+        "parsedToStructuredRows",
+        "narrativeOnly",
+        "claimIds"
+      ],
       "additionalProperties": false,
       "properties": {
-        "sourceKind": { "enum": ["agent-dogfood", "re_swarm", "compound-frontier", "provider-worker"] },
-        "parsedToStructuredRows": { "const": true },
-        "narrativeOnly": { "const": false },
-        "claimIds": { "type": "array", "items": { "type": "string" } }
+        "sourceKind": {
+          "enum": [
+            "agent-dogfood",
+            "re_swarm",
+            "compound-frontier",
+            "provider-worker"
+          ]
+        },
+        "parsedToStructuredRows": {
+          "const": true
+        },
+        "narrativeOnly": {
+          "const": false
+        },
+        "claimIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
     "LiveConflictArbitrationMatrixV1": {
       "type": "object",
-      "required": ["kind", "schemaVersion", "closureGate", "sources", "claimRows", "conflictRows", "promotionGate", "synthesizerRows"],
+      "required": [
+        "kind",
+        "schemaVersion",
+        "closureGate",
+        "sources",
+        "claimRows",
+        "conflictRows",
+        "promotionGate",
+        "synthesizerRows",
+        "providerBackedConflictTable",
+        "synthesizerTopicParseMatrix"
+      ],
       "additionalProperties": false,
       "properties": {
-        "kind": { "const": "LiveConflictArbitrationMatrixV1" },
-        "schemaVersion": { "const": 1 },
-        "closureGate": { "const": "gate:live-conflict-arbitration-matrix" },
-        "sources": { "type": "array", "minItems": 4, "items": { "$ref": "#/$defs/LiveConflictSourceManifestV1" } },
-        "claimRows": { "type": "array", "minItems": 6, "items": { "$ref": "#/$defs/LiveConflictClaimRowV1" } },
-        "conflictRows": { "type": "array", "minItems": 3, "items": { "$ref": "#/$defs/LiveConflictArbitrationConflictRowV1" } },
-        "promotionGate": { "$ref": "#/$defs/LiveConflictPromotionGateV1" },
-        "synthesizerRows": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/LiveConflictSynthesizerRowV1" } }
+        "kind": {
+          "const": "LiveConflictArbitrationMatrixV1"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "closureGate": {
+          "const": "gate:live-conflict-arbitration-matrix"
+        },
+        "sources": {
+          "type": "array",
+          "minItems": 4,
+          "items": {
+            "$ref": "#/$defs/LiveConflictSourceManifestV1"
+          }
+        },
+        "claimRows": {
+          "type": "array",
+          "minItems": 10,
+          "items": {
+            "$ref": "#/$defs/LiveConflictClaimRowV1"
+          }
+        },
+        "conflictRows": {
+          "type": "array",
+          "minItems": 4,
+          "items": {
+            "$ref": "#/$defs/LiveConflictArbitrationConflictRowV1"
+          }
+        },
+        "promotionGate": {
+          "$ref": "#/$defs/LiveConflictPromotionGateV1"
+        },
+        "synthesizerRows": {
+          "type": "array",
+          "minItems": 4,
+          "items": {
+            "$ref": "#/$defs/LiveConflictSynthesizerRowV1"
+          }
+        },
+        "providerBackedConflictTable": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/ProviderBackedSameWindowConflictTableV1"
+          }
+        },
+        "synthesizerTopicParseMatrix": {
+          "$ref": "#/$defs/LongRunSynthesizerTopicParseMatrixV1"
+        }
       }
     },
     "LiveConflictArbitrationMatrixGateV1": {
       "type": "object",
-      "required": ["kind", "schemaVersion", "generatedAt", "LiveConflictArbitrationMatrixGateV1", "requiredGates", "arbitrationMatrix", "negativeCases", "invariants"],
+      "required": [
+        "kind",
+        "schemaVersion",
+        "generatedAt",
+        "LiveConflictArbitrationMatrixGateV1",
+        "requiredGates",
+        "arbitrationMatrix",
+        "negativeCases",
+        "invariants"
+      ],
       "additionalProperties": false,
       "properties": {
-        "kind": { "const": "LiveConflictArbitrationMatrixGateV1" },
-        "schemaVersion": { "const": 1 },
-        "generatedAt": { "type": "string" },
-        "LiveConflictArbitrationMatrixGateV1": { "const": true },
+        "kind": {
+          "const": "LiveConflictArbitrationMatrixGateV1"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "generatedAt": {
+          "type": "string"
+        },
+        "LiveConflictArbitrationMatrixGateV1": {
+          "const": true
+        },
         "requiredGates": {
           "type": "array",
-          "minItems": 8,
+          "minItems": 10,
           "items": {
             "enum": [
               "LiveConflictArbitrationMatrixGateV1",
@@ -192,17 +618,26 @@
               "loser_downgrade_blocks_promotion",
               "orchestration_success_separate_from_platform_claim",
               "synthesizer_summary_parsed_to_structured_rows",
-              "claim_ledger_refs_hash_chain_quality"
+              "claim_ledger_refs_hash_chain_quality",
+              "provider_backed_same_window_multi_worker_conflict_table",
+              "long_run_synthesizer_topic_parse_matrix"
             ]
           }
         },
-        "arbitrationMatrix": { "$ref": "#/$defs/LiveConflictArbitrationMatrixV1" },
+        "arbitrationMatrix": {
+          "$ref": "#/$defs/LiveConflictArbitrationMatrixV1"
+        },
         "negativeCases": {
           "type": "array",
-          "minItems": 8,
+          "minItems": 11,
           "items": {
             "type": "object",
-            "required": ["id", "mutates", "expect", "mustNotPromote"],
+            "required": [
+              "id",
+              "mutates",
+              "expect",
+              "mustNotPromote"
+            ],
             "additionalProperties": false,
             "properties": {
               "id": {
@@ -214,18 +649,27 @@
                   "narrative-only-synthesizer-promoted",
                   "claim-ledger-ref-missing",
                   "unresolved-conflict",
-                  "final-without-json-query"
+                  "final-without-json-query",
+                  "provider-backed-conflict-single-worker",
+                  "synthesizer-topic-parse-missing",
+                  "same-window-conflict-without-provider-worker"
                 ]
               },
-              "mutates": { "type": "string" },
-              "expect": { "const": "reject" },
-              "mustNotPromote": { "const": true }
+              "mutates": {
+                "type": "string"
+              },
+              "expect": {
+                "const": "reject"
+              },
+              "mustNotPromote": {
+                "const": true
+              }
             }
           }
         },
         "invariants": {
           "type": "array",
-          "minItems": 8,
+          "minItems": 10,
           "items": {
             "enum": [
               "live_conflict_arbitration_matrix_gate",
@@ -235,7 +679,9 @@
               "loser_downgrade_blocks_promotion",
               "orchestration_success_separate_from_platform_claim",
               "synthesizer_summary_parsed_to_structured_rows",
-              "claim_ledger_refs_hash_chain_quality"
+              "claim_ledger_refs_hash_chain_quality",
+              "provider_backed_same_window_multi_worker_conflict_table",
+              "long_run_synthesizer_topic_parse_matrix"
             ]
           }
         }
@@ -248,8 +694,280 @@
         "loser_downgrade_blocks_promotion",
         "orchestration_success_separate_from_platform_claim",
         "synthesizer_summary_parsed_to_structured_rows",
-        "claim_ledger_refs_hash_chain_quality"
+        "claim_ledger_refs_hash_chain_quality",
+        "provider_backed_same_window_multi_worker_conflict_table",
+        "long_run_synthesizer_topic_parse_matrix"
       ]
+    },
+    "ProviderBackedSameWindowConflictTableV1": {
+      "type": "object",
+      "required": [
+        "kind",
+        "tableId",
+        "windowId",
+        "topic",
+        "sameWindow",
+        "conflictIds",
+        "workerIds",
+        "providerWorkerIds",
+        "sourceKinds",
+        "claimIds",
+        "winnerClaimId",
+        "winningEvidenceRefs",
+        "loserClaimIds",
+        "loserDowngradeBlocked",
+        "jsonQueryVerifierPass",
+        "providerRuntimeManifestRefs",
+        "requestLogRefs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "ProviderBackedSameWindowConflictTableV1"
+        },
+        "tableId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "windowId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "topic": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sameWindow": {
+          "const": true
+        },
+        "conflictIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "workerIds": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "providerWorkerIds": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "sourceKinds": {
+          "type": "array",
+          "minItems": 2,
+          "contains": {
+            "const": "provider-worker"
+          },
+          "items": {
+            "enum": [
+              "agent-dogfood",
+              "re_swarm",
+              "compound-frontier",
+              "provider-worker"
+            ]
+          }
+        },
+        "claimIds": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "winnerClaimId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "winningEvidenceRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "loserClaimIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "loserDowngradeBlocked": {
+          "const": true
+        },
+        "jsonQueryVerifierPass": {
+          "const": true
+        },
+        "providerRuntimeManifestRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "requestLogRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "LongRunSynthesizerTopicRowV1": {
+      "type": "object",
+      "required": [
+        "topic",
+        "conflictId",
+        "sourceKinds",
+        "claimIds",
+        "winnerClaimId",
+        "parsedToStructuredRows",
+        "narrativeOnly",
+        "promotion"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "topic": {
+          "type": "string",
+          "minLength": 1
+        },
+        "conflictId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceKinds": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "enum": [
+              "agent-dogfood",
+              "re_swarm",
+              "compound-frontier",
+              "provider-worker"
+            ]
+          }
+        },
+        "claimIds": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "winnerClaimId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parsedToStructuredRows": {
+          "const": true
+        },
+        "narrativeOnly": {
+          "const": false
+        },
+        "promotion": {
+          "const": "final_pass"
+        }
+      }
+    },
+    "LongRunSynthesizerNarrativeBlockedRowV1": {
+      "type": "object",
+      "required": [
+        "sourceKind",
+        "topic",
+        "claimIds",
+        "narrativeOnly",
+        "blockedPromotion"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sourceKind": {
+          "enum": [
+            "agent-dogfood",
+            "re_swarm",
+            "compound-frontier",
+            "provider-worker"
+          ]
+        },
+        "topic": {
+          "type": "string",
+          "minLength": 1
+        },
+        "claimIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "narrativeOnly": {
+          "const": true
+        },
+        "blockedPromotion": {
+          "const": true
+        }
+      }
+    },
+    "LongRunSynthesizerTopicParseMatrixV1": {
+      "type": "object",
+      "required": [
+        "kind",
+        "parseId",
+        "longRunWindowIds",
+        "topicRows",
+        "narrativeOnlyBlockedRows"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "LongRunSynthesizerTopicParseMatrixV1"
+        },
+        "parseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "longRunWindowIds": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "topicRows": {
+          "type": "array",
+          "minItems": 4,
+          "items": {
+            "$ref": "#/$defs/LongRunSynthesizerTopicRowV1"
+          }
+        },
+        "narrativeOnlyBlockedRows": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/LongRunSynthesizerNarrativeBlockedRowV1"
+          }
+        }
+      }
     }
   },
   "$ref": "#/$defs/LiveConflictArbitrationMatrixGateV1",
@@ -262,6 +980,8 @@
     "loser_downgrade_blocks_promotion",
     "orchestration_success_separate_from_platform_claim",
     "synthesizer_summary_parsed_to_structured_rows",
-    "claim_ledger_refs_hash_chain_quality"
+    "claim_ledger_refs_hash_chain_quality",
+    "provider_backed_same_window_multi_worker_conflict_table",
+    "long_run_synthesizer_topic_parse_matrix"
   ]
 }
