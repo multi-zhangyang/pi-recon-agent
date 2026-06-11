@@ -25,8 +25,10 @@ const REQUIRED_GATES = [
 	"regression_gate_refs_match_repair_queue",
 	"provider_worker_live_state_change_repair_matrix",
 	"multi_attempt_retry_window_completion_chain",
+	"provider_worker_state_lineage_snapshot_matrix",
+	"compound_provider_long_horizon_repair_completion_chain",
 ];
-const REQUIRED_SCENARIOS = ["provider-worker-state-change", "swarm-worker-provider-repair", "compound-frontier-retry-window", "operator-exhausted-escalation"];
+const REQUIRED_SCENARIOS = ["provider-worker-state-change", "swarm-worker-provider-repair", "provider-worker-cache-state-repair", "swarm-worker-tool-state-repair", "compound-frontier-retry-window", "compound-provider-long-horizon-repair", "operator-exhausted-escalation"];
 const REQUIRED_NEGATIVE_CASES = [
 	"signature-mismatch",
 	"missing-rollback-policy",
@@ -37,6 +39,9 @@ const REQUIRED_NEGATIVE_CASES = [
 	"live-repair-matrix-missing-provider",
 	"retry-window-not-monotonic",
 	"completion-without-regression-proof",
+	"state-lineage-missing-baseline",
+	"long-horizon-chain-too-short",
+	"long-horizon-signature-drift",
 ];
 const INVARIANTS = [
 	"worker_provider_repair_rollback_unification_gate",
@@ -48,8 +53,11 @@ const INVARIANTS = [
 	"regression_gate_refs_match_repair_queue",
 	"provider_worker_live_state_change_repair_matrix",
 	"multi_attempt_retry_window_completion_chain",
+	"provider_worker_state_lineage_snapshot_matrix",
+	"compound_provider_long_horizon_repair_completion_chain",
 ];
-const PROVIDER_WORKER_SCENARIOS = new Set(["provider-worker-state-change", "swarm-worker-provider-repair"]);
+const PROVIDER_WORKER_SCENARIOS = new Set(["provider-worker-state-change", "swarm-worker-provider-repair", "provider-worker-cache-state-repair", "swarm-worker-tool-state-repair"]);
+const LONG_HORIZON_SCENARIOS = new Set(["provider-worker-cache-state-repair", "compound-provider-long-horizon-repair"]);
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const shortHash = (value) => sha256(value).slice(0, 24);
@@ -310,6 +318,94 @@ function buildRetryCompletionChain(scenarios) {
 	};
 }
 
+function buildStateLineageSnapshotMatrix(scenarios) {
+	const rows = scenarios
+		.filter((scenario) => PROVIDER_WORKER_SCENARIOS.has(scenario.id))
+		.map((scenario) => {
+			const baselineTreeSha256 = scenario.rollbackPolicy?.baseline?.treeSha256;
+			const restoredTreeSha256 = scenario.rollbackPolicy?.rollback?.restoredTreeSha256;
+			return {
+				scenarioId: scenario.id,
+				workerId: scenario.workerId,
+				providerName: scenario.providerName,
+				apiStyle: providerApiStyle(scenario.providerName),
+				stateChangingRepair: scenario.stateChangingRepair === true,
+				runtimeManifestFile: scenario.runtimeRefs.runtimeManifestFile,
+				requestLogFile: scenario.runtimeRefs.requestLogFile,
+				rollbackPolicyFile: scenario.runtimeRefs.rollbackPolicyFile,
+				baselineTreeSha256,
+				mutationScopeSha256: sha256(JSON.stringify({ scenarioId: scenario.id, allowlist: scenario.rollbackPolicy?.allowlist ?? [], commands: scenario.repairQueueItem?.commands ?? [] })),
+				restoredTreeSha256,
+				regressionProofSha256: sha256(JSON.stringify(scenario.rollbackPolicy?.regression ?? {})),
+				repairId: scenario.repairQueueItem.repairId,
+				failureId: scenario.failureLedgerEvent.id,
+				signature: scenario.failureLedgerEvent.signature,
+				assertions: {
+					baselineCaptured: /^[a-f0-9]{64}$/.test(String(baselineTreeSha256 ?? "")),
+					stateMutationScoped: (scenario.rollbackPolicy?.allowlist ?? []).length > 0 && (scenario.rollbackPolicy?.repair?.changedFiles ?? []).every((changed) => scenario.rollbackPolicy.allowlist.includes(changed)),
+					rollbackRestoredBaseline: Boolean(baselineTreeSha256 && baselineTreeSha256 === restoredTreeSha256),
+					requestLogBound: scenarioArtifactsInclude(scenario, scenario.runtimeRefs.requestLogFile),
+					runtimeManifestBound: scenarioArtifactsInclude(scenario, scenario.runtimeRefs.runtimeManifestFile),
+					rollbackPolicyBound: scenarioArtifactsInclude(scenario, scenario.runtimeRefs.rollbackPolicyFile),
+					regressionProofPresent: /^[a-f0-9]{64}$/.test(sha256(JSON.stringify(scenario.rollbackPolicy?.regression ?? {}))),
+				},
+			};
+		});
+	return {
+		kind: "ProviderWorkerStateLineageSnapshotMatrixV1",
+		rowCount: rows.length,
+		providerCount: new Set(rows.map((row) => row.providerName)).size,
+		apiStyles: [...new Set(rows.map((row) => row.apiStyle))],
+		rows,
+		allBaselineCaptured: rows.every((row) => row.assertions.baselineCaptured),
+		allStateMutationsScoped: rows.every((row) => row.assertions.stateMutationScoped),
+		allRollbackRestoredBaseline: rows.every((row) => row.assertions.rollbackRestoredBaseline),
+		allRequestLogsBound: rows.every((row) => row.assertions.requestLogBound),
+		allRegressionProofsPresent: rows.every((row) => row.assertions.regressionProofPresent),
+	};
+}
+
+function buildLongHorizonRepairCompletionChain(scenarios) {
+	const chains = scenarios
+		.filter((scenario) => LONG_HORIZON_SCENARIOS.has(scenario.id))
+		.map((scenario) => ({
+			scenarioId: scenario.id,
+			source: scenario.source,
+			workerId: scenario.workerId,
+			providerName: scenario.providerName,
+			signature: scenario.failureLedgerEvent.signature,
+			terminalStatus: scenario.failureLedgerEvent.status,
+			attempts: scenario.retryWindow.attempts.map((attempt) => ({
+				...attempt,
+				rollbackPolicyFile: scenario.runtimeRefs.rollbackPolicyFile,
+				regressionProofSha256: sha256(JSON.stringify({ scenarioId: scenario.id, attempt: attempt.attempt, regression: scenario.rollbackPolicy?.regression ?? {} })),
+			})),
+			attemptCount: scenario.retryWindow.attempts.length,
+			closed: scenario.retryWindow.closed,
+			regressionGateRefs: scenario.regressionGateRefs,
+			repairRegressionGateRefs: scenario.repairQueueItem.regressionGates,
+			completionProof: {
+				monotonicAttempts: scenario.retryWindow.attempts.every((attempt, index, attempts) => index === 0 || attempt.attempt > attempts[index - 1].attempt),
+				sameSignature: scenario.retryWindow.attempts.every((attempt) => attempt.signature === scenario.failureLedgerEvent.signature),
+				terminalClosed: scenario.retryWindow.closed === true && ["repaired", "rolled_back", "exhausted", "blocked"].includes(scenario.failureLedgerEvent.status),
+				regressionGateRefsMatchRepairQueue: (scenario.repairQueueItem.regressionGates ?? []).every((gate) => scenario.regressionGateRefs.includes(gate)),
+				allAttemptRegressionProofs: scenario.retryWindow.attempts.every((attempt) => /^[a-f0-9]{64}$/.test(sha256(JSON.stringify({ scenarioId: scenario.id, attempt: attempt.attempt, regression: scenario.rollbackPolicy?.regression ?? {} })))),
+			},
+		}));
+	return {
+		kind: "CompoundProviderLongHorizonRepairCompletionChainV1",
+		minAttemptCount: Math.min(...chains.map((chain) => chain.attemptCount)),
+		longestAttemptCount: Math.max(...chains.map((chain) => chain.attemptCount)),
+		chains,
+		includesProviderWorker: chains.some((chain) => chain.source === "provider-worker"),
+		includesCompoundFrontier: chains.some((chain) => chain.source === "compound-frontier"),
+		allClosed: chains.every((chain) => chain.closed),
+		allMonotonic: chains.every((chain) => chain.completionProof.monotonicAttempts),
+		allSameSignature: chains.every((chain) => chain.completionProof.sameSignature),
+		allAttemptRegressionProofs: chains.every((chain) => chain.completionProof.allAttemptRegressionProofs),
+	};
+}
+
 function buildRuntimeReport(tempRoot) {
 	const scenarios = [
 		buildScenario(tempRoot, {
@@ -352,6 +448,55 @@ function buildRuntimeReport(tempRoot) {
 			gateIds: ["gate:worker-provider-repair-rollback-unification", "gate:swarm-provider-manifest-parity", "gate:worker-child-session"],
 		}),
 		buildScenario(tempRoot, {
+			id: "provider-worker-cache-state-repair",
+			source: "provider-worker",
+			policySource: "provider-worker",
+			worker: true,
+			workerId: "provider-worker-cache-gamma",
+			providerName: "openai-compatible",
+			modelId: "mock/openai-cache-repair-gamma",
+			attempt: 4,
+			maxAttempts: 4,
+			status: "repaired",
+			action: "rollback",
+			providerAllowed: true,
+			paused: false,
+			retryWindowClosed: true,
+			retryAttempts: [
+				{ attempt: 1, status: "failed" },
+				{ attempt: 2, status: "repair_queued" },
+				{ attempt: 3, status: "rolled_back" },
+				{ attempt: 4, status: "repaired" },
+			],
+			reason: "provider cache mutation repair must preserve baseline snapshot lineage across a longer retry window",
+			commands: ["npm run gate:provider-runtime-matrix", "npm run gate:repair-rollback-policy", "npm run gate:worker-provider-repair-rollback-unification"],
+			gateIds: ["gate:worker-provider-repair-rollback-unification", "gate:provider-runtime-matrix", "gate:repair-rollback-policy"],
+		}),
+		buildScenario(tempRoot, {
+			id: "swarm-worker-tool-state-repair",
+			source: "provider-worker",
+			policySource: "provider-worker",
+			worker: true,
+			workerId: "re-swarm-tool-delta",
+			providerName: "anthropic-compatible",
+			modelId: "mock/anthropic-tool-repair-delta",
+			requestPath: "/v1/messages",
+			attempt: 2,
+			maxAttempts: 3,
+			status: "rolled_back",
+			action: "rollback",
+			providerAllowed: true,
+			paused: false,
+			retryWindowClosed: true,
+			retryAttempts: [
+				{ attempt: 1, status: "failed" },
+				{ attempt: 2, status: "rolled_back" },
+			],
+			reason: "re_swarm tool state repair must keep runtime manifest, request log, rollback policy, and regression refs in one lineage row",
+			commands: ["npm run gate:swarm-provider-manifest-parity", "npm run gate:tool-call-trace-ledger", "npm run gate:repair-rollback-policy"],
+			gateIds: ["gate:worker-provider-repair-rollback-unification", "gate:swarm-provider-manifest-parity", "gate:tool-call-trace-ledger", "gate:repair-rollback-policy"],
+		}),
+		buildScenario(tempRoot, {
 			id: "compound-frontier-retry-window",
 			source: "compound-frontier",
 			policySource: "compound-frontier",
@@ -374,6 +519,32 @@ function buildRuntimeReport(tempRoot) {
 			reason: "compound-frontier repair completion closes same signature across retry window",
 			commands: ["npm run gate:compound-frontier", "npm run gate:runtime-claim-ledger"],
 			gateIds: ["gate:worker-provider-repair-rollback-unification", "gate:runtime-claim-ledger", "gate:repair-rollback-policy"],
+		}),
+		buildScenario(tempRoot, {
+			id: "compound-provider-long-horizon-repair",
+			source: "compound-frontier",
+			policySource: "compound-frontier",
+			worker: false,
+			workerId: "compound-provider-epsilon",
+			providerName: "compound-provider",
+			modelId: "offline/compound-provider-long-horizon",
+			attempt: 5,
+			maxAttempts: 5,
+			status: "repaired",
+			action: "recapture-evidence",
+			providerAllowed: false,
+			paused: false,
+			retryWindowClosed: true,
+			retryAttempts: [
+				{ attempt: 1, status: "failed" },
+				{ attempt: 2, status: "repair_queued" },
+				{ attempt: 3, status: "failed" },
+				{ attempt: 4, status: "rolled_back" },
+				{ attempt: 5, status: "repaired" },
+			],
+			reason: "compound/provider long-horizon repair completion must keep the same signature and regression proof beyond a three-attempt bounded chain",
+			commands: ["npm run gate:compound-frontier", "npm run gate:runtime-claim-ledger", "npm run gate:repair-rollback-policy"],
+			gateIds: ["gate:worker-provider-repair-rollback-unification", "gate:runtime-claim-ledger", "gate:repair-rollback-policy", "gate:compound-frontier"],
 		}),
 		buildScenario(tempRoot, {
 			id: "operator-exhausted-escalation",
@@ -405,6 +576,8 @@ function buildRuntimeReport(tempRoot) {
 	}
 	const liveRepairMatrix = buildLiveRepairMatrix(scenarios);
 	const retryWindowCompletionChain = buildRetryCompletionChain(scenarios);
+	const stateLineageSnapshotMatrix = buildStateLineageSnapshotMatrix(scenarios);
+	const longHorizonRepairCompletionChain = buildLongHorizonRepairCompletionChain(scenarios);
 	return {
 		kind: "WorkerProviderRepairRollbackUnificationGateV1",
 		schemaVersion: 1,
@@ -418,6 +591,8 @@ function buildRuntimeReport(tempRoot) {
 			scenarios,
 			liveRepairMatrix,
 			retryWindowCompletionChain,
+			stateLineageSnapshotMatrix,
+			longHorizonRepairCompletionChain,
 			signatureIndex: scenarios.map((scenario) => ({
 				scenarioId: scenario.id,
 				signature: scenario.failureLedgerEvent.signature,
@@ -434,6 +609,8 @@ function buildRuntimeReport(tempRoot) {
 				requiresNoUnpausedRerunWhenExhausted: true,
 				requiresProviderWorkerLiveRepairMatrix: true,
 				requiresMultiAttemptRetryWindowCompletion: true,
+				requiresProviderWorkerStateLineageSnapshotMatrix: true,
+				requiresCompoundProviderLongHorizonRepairCompletion: true,
 			},
 		},
 		negativeCases: REQUIRED_NEGATIVE_CASES.map((id) => ({ id, mutates: id, expect: "reject", mustNotPromote: true })),
@@ -540,6 +717,47 @@ function validateRetryCompletionChain(chain) {
 	return { ok: errors.length === 0, errors };
 }
 
+function validateStateLineageSnapshotMatrix(matrix) {
+	const errors = [];
+	if (matrix?.kind !== "ProviderWorkerStateLineageSnapshotMatrixV1") errors.push("stateLineage.kind");
+	if ((matrix?.rowCount ?? 0) < 4) errors.push("stateLineage.row_count_lt_4");
+	if ((matrix?.providerCount ?? 0) < 2) errors.push("stateLineage.provider_count_lt_2");
+	if (!matrix?.apiStyles?.includes("openai-compatible") || !matrix?.apiStyles?.includes("anthropic-compatible")) errors.push("stateLineage.api_styles_missing");
+	for (const key of ["allBaselineCaptured", "allStateMutationsScoped", "allRollbackRestoredBaseline", "allRequestLogsBound", "allRegressionProofsPresent"]) {
+		if (matrix?.[key] !== true) errors.push(`stateLineage.${key}_not_true`);
+	}
+	for (const row of matrix?.rows ?? []) {
+		for (const field of ["scenarioId", "workerId", "providerName", "runtimeManifestFile", "requestLogFile", "rollbackPolicyFile", "baselineTreeSha256", "mutationScopeSha256", "restoredTreeSha256", "regressionProofSha256", "signature"]) if (!row[field]) errors.push(`stateLineage.${field}_missing:${row.scenarioId ?? "unknown"}`);
+		if (row.baselineTreeSha256 !== row.restoredTreeSha256) errors.push(`stateLineage.baseline_restore_mismatch:${row.scenarioId}`);
+		for (const [key, ok] of Object.entries(row.assertions ?? {})) if (ok !== true) errors.push(`stateLineage.assertion_failed:${row.scenarioId}:${key}`);
+	}
+	return { ok: errors.length === 0, errors };
+}
+
+function validateLongHorizonRepairCompletionChain(chain) {
+	const errors = [];
+	if (chain?.kind !== "CompoundProviderLongHorizonRepairCompletionChainV1") errors.push("longHorizon.kind");
+	if ((chain?.minAttemptCount ?? 0) < 4) errors.push("longHorizon.min_attempt_count_lt_4");
+	if ((chain?.longestAttemptCount ?? 0) < 5) errors.push("longHorizon.longest_attempt_count_lt_5");
+	if (chain?.includesProviderWorker !== true) errors.push("longHorizon.provider_worker_missing");
+	if (chain?.includesCompoundFrontier !== true) errors.push("longHorizon.compound_frontier_missing");
+	for (const key of ["allClosed", "allMonotonic", "allSameSignature", "allAttemptRegressionProofs"]) if (chain?.[key] !== true) errors.push(`longHorizon.${key}_not_true`);
+	for (const row of chain?.chains ?? []) {
+		if ((row.attempts ?? []).length < 4) errors.push(`longHorizon.chain_too_short:${row.scenarioId}`);
+		if (row.completionProof?.monotonicAttempts !== true) errors.push(`longHorizon.not_monotonic:${row.scenarioId}`);
+		if (row.completionProof?.sameSignature !== true) errors.push(`longHorizon.signature_mismatch:${row.scenarioId}`);
+		if (row.completionProof?.terminalClosed !== true) errors.push(`longHorizon.terminal_not_closed:${row.scenarioId}`);
+		if (row.completionProof?.regressionGateRefsMatchRepairQueue !== true) errors.push(`longHorizon.regression_ref_mismatch:${row.scenarioId}`);
+		if (row.completionProof?.allAttemptRegressionProofs !== true) errors.push(`longHorizon.attempt_regression_proof_missing:${row.scenarioId}`);
+		for (const attempt of row.attempts ?? []) {
+			if (attempt.signature !== row.signature) errors.push(`longHorizon.attempt_signature_drift:${row.scenarioId}:${attempt.attempt}`);
+			if (!attempt.rollbackPolicyFile) errors.push(`longHorizon.attempt_rollback_missing:${row.scenarioId}:${attempt.attempt}`);
+			if (!/^[a-f0-9]{64}$/.test(String(attempt.regressionProofSha256 ?? ""))) errors.push(`longHorizon.attempt_regression_hash_invalid:${row.scenarioId}:${attempt.attempt}`);
+		}
+	}
+	return { ok: errors.length === 0, errors };
+}
+
 function validateReport(report) {
 	const errors = [];
 	if (report?.kind !== "WorkerProviderRepairRollbackUnificationGateV1") errors.push("report.kind");
@@ -555,11 +773,15 @@ function validateReport(report) {
 	if (!liveRepairMatrixValidation.ok) errors.push(...liveRepairMatrixValidation.errors);
 	const retryCompletionValidation = validateRetryCompletionChain(report?.unificationReport?.retryWindowCompletionChain);
 	if (!retryCompletionValidation.ok) errors.push(...retryCompletionValidation.errors);
+	const stateLineageValidation = validateStateLineageSnapshotMatrix(report?.unificationReport?.stateLineageSnapshotMatrix);
+	if (!stateLineageValidation.ok) errors.push(...stateLineageValidation.errors);
+	const longHorizonValidation = validateLongHorizonRepairCompletionChain(report?.unificationReport?.longHorizonRepairCompletionChain);
+	if (!longHorizonValidation.ok) errors.push(...longHorizonValidation.errors);
 	const signatures = new Set(scenarios.map((scenario) => scenario.failureLedgerEvent?.signature).filter(Boolean));
 	if (signatures.size !== scenarios.length) errors.push("scenario_signatures_not_unique");
 	const text = JSON.stringify(report);
 	if (/ghp_[A-Za-z0-9]|github_pat_[A-Za-z0-9]|sk-[A-Za-z0-9]{8,}/i.test(text)) errors.push("literal_secret_leak");
-	return { ok: errors.length === 0, errors, scenarioResults, liveRepairMatrixValidation, retryCompletionValidation };
+	return { ok: errors.length === 0, errors, scenarioResults, liveRepairMatrixValidation, retryCompletionValidation, stateLineageValidation, longHorizonValidation };
 }
 
 function clone(value) {
@@ -612,6 +834,25 @@ function mutateReport(report, id) {
 		chain.completionProof.regressionGateRefsMatchRepairQueue = false;
 		row.unificationReport.retryWindowCompletionChain.allRegressionProofsPresent = false;
 	}
+	if (id === "state-lineage-missing-baseline") {
+		const lineage = row.unificationReport.stateLineageSnapshotMatrix;
+		delete lineage.rows[0].baselineTreeSha256;
+		lineage.rows[0].assertions.baselineCaptured = false;
+		lineage.allBaselineCaptured = false;
+	}
+	if (id === "long-horizon-chain-too-short") {
+		const chain = row.unificationReport.longHorizonRepairCompletionChain.chains.find((entry) => entry.scenarioId === "compound-provider-long-horizon-repair") ?? row.unificationReport.longHorizonRepairCompletionChain.chains[0];
+		chain.attempts = chain.attempts.slice(0, 3);
+		chain.attemptCount = chain.attempts.length;
+		row.unificationReport.longHorizonRepairCompletionChain.minAttemptCount = Math.min(...row.unificationReport.longHorizonRepairCompletionChain.chains.map((entry) => entry.attempts.length));
+		row.unificationReport.longHorizonRepairCompletionChain.longestAttemptCount = Math.max(...row.unificationReport.longHorizonRepairCompletionChain.chains.map((entry) => entry.attempts.length));
+	}
+	if (id === "long-horizon-signature-drift") {
+		const chain = row.unificationReport.longHorizonRepairCompletionChain.chains[0];
+		chain.attempts[1].signature = "deadbeefsignaturedrift";
+		chain.completionProof.sameSignature = false;
+		row.unificationReport.longHorizonRepairCompletionChain.allSameSignature = false;
+	}
 	return row;
 }
 
@@ -656,14 +897,16 @@ async function main() {
 		checks.push(check("runtime:compound-provider-retry-window-closed", (report.unificationReport.scenarios ?? []).some((scenario) => scenario.id === "compound-frontier-retry-window" && scenario.retryWindow.closed && scenario.retryWindow.attempts.every((attempt) => attempt.signature === scenario.failureLedgerEvent.signature)), { compound: (report.unificationReport.scenarios ?? []).find((scenario) => scenario.id === "compound-frontier-retry-window")?.retryWindow }));
 		checks.push(check("runtime:provider-worker-live-state-change-repair-matrix", report.unificationReport.liveRepairMatrix.providerCount >= 2 && report.unificationReport.liveRepairMatrix.allRollbackPolicyBound && report.unificationReport.liveRepairMatrix.allRequestLogsBound && report.unificationReport.liveRepairMatrix.allRegressionRefsMatched, report.unificationReport.liveRepairMatrix));
 		checks.push(check("runtime:multi-attempt-retry-window-completion-chain", report.unificationReport.retryWindowCompletionChain.minAttemptCount >= 3 && report.unificationReport.retryWindowCompletionChain.allClosed && report.unificationReport.retryWindowCompletionChain.allMonotonic && report.unificationReport.retryWindowCompletionChain.allRegressionProofsPresent, report.unificationReport.retryWindowCompletionChain));
+		checks.push(check("runtime:provider-worker-state-lineage-snapshot-matrix", report.unificationReport.stateLineageSnapshotMatrix.rowCount >= 4 && report.unificationReport.stateLineageSnapshotMatrix.allBaselineCaptured && report.unificationReport.stateLineageSnapshotMatrix.allRollbackRestoredBaseline && report.unificationReport.stateLineageSnapshotMatrix.allRegressionProofsPresent, report.unificationReport.stateLineageSnapshotMatrix));
+		checks.push(check("runtime:compound-provider-long-horizon-repair-completion-chain", report.unificationReport.longHorizonRepairCompletionChain.minAttemptCount >= 4 && report.unificationReport.longHorizonRepairCompletionChain.longestAttemptCount >= 5 && report.unificationReport.longHorizonRepairCompletionChain.includesProviderWorker && report.unificationReport.longHorizonRepairCompletionChain.includesCompoundFrontier && report.unificationReport.longHorizonRepairCompletionChain.allSameSignature, report.unificationReport.longHorizonRepairCompletionChain));
 		const negativeResults = REQUIRED_NEGATIVE_CASES.map((id) => ({ id, validation: validateReport(mutateReport(report, id)) }));
 		checks.push(check("fixture:negative-rejections", negativeResults.every((row) => !row.validation.ok), { negativeResults: negativeResults.map((row) => ({ id: row.id, ok: row.validation.ok, errors: row.validation.errors })) }));
 		checks.push(markerCheck("harness:worker-provider-repair-rollback-unification", "scripts/reverse-agent/repi-top-harness.mjs", ["gate:worker-provider-repair-rollback-unification", "WorkerProviderRepairRollbackUnificationGateV1", "child:gate:worker-provider-repair-rollback-unification"]));
-		checks.push(markerCheck("autonomy:worker-provider-repair-rollback-unification", "scripts/reverse-agent/autonomy-control-plane.mjs", ["WorkerProviderRepairRollbackUnificationGateV1", "worker_provider_repair_rollback_unification_gate", "provider_worker_state_change_writes_rollback_policy", "provider_worker_live_state_change_repair_matrix", "multi_attempt_retry_window_completion_chain"]));
+		checks.push(markerCheck("autonomy:worker-provider-repair-rollback-unification", "scripts/reverse-agent/autonomy-control-plane.mjs", ["WorkerProviderRepairRollbackUnificationGateV1", "worker_provider_repair_rollback_unification_gate", "provider_worker_state_change_writes_rollback_policy", "provider_worker_live_state_change_repair_matrix", "multi_attempt_retry_window_completion_chain", "provider_worker_state_lineage_snapshot_matrix", "compound_provider_long_horizon_repair_completion_chain"]));
 		checks.push(markerCheck("npm:worker-provider-repair-rollback-unification", "package.json", ["gate:worker-provider-repair-rollback-unification", "worker-provider-repair-rollback-unification-gate.mjs"]));
-		checks.push(markerCheck("docs:worker-provider-repair-rollback-unification-readme", "README.md", ["WorkerProviderRepairRollbackUnificationGateV1", "gate:worker-provider-repair-rollback-unification", "live repair matrix", "multi-attempt"]));
-		checks.push(markerCheck("docs:worker-provider-repair-rollback-unification-control-plane", "docs/reverse-agent/autonomous-control-plane.md", ["WorkerProviderRepairRollbackUnificationGateV1", "gate:worker-provider-repair-rollback-unification", "live repair matrix", "multi-attempt"]));
-		checks.push(markerCheck("docs:worker-provider-repair-rollback-unification-reverse", "docs/reverse-agent/README.md", ["WorkerProviderRepairRollbackUnificationGateV1", "gate:worker-provider-repair-rollback-unification", "live repair matrix", "multi-attempt"]));
+		checks.push(markerCheck("docs:worker-provider-repair-rollback-unification-readme", "README.md", ["WorkerProviderRepairRollbackUnificationGateV1", "gate:worker-provider-repair-rollback-unification", "live repair matrix", "multi-attempt", "state lineage", "long-horizon"]));
+		checks.push(markerCheck("docs:worker-provider-repair-rollback-unification-control-plane", "docs/reverse-agent/autonomous-control-plane.md", ["WorkerProviderRepairRollbackUnificationGateV1", "gate:worker-provider-repair-rollback-unification", "live repair matrix", "multi-attempt", "state lineage", "long-horizon"]));
+		checks.push(markerCheck("docs:worker-provider-repair-rollback-unification-reverse", "docs/reverse-agent/README.md", ["WorkerProviderRepairRollbackUnificationGateV1", "gate:worker-provider-repair-rollback-unification", "live repair matrix", "multi-attempt", "state lineage", "long-horizon"]));
 	} catch (error) {
 		checks.push(check("gate:exception", false, { error: String(error), stack: error?.stack }));
 	} finally {

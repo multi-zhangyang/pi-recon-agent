@@ -11,7 +11,9 @@
     "compound_provider_retry_window_closes_same_signature",
     "regression_gate_refs_match_repair_queue",
     "provider_worker_live_state_change_repair_matrix",
-    "multi_attempt_retry_window_completion_chain"
+    "multi_attempt_retry_window_completion_chain",
+    "provider_worker_state_lineage_snapshot_matrix",
+    "compound_provider_long_horizon_repair_completion_chain"
   ],
   "scenarios": [
     {
@@ -61,6 +63,43 @@
         "action=escalate",
         "MultiAttemptRetryWindowCompletionChainV1",
         "multi_attempt_retry_window_completion_chain"
+      ]
+    },
+    {
+      "id": "provider-worker-cache-state-repair",
+      "source": "provider-worker",
+      "mustBind": [
+        "ProviderWorkerStateLineageSnapshotMatrixV1",
+        "baselineTreeSha256",
+        "mutationScopeSha256",
+        "restoredTreeSha256",
+        "requestLogFile",
+        "runtimeManifestFile",
+        "provider_worker_state_lineage_snapshot_matrix",
+        "long-horizon provider chain"
+      ]
+    },
+    {
+      "id": "swarm-worker-tool-state-repair",
+      "source": "provider-worker",
+      "mustBind": [
+        "ProviderWorkerStateLineageSnapshotMatrixV1",
+        "ToolCallTraceLedgerV1",
+        "SubagentRuntimeManifestV1",
+        "RepairRollbackPolicyV1",
+        "state lineage",
+        "provider_worker_state_lineage_snapshot_matrix"
+      ]
+    },
+    {
+      "id": "compound-provider-long-horizon-repair",
+      "source": "compound-frontier",
+      "mustBind": [
+        "CompoundProviderLongHorizonRepairCompletionChainV1",
+        "five attempts",
+        "sameSignatureRetryWindow",
+        "regressionProofSha256 per attempt",
+        "compound_provider_long_horizon_repair_completion_chain"
       ]
     }
   ],
@@ -118,6 +157,24 @@
       "mutates": "retryWindowCompletionChain regressionProofSha256 and gate refs removed",
       "expect": "reject",
       "mustNotPromote": true
+    },
+    {
+      "id": "state-lineage-missing-baseline",
+      "mutates": "stateLineageSnapshotMatrix.rows[0].baselineTreeSha256",
+      "expect": "reject",
+      "mustNotPromote": true
+    },
+    {
+      "id": "long-horizon-chain-too-short",
+      "mutates": "longHorizonRepairCompletionChain compound chain truncated to three attempts",
+      "expect": "reject",
+      "mustNotPromote": true
+    },
+    {
+      "id": "long-horizon-signature-drift",
+      "mutates": "longHorizonRepairCompletionChain.attempts[1].signature",
+      "expect": "reject",
+      "mustNotPromote": true
     }
   ],
   "promotionPolicy": {
@@ -127,7 +184,9 @@
     "requiresProviderWorkerRuntimeRefs": true,
     "requiresNoUnpausedRerunWhenExhausted": true,
     "requiresProviderWorkerLiveRepairMatrix": true,
-    "requiresMultiAttemptRetryWindowCompletion": true
+    "requiresMultiAttemptRetryWindowCompletion": true,
+    "requiresProviderWorkerStateLineageSnapshotMatrix": true,
+    "requiresCompoundProviderLongHorizonRepairCompletion": true
   },
   "invariants": [
     "worker_provider_repair_rollback_unification_gate",
@@ -138,6 +197,8 @@
     "compound_provider_retry_window_closes_same_signature",
     "regression_gate_refs_match_repair_queue",
     "provider_worker_live_state_change_repair_matrix",
-    "multi_attempt_retry_window_completion_chain"
+    "multi_attempt_retry_window_completion_chain",
+    "provider_worker_state_lineage_snapshot_matrix",
+    "compound_provider_long_horizon_repair_completion_chain"
   ]
 }
