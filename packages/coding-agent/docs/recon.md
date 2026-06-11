@@ -492,6 +492,8 @@ Built-in REPI handles `session_before_compact` as a first-class compaction provi
 
 `npm run gate:release-ci-pipeline` 会检查 `ReleaseCiPipelineGateV1`：`.github/workflows/repi-harness.yml` 和 docs 模板必须显式执行 product boundary、profile isolation、product surface、closure readiness、capability release bundle、top harness、repository check 和 no-diff guard；workflow 不能依赖 live provider secrets，也不能调用 upstream `pi` takeover 路径。
 
+`npm run gate:release-evidence-index` 会检查 `ReleaseEvidenceIndexGateV1`：生成 `ReleaseEvidenceIndexV1`，把 autonomy gap ledger、closure readiness、capability release bundle、release CI pipeline、source hashes 和 command output hashes 合成 hash-chain evidence rows；缺任一关键引用、hash-chain drift、命令失败或 secret leak 都会失败。
+
 `npm run gate:swarm-provider-manifest-parity` 会检查 `SwarmProviderManifestParityGateV1`：re_swarm `SubagentRuntimeManifestV1`、WorkerChildSessionRuntimeBatchV1 和 ParallelProviderWorkerMatrixV1 必须在 workerId、claimRefs、mergeKey、stdout/stderr/transcript hash、provider env-ref-only 与 failure/repair refs 上保持同源，防止 provider worker claim 绕过 swarm manifest 或 child-session runtime 直接 promotion。
 
 `npm run gate:worker-provider-repair-rollback-unification` 会检查 `WorkerProviderRepairRollbackUnificationGateV1`：provider-worker、re_swarm worker、compound-frontier 和 operator repair rows 必须共享同一 `FailureLedgerEventV1` / `RepairQueueItemV1` signature、`RepairRollbackPolicyV1`、retry window closure 与 regression gate refs；provider/worker state-changing repair 必须保留 runtimeManifestFile、requestLogFile 和 rollbackPolicyFile，exhausted 后不能继续 unpaused rerun。

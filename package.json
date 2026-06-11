@@ -108,7 +108,8 @@
 		"gate:cross-session-multi-compact-matrix": "node scripts/reverse-agent/cross-session-multi-compact-matrix-gate.mjs . --strict",
 		"gate:autonomous-closure-readiness": "node scripts/reverse-agent/autonomous-closure-readiness-gate.mjs . --strict",
 		"gate:capability-release-bundle": "node scripts/reverse-agent/capability-release-bundle-gate.mjs . --strict",
-		"gate:release-ci-pipeline": "node scripts/reverse-agent/release-ci-pipeline-gate.mjs . --strict"
+		"gate:release-ci-pipeline": "node scripts/reverse-agent/release-ci-pipeline-gate.mjs . --strict",
+		"gate:release-evidence-index": "node scripts/reverse-agent/release-evidence-index-gate.mjs . --strict"
 	},
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "0.0.26",

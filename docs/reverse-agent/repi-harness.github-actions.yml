@@ -43,6 +43,12 @@ jobs:
       - name: REPI capability release bundle gate
         run: npm run gate:capability-release-bundle -- --no-write
 
+      - name: REPI release CI pipeline gate
+        run: npm run gate:release-ci-pipeline -- --no-write
+
+      - name: REPI release evidence index gate
+        run: npm run gate:release-evidence-index -- --no-write
+
       - name: Top-level REPI independence harness
         run: npm run gate:repi-harness
 

@@ -21,6 +21,8 @@ const REQUIRED_GATES = [
   "top_harness_before_repository_check",
   "no_generated_diff_after_checks",
   "ci_no_live_provider_or_secret_dependency",
+  "release_ci_pipeline_before_evidence_index",
+  "release_evidence_index_before_top_harness",
 ];
 const REQUIRED_NEGATIVE_CASES = [
   "missing-product-boundary-gate",
@@ -39,6 +41,8 @@ const REQUIRED_COMMANDS = [
   { name: "REPI product surface gate", command: "npm run gate:repi-product-surface", evidenceTier: "product_boundary" },
   { name: "REPI closure readiness gate", command: "npm run gate:autonomous-closure-readiness -- --no-write", evidenceTier: "closure_readiness" },
   { name: "REPI capability release bundle gate", command: "npm run gate:capability-release-bundle -- --no-write", evidenceTier: "capability_release" },
+  { name: "REPI release CI pipeline gate", command: "npm run gate:release-ci-pipeline -- --no-write", evidenceTier: "release_ci_pipeline" },
+  { name: "REPI release evidence index gate", command: "npm run gate:release-evidence-index -- --no-write", evidenceTier: "release_evidence_index" },
   { name: "Top-level REPI independence harness", command: "npm run gate:repi-harness", evidenceTier: "top_harness" },
   { name: "Full repository check", command: "npm run check", evidenceTier: "repository_check" },
   { name: "No generated diff", command: "git diff --check && git diff --exit-code", evidenceTier: "diff_guard" },
@@ -141,12 +145,14 @@ function computeOrderPolicy(workflows) {
   });
   const closureReadinessBeforeCapability = workflows.every((workflow) => stepOrder(workflow, "npm run gate:autonomous-closure-readiness -- --no-write") >= 0 && stepOrder(workflow, "npm run gate:autonomous-closure-readiness -- --no-write") < stepOrder(workflow, "npm run gate:capability-release-bundle -- --no-write"));
   const capabilityBeforeTopHarness = workflows.every((workflow) => stepOrder(workflow, "npm run gate:capability-release-bundle -- --no-write") >= 0 && stepOrder(workflow, "npm run gate:capability-release-bundle -- --no-write") < stepOrder(workflow, "npm run gate:repi-harness"));
+  const releaseCiPipelineBeforeEvidenceIndex = workflows.every((workflow) => stepOrder(workflow, "npm run gate:release-ci-pipeline -- --no-write") >= 0 && stepOrder(workflow, "npm run gate:release-ci-pipeline -- --no-write") < stepOrder(workflow, "npm run gate:release-evidence-index -- --no-write"));
+  const releaseEvidenceIndexBeforeTopHarness = workflows.every((workflow) => stepOrder(workflow, "npm run gate:release-evidence-index -- --no-write") >= 0 && stepOrder(workflow, "npm run gate:release-evidence-index -- --no-write") < stepOrder(workflow, "npm run gate:repi-harness"));
   const topHarnessBeforeCheck = workflows.every((workflow) => stepOrder(workflow, "npm run gate:repi-harness") >= 0 && stepOrder(workflow, "npm run gate:repi-harness") < stepOrder(workflow, "npm run check"));
   const diffGuardLast = workflows.every((workflow) => {
     const diff = stepOrder(workflow, "git diff --check && git diff --exit-code");
     return diff >= 0 && workflow.steps.every((step) => step.order <= diff || step.order < 0);
   });
-  return { productBoundaryBeforeCapability, closureReadinessBeforeCapability, capabilityBeforeTopHarness, topHarnessBeforeCheck, diffGuardLast };
+  return { productBoundaryBeforeCapability, closureReadinessBeforeCapability, capabilityBeforeTopHarness, releaseCiPipelineBeforeEvidenceIndex, releaseEvidenceIndexBeforeTopHarness, topHarnessBeforeCheck, diffGuardLast };
 }
 
 function validatePipelinePackage(pkg) {

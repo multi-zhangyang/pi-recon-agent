@@ -23,7 +23,9 @@
           "capability_release_before_top_harness",
           "top_harness_before_repository_check",
           "no_generated_diff_after_checks",
-          "ci_no_live_provider_or_secret_dependency"
+          "ci_no_live_provider_or_secret_dependency",
+          "release_ci_pipeline_before_evidence_index",
+          "release_evidence_index_before_top_harness"
         ]
       }
     },
@@ -41,7 +43,7 @@
         "command": { "type": "string", "minLength": 1 },
         "order": { "type": "integer", "minimum": 0 },
         "required": { "const": true },
-        "evidenceTier": { "enum": ["install", "product_boundary", "closure_readiness", "capability_release", "top_harness", "repository_check", "diff_guard"] }
+        "evidenceTier": { "enum": ["install", "product_boundary", "closure_readiness", "capability_release", "top_harness", "repository_check", "diff_guard", "release_ci_pipeline", "release_evidence_index"] }
       }
     },
     "ReleaseCiWorkflowV1": {
@@ -68,12 +70,14 @@
         "workflows": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/ReleaseCiWorkflowV1" } },
         "orderPolicy": {
           "type": "object",
-          "required": ["productBoundaryBeforeCapability", "closureReadinessBeforeCapability", "capabilityBeforeTopHarness", "topHarnessBeforeCheck", "diffGuardLast"],
+          "required": ["productBoundaryBeforeCapability", "closureReadinessBeforeCapability", "capabilityBeforeTopHarness", "releaseCiPipelineBeforeEvidenceIndex", "releaseEvidenceIndexBeforeTopHarness", "topHarnessBeforeCheck", "diffGuardLast"],
           "additionalProperties": false,
           "properties": {
             "productBoundaryBeforeCapability": { "const": true },
             "closureReadinessBeforeCapability": { "const": true },
             "capabilityBeforeTopHarness": { "const": true },
+            "releaseCiPipelineBeforeEvidenceIndex": { "const": true },
+            "releaseEvidenceIndexBeforeTopHarness": { "const": true },
             "topHarnessBeforeCheck": { "const": true },
             "diffGuardLast": { "const": true }
           }
@@ -137,6 +141,8 @@
     "capability_release_before_top_harness",
     "top_harness_before_repository_check",
     "no_generated_diff_after_checks",
-    "ci_no_live_provider_or_secret_dependency"
+    "ci_no_live_provider_or_secret_dependency",
+    "release_ci_pipeline_before_evidence_index",
+    "release_evidence_index_before_top_harness"
   ]
 }
