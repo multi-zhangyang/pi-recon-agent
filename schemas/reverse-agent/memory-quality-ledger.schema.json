@@ -1,0 +1,397 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repi.local/schemas/memory-quality-ledger.schema.json",
+  "title": "REPI Memory Quality Ledger V11",
+  "type": "object",
+  "$defs": {
+    "MemoryQualityLifecycleDecisionV11": {
+      "enum": [
+        "promote",
+        "retain",
+        "demote",
+        "quarantine",
+        "expire"
+      ]
+    },
+    "MemoryQualitySignalV11": {
+      "enum": [
+        "retrieved",
+        "vector_hit",
+        "injected",
+        "positive_feedback",
+        "negative_feedback",
+        "pending_feedback",
+        "usefulness_hit",
+        "usefulness_miss",
+        "forbidden_leak",
+        "scope_blocked",
+        "stale_decay",
+        "ab_replay_improved",
+        "ab_replay_regressed"
+      ]
+    },
+    "MemoryQualityLedgerRowV11": {
+      "type": "object",
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "id",
+        "ts",
+        "MemoryQualityLedgerV11",
+        "eventId",
+        "caseSignature",
+        "route",
+        "targetScope",
+        "retrievalCount",
+        "vectorHitCount",
+        "injectedCount",
+        "positiveFeedbackCount",
+        "negativeFeedbackCount",
+        "pendingFeedbackCount",
+        "usefulnessHitCount",
+        "usefulnessMissCount",
+        "forbiddenLeakCount",
+        "scopeBlocked",
+        "baseConfidence",
+        "qualityScore",
+        "lifecycleDecision",
+        "signals",
+        "evidenceRefs",
+        "nextCommands",
+        "prevHash",
+        "entryHash"
+      ],
+      "properties": {
+        "kind": {
+          "const": "repi-memory-quality-ledger-row"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "MemoryQualityLedgerV11": {
+          "const": true
+        },
+        "eventId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "caseSignature": {
+          "type": "string"
+        },
+        "route": {
+          "type": "string"
+        },
+        "targetScope": {
+          "type": "string"
+        },
+        "retrievalCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "vectorHitCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "injectedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "positiveFeedbackCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "negativeFeedbackCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pendingFeedbackCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "usefulnessHitCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "usefulnessMissCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "forbiddenLeakCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scopeBlocked": {
+          "type": "boolean"
+        },
+        "lastRecalledAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "lastInjectedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "lastFeedbackAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "baseConfidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "qualityScore": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "lifecycleDecision": {
+          "$ref": "#/$defs/MemoryQualityLifecycleDecisionV11"
+        },
+        "signals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MemoryQualitySignalV11"
+          }
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "nextCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "prevHash": {
+          "type": "string"
+        },
+        "entryHash": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "MemoryQualityLedgerReportV11": {
+      "type": "object",
+      "required": [
+        "kind",
+        "schemaVersion",
+        "generatedAt",
+        "MemoryQualityLedgerV11",
+        "active_memory_policy",
+        "quality_score_feedback_loop",
+        "usefulness_feedback_writeback",
+        "reportPath",
+        "ledgerPath",
+        "boardPath",
+        "sourceRetrievalReportPath",
+        "sourceVectorSearchReportPath",
+        "sourceFeedbackClosureReportPath",
+        "sourceUsefulnessEvalReportPath",
+        "eventCount",
+        "rowCount",
+        "averageQualityScore",
+        "promotedEventIds",
+        "retainedEventIds",
+        "demotedEventIds",
+        "quarantinedEventIds",
+        "expiredEventIds",
+        "requiredFeedbackEventIds",
+        "operatorInjectionCommands",
+        "avoidCommands",
+        "status",
+        "rows",
+        "requiredGates",
+        "policy",
+        "nextCommands"
+      ],
+      "properties": {
+        "kind": {
+          "const": "repi-memory-quality-ledger-report"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "generatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "MemoryQualityLedgerV11": {
+          "const": true
+        },
+        "active_memory_policy": {
+          "const": true
+        },
+        "quality_score_feedback_loop": {
+          "const": true
+        },
+        "usefulness_feedback_writeback": {
+          "const": true
+        },
+        "reportPath": {
+          "type": "string"
+        },
+        "ledgerPath": {
+          "type": "string"
+        },
+        "boardPath": {
+          "type": "string"
+        },
+        "sourceRetrievalReportPath": {
+          "type": "string"
+        },
+        "sourceVectorSearchReportPath": {
+          "type": "string"
+        },
+        "sourceFeedbackClosureReportPath": {
+          "type": "string"
+        },
+        "sourceUsefulnessEvalReportPath": {
+          "type": "string"
+        },
+        "eventCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rowCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "averageQualityScore": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "promotedEventIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "retainedEventIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "demotedEventIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "quarantinedEventIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expiredEventIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "requiredFeedbackEventIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "operatorInjectionCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "avoidCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "warn",
+            "blocked",
+            "empty"
+          ]
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MemoryQualityLedgerRowV11"
+          }
+        },
+        "requiredGates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "policy": {
+          "type": "object",
+          "required": [
+            "MemoryQualityLedgerV11",
+            "activeMemoryPolicy",
+            "qualityScoreFeedbackLoop",
+            "usefulnessFeedbackWriteback",
+            "appendOnlyQualityLedger",
+            "qualityDrivesSedimentation"
+          ],
+          "properties": {
+            "MemoryQualityLedgerV11": {
+              "const": true
+            },
+            "activeMemoryPolicy": {
+              "const": true
+            },
+            "qualityScoreFeedbackLoop": {
+              "const": true
+            },
+            "usefulnessFeedbackWriteback": {
+              "const": true
+            },
+            "appendOnlyQualityLedger": {
+              "const": true
+            },
+            "qualityDrivesSedimentation": {
+              "const": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "nextCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "report": {
+      "$ref": "#/$defs/MemoryQualityLedgerReportV11"
+    }
+  }
+}

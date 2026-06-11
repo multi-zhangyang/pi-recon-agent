@@ -1,0 +1,26 @@
+{
+  "kind": "repi-memory-distill-promotion-fixture",
+  "schemaVersion": 1,
+  "description": "MemoryDistillPromotionV10 fixture for provider-contract distillation and verifier-backed promotion.",
+  "requiredGates": [
+    "MemoryDistillPromotionV10",
+    "provider_distill_contract",
+    "artifact_to_claim_distillation",
+    "verifier_backed_promotion_gate",
+    "skill_capsule_promotion_writeback",
+    "memory_distill_promotion_in_context_pack",
+    "memory_distill_orchestrator_step"
+  ],
+  "validScenarios": [
+    "local-provider-contract-fallback-is-deterministic",
+    "skill-capsule-promotes-artifact-backed-candidate",
+    "experience-claim-enters-distill-candidate-ledger",
+    "provider-api-key-is-env-ref-only",
+    "context-pack-embeds-distill-promotion-report",
+    "orchestrator-runs-distill-promotion-step"
+  ],
+  "negativeScenarios": [
+    "remote-provider-without-explicit-allow-falls-back",
+    "conflicted-source-is-quarantined-not-promoted"
+  ]
+}

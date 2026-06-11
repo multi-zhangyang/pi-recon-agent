@@ -75,6 +75,23 @@ repi --offline \
 
 真实调用时去掉 `--offline`。
 
+### 可选远程 provider 长跑回归
+
+REPI 的默认 CI 不要求真实密钥；需要验证某个真实网关/模型时，用 opt-in live gate：
+
+```bash
+export REPI_REMOTE_PROVIDER_LIVE=1
+export REPI_REMOTE_PROVIDER_API=openai-completions
+export REPI_REMOTE_PROVIDER_BASE_URL=https://api.example.com/v1
+export REPI_REMOTE_PROVIDER_MODEL=provider/model-id
+export REPI_REMOTE_PROVIDER_API_KEY_ENV=REPI_REMOTE_PROVIDER_API_KEY
+export REPI_REMOTE_PROVIDER_API_KEY=<your-token>
+
+npm run gate:remote-provider-longrun -- --live --no-write
+```
+
+Anthropic-compatible endpoint 把 `REPI_REMOTE_PROVIDER_API` 改成 `anthropic-messages`，`REPI_REMOTE_PROVIDER_BASE_URL` 填服务根地址。gate 会临时写 isolated `~/.repi/agent/models.json`，只保存 `$REPI_REMOTE_PROVIDER_API_KEY` 这种环境变量引用；输出 artifact 只保存 hash 和脱敏状态，不保存明文 key。
+
 ## 3. Anthropic-compatible provider
 
 ```json

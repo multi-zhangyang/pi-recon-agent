@@ -54,6 +54,14 @@ node bench/recon-remote/agent-dogfood/parallel-run.mjs \
   --plan-json /tmp/recon-parallel-plan.json --plan-only --json
 ```
 
+When a gate needs a native runtime claim ledger without provider calls, add
+`--write-plan-ledger` (or `RECON_PARALLEL_PLAN_LEDGER=1`):
+
+```bash
+node bench/recon-remote/agent-dogfood/parallel-run.mjs \
+  --plan-json /tmp/recon-parallel-plan.json --plan-only --json --write-plan-ledger
+```
+
 `--plan-json <path>` accepts either a direct `ReconParallelPlanV1` object or an
 orchestrator JSON root containing `parallelPlan`. In plan-only mode the runner:
 
@@ -62,6 +70,10 @@ orchestrator JSON root containing `parallelPlan`. In plan-only mode the runner:
 - does not require `RECON_AGENT_MODEL`, provider credentials, or provider base
   URLs;
 - does not create `.repi-harness/evidence/remote/agent-parallel-dogfood/<timestamp>/`;
+- with `--write-plan-ledger`, writes a bounded native
+  `.repi-harness/evidence/runtime/agent-dogfood-plan-only/<timestamp>/result.json`
+  and `claim-ledger.jsonl` containing
+  `artifact_handoff → claim → validation → challenge → resolution`;
 - does not run hard-score, hard-eval, worker agents, synthesizer agents, browser
   automation, or real-platform checks;
 - prints a `pi-recon-parallel-plan-preview` object on stdout for CI/static review.
@@ -119,6 +131,7 @@ The parallel result also records a runtime audit so the dogfood proof is not jus
 | `RECON_ROLE_RETRIES` | `1` | Retry flaky role/model runs before judging the strict gate. |
 | `RECON_PARALLEL_PLAN_JSON` | unset | Same as `--plan-json <path>`; reads a `ReconParallelPlanV1` or an orchestrator JSON root containing `parallelPlan`. |
 | `RECON_PARALLEL_PLAN_ONLY` | unset | Same as `--plan-only`; prints a normalized plan preview and exits without provider/model execution. |
+| `RECON_PARALLEL_PLAN_LEDGER` | unset | Same as `--write-plan-ledger`; in plan-only mode writes native `result.json` + `ClaimLedgerEventV1` under `.repi-harness/evidence/runtime/agent-dogfood-plan-only/`. |
 
 ## Output
 
@@ -146,8 +159,18 @@ worker-summary.json
 sessions/<role>/*.jsonl
 ```
 
-Plan-only output is stdout-only. It should not create an
-`agent-parallel-dogfood/<timestamp>/` evidence directory.
+Default plan-only output is stdout-only and should not create an
+`agent-parallel-dogfood/<timestamp>/` evidence directory. With
+`--write-plan-ledger`, the runner writes only the bounded runtime ledger path:
+
+```text
+.repi-harness/evidence/runtime/agent-dogfood-plan-only/<timestamp>/
+parallel-plan-preview.json
+role-contract.json
+result.json
+claim-ledger.jsonl
+artifact.md
+```
 
 Important `result.json` fields:
 

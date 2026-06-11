@@ -1,0 +1,36 @@
+{
+  "kind": "repi-memory-experience-fixture",
+  "schemaVersion": 1,
+  "MemoryExperienceEngineV8": true,
+  "requiredGates": [
+    "MemoryExperienceEngineV8",
+    "episode_model_v8",
+    "structured_claim_extraction",
+    "lesson_promotion_gate",
+    "contradiction_resolution",
+    "usefulness_backprop",
+    "experience_report_in_context_pack",
+    "operator_memory_injection_commands"
+  ],
+  "validScenarios": [
+    "success-event-promotes-command-strategy-lesson",
+    "failure-event-demotes-avoid-lesson",
+    "contradictory-command-enters-conflict-resolution",
+    "context-pack-embeds-experience-report",
+    "orchestrator-runs-experience-promotion-step"
+  ],
+  "negativeCases": [
+    {
+      "id": "raw-log-without-claim-extraction",
+      "mustFailBecause": "Memory events that do not produce structured claims cannot be promoted."
+    },
+    {
+      "id": "conflicted-command-promoted-without-quarantine",
+      "mustFailBecause": "A command with both success and failure evidence must enter contradiction_resolution before reuse."
+    },
+    {
+      "id": "lesson-without-backprop",
+      "mustFailBecause": "Lessons must carry usefulness_backprop data for later ranking."
+    }
+  ]
+}

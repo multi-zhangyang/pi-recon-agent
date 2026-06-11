@@ -1,0 +1,27 @@
+{
+  "kind": "repi-memory-strategy-capsule-fixture",
+  "schemaVersion": 1,
+  "MemoryStrategyCapsuleV13": true,
+  "requiredGates": [
+    "MemoryStrategyCapsuleV13",
+    "executable_strategy_capsule",
+    "replay_backed_strategy_promotion",
+    "strategy_quality_gate",
+    "strategy_capsule_in_context_pack",
+    "strategy_capsule_orchestrator_step",
+    "strategy_capsule_operator_injection"
+  ],
+  "validScenarios": [
+    "replay-improved-memory-becomes-executable-strategy",
+    "strategy-capsule-has-trigger-objective-commands-verifier-fallback",
+    "quality-gate-blocks-regressed-strategy",
+    "strategy-capsule-in-context-pack",
+    "orchestrator-runs-strategy-capsule-step",
+    "operator-injection-consumes-strategy-commands"
+  ],
+  "negativeScenarios": [
+    "missing-recommended-command-stays-candidate",
+    "regressed-replay-enters-demoted-strategy",
+    "cross-scope-strategy-requires-replay-before-injection"
+  ]
+}

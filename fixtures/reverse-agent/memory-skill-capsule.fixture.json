@@ -1,0 +1,25 @@
+{
+  "kind": "repi-memory-skill-capsule-fixture",
+  "schemaVersion": 1,
+  "description": "MemorySkillCapsuleV9 fixture for assetizing experience lessons and distilled patterns into operator/verifier skill capsules.",
+  "requiredGates": [
+    "MemorySkillCapsuleV9",
+    "skill_capsule_assetization",
+    "verified_skill_promotion_gate",
+    "operator_skill_injection",
+    "memory_skill_capsules_in_context_pack",
+    "experience_to_skill_capsule",
+    "distilled_pattern_to_skill_capsule"
+  ],
+  "validScenarios": [
+    "experience-lesson-becomes-operator-skill-capsule",
+    "promoted-pattern-becomes-verifier-skill-capsule",
+    "avoid-lesson-becomes-demotion-skill-capsule",
+    "context-pack-embeds-skill-capsule-report",
+    "orchestrator-runs-skill-capsule-injection-step"
+  ],
+  "negativeScenarios": [
+    "quarantined-skill-not-in-operator-injection",
+    "skill-without-source-hash-not-promoted"
+  ]
+}

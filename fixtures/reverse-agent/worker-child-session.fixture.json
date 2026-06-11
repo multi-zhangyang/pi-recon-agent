@@ -76,6 +76,16 @@
       "path": ".repi-harness/evidence/child-sessions/child-pcap-timeout-2/stderr.txt",
       "content": "worker-pcap-timeout timed out and was cancelled\n",
       "sha256": "27c526cdb02cc60d034296489a3f9611e338b703c77d90517e29a23e4cfcd581"
+    },
+    {
+      "path": ".repi-harness/evidence/child-sessions/child-process-probe/stdout.txt",
+      "content": "REPI reverse/pentest independent product\n",
+      "sha256": "dff68d8783a1e965eaa686f0add9aa60d83260077b4bca8af95ff4e04c407819"
+    },
+    {
+      "path": ".repi-harness/evidence/child-sessions/child-process-probe/stderr.txt",
+      "content": "",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
   ],
   "providerRuntime": {
@@ -550,7 +560,54 @@
         "worker-pcap-timeout"
       ],
       "claimAwareMerge": true,
-      "childSessionRuntimeCaptured": true
+      "childSessionRuntimeCaptured": true,
+      "childProcessRuntimeCaptured": true
+    },
+    "childProcessProbe": {
+      "kind": "WorkerChildProcessProbeV1",
+      "schemaVersion": 1,
+      "probeId": "fixture-child-process-probe",
+      "command": "repi",
+      "args": [
+        "--offline",
+        "--help"
+      ],
+      "cwd": "/workspace/target",
+      "isolatedHome": "/tmp/repi-child-home/.repi/agent",
+      "startedAt": "2026-06-10T00:00:00.000Z",
+      "endedAt": "2026-06-10T00:00:01.000Z",
+      "elapsedMs": 1000,
+      "exitCode": 0,
+      "signal": null,
+      "status": "pass",
+      "stdoutPath": ".repi-harness/evidence/child-sessions/child-process-probe/stdout.txt",
+      "stderrPath": ".repi-harness/evidence/child-sessions/child-process-probe/stderr.txt",
+      "stdoutSha256": "dff68d8783a1e965eaa686f0add9aa60d83260077b4bca8af95ff4e04c407819",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "envAllowlist": [
+        "HOME",
+        "PATH",
+        "REPI_PRODUCT",
+        "REPI_OFFLINE",
+        "REPI_SKIP_VERSION_CHECK",
+        "REPI_CODING_AGENT_DIR"
+      ],
+      "envDenylist": [
+        "GITHUB_TOKEN",
+        "GITHUB_TOKEN_FOR_PUSH",
+        "ANTHROPIC_AUTH_TOKEN",
+        "NPM_TOKEN"
+      ],
+      "assertions": {
+        "repiCommandExecuted": true,
+        "isolatedRepiHome": true,
+        "noPiHomeImport": true,
+        "updateChecksDisabled": true,
+        "telemetryDisabled": true,
+        "noLiteralSecrets": true,
+        "stdoutCaptured": true
+      },
+      "errors": []
     }
   },
   "expected": {
@@ -565,7 +622,9 @@
       "timeout_without_cancel",
       "exhausted_still_running",
       "missing_pool_bridge",
-      "missing_validation"
+      "missing_validation",
+      "childProcessProbe_missing",
+      "childProcessProbe.stdout.literal_secret"
     ]
   },
   "negativeCases": [
@@ -665,6 +724,24 @@
       "expected": {
         "mustHaveErrors": [
           "claim-child-authz.missing_validation"
+        ]
+      }
+    },
+    {
+      "id": "missing-child-process-probe",
+      "mutate": "missingChildProcessProbe",
+      "expected": {
+        "mustHaveErrors": [
+          "childProcessProbe_missing"
+        ]
+      }
+    },
+    {
+      "id": "child-process-secret-leak",
+      "mutate": "childProcessSecretLeak",
+      "expected": {
+        "mustHaveErrors": [
+          "childProcessProbe.stdout.literal_secret"
         ]
       }
     }

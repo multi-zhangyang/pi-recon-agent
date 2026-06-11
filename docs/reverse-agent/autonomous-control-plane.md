@@ -211,12 +211,13 @@ claim ledger、hard-eval score split 和 autonomous contracts gate，输出
 - `hard-eval-control-plane --write` 同时写 per-run failure/repair artifact，并追加 canonical `.repi-harness/evidence/failures/ledger.jsonl` 与 `.repi-harness/evidence/repairs/queue.jsonl`；failure event 带 `retryBudget/evidenceWriteback/blockedConditions`，repair item 带 `repairAction/evidenceWriteback/blockedConditions`。
 - `schemas/reverse-agent/failure-repair-contract.schema.json` 已开启 strict additionalProperties=false，并绑定 `fixtures/reverse-agent/failure-repair-strict.fixture.json`；`gate:autonomous-contracts` 会验证 valid fixture 通过、duplicate signature/attempt、loose extra field、exhausted 后继续 unpaused rerun/retry 都被拒绝。
 - compound-frontier failed gates、agent-dogfood role retry 和 plan-only invalid fixture 已输出 canonical failure/repair rows。
+- `RepairRollbackPolicyV1` / `gate:repair-rollback-policy` 已把 state-changing repair 的 baseline snapshot、allowlist、passed regression gate、rollback restore 和 restored tree hash 校验接成 hard-eval；负例覆盖 baseline missing、allowlist violation、rollback not restored、missing regression gate 和 failure/repair unlinked。
 
 仍需硬化：
 
 - 把 strict failure/repair validator 接入独立 sub-agent/session runtime regression gates。
 - 继续把所有 runtime retry 接入同一失败签名和预算；strict validator 已阻断 exhausted 后未闭合 budget 或 unpaused rerun/retry 的盲重试。
-- 为 autofix/operator/compound 类动作加入 baseline、allowlist、passed gate regression 和 rollback criteria。
+- 继续把 `RepairRollbackPolicyV1` 从 re_autofix 扩展到 re_operator、compound-frontier 和 provider-worker 的更多真实 state-changing repair。
 
 推荐非测试顺序：
 
@@ -251,9 +252,9 @@ claim ledger、hard-eval score split 和 autonomous contracts gate，输出
 
 | 方向 | 现在能保证 | 不能夸大的部分 |
 |---|---|---|
-| 并行调度 | 能生成 `ReconParallelPlanV1`，能用 `--plan-json --plan-only` 离线预览 worker/merge/evidence contract，agent-dogfood 已有 subagent runtime manifest，re_swarm run 也会写 command-level `SubagentRuntimeManifestV1`、stdout/stderr、sessionDir 和 toolCallDigest；`WorkerRuntimePoolV1` hard-eval 已覆盖并发、timeout/cancel、retryBudget、claim-aware merge 负例；`WorkerChildSessionRuntimeBatchV1` hard-eval 已覆盖独立 `repi --recon` child session/provider runtime 合同。 | 还不是动态 autonomous scheduler；尚未完成跨入口统一调度、自动取消、工作窃取、实时重分片和真实 child-session claim-aware merge 执行闭环，也还未把 re_swarm worker 默认升级成真实 child process/provider runtime。 |
+| 并行调度 | 能生成 `ReconParallelPlanV1`，能用 `--plan-json --plan-only` 离线预览 worker/merge/evidence contract，agent-dogfood 已有 subagent runtime manifest，re_swarm run 也会写 command-level `SubagentRuntimeManifestV1`、stdout/stderr、sessionDir 和 toolCallDigest；`WorkerRuntimePoolV1` hard-eval 已覆盖并发、timeout/cancel、retryBudget、claim-aware merge 负例；`WorkerChildSessionRuntimeBatchV1` hard-eval 已覆盖独立 `repi --recon` child session/provider runtime 合同；`ProviderRuntimeMatrixV1`、`ProviderFailureInjectionReportV1`、`ParallelProviderWorkerMatrixV1` 和 `RemoteProviderLongRunV1` 已覆盖本地 provider 矩阵、失败注入、多 worker provider 并发和可选远程 provider 长跑。 | 还不是完整动态 autonomous scheduler；跨入口统一调度、工作窃取、实时重分片、更多真实冲突仲裁和 cross-session resume live 回归仍可继续硬化。 |
 | 长期上下文压缩/记忆 | `re_context`、`session_before_compact`、`session_compact`、context audit 已覆盖 context pack、resume contract、branch mismatch/hash drift/missing pack 等负例；Memory v3 已有 distillation-report、pattern-book、quarantine 和 mandatory injection chain。 | 还不能宣称无限长期记忆；仍需多次 compact、预算 exhausted、跨 session contamination、embedding/semantic index 和更多记忆污染回滚负例。 |
-| 失败自修复 | 已有 bounded retry、repair queue、hard-eval gaps、autofix/proof-loop、strict failure/repair schema fixture、duplicate rejection 和 compound/role retry rows。 | 还不是自动修好所有失败；plan-only 不执行 repair，真实修复仍需把 strict validator 接入更多 runtime regression、rollback criteria 和 passed-gate regression。 |
+| 失败自修复 | 已有 bounded retry、repair queue、hard-eval gaps、autofix/proof-loop、strict failure/repair schema fixture、duplicate rejection、compound/role retry rows，以及 `RepairRollbackPolicyV1` baseline/allowlist/regression/rollback gate。 | 还不是自动修好所有失败；plan-only 不执行 repair，真实修复仍需把 strict validator 和 rollback policy 接入更多 runtime regression。 |
 | 自动分工验证 | 已有 role contract、hard-eval claim ledger、agent-dogfood / re_swarm / compound runtime claim ledger、runtime-claim-ledger adapter/gate、synthesizer reconciliation、score split、strict claim marker、runtime final path 阻断，以及 `StructuredClaimMergeV1` final promotion hard-eval，能防止把 orchestration 成功或 worker 文本摘要写成 final claim。 | 仍需补齐 agent-dogfood/re_swarm live runtime artifacts、unresolved challenge 自动回流、claim-aware merge 接入真实运行态和最终 claim promotion 全覆盖。 |
 
 ## 当前不做的事
@@ -291,4 +292,4 @@ They validate these contract families without running live benchmarks or provide
 
 `hard-eval-control-plane.mjs` 的离线 failure/repair 输出也已补齐 `signature`、`artifactHashes`、`budget`、`rollback`、`expectedGates`、`rollbackCriteria`；role contract 已补齐 `ledgerPolicy`、`conflictPolicy`、`claimGatePolicy`、`handoffTargets`、`evidenceContract`。
 
-This means REPI now has a usable professional control plane with machine-readable schemas, validators, agent-dogfood subagent runtime manifests plus agent-dogfood / re_swarm / compound runtime claim ledger rows, exact-resume negative fixtures, strict failure/repair fixtures, failure/repair writeback hooks, strict claim release markers, and runtime final-path gates. Remaining work is limited to hardening such as generic re_swarm independent sub-agent runtime, cross-session/multi-compact fixtures, strict validator regression, and runtime ledger regression wiring.
+This means REPI now has a usable professional control plane with machine-readable schemas, validators, agent-dogfood subagent runtime manifests plus agent-dogfood / re_swarm / compound runtime claim ledger rows, provider runtime matrix/failure injection/parallel provider worker gates, WorkerLeaseSchedulerV1 live re_swarm scheduler artifact wiring, opt-in remote provider long-run regression, exact-resume negative fixtures, strict failure/repair fixtures, RepairRollbackPolicyV1 baseline/allowlist/regression/rollback gates, ToolCallTraceLedgerV1 append-only tool traces, failure/repair writeback hooks, strict claim release markers, and runtime final-path gates. Remaining work is limited to hardening such as cross-session/multi-compact live fixtures, deeper real conflict arbitration, strict validator regression, and runtime ledger regression wiring.

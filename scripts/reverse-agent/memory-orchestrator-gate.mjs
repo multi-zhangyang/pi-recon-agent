@@ -77,6 +77,40 @@ function validateFixture(fixture) {
 		"pre_task_retrieve_before_operator",
 		"scope_filter_before_memory_injection",
 		"post_tool_writeback_contract",
+		"MemorySkillCapsuleV9",
+		"skill_capsule_assetization",
+		"verified_skill_promotion_gate",
+		"operator_skill_injection",
+		"MemoryDistillPromotionV10",
+		"provider_distill_contract",
+		"artifact_to_claim_distillation",
+		"verifier_backed_promotion_gate",
+		"skill_capsule_promotion_writeback",
+		"MemoryQualityLedgerV11",
+		"active_memory_policy",
+		"quality_score_feedback_loop",
+		"usefulness_feedback_writeback",
+		"MemoryStrategyCapsuleV13",
+		"executable_strategy_capsule",
+		"replay_backed_strategy_promotion",
+		"strategy_quality_gate",
+		"strategy_capsule_operator_injection",
+		"MemoryActiveKernelV14",
+		"unified_memory_decision_engine",
+		"active_recall_scheduler",
+		"quality_replay_strategy_fusion",
+		"scope_safe_strategy_injection",
+		"feedback_driven_promotion",
+		"cross_session_compact_ready",
+		"MemoryMaturationRuntimeV15",
+		"automatic_memory_maturation_pipeline",
+		"tool_result_to_strategy_loop",
+		"closed_loop_writeback",
+		"retention_decay_scheduler",
+		"stale_memory_rehearsal_queue",
+		"usefulness_backprop_to_maturation",
+		"promotion_demotion_replay_backed",
+		"cross_session_maturation_ready",
 		"failure_success_feedback_closure",
 		"pre_compact_memory_snapshot",
 		"post_compact_resume_memory_injection",
@@ -187,13 +221,18 @@ function main() {
 			checks.push(check("runtime:report-schema", schemaErrors.length === 0, { errors: schemaErrors, reportPath: probeData.reportPath, sha256: sha256(JSON.stringify(probeData.report)).slice(0, 24) }));
 			checks.push(check("runtime:pre-task-retrieval-before-operator", stepIds.has("pre_task_retrieve") && gates.has("pre_task_retrieve_before_operator") && /re_memory search-events|retrieval_hits=/i.test(probeData.finalText), { stepIds: Array.from(stepIds), gates: Array.from(gates) }));
 			checks.push(check("runtime:scope-filter-before-injection", stepIds.has("scope_filter_before_injection") && gates.has("scope_filter_before_memory_injection"), { stepIds: Array.from(stepIds) }));
-			checks.push(check("runtime:post-tool-writeback-contract", stepIds.has("post_tool_writeback_contract") && gates.has("post_tool_writeback_contract") && (probeData.report.steps ?? []).some((step) => step.id === "post_tool_writeback_contract" && /re_memory append/i.test(step.command)), { nextCommands: probeData.report.nextCommands, postToolStep: (probeData.report.steps ?? []).find((step) => step.id === "post_tool_writeback_contract") }));
+			checks.push(check("runtime:post-tool-writeback-contract", stepIds.has("post_tool_writeback_contract") && gates.has("post_tool_writeback_contract") && (probeData.report.steps ?? []).some((step) => step.id === "post_tool_writeback_contract" && /re_memory (?:append|deposit)/i.test(step.command)), { nextCommands: probeData.report.nextCommands, postToolStep: (probeData.report.steps ?? []).find((step) => step.id === "post_tool_writeback_contract") }));
 			checks.push(check("runtime:compact-resume-memory-injection", stepIds.has("post_compact_resume_memory_injection") && gates.has("post_compact_resume_memory_injection"), { compactResumeStatus: probeData.report.compactResumeStatus }));
+			checks.push(check("runtime:skill-capsule-operator-injection", stepIds.has("skill_capsule_operator_injection") && gates.has("MemorySkillCapsuleV9") && probeData.report.memorySkillCapsuleReportPath && (probeData.report.nextCommands ?? []).some((command) => /re_memory skills/i.test(command)), { skillCapsules: { status: probeData.report.memorySkillCapsuleStatus, count: probeData.report.memorySkillCapsuleCount, report: probeData.report.memorySkillCapsuleReportPath }, stepIds: Array.from(stepIds) }));
+			checks.push(check("runtime:distill-promotion-provider-gate", stepIds.has("distill_promotion_provider_gate") && gates.has("MemoryDistillPromotionV10") && probeData.report.memoryDistillPromotionReportPath && (probeData.report.nextCommands ?? []).some((command) => /re_memory distill-promote/i.test(command)), { distillPromotion: { status: probeData.report.memoryDistillPromotionStatus, count: probeData.report.memoryDistillPromotionCandidateCount, report: probeData.report.memoryDistillPromotionReportPath }, stepIds: Array.from(stepIds) }));
+			checks.push(check("runtime:memory-quality-feedback-loop", stepIds.has("memory_quality_feedback_loop") && gates.has("MemoryQualityLedgerV11") && probeData.report.memoryQualityReportPath && (probeData.report.nextCommands ?? []).some((command) => /re_memory quality/i.test(command)), { memoryQuality: { status: probeData.report.memoryQualityStatus, rows: probeData.report.memoryQualityRowCount, report: probeData.report.memoryQualityReportPath }, stepIds: Array.from(stepIds) }));
+			checks.push(check("runtime:strategy-capsule-operator-injection", stepIds.has("strategy_capsule_operator_injection") && gates.has("MemoryStrategyCapsuleV13") && probeData.report.memoryStrategyReportPath && (probeData.report.nextCommands ?? []).some((command) => /re_memory strategy/i.test(command)), { memoryStrategy: { status: probeData.report.memoryStrategyStatus, count: probeData.report.memoryStrategyCapsuleCount, report: probeData.report.memoryStrategyReportPath }, stepIds: Array.from(stepIds) }));
+			checks.push(check("runtime:memory-active-kernel-decision", stepIds.has("active_memory_kernel_decision") && gates.has("MemoryActiveKernelV14") && probeData.report.memoryActiveKernelReportPath && (probeData.report.nextCommands ?? []).some((command) => /re_memory active/i.test(command)), { memoryActiveKernel: { status: probeData.report.memoryActiveKernelStatus, decisions: probeData.report.memoryActiveKernelDecisionCount, inject: probeData.report.memoryActiveKernelInject, avoid: probeData.report.memoryActiveKernelAvoid, report: probeData.report.memoryActiveKernelReportPath }, stepIds: Array.from(stepIds) }));
 			checks.push(check("runtime:final-supervise-before-claim", stepIds.has("final_supervise_before_claim") && gates.has("final_supervise_before_claim") && (probeData.report.nextCommands ?? []).some((command) => /re_complete audit/i.test(command)), { nextCommands: probeData.report.nextCommands }));
 			checks.push(check("runtime:context-pack-embeds-orchestrator", probeData.packHasMemoryOrchestrator && probeData.pack.memoryOrchestrator?.mandatory_memory_control_loop === true, { packPath: probeData.packPath, memoryOrchestrator: probeData.pack.memoryOrchestrator }));
-			checks.push(check("runtime:required-gates", ["MemoryOrchestratorV6", "mandatory_memory_control_loop", "pre_task_retrieve_before_operator", "scope_filter_before_memory_injection", "post_tool_writeback_contract", "failure_success_feedback_closure", "pre_compact_memory_snapshot", "post_compact_resume_memory_injection", "final_supervise_before_claim", "memory_orchestrator_report_in_context_pack"].every((gate) => gates.has(gate)), { requiredGates: probeData.report.requiredGates }));
+			checks.push(check("runtime:required-gates", ["MemoryOrchestratorV6", "mandatory_memory_control_loop", "pre_task_retrieve_before_operator", "scope_filter_before_memory_injection", "post_tool_writeback_contract", "failure_success_feedback_closure", "pre_compact_memory_snapshot", "post_compact_resume_memory_injection", "MemorySkillCapsuleV9", "skill_capsule_assetization", "operator_skill_injection", "MemoryDistillPromotionV10", "provider_distill_contract", "artifact_to_claim_distillation", "verifier_backed_promotion_gate", "skill_capsule_promotion_writeback", "MemoryQualityLedgerV11", "active_memory_policy", "quality_score_feedback_loop", "usefulness_feedback_writeback", "MemoryStrategyCapsuleV13", "executable_strategy_capsule", "replay_backed_strategy_promotion", "strategy_quality_gate", "strategy_capsule_operator_injection", "MemoryActiveKernelV14", "unified_memory_decision_engine", "active_recall_scheduler", "quality_replay_strategy_fusion", "scope_safe_strategy_injection", "feedback_driven_promotion", "cross_session_compact_ready", "MemoryMaturationRuntimeV15", "automatic_memory_maturation_pipeline", "tool_result_to_strategy_loop", "closed_loop_writeback", "retention_decay_scheduler", "stale_memory_rehearsal_queue", "usefulness_backprop_to_maturation", "promotion_demotion_replay_backed", "cross_session_maturation_ready", "final_supervise_before_claim", "memory_orchestrator_report_in_context_pack"].every((gate) => gates.has(gate)), { requiredGates: probeData.report.requiredGates }));
 		} else {
-			for (const id of ["runtime:report-schema", "runtime:pre-task-retrieval-before-operator", "runtime:scope-filter-before-injection", "runtime:post-tool-writeback-contract", "runtime:compact-resume-memory-injection", "runtime:final-supervise-before-claim", "runtime:context-pack-embeds-orchestrator", "runtime:required-gates"]) checks.push(check(id, false, { error: "probe output missing" }));
+			for (const id of ["runtime:report-schema", "runtime:pre-task-retrieval-before-operator", "runtime:scope-filter-before-injection", "runtime:post-tool-writeback-contract", "runtime:compact-resume-memory-injection", "runtime:skill-capsule-operator-injection", "runtime:distill-promotion-provider-gate", "runtime:memory-quality-feedback-loop", "runtime:strategy-capsule-operator-injection", "runtime:memory-active-kernel-decision", "runtime:final-supervise-before-claim", "runtime:context-pack-embeds-orchestrator", "runtime:required-gates"]) checks.push(check(id, false, { error: "probe output missing" }));
 		}
 		checks.push(check("code:orchestrator-markers", ["MemoryOrchestratorV6", "buildMemoryOrchestratorReport", "formatMemoryOrchestrator", "memoryOrchestratorReportPath", "mandatory_memory_control_loop", "pre_task_retrieve_before_operator", "post_compact_resume_memory_injection"].every((marker) => readText("packages/coding-agent/src/core/recon-profile.ts").includes(marker)), { markers: ["MemoryOrchestratorV6", "buildMemoryOrchestratorReport", "formatMemoryOrchestrator"] }));
 	} catch (error) {

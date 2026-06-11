@@ -1,0 +1,417 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repi.local/schemas/memory-skill-capsule.schema.json",
+  "title": "REPI Memory Skill Capsule V9",
+  "type": "object",
+  "$defs": {
+    "ArtifactRef": {
+      "type": "object",
+      "required": [
+        "path",
+        "sha256",
+        "tier"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tier": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "MemorySkillCapsuleV9": {
+      "type": "object",
+      "required": [
+        "kind",
+        "schemaVersion",
+        "id",
+        "ts",
+        "MemorySkillCapsuleV9",
+        "caseSignature",
+        "route",
+        "targetScope",
+        "skillType",
+        "lifecycle",
+        "sourceIds",
+        "sourceHashes",
+        "preconditions",
+        "operatorCommands",
+        "verifierCommands",
+        "avoidCommands",
+        "workerRoutingHints",
+        "evidenceRefs",
+        "score",
+        "promotionGate",
+        "usage",
+        "injection",
+        "entryHash"
+      ],
+      "properties": {
+        "kind": {
+          "const": "repi-memory-skill-capsule"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "MemorySkillCapsuleV9": {
+          "const": true
+        },
+        "caseSignature": {
+          "type": "string"
+        },
+        "route": {
+          "type": "string"
+        },
+        "targetScope": {
+          "type": "string"
+        },
+        "skillType": {
+          "enum": [
+            "operator_playbook",
+            "verifier_rule",
+            "avoid_rule",
+            "repair_rule",
+            "worker_routing",
+            "scope_guard"
+          ]
+        },
+        "lifecycle": {
+          "enum": [
+            "candidate",
+            "promoted",
+            "quarantined",
+            "demoted"
+          ]
+        },
+        "sourceIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sourceHashes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "preconditions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "operatorCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "verifierCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "avoidCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "workerRoutingHints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ArtifactRef"
+          }
+        },
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "promotionGate": {
+          "enum": [
+            "artifact_sha256",
+            "replay_or_verifier",
+            "experience_promotion",
+            "pattern_confidence",
+            "feedback_usefulness",
+            "scope"
+          ]
+        },
+        "usage": {
+          "type": "object",
+          "required": [
+            "reuseCount",
+            "successCount",
+            "failureCount",
+            "lastUsedAt",
+            "usefulnessScore"
+          ],
+          "properties": {
+            "reuseCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "successCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "failureCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "lastUsedAt": {
+              "type": "string"
+            },
+            "usefulnessScore": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "injection": {
+          "type": "object",
+          "required": [
+            "operatorPromptSnippet",
+            "verifierPromptSnippet",
+            "nextActionCommands"
+          ],
+          "properties": {
+            "operatorPromptSnippet": {
+              "type": "string"
+            },
+            "verifierPromptSnippet": {
+              "type": "string"
+            },
+            "workerRoutingHint": {
+              "type": "string"
+            },
+            "nextActionCommands": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "entryHash": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "MemorySkillCapsuleReportV9": {
+      "type": "object",
+      "required": [
+        "kind",
+        "schemaVersion",
+        "generatedAt",
+        "MemorySkillCapsuleV9",
+        "skill_capsule_assetization",
+        "verified_skill_promotion_gate",
+        "operator_skill_injection",
+        "reportPath",
+        "capsuleLedgerPath",
+        "capsuleBookPath",
+        "sourceExperienceReportPath",
+        "sourceDistillationReportPath",
+        "capsuleCount",
+        "promotedCapsuleIds",
+        "candidateCapsuleIds",
+        "quarantinedCapsuleIds",
+        "demotedCapsuleIds",
+        "operatorInjectionCommands",
+        "verifierCommands",
+        "avoidCommands",
+        "workerRoutingHints",
+        "status",
+        "recentCapsules",
+        "requiredGates",
+        "policy",
+        "nextCommands"
+      ],
+      "properties": {
+        "kind": {
+          "const": "repi-memory-skill-capsule-report"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "generatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "MemorySkillCapsuleV9": {
+          "const": true
+        },
+        "skill_capsule_assetization": {
+          "const": true
+        },
+        "verified_skill_promotion_gate": {
+          "const": true
+        },
+        "operator_skill_injection": {
+          "const": true
+        },
+        "reportPath": {
+          "type": "string"
+        },
+        "capsuleLedgerPath": {
+          "type": "string"
+        },
+        "capsuleBookPath": {
+          "type": "string"
+        },
+        "sourceExperienceReportPath": {
+          "type": "string"
+        },
+        "sourceDistillationReportPath": {
+          "type": "string"
+        },
+        "capsuleCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "promotedCapsuleIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "candidateCapsuleIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "quarantinedCapsuleIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "demotedCapsuleIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "operatorInjectionCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "verifierCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "avoidCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "workerRoutingHints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "warn",
+            "blocked",
+            "empty"
+          ]
+        },
+        "recentCapsules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MemorySkillCapsuleV9"
+          }
+        },
+        "requiredGates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "policy": {
+          "type": "object",
+          "required": [
+            "MemorySkillCapsuleV9",
+            "experienceToSkillCapsule",
+            "distilledPatternToSkillCapsule",
+            "verifiedPromotionGate",
+            "operatorInjectionOnlyPromotedOrCandidate"
+          ],
+          "properties": {
+            "MemorySkillCapsuleV9": {
+              "const": true
+            },
+            "experienceToSkillCapsule": {
+              "const": true
+            },
+            "distilledPatternToSkillCapsule": {
+              "const": true
+            },
+            "verifiedPromotionGate": {
+              "const": true
+            },
+            "operatorInjectionOnlyPromotedOrCandidate": {
+              "const": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "nextCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "report": {
+      "$ref": "#/$defs/MemorySkillCapsuleReportV9"
+    }
+  }
+}

@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repi.local/schemas/reverse-agent/structured-claim-merge.schema.json",
+  "title": "StructuredClaimMergeV1",
+  "description": "REPI StructuredClaimMergeV1 strict final claim promotion contract. Final claims require artifact sha256, JSON query binding, verifier pass, unresolved_adversary_challenge_blocks_final enforcement, resolved conflicts, winner evidence, and loser downgrade.",
+  "type": "object",
+  "required": [
+    "kind",
+    "schemaVersion",
+    "mergeId",
+    "sourcePoolId",
+    "claimRows",
+    "conflictTable",
+    "promotionGate"
+  ],
+  "properties": {
+    "kind": { "const": "StructuredClaimMergeV1" },
+    "schemaVersion": { "const": 1 },
+    "mergeId": { "type": "string", "minLength": 1 },
+    "sourcePoolId": { "type": "string", "minLength": 1 },
+    "target": { "type": "string" },
+    "claimRows": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/StructuredClaimRowV1" }
+    },
+    "conflictTable": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/StructuredClaimConflictV1" }
+    },
+    "promotionGate": { "$ref": "#/$defs/StructuredClaimPromotionGateV1" }
+  },
+  "$defs": {
+    "StructuredClaimArtifactRefV1": {
+      "type": "object",
+      "required": ["artifactId", "path", "sha256", "jsonQuery", "op", "expected", "verifierPass"],
+      "properties": {
+        "artifactId": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{32,64}$" },
+        "jsonQuery": { "type": "string", "minLength": 1 },
+        "op": { "enum": ["==", "contains", "includes_all"] },
+        "expected": {},
+        "verifierPass": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "StructuredClaimChallengeV1": {
+      "type": "object",
+      "required": ["challengeId", "status"],
+      "properties": {
+        "challengeId": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["open", "resolved"] },
+        "resolution": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "StructuredClaimRowV1": {
+      "type": "object",
+      "required": ["claimId", "workerId", "mergeKey", "status", "statement", "artifactRefs", "challenges"],
+      "properties": {
+        "claimId": { "type": "string", "minLength": 1 },
+        "workerId": { "type": "string", "minLength": 1 },
+        "mergeKey": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["proven", "gap", "pending", "blocked"] },
+        "statement": { "type": "string", "minLength": 1 },
+        "artifactRefs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/StructuredClaimArtifactRefV1" }
+        },
+        "challenges": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/StructuredClaimChallengeV1" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "StructuredClaimConflictV1": {
+      "type": "object",
+      "required": ["conflictId", "claimIds", "topic", "status", "winningEvidenceRefs", "downgradeLosers"],
+      "properties": {
+        "conflictId": { "type": "string", "minLength": 1 },
+        "claimIds": { "type": "array", "items": { "type": "string" } },
+        "topic": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["resolved", "unresolved"] },
+        "winnerClaimId": { "type": "string" },
+        "winningEvidenceRefs": { "type": "array", "items": { "type": "string" } },
+        "downgradeLosers": { "type": "array", "items": { "type": "string" } },
+        "resolutionReason": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "StructuredFinalClaimV1": {
+      "type": "object",
+      "required": ["claimId", "promotion", "reportSection", "verifierPass", "artifactRefs"],
+      "properties": {
+        "claimId": { "type": "string", "minLength": 1 },
+        "promotion": { "const": "final_pass" },
+        "reportSection": { "type": "string", "minLength": 1 },
+        "verifierPass": { "const": true },
+        "artifactRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/StructuredClaimArtifactRefV1" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "StructuredBlockedClaimV1": {
+      "type": "object",
+      "required": ["claimId", "reason"],
+      "properties": {
+        "claimId": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "StructuredClaimPromotionGateV1": {
+      "type": "object",
+      "required": ["mode", "requiredStatuses", "finalClaims", "blockedClaims", "policies"],
+      "properties": {
+        "mode": { "const": "strict_final_claim_promotion" },
+        "requiredStatuses": {
+          "type": "array",
+          "contains": { "const": "proven" }
+        },
+        "finalClaims": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/StructuredFinalClaimV1" }
+        },
+        "blockedClaims": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/StructuredBlockedClaimV1" }
+        },
+        "policies": {
+          "type": "array",
+          "contains": { "const": "final_pass_requires_json_query" }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

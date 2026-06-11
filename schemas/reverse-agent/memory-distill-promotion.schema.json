@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repi.local/schemas/memory-distill-promotion.schema.json",
+  "title": "REPI Memory Distill Promotion V10",
+  "type": "object",
+  "$defs": {
+    "ArtifactRef": {
+      "type": "object",
+      "required": ["path", "sha256", "tier"],
+      "properties": {
+        "path": { "type": "string" },
+        "sha256": { "type": ["string", "null"] },
+        "tier": { "type": "string" },
+        "required": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "MemoryDistillProviderV10": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "MemoryDistillPromotionV10", "backend", "requestedBackend", "model", "status", "allowRemote", "timeoutMs", "requiredGates"],
+      "properties": {
+        "kind": { "const": "repi-memory-distill-provider" },
+        "schemaVersion": { "const": 1 },
+        "MemoryDistillPromotionV10": { "const": true },
+        "backend": { "enum": ["local-rule", "mock-provider", "openai-compatible", "anthropic-compatible"] },
+        "requestedBackend": { "enum": ["local-rule", "mock-provider", "openai-compatible", "anthropic-compatible"] },
+        "model": { "type": "string" },
+        "status": { "enum": ["active", "fallback"] },
+        "allowRemote": { "type": "boolean" },
+        "baseUrl": { "type": "string" },
+        "endpoint": { "type": "string" },
+        "apiKeyEnv": { "type": "string" },
+        "timeoutMs": { "type": "integer", "minimum": 1 },
+        "fallbackReason": { "type": "string" },
+        "requiredGates": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "MemoryDistillCandidateV10": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "id", "ts", "MemoryDistillPromotionV10", "sourceType", "sourceId", "sourceHash", "provider", "route", "targetScope", "claim", "lesson", "commands", "verifierCommands", "avoidCommands", "evidenceRefs", "confidence", "verifierRequired", "promotionDecision", "promotionReason", "providerTraceHash", "entryHash"],
+      "properties": {
+        "kind": { "const": "repi-memory-distill-candidate" },
+        "schemaVersion": { "const": 1 },
+        "id": { "type": "string" },
+        "ts": { "type": "string", "format": "date-time" },
+        "MemoryDistillPromotionV10": { "const": true },
+        "sourceType": { "enum": ["artifact", "experience_claim", "skill_capsule", "distilled_pattern"] },
+        "sourceId": { "type": "string" },
+        "sourceHash": { "type": "string" },
+        "provider": { "$ref": "#/$defs/MemoryDistillProviderV10" },
+        "route": { "type": "string" },
+        "targetScope": { "type": "string" },
+        "claim": { "type": "string" },
+        "lesson": { "type": "string" },
+        "commands": { "type": "array", "items": { "type": "string" } },
+        "verifierCommands": { "type": "array", "items": { "type": "string" } },
+        "avoidCommands": { "type": "array", "items": { "type": "string" } },
+        "evidenceRefs": { "type": "array", "items": { "$ref": "#/$defs/ArtifactRef" } },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "verifierRequired": { "type": "boolean" },
+        "promotionDecision": { "enum": ["promote", "retain", "quarantine", "demote"] },
+        "promotionReason": { "type": "string" },
+        "providerTraceHash": { "type": "string" },
+        "entryHash": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "MemoryDistillPromotionReportV10": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "generatedAt", "MemoryDistillPromotionV10", "provider_distill_contract", "artifact_to_claim_distillation", "verifier_backed_promotion_gate", "skill_capsule_promotion_writeback", "reportPath", "candidateLedgerPath", "promotionBookPath", "sourceSkillCapsuleReportPath", "sourceExperienceReportPath", "provider", "candidateCount", "promotedCandidateIds", "retainedCandidateIds", "quarantinedCandidateIds", "demotedCandidateIds", "operatorInjectionCommands", "verifierCommands", "avoidCommands", "status", "recentCandidates", "requiredGates", "policy", "nextCommands"],
+      "properties": {
+        "kind": { "const": "repi-memory-distill-promotion-report" },
+        "schemaVersion": { "const": 1 },
+        "generatedAt": { "type": "string", "format": "date-time" },
+        "MemoryDistillPromotionV10": { "const": true },
+        "provider_distill_contract": { "const": true },
+        "artifact_to_claim_distillation": { "const": true },
+        "verifier_backed_promotion_gate": { "const": true },
+        "skill_capsule_promotion_writeback": { "const": true },
+        "reportPath": { "type": "string" },
+        "candidateLedgerPath": { "type": "string" },
+        "promotionBookPath": { "type": "string" },
+        "sourceSkillCapsuleReportPath": { "type": "string" },
+        "sourceExperienceReportPath": { "type": "string" },
+        "provider": { "$ref": "#/$defs/MemoryDistillProviderV10" },
+        "candidateCount": { "type": "integer", "minimum": 0 },
+        "promotedCandidateIds": { "type": "array", "items": { "type": "string" } },
+        "retainedCandidateIds": { "type": "array", "items": { "type": "string" } },
+        "quarantinedCandidateIds": { "type": "array", "items": { "type": "string" } },
+        "demotedCandidateIds": { "type": "array", "items": { "type": "string" } },
+        "operatorInjectionCommands": { "type": "array", "items": { "type": "string" } },
+        "verifierCommands": { "type": "array", "items": { "type": "string" } },
+        "avoidCommands": { "type": "array", "items": { "type": "string" } },
+        "status": { "enum": ["pass", "warn", "blocked", "empty"] },
+        "recentCandidates": { "type": "array", "items": { "$ref": "#/$defs/MemoryDistillCandidateV10" } },
+        "requiredGates": { "type": "array", "items": { "type": "string" } },
+        "policy": {
+          "type": "object",
+          "required": ["MemoryDistillPromotionV10", "providerContractEnvRefOnly", "localFallbackDeterministic", "artifactClaimDistillation", "verifierBackedPromotionGate", "skillCapsulePromotionWriteback"],
+          "properties": {
+            "MemoryDistillPromotionV10": { "const": true },
+            "providerContractEnvRefOnly": { "const": true },
+            "localFallbackDeterministic": { "const": true },
+            "artifactClaimDistillation": { "const": true },
+            "verifierBackedPromotionGate": { "const": true },
+            "skillCapsulePromotionWriteback": { "const": true }
+          },
+          "additionalProperties": false
+        },
+        "nextCommands": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "properties": { "report": { "$ref": "#/$defs/MemoryDistillPromotionReportV10" } }
+}

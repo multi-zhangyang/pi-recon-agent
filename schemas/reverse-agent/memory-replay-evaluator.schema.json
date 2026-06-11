@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repi.local/schemas/memory-replay-evaluator.schema.json",
+  "title": "REPI Memory Replay Evaluator V12",
+  "type": "object",
+  "$defs": {
+    "MemoryReplayVerdictV12": {
+      "enum": ["improves", "neutral", "regresses", "blocked"]
+    },
+    "MemoryReplayEvaluatorRowV12": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "seq", "id", "ts", "MemoryReplayEvaluatorV12", "memory_ab_replay", "causal_attribution_signal", "scenarioId", "query", "expectedEventIds", "forbiddenEventIds", "controlHitIds", "treatmentHitIds", "attributionEventIds", "regressionEventIds", "qualityPromotedEventIds", "qualityDemotedEventIds", "controlPlanStepsEstimate", "treatmentPlanStepsEstimate", "savedStepEstimate", "toolCallDeltaEstimate", "successLift", "poisonRegressionCount", "causalScore", "verdict", "evidenceRefs", "feedbackWritebackCommands", "prevHash", "entryHash"],
+      "properties": {
+        "kind": { "const": "repi-memory-replay-evaluator-row" },
+        "schemaVersion": { "const": 1 },
+        "seq": { "type": "integer", "minimum": 1 },
+        "id": { "type": "string", "minLength": 1 },
+        "ts": { "type": "string", "format": "date-time" },
+        "MemoryReplayEvaluatorV12": { "const": true },
+        "memory_ab_replay": { "const": true },
+        "causal_attribution_signal": { "const": true },
+        "scenarioId": { "type": "string", "minLength": 1 },
+        "query": { "type": "string" },
+        "route": { "type": "string" },
+        "target": { "type": "string" },
+        "expectedEventIds": { "type": "array", "items": { "type": "string" } },
+        "forbiddenEventIds": { "type": "array", "items": { "type": "string" } },
+        "controlHitIds": { "type": "array", "items": { "type": "string" } },
+        "treatmentHitIds": { "type": "array", "items": { "type": "string" } },
+        "attributionEventIds": { "type": "array", "items": { "type": "string" } },
+        "regressionEventIds": { "type": "array", "items": { "type": "string" } },
+        "qualityPromotedEventIds": { "type": "array", "items": { "type": "string" } },
+        "qualityDemotedEventIds": { "type": "array", "items": { "type": "string" } },
+        "controlPlanStepsEstimate": { "type": "number", "minimum": 0 },
+        "treatmentPlanStepsEstimate": { "type": "number", "minimum": 0 },
+        "savedStepEstimate": { "type": "number", "minimum": 0 },
+        "toolCallDeltaEstimate": { "type": "number" },
+        "successLift": { "type": "number" },
+        "poisonRegressionCount": { "type": "integer", "minimum": 0 },
+        "causalScore": { "type": "number", "minimum": 0, "maximum": 100 },
+        "verdict": { "$ref": "#/$defs/MemoryReplayVerdictV12" },
+        "evidenceRefs": { "type": "array", "items": { "type": "string" } },
+        "feedbackWritebackCommands": { "type": "array", "items": { "type": "string" } },
+        "prevHash": { "type": "string" },
+        "entryHash": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "MemoryReplayEvaluatorReportV12": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "generatedAt", "MemoryReplayEvaluatorV12", "memory_ab_replay", "causal_attribution_signal", "replay_delta_feedback_writeback", "reportPath", "ledgerPath", "boardPath", "sourceQualityReportPath", "sourceUsefulnessEvalReportPath", "scenarioCount", "rowCount", "improvedScenarioIds", "neutralScenarioIds", "regressedScenarioIds", "blockedScenarioIds", "attributionEventIds", "regressionEventIds", "averageCausalScore", "totalSavedStepEstimate", "operatorInjectionCommands", "avoidCommands", "status", "rows", "requiredGates", "policy", "nextCommands"],
+      "properties": {
+        "kind": { "const": "repi-memory-replay-evaluator-report" },
+        "schemaVersion": { "const": 1 },
+        "generatedAt": { "type": "string", "format": "date-time" },
+        "MemoryReplayEvaluatorV12": { "const": true },
+        "memory_ab_replay": { "const": true },
+        "causal_attribution_signal": { "const": true },
+        "replay_delta_feedback_writeback": { "const": true },
+        "reportPath": { "type": "string" },
+        "ledgerPath": { "type": "string" },
+        "boardPath": { "type": "string" },
+        "sourceQualityReportPath": { "type": "string" },
+        "sourceUsefulnessEvalReportPath": { "type": "string" },
+        "scenarioCount": { "type": "integer", "minimum": 0 },
+        "rowCount": { "type": "integer", "minimum": 0 },
+        "improvedScenarioIds": { "type": "array", "items": { "type": "string" } },
+        "neutralScenarioIds": { "type": "array", "items": { "type": "string" } },
+        "regressedScenarioIds": { "type": "array", "items": { "type": "string" } },
+        "blockedScenarioIds": { "type": "array", "items": { "type": "string" } },
+        "attributionEventIds": { "type": "array", "items": { "type": "string" } },
+        "regressionEventIds": { "type": "array", "items": { "type": "string" } },
+        "averageCausalScore": { "type": "number", "minimum": 0, "maximum": 100 },
+        "totalSavedStepEstimate": { "type": "number", "minimum": 0 },
+        "operatorInjectionCommands": { "type": "array", "items": { "type": "string" } },
+        "avoidCommands": { "type": "array", "items": { "type": "string" } },
+        "status": { "enum": ["pass", "warn", "blocked", "empty"] },
+        "rows": { "type": "array", "items": { "$ref": "#/$defs/MemoryReplayEvaluatorRowV12" } },
+        "requiredGates": { "type": "array", "items": { "type": "string" } },
+        "policy": {
+          "type": "object",
+          "required": ["MemoryReplayEvaluatorV12", "memoryAbReplay", "causalAttributionSignal", "replayDeltaFeedbackWriteback", "appendOnlyReplayLedger", "qualityLedgerConsumesReplay"],
+          "properties": {
+            "MemoryReplayEvaluatorV12": { "const": true },
+            "memoryAbReplay": { "const": true },
+            "causalAttributionSignal": { "const": true },
+            "replayDeltaFeedbackWriteback": { "const": true },
+            "appendOnlyReplayLedger": { "const": true },
+            "qualityLedgerConsumesReplay": { "const": true }
+          },
+          "additionalProperties": false
+        },
+        "nextCommands": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "properties": { "report": { "$ref": "#/$defs/MemoryReplayEvaluatorReportV12" } }
+}

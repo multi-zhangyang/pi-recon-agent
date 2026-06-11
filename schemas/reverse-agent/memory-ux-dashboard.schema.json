@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repi.local/schemas/reverse-agent/memory-ux-dashboard.schema.json",
+  "$comment": "MemoryUxDashboardV16 user_visible_memory_status recall_explainability append_only_memory_governance lifecycle_governance_commands",
+  "$defs": {
+    "MemoryUxWhyRowV16": {
+      "type": "object",
+      "required": ["eventId", "caseSignature", "score", "outcome", "route", "reasons", "commands", "lessons", "governanceCommands"],
+      "properties": {
+        "eventId": { "type": "string", "minLength": 1 },
+        "caseSignature": { "type": "string", "minLength": 1 },
+        "score": { "type": "number" },
+        "outcome": { "enum": ["success", "failure", "partial", "blocked", "repair"] },
+        "route": { "type": "string" },
+        "target": { "type": "string" },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "commands": { "type": "array", "items": { "type": "string" } },
+        "lessons": { "type": "array", "items": { "type": "string" } },
+        "governanceCommands": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+      },
+      "additionalProperties": false
+    },
+    "MemoryUxDashboardV16": {
+      "type": "object",
+      "required": [
+        "kind",
+        "schemaVersion",
+        "generatedAt",
+        "MemoryUxDashboardV16",
+        "user_visible_memory_status",
+        "recall_explainability",
+        "append_only_memory_governance",
+        "lifecycle_governance_commands",
+        "statusReportPath",
+        "statusBoardPath",
+        "governanceLedgerPath",
+        "store",
+        "recall",
+        "quality",
+        "replay",
+        "activeKernel",
+        "maturation",
+        "supervisor",
+        "operatorCommands",
+        "governanceCommands",
+        "requiredGates"
+      ],
+      "properties": {
+        "kind": { "const": "repi-memory-ux-dashboard" },
+        "schemaVersion": { "const": 1 },
+        "generatedAt": { "type": "string", "format": "date-time" },
+        "MemoryUxDashboardV16": { "const": true },
+        "user_visible_memory_status": { "const": true },
+        "recall_explainability": { "const": true },
+        "append_only_memory_governance": { "const": true },
+        "lifecycle_governance_commands": { "const": true },
+        "statusReportPath": { "type": "string", "minLength": 1 },
+        "statusBoardPath": { "type": "string", "minLength": 1 },
+        "governanceLedgerPath": { "type": "string", "minLength": 1 },
+        "query": { "type": "string" },
+        "route": { "type": "string" },
+        "target": { "type": "string" },
+        "store": {
+          "type": "object",
+          "required": ["eventCount", "caseCount", "hashChainOk", "storeGrade", "latestEventHash"],
+          "properties": {
+            "eventCount": { "type": "integer", "minimum": 0 },
+            "caseCount": { "type": "integer", "minimum": 0 },
+            "hashChainOk": { "type": "boolean" },
+            "storeGrade": { "enum": ["pass", "repairable", "blocked"] },
+            "latestEventHash": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "recall": {
+          "type": "object",
+          "required": ["hitCount", "retrievalReportPath", "vectorSearchReportPath", "whyRows"],
+          "properties": {
+            "hitCount": { "type": "integer", "minimum": 0 },
+            "retrievalReportPath": { "type": "string", "minLength": 1 },
+            "vectorSearchReportPath": { "type": "string", "minLength": 1 },
+            "whyRows": { "type": "array", "items": { "$ref": "#/$defs/MemoryUxWhyRowV16" } }
+          },
+          "additionalProperties": false
+        },
+        "quality": { "type": "object" },
+        "replay": { "type": "object" },
+        "activeKernel": { "type": "object" },
+        "maturation": { "type": "object" },
+        "supervisor": { "type": "object" },
+        "operatorCommands": { "type": "array", "items": { "type": "string" } },
+        "governanceCommands": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "requiredGates": {
+          "type": "array",
+          "items": { "type": "string" },
+          "contains": { "const": "MemoryUxDashboardV16" }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "$ref": "#/$defs/MemoryUxDashboardV16"
+}

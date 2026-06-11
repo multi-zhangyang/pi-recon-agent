@@ -1,0 +1,115 @@
+{
+  "kind": "repi-compact-resume-ledger-v2-fixture",
+  "schemaVersion": 1,
+  "requiredGates": [
+    "CompactResumeLedgerV2",
+    "append_only_transition_ledger",
+    "idempotent_multi_compact_replay",
+    "auto_resume_budget_enforced",
+    "invalid_resume_transition",
+    "compact_resume_transition_report_in_context_pack"
+  ],
+  "negativeCases": [
+    {
+      "id": "invalid-done-reopen",
+      "transitions": [
+        {
+          "from": "queued",
+          "to": "running"
+        },
+        {
+          "from": "running",
+          "to": "done"
+        },
+        {
+          "from": "done",
+          "to": "running"
+        }
+      ],
+      "expect": "invalid_resume_transition"
+    },
+    {
+      "id": "invalid-running-queued",
+      "transitions": [
+        {
+          "from": "queued",
+          "to": "running"
+        },
+        {
+          "from": "running",
+          "to": "queued"
+        }
+      ],
+      "expect": "invalid_resume_transition"
+    },
+    {
+      "id": "budget-exhausted",
+      "transitions": [
+        {
+          "from": "queued",
+          "to": "running",
+          "attempt": 4,
+          "maxAttempts": 3
+        }
+      ],
+      "expect": "auto_resume_budget_exceeded"
+    },
+    {
+      "id": "duplicate-idempotent-replay",
+      "duplicate": true,
+      "expect": "idempotent_multi_compact_replay"
+    }
+  ],
+  "validScenarios": [
+    {
+      "id": "enqueue-then-done",
+      "transitions": [
+        {
+          "from": "queued",
+          "to": "queued",
+          "reason": "pack queued"
+        },
+        {
+          "from": "queued",
+          "to": "running",
+          "reason": "resume started"
+        },
+        {
+          "from": "running",
+          "to": "done",
+          "reason": "resume verified"
+        }
+      ]
+    },
+    {
+      "id": "missing-context-blocked",
+      "transitions": [
+        {
+          "from": "queued",
+          "to": "blocked",
+          "reason": "missing context"
+        }
+      ]
+    },
+    {
+      "id": "blocked-retry-exhausted",
+      "transitions": [
+        {
+          "from": "queued",
+          "to": "blocked",
+          "reason": "first blocked"
+        },
+        {
+          "from": "blocked",
+          "to": "running",
+          "reason": "manual unblock"
+        },
+        {
+          "from": "running",
+          "to": "exhausted",
+          "reason": "budget exhausted"
+        }
+      ]
+    }
+  ]
+}

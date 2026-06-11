@@ -1,0 +1,125 @@
+{
+  "kind": "repi-repair-rollback-policy-fixture",
+  "schemaVersion": 1,
+  "description": "RepairRollbackPolicyV1 fixture: baseline/allowlist/regression/rollback gates for state-changing repair actions; baseline_required_before_repair; allowlist_violation_blocks_repair; rollback_tree_hash_must_match_baseline.",
+  "valid": {
+    "kind": "RepairRollbackPolicyV1",
+    "schemaVersion": 1,
+    "generatedAt": "2026-06-11T00:00:00.000Z",
+    "source": "re_autofix",
+    "workspace": "/tmp/repi-repair-rollback-policy-fixture/workspace",
+    "baseline": {
+      "command": "snapshot(workspace)",
+      "treeSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "files": [
+        {
+          "path": "target.txt",
+          "bytes": 12,
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ]
+    },
+    "allowlist": ["target.txt"],
+    "repair": {
+      "commands": ["printf PATCHED_OK > target.txt"],
+      "changedFiles": ["target.txt"],
+      "expectedArtifacts": ["target.txt"],
+      "regressionGates": ["gate:repair-regression", "gate:repair-rollback-policy"]
+    },
+    "rollback": {
+      "required": true,
+      "commands": ["printf BASELINE_OK > target.txt"],
+      "restored": true,
+      "restoredTreeSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "criteria": ["restore baseline tree hash", "no unrelated file changes", "previous passed gates remain passed"]
+    },
+    "regression": {
+      "before": "pass",
+      "after": "pass",
+      "restored": "pass",
+      "gates": [
+        {
+          "gateId": "gate:repair-regression",
+          "command": "grep -q PATCHED_OK target.txt",
+          "status": "pass",
+          "expectedNeedle": "PATCHED_OK",
+          "artifactPath": "target.txt",
+          "artifactSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        {
+          "gateId": "gate:repair-regression",
+          "command": "grep -q BASELINE_OK target.txt",
+          "status": "pass",
+          "expectedNeedle": "BASELINE_OK",
+          "artifactPath": "target.txt",
+          "artifactSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ]
+    },
+    "failureLedgerEvents": [
+      {
+        "id": "fail:re_autofix:fixture",
+        "status": "repair_queued",
+        "rollback": {
+          "required": true,
+          "restored": true
+        }
+      }
+    ],
+    "repairQueue": [
+      {
+        "repairId": "repair:re_autofix:fixture",
+        "fromFailureId": "fail:re_autofix:fixture",
+        "action": "rollback",
+        "repairAction": "rollback",
+        "allowlist": ["target.txt"],
+        "rollbackCriteria": {
+          "baseline": "git status --short",
+          "mustRestore": ["target.txt"],
+          "verificationCommand": "node scripts/reverse-agent/repair-rollback-policy-gate.mjs . --strict"
+        },
+        "regressionGates": ["gate:repair-regression", "gate:repair-rollback-policy"]
+      }
+    ],
+    "failureRepairValidation": {
+      "ok": true,
+      "failureCount": 1,
+      "repairCount": 1
+    },
+    "assertions": {
+      "baselineCaptured": true,
+      "allowlistEnforced": true,
+      "rollbackRestored": true,
+      "regressionGatesPassed": true,
+      "noUnrelatedFileChanges": true,
+      "failureRepairLinked": true
+    }
+  },
+  "negativeCases": [
+    {
+      "id": "negative:repair-baseline-missing",
+      "mutate": "removeBaseline",
+      "expectedErrors": ["baseline_missing", "assertion_baseline_not_captured"]
+    },
+    {
+      "id": "negative:repair-allowlist-violation",
+      "mutate": "allowlistViolation",
+      "expectedErrors": ["allowlist_violation", "assertion_allowlist_not_enforced", "assertion_unrelated_file_changes"]
+    },
+    {
+      "id": "negative:repair-rollback-not-restored",
+      "mutate": "rollbackNotRestored",
+      "expectedErrors": ["rollback_not_restored", "rollback_tree_hash_mismatch", "assertion_rollback_not_restored"]
+    },
+    {
+      "id": "negative:repair-missing-regression-gate",
+      "mutate": "missingRegressionGate",
+      "expectedErrors": ["regression_gate_missing", "regression_after_not_pass", "assertion_regression_not_passed"]
+    },
+    {
+      "id": "negative:repair-failure-repair-unlinked",
+      "mutate": "failureRepairUnlinked",
+      "expectedErrors": ["failure_repair_not_linked", "repair_rollback_queue_missing", "assertion_failure_repair_not_linked"]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "kind": "repi-memory-replay-evaluator-fixture",
+  "schemaVersion": 1,
+  "MemoryReplayEvaluatorV12": true,
+  "requiredGates": [
+    "MemoryReplayEvaluatorV12",
+    "memory_ab_replay",
+    "causal_attribution_signal",
+    "replay_delta_feedback_writeback",
+    "append_only_replay_ledger",
+    "memory_replay_in_quality_ledger",
+    "memory_replay_in_context_pack",
+    "memory_replay_orchestrator_step"
+  ],
+  "validScenarios": [
+    "memory-ab-replay-promotes-useful-memory",
+    "causal-attribution-estimates-saved-steps",
+    "replay-regression-demotes-forbidden-memory",
+    "append-only-replay-ledger-hash-chain",
+    "quality-ledger-consumes-replay-signal",
+    "context-pack-embeds-replay-report",
+    "orchestrator-runs-replay-causal-step"
+  ],
+  "negativeScenarios": [
+    "treatment-hits-forbidden-memory-regresses",
+    "missing-entryHash-blocks-row-schema",
+    "no-attribution-remains-neutral-or-blocked"
+  ]
+}

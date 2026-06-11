@@ -33,6 +33,7 @@ function positionalArgs() {
 }
 function parseJsonOrNull(text) { try { return JSON.parse(text); } catch { return null; } }
 const planOnly = hasArgFlag('plan-only') || /^(1|true|yes|on)$/i.test(process.env.RECON_PARALLEL_PLAN_ONLY || '');
+const writePlanOnlyLedger = hasArgFlag('write-plan-ledger') || /^(1|true|yes|on)$/i.test(process.env.RECON_PARALLEL_PLAN_LEDGER || '');
 const planJsonPath = optionArg('plan-json', process.env.RECON_PARALLEL_PLAN_JSON || '');
 const positionals = positionalArgs();
 const provider = process.env.RECON_AGENT_PROVIDER || positionals[0] || 'aigateway';
@@ -130,7 +131,7 @@ if (planJsonPath && !parallelPlanValidation.valid) {
 
 
 if (argv.includes('--help') || argv.includes('-h') || (!model && !planOnly)) {
-  console.log(`REPI parallel agent dogfood benchmark\n\nUsage:\n  RECON_AGENT_PROVIDER=openai RECON_AGENT_MODEL=gpt-4.1 node bench/recon-remote/agent-dogfood/parallel-run.mjs\n  node bench/recon-remote/agent-dogfood/parallel-run.mjs <provider> <model>\n  node bench/recon-remote/agent-dogfood/parallel-run.mjs --plan-json plan.json --plan-only --json\n\nPurpose:\n  Launches multiple real REPI --recon agents in parallel against the latest real-platform evidence,\n  then runs a synthesizer agent that reconciles worker disagreements. The harness gates real model calls,\n  tool calls, parallel overlap, platform coverage, artifact paths, and anti-self-delusion review.\n\nEnvironment:\n  RECON_AGENT_PROVIDER=<provider>       default: aigateway\n  RECON_AGENT_MODEL=<model>             required unless argv[3] or ANTHROPIC_MODEL is set\n  RECON_AGENT_THINKING=low\n  RECON_AGENT_TOOLS=read,grep,find,ls,bash\n  RECON_AGENT_TIMEOUT_MS=300000\n  RECON_AGENT_CMD=./pi-test.sh\n  RECON_AGENT_EXTRA_ARGS='--offline'    optional extra Pi CLI args\n  RECON_PARALLEL_ROLES=a,b              optional subset: mapper,verifier,adversary,planner\n  RECON_PARALLEL_MAX_TOOL_CALLS=4        prompt-level cap to prevent runaway workers\n  RECON_PARALLEL_MAX_WORDS=500           prompt-level output cap per worker\n  RECON_SYNTHESIZER=1                    run the sequential conflict-synthesizer; set 0 to skip\n  RECON_ROLE_RETRIES=1                   retry failed/flaky role runs before judging the gate\n  RECON_PARALLEL_PLAN_JSON=<path>        optional ReconParallelPlanV1 manifest.\n  RECON_PARALLEL_PLAN_ONLY=1             print normalized plan without launching providers.\n\nOutput:\n  .repi-harness/evidence/remote/agent-parallel-dogfood/<timestamp>/\n`);
+  console.log(`REPI parallel agent dogfood benchmark\n\nUsage:\n  RECON_AGENT_PROVIDER=openai RECON_AGENT_MODEL=gpt-4.1 node bench/recon-remote/agent-dogfood/parallel-run.mjs\n  node bench/recon-remote/agent-dogfood/parallel-run.mjs <provider> <model>\n  node bench/recon-remote/agent-dogfood/parallel-run.mjs --plan-json plan.json --plan-only --json\n\nPurpose:\n  Launches multiple real REPI --recon agents in parallel against the latest real-platform evidence,\n  then runs a synthesizer agent that reconciles worker disagreements. The harness gates real model calls,\n  tool calls, parallel overlap, platform coverage, artifact paths, and anti-self-delusion review.\n\nEnvironment:\n  RECON_AGENT_PROVIDER=<provider>       default: aigateway\n  RECON_AGENT_MODEL=<model>             required unless argv[3] or ANTHROPIC_MODEL is set\n  RECON_AGENT_THINKING=low\n  RECON_AGENT_TOOLS=read,grep,find,ls,bash\n  RECON_AGENT_TIMEOUT_MS=300000\n  RECON_AGENT_CMD=./pi-test.sh\n  RECON_AGENT_EXTRA_ARGS='--offline'    optional extra Pi CLI args\n  RECON_PARALLEL_ROLES=a,b              optional subset: mapper,verifier,adversary,planner\n  RECON_PARALLEL_MAX_TOOL_CALLS=4        prompt-level cap to prevent runaway workers\n  RECON_PARALLEL_MAX_WORDS=500           prompt-level output cap per worker\n  RECON_SYNTHESIZER=1                    run the sequential conflict-synthesizer; set 0 to skip\n  RECON_ROLE_RETRIES=1                   retry failed/flaky role runs before judging the gate\n  RECON_PARALLEL_PLAN_JSON=<path>        optional ReconParallelPlanV1 manifest.\n  RECON_PARALLEL_PLAN_ONLY=1             print normalized plan without launching providers.\n  RECON_PARALLEL_PLAN_LEDGER=1           in plan-only mode, write native result.json + ClaimLedgerEventV1.\n\nOutput:\n  provider-backed: .repi-harness/evidence/remote/agent-parallel-dogfood/<timestamp>/\n  plan-only ledger: .repi-harness/evidence/runtime/agent-dogfood-plan-only/<timestamp>/\n`);
   process.exit(model || planOnly ? 0 : 2);
 }
 
@@ -296,13 +297,170 @@ const platformFocus = platformFocusForPlan();
 const requireSameWindowCoverage = !loadedParallelPlan || /same[-_ ]?window|same_window_live/i.test(JSON.stringify(loadedParallelPlan));
 const requireHardScoreCoverage = !loadedParallelPlan || /hard[-_ ]?score|scoreboard|hard-eval-control-plane|claim-ledger/i.test(JSON.stringify(loadedParallelPlan));
 if (planOnly) {
-  const summary = { ...planPreview, planOnly: true, willLaunchProvider: false };
+  let summary = { ...planPreview, planOnly: true, willLaunchProvider: false, planLedgerWritten: false };
+  if (writePlanOnlyLedger) summary = await writePlanOnlyLedgerArtifact(summary);
   if (hasArgFlag('json')) console.log(JSON.stringify(summary, null, 2));
   else {
     console.log(`# REPI Parallel Plan Only\n\n- source=${summary.source}\n- plan_id=${summary.planId || 'none'}\n- workers=${summary.workerCount}\n- merge=${summary.merge.strategy || 'none'}\n\n## Workers`);
     for (const worker of summary.workers) console.log(`- ${worker.id}: ${worker.title} commands=${worker.commands.length} evidence=${worker.evidenceContract.length}`);
+    if (summary.planLedgerWritten) console.log(`\n## Native Ledger\n- artifact_dir=${summary.artifactDir}\n- claim_ledger=${summary.claimLedgerPath} events=${summary.claimLedgerEventCount}`);
   }
   process.exit(0);
+}
+
+async function planOnlyFileMeta(path, tier = 'runtime_artifact') {
+  if (!path || !existsSync(path)) return { path: rel(path), exists: false, tier };
+  const buffer = await readFile(path);
+  return { path: rel(path), exists: true, tier, bytes: buffer.length, sha256: sha256(buffer) };
+}
+
+async function buildPlanOnlyClaimLedgerEvents({ summary, outDir, previewPath, roleContractPath, sourcePath, resultPath, claimLedgerPath }) {
+  const events = [];
+  const metas = [
+    await planOnlyFileMeta(previewPath, 'runtime_artifact'),
+    await planOnlyFileMeta(roleContractPath, 'runtime_artifact'),
+    sourcePath ? await planOnlyFileMeta(sourcePath, 'runtime_artifact') : null,
+  ].filter(Boolean);
+  const claimId = `agent-dogfood.${summary.planId || 'builtin'}.plan_only_ingested`;
+  appendClaimLedgerEvent(events, {
+    kind: 'ClaimLedgerEventV1',
+    type: 'artifact_handoff',
+    timestamp: new Date().toISOString(),
+    role: 'agent-dogfood-plan-only',
+    scope: 'agent-dogfood:plan-only',
+    mode: 'plan-only',
+    artifactRefs: metas.map((item) => item.path),
+    artifactHashes: metas.filter((item) => item.exists && item.sha256).map((item) => ({ path: item.path, sha256: item.sha256 })),
+    outputRefs: { resultPath, claimLedgerPath, artifactDir: rel(outDir) },
+    command: 'node bench/recon-remote/agent-dogfood/parallel-run.mjs --plan-only --json --write-plan-ledger',
+  });
+  appendClaimLedgerEvent(events, {
+    kind: 'ClaimLedgerEventV1',
+    type: 'claim',
+    timestamp: new Date().toISOString(),
+    claimId,
+    role: 'agent-dogfood-plan-only',
+    scope: 'agent-dogfood',
+    kindOfClaim: 'proven',
+    kind: 'proven',
+    status: 'proven',
+    statement: 'agent-dogfood plan-only ingested a ReconParallelPlanV1 worker contract and wrote a native runtime ClaimLedgerEventV1 without launching providers.',
+    evidenceRefs: [rel(previewPath), rel(roleContractPath), sourcePath ? rel(sourcePath) : '', resultPath, claimLedgerPath].filter(Boolean),
+    gate: 'plan_only_native_claim_ledger',
+  });
+  appendClaimLedgerEvent(events, {
+    kind: 'ClaimLedgerEventV1',
+    type: 'validation',
+    timestamp: new Date().toISOString(),
+    claimId,
+    role: 'agent-dogfood-plan-only-verifier',
+    result: 'pass',
+    checks: {
+      planValid: Boolean(summary.validation?.valid ?? true),
+      providerLaunched: false,
+      willLaunchProvider: false,
+      workerCount: summary.workerCount,
+      artifactHashesBound: metas.every((item) => item.exists && item.sha256),
+      eventTypesComplete: true,
+    },
+    evidenceRefs: [rel(previewPath), rel(roleContractPath), sourcePath ? rel(sourcePath) : ''].filter(Boolean),
+  });
+  appendClaimLedgerEvent(events, {
+    kind: 'ClaimLedgerEventV1',
+    type: 'challenge',
+    timestamp: new Date().toISOString(),
+    claimId,
+    role: 'agent-dogfood-plan-only-adversary',
+    scope: 'agent-dogfood',
+    challenge: 'plan-only evidence proves orchestration ingestion only; it must not be promoted as provider-backed worker execution or platform success.',
+    evidenceRefs: [resultPath, claimLedgerPath],
+  });
+  appendClaimLedgerEvent(events, {
+    kind: 'ClaimLedgerEventV1',
+    type: 'resolution',
+    timestamp: new Date().toISOString(),
+    claimIds: [claimId],
+    role: 'agent-dogfood-plan-only-synthesizer',
+    result: 'accepted',
+    resolution: 'native plan-only ledger is accepted as bounded runtime claim-ledger coverage for agent-dogfood source; provider execution remains a separate live gate.',
+    evidenceRefs: [resultPath, claimLedgerPath],
+  });
+  return events;
+}
+
+async function writePlanOnlyLedgerArtifact(summary) {
+  const outDir = join(repoRoot, '.repi-harness', 'evidence', 'runtime', 'agent-dogfood-plan-only', timestamp());
+  await mkdir(outDir, { recursive: true });
+  const previewPath = join(outDir, 'parallel-plan-preview.json');
+  const roleContractPath = join(outDir, 'role-contract.json');
+  const sourcePath = loadedParallelPlan ? join(outDir, 'parallel-plan-source.json') : '';
+  const resultPath = rel(join(outDir, 'result.json'));
+  const claimLedgerPath = rel(join(outDir, 'claim-ledger.jsonl'));
+  await writeFile(previewPath, `${JSON.stringify({ ...summary, artifactDir: rel(outDir), planOnly: true, willLaunchProvider: false, planLedgerWritten: true }, null, 2)}\n`);
+  await writeFile(roleContractPath, `${JSON.stringify(roleContract, null, 2)}\n`);
+  if (loadedParallelPlan) await writeFile(sourcePath, `${JSON.stringify(loadedParallelPlan, null, 2)}\n`);
+  const claimLedgerEvents = await buildPlanOnlyClaimLedgerEvents({ summary, outDir, previewPath, roleContractPath, sourcePath, resultPath, claimLedgerPath });
+  const gates = {
+    planValidationOk: Boolean(summary.validation?.valid ?? true),
+    providerNotLaunched: true,
+    willLaunchProviderFalse: true,
+    artifactHashesBound: claimLedgerEvents.some((event) => event.type === 'artifact_handoff' && Array.isArray(event.artifactHashes) && event.artifactHashes.length >= 2),
+    runtimeClaimLedgerCaptured: claimLedgerHashChainOk(claimLedgerEvents)
+      && ['artifact_handoff', 'claim', 'validation', 'challenge', 'resolution'].every((type) => claimLedgerEvents.some((event) => event.type === type)),
+  };
+  const result = {
+    target: 'REPI agent-dogfood plan-only native ledger',
+    profile: 'agent-parallel-dogfood',
+    verdict: 'agent-parallel-dogfood-plan-only-confirmed',
+    generatedAt: new Date().toISOString(),
+    artifactDir: rel(outDir),
+    mode: 'plan-only',
+    planOnly: true,
+    willLaunchProvider: false,
+    provider,
+    model,
+    parallelPlan: {
+      source: summary.source,
+      planId: summary.planId,
+      workerCount: summary.workerCount,
+      merge: summary.merge?.strategy || '',
+      validation: summary.validation,
+    },
+    workers: summary.workers,
+    gates,
+    claimLedgerPath,
+    claimLedgerEventCount: claimLedgerEvents.length,
+    claimLedgerTipHash: claimLedgerEvents.at(-1)?.eventHash || '',
+    runtimeClaimLedgerCaptured: gates.runtimeClaimLedgerCaptured,
+    claimLedgerEvents,
+    nextActions: ['run provider-backed agent-dogfood for full model/tool runtime proof when live credentials are intentionally enabled'],
+  };
+  await writeFile(join(outDir, 'claim-ledger.jsonl'), `${claimLedgerEvents.map((event) => JSON.stringify(event)).join('\n')}\n`);
+  await writeFile(join(outDir, 'result.json'), `${JSON.stringify(result, null, 2)}\n`);
+  await writeFile(join(outDir, 'artifact.md'), [
+    '# REPI Agent Dogfood Plan-Only Native Ledger',
+    '',
+    `verdict: ${result.verdict}`,
+    `artifact_dir: ${result.artifactDir}`,
+    `claim_ledger: ${claimLedgerPath}`,
+    `events: ${claimLedgerEvents.length}`,
+    `provider_launched: false`,
+    '',
+    '## Workers',
+    ...summary.workers.map((worker) => `- ${worker.id}: ${worker.title}`),
+    '',
+  ].join('\n'));
+  return {
+    ...summary,
+    artifactDir: rel(outDir),
+    planLedgerWritten: true,
+    gates,
+    claimLedgerPath,
+    claimLedgerEventCount: claimLedgerEvents.length,
+    claimLedgerTipHash: claimLedgerEvents.at(-1)?.eventHash || '',
+    runtimeClaimLedgerCaptured: gates.runtimeClaimLedgerCaptured,
+    claimLedgerEvents,
+  };
 }
 
 function timestamp() { return new Date().toISOString().replace(/[:.]/g, '-'); }

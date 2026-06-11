@@ -1,0 +1,225 @@
+{
+  "kind": "repi-memory-maturation-runtime-fixture",
+  "schemaVersion": 1,
+  "now": "2026-06-10T00:00:00.000Z",
+  "activeDecisions": [
+    {
+      "id": "mak:strategy:authz-success",
+      "action": "inject",
+      "route": "web/authz",
+      "targetScope": "target:https://app.local",
+      "sourceEventIds": [
+        "mem-authz-success"
+      ],
+      "sourceStrategyCapsuleIds": [
+        "strategy-authz-bola"
+      ],
+      "sourceQualityRowIds": [
+        "quality-authz-success"
+      ],
+      "sourceReplayRowIds": [
+        "replay-authz-success"
+      ],
+      "activeScore": 91,
+      "qualityScore": 88,
+      "causalScore": 84,
+      "confidence": 0.92,
+      "commands": [
+        "re_lane run authz-bola https://app.local"
+      ],
+      "verifierCommands": [
+        "re_verifier matrix # authz replay"
+      ],
+      "fallbackCommands": [
+        "re_memory replay",
+        "re_autofix plan"
+      ],
+      "avoidCommands": [],
+      "evidenceRefs": [
+        ".repi-harness/evidence/authz/replay.json"
+      ],
+      "feedbackWritebackCommands": [
+        "re_memory append # active_kernel_feedback event=mem-authz-success decision=inject"
+      ],
+      "compactResumeHints": [
+        "include maturation-runtime-report in ContextPackV2"
+      ],
+      "blockers": [],
+      "lastUsefulAt": "2026-06-09T00:00:00.000Z",
+      "reuseCount": 4
+    },
+    {
+      "id": "mak:quality:needs-feedback",
+      "action": "wait-feedback",
+      "route": "web/authz",
+      "targetScope": "target:https://app.local",
+      "sourceEventIds": [
+        "mem-needs-feedback"
+      ],
+      "sourceStrategyCapsuleIds": [],
+      "sourceQualityRowIds": [
+        "quality-needs-feedback"
+      ],
+      "sourceReplayRowIds": [],
+      "activeScore": 66,
+      "qualityScore": 62,
+      "causalScore": 0,
+      "confidence": 0.7,
+      "commands": [
+        "re_memory feedback # close pending"
+      ],
+      "verifierCommands": [
+        "re_verifier matrix"
+      ],
+      "fallbackCommands": [
+        "re_memory quality"
+      ],
+      "avoidCommands": [],
+      "evidenceRefs": [
+        "memory/feedback-closure-report.json"
+      ],
+      "feedbackWritebackCommands": [
+        "re_memory append # close_active_kernel_feedback event=mem-needs-feedback"
+      ],
+      "compactResumeHints": [
+        "carry maturation feedback across compact"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "mak:strategy:needs-replay",
+      "action": "reuse",
+      "route": "native/pwn",
+      "targetScope": "target:./vuln",
+      "sourceEventIds": [
+        "mem-needs-replay"
+      ],
+      "sourceStrategyCapsuleIds": [
+        "strategy-pwn-offset"
+      ],
+      "sourceQualityRowIds": [
+        "quality-needs-replay"
+      ],
+      "sourceReplayRowIds": [],
+      "activeScore": 78,
+      "qualityScore": 80,
+      "causalScore": 0,
+      "confidence": 0.81,
+      "commands": [
+        "re_native_runtime run ./vuln"
+      ],
+      "verifierCommands": [
+        "re_replayer run"
+      ],
+      "fallbackCommands": [
+        "re_memory replay"
+      ],
+      "avoidCommands": [],
+      "evidenceRefs": [
+        ".repi-harness/evidence/pwn/offset.txt"
+      ],
+      "feedbackWritebackCommands": [
+        "re_memory append # active_kernel_feedback event=mem-needs-replay decision=reuse"
+      ],
+      "compactResumeHints": [
+        "rerun replay after compact"
+      ],
+      "blockers": [],
+      "lastUsefulAt": "2026-04-01T00:00:00.000Z",
+      "reuseCount": 1,
+      "failureCount": 0
+    },
+    {
+      "id": "mak:quality:bad-path",
+      "action": "avoid",
+      "route": "web/authz",
+      "targetScope": "target:https://app.local",
+      "sourceEventIds": [
+        "mem-bad-path"
+      ],
+      "sourceStrategyCapsuleIds": [],
+      "sourceQualityRowIds": [
+        "quality-bad-path"
+      ],
+      "sourceReplayRowIds": [
+        "replay-bad-path"
+      ],
+      "activeScore": 31,
+      "qualityScore": 22,
+      "causalScore": 10,
+      "confidence": 0.45,
+      "commands": [],
+      "verifierCommands": [],
+      "fallbackCommands": [
+        "re_memory supervise"
+      ],
+      "avoidCommands": [
+        "curl -k https://app.local/admin # stale unauthenticated path"
+      ],
+      "evidenceRefs": [
+        "memory/quality-board.md"
+      ],
+      "feedbackWritebackCommands": [
+        "re_memory append # active_kernel_feedback event=mem-bad-path decision=avoid"
+      ],
+      "compactResumeHints": [],
+      "blockers": [
+        "negative_feedback"
+      ],
+      "lastUsefulAt": "2026-01-01T00:00:00.000Z",
+      "failureCount": 3
+    }
+  ],
+  "expected": {
+    "mustPromoteEventIds": [
+      "mem-authz-success"
+    ],
+    "mustFeedbackEventIds": [
+      "mem-needs-feedback"
+    ],
+    "mustReplayRequiredEventIds": [
+      "mem-needs-replay"
+    ],
+    "mustDemoteEventIds": [
+      "mem-bad-path"
+    ],
+    "mustHaveRequiredGates": [
+      "MemoryMaturationRuntimeV15",
+      "automatic_memory_maturation_pipeline",
+      "tool_result_to_strategy_loop",
+      "closed_loop_writeback",
+      "retention_decay_scheduler",
+      "stale_memory_rehearsal_queue",
+      "usefulness_backprop_to_maturation",
+      "promotion_demotion_replay_backed",
+      "cross_session_maturation_ready"
+    ],
+    "mustHaveArtifacts": [
+      "maturation-runtime-report.json",
+      "maturation-runtime-ledger.jsonl",
+      "maturation-action-board.md"
+    ],
+    "mustRehearseEventIds": [
+      "mem-needs-replay"
+    ],
+    "mustRetentionQueueEventIds": [
+      "mem-needs-feedback",
+      "mem-needs-replay",
+      "mem-bad-path"
+    ]
+  },
+  "negativeCases": [
+    {
+      "id": "drop-evidence-blocks-promotion",
+      "mutate": "dropEvidence",
+      "decisionId": "mak:strategy:authz-success",
+      "expectNotAction": "promote"
+    },
+    {
+      "id": "scope-block-quarantines",
+      "mutate": "scopeBlock",
+      "decisionId": "mak:strategy:authz-success",
+      "expectAction": "quarantine"
+    }
+  ]
+}

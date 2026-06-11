@@ -9,9 +9,9 @@ import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dis
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
 	reserveTokens?: number; // default: 16384
-	keepRecentTokens?: number; // default: 20000
-	triggerPercent?: number; // optional: compact when context reaches this percentage of contextWindow
-	warningPercent?: number; // optional: UI/docs warning threshold for long-running harnesses
+	keepRecentTokens?: number; // default: 36000
+	triggerPercent?: number; // default: 85; compact when context reaches this percentage of contextWindow
+	warningPercent?: number; // default: 80; UI/docs warning threshold for long-running harnesses
 }
 
 export interface BranchSummarySettings {
@@ -757,17 +757,17 @@ export class SettingsManager {
 	}
 
 	getCompactionKeepRecentTokens(): number {
-		return this.settings.compaction?.keepRecentTokens ?? 20000;
+		return this.settings.compaction?.keepRecentTokens ?? 36000;
 	}
 
 	getCompactionTriggerPercent(): number | undefined {
 		const value = this.settings.compaction?.triggerPercent;
-		return typeof value === "number" && value > 0 && value < 100 ? value : undefined;
+		return typeof value === "number" && value > 0 && value < 100 ? value : 85;
 	}
 
 	getCompactionWarningPercent(): number | undefined {
 		const value = this.settings.compaction?.warningPercent;
-		return typeof value === "number" && value > 0 && value < 100 ? value : undefined;
+		return typeof value === "number" && value > 0 && value < 100 ? value : 80;
 	}
 
 	getCompactionSettings(): {

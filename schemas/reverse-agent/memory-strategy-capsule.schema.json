@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repi.local/schemas/memory-strategy-capsule.schema.json",
+  "title": "REPI Memory Strategy Capsule V13",
+  "type": "object",
+  "$defs": {
+    "MemoryStrategyCapsuleLifecycleV13": {
+      "enum": ["candidate", "promoted", "demoted", "quarantined"]
+    },
+    "MemoryStrategyCapsuleV13": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "id", "ts", "MemoryStrategyCapsuleV13", "executable_strategy_capsule", "replay_backed_strategy_promotion", "strategy_quality_gate", "caseSignature", "route", "targetScope", "lifecycle", "triggerConditions", "objectives", "recommendedCommands", "verifierCommands", "fallbackCommands", "avoidCommands", "workerRoutingHints", "applicabilityBoundary", "sourceReplayRowIds", "sourceQualityEventIds", "sourceSkillCapsuleIds", "evidenceRefs", "causalScore", "qualityScore", "confidence", "executionPolicy", "injection", "entryHash"],
+      "properties": {
+        "kind": { "const": "repi-memory-strategy-capsule" },
+        "schemaVersion": { "const": 1 },
+        "id": { "type": "string", "minLength": 1 },
+        "ts": { "type": "string", "format": "date-time" },
+        "MemoryStrategyCapsuleV13": { "const": true },
+        "executable_strategy_capsule": { "const": true },
+        "replay_backed_strategy_promotion": { "const": true },
+        "strategy_quality_gate": { "const": true },
+        "caseSignature": { "type": "string" },
+        "route": { "type": "string" },
+        "targetScope": { "type": "string" },
+        "lifecycle": { "$ref": "#/$defs/MemoryStrategyCapsuleLifecycleV13" },
+        "triggerConditions": { "type": "array", "items": { "type": "string" } },
+        "objectives": { "type": "array", "items": { "type": "string" } },
+        "recommendedCommands": { "type": "array", "items": { "type": "string" } },
+        "verifierCommands": { "type": "array", "items": { "type": "string" } },
+        "fallbackCommands": { "type": "array", "items": { "type": "string" } },
+        "avoidCommands": { "type": "array", "items": { "type": "string" } },
+        "workerRoutingHints": { "type": "array", "items": { "type": "string" } },
+        "applicabilityBoundary": { "type": "array", "items": { "type": "string" } },
+        "sourceReplayRowIds": { "type": "array", "items": { "type": "string" } },
+        "sourceQualityEventIds": { "type": "array", "items": { "type": "string" } },
+        "sourceSkillCapsuleIds": { "type": "array", "items": { "type": "string" } },
+        "evidenceRefs": { "type": "array", "items": { "type": "string" } },
+        "causalScore": { "type": "number", "minimum": 0, "maximum": 100 },
+        "qualityScore": { "type": "number", "minimum": 0, "maximum": 100 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "executionPolicy": {
+          "type": "object",
+          "required": ["preflightChecks", "evidenceRequirements", "stopConditions", "compactResumeHints"],
+          "properties": {
+            "preflightChecks": { "type": "array", "items": { "type": "string" } },
+            "evidenceRequirements": { "type": "array", "items": { "type": "string" } },
+            "stopConditions": { "type": "array", "items": { "type": "string" } },
+            "compactResumeHints": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        },
+        "injection": {
+          "type": "object",
+          "required": ["operatorPromptSnippet", "verifierPromptSnippet", "nextActionCommands"],
+          "properties": {
+            "operatorPromptSnippet": { "type": "string" },
+            "verifierPromptSnippet": { "type": "string" },
+            "nextActionCommands": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        },
+        "entryHash": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "MemoryStrategyCapsuleReportV13": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "generatedAt", "MemoryStrategyCapsuleV13", "executable_strategy_capsule", "replay_backed_strategy_promotion", "strategy_quality_gate", "reportPath", "capsuleLedgerPath", "strategyBookPath", "sourceReplayReportPath", "sourceQualityReportPath", "sourceSkillCapsuleReportPath", "capsuleCount", "promotedCapsuleIds", "candidateCapsuleIds", "demotedCapsuleIds", "quarantinedCapsuleIds", "operatorInjectionCommands", "verifierCommands", "avoidCommands", "fallbackCommands", "workerRoutingHints", "status", "recentCapsules", "requiredGates", "policy", "nextCommands"],
+      "properties": {
+        "kind": { "const": "repi-memory-strategy-capsule-report" },
+        "schemaVersion": { "const": 1 },
+        "generatedAt": { "type": "string", "format": "date-time" },
+        "MemoryStrategyCapsuleV13": { "const": true },
+        "executable_strategy_capsule": { "const": true },
+        "replay_backed_strategy_promotion": { "const": true },
+        "strategy_quality_gate": { "const": true },
+        "reportPath": { "type": "string" },
+        "capsuleLedgerPath": { "type": "string" },
+        "strategyBookPath": { "type": "string" },
+        "sourceReplayReportPath": { "type": "string" },
+        "sourceQualityReportPath": { "type": "string" },
+        "sourceSkillCapsuleReportPath": { "type": "string" },
+        "capsuleCount": { "type": "integer", "minimum": 0 },
+        "promotedCapsuleIds": { "type": "array", "items": { "type": "string" } },
+        "candidateCapsuleIds": { "type": "array", "items": { "type": "string" } },
+        "demotedCapsuleIds": { "type": "array", "items": { "type": "string" } },
+        "quarantinedCapsuleIds": { "type": "array", "items": { "type": "string" } },
+        "operatorInjectionCommands": { "type": "array", "items": { "type": "string" } },
+        "verifierCommands": { "type": "array", "items": { "type": "string" } },
+        "avoidCommands": { "type": "array", "items": { "type": "string" } },
+        "fallbackCommands": { "type": "array", "items": { "type": "string" } },
+        "workerRoutingHints": { "type": "array", "items": { "type": "string" } },
+        "status": { "enum": ["pass", "warn", "blocked", "empty"] },
+        "recentCapsules": { "type": "array", "items": { "$ref": "#/$defs/MemoryStrategyCapsuleV13" } },
+        "requiredGates": { "type": "array", "items": { "type": "string" } },
+        "policy": {
+          "type": "object",
+          "required": ["MemoryStrategyCapsuleV13", "replayBackedPromotion", "qualityGateRequired", "executableCommandsRequired", "verifierAndFallbackRequired"],
+          "properties": {
+            "MemoryStrategyCapsuleV13": { "const": true },
+            "replayBackedPromotion": { "const": true },
+            "qualityGateRequired": { "const": true },
+            "executableCommandsRequired": { "const": true },
+            "verifierAndFallbackRequired": { "const": true }
+          },
+          "additionalProperties": false
+        },
+        "nextCommands": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "properties": { "report": { "$ref": "#/$defs/MemoryStrategyCapsuleReportV13" } }
+}

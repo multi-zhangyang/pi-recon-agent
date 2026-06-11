@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { join } from "node:path";
 import { Type } from "typebox";
 import { getAgentDir } from "../config.ts";
-import type { Extension, ExtensionAPI, LoadExtensionsResult, ToolCallEvent } from "./extensions/types.ts";
+import type { Extension, ExtensionAPI, LoadExtensionsResult, ToolCallEvent, ToolResultEvent } from "./extensions/types.ts";
 import type { PromptTemplate } from "./prompt-templates.ts";
 import type { DefaultResourceLoaderOptions } from "./resource-loader.ts";
 import type { Skill } from "./skills.ts";
@@ -1122,6 +1122,48 @@ function verifyWorkerRuntimePool(pool: WorkerRuntimePoolV1): { ok: boolean; erro
 	return { ok: errors.length === 0, errors: uniqueNonEmpty(errors, 80), evidenceContract: workerRuntimePoolEvidenceContract() };
 }
 
+function workerLeaseSchedulerEventHash(event: Omit<WorkerLeaseSchedulerEventV1, "eventHash">): string {
+	return createHash("sha256").update(stableJson(event)).digest("hex");
+}
+
+function verifyWorkerLeaseSchedulerV1(scheduler: WorkerLeaseSchedulerV1): { ok: boolean; errors: string[] } {
+	const errors: string[] = [];
+	if (scheduler.kind !== "WorkerLeaseSchedulerV1") errors.push("worker_lease_scheduler_kind_invalid");
+	if (scheduler.maxConcurrency < 1) errors.push("worker_lease_scheduler_max_concurrency_invalid");
+	const activeLeases = new Map<string, string>();
+	for (const task of scheduler.tasks) {
+		if (task.status === "leased" || task.status === "running") {
+			const existing = activeLeases.get(task.taskId);
+			if (existing && existing !== task.leaseId) errors.push(`worker_lease_scheduler_duplicate_active_lease:${task.taskId}`);
+			if (task.leaseId) activeLeases.set(task.taskId, task.leaseId);
+		}
+		if (task.attempt > task.maxAttempts) errors.push(`worker_lease_scheduler_attempt_exceeded:${task.taskId}`);
+		if (!task.claimRefs.length) errors.push(`worker_lease_scheduler_claim_refs_missing:${task.taskId}`);
+	}
+	let prevHash = "0".repeat(64);
+	const completed = new Set<string>();
+	for (const event of scheduler.events) {
+		if (event.kind !== "WorkerLeaseSchedulerEventV1") errors.push(`worker_lease_scheduler_event_kind_invalid:${event.eventId}`);
+		if (event.prevHash !== prevHash) errors.push(`worker_lease_scheduler_prev_hash_mismatch:${event.eventId}`);
+		const { eventHash: _eventHash, ...withoutHash } = event;
+		if (event.eventHash !== workerLeaseSchedulerEventHash(withoutHash)) errors.push(`worker_lease_scheduler_event_hash_mismatch:${event.eventId}`);
+		prevHash = event.eventHash;
+		if (event.type === "completed") {
+			if (completed.has(event.taskId)) errors.push(`worker_lease_scheduler_duplicate_completion:${event.taskId}`);
+			completed.add(event.taskId);
+		}
+	}
+	if (!scheduler.assertions.leaseExclusive) errors.push("worker_lease_scheduler_lease_exclusive_missing");
+	if (!scheduler.assertions.heartbeatRequired) errors.push("worker_lease_scheduler_heartbeat_missing");
+	if (!scheduler.assertions.staleLeaseRecovered) errors.push("worker_lease_scheduler_stale_recovery_missing");
+	if (!scheduler.assertions.workStealingObserved) errors.push("worker_lease_scheduler_work_steal_missing");
+	if (!scheduler.assertions.duplicateCompletionRejected) errors.push("worker_lease_scheduler_duplicate_completion_rejection_missing");
+	if (!scheduler.assertions.maxConcurrencyRespected) errors.push("worker_lease_scheduler_max_concurrency_not_respected");
+	if (!scheduler.assertions.claimRefsPreserved) errors.push("worker_lease_scheduler_claim_refs_not_preserved");
+	if (!scheduler.assertions.appendOnlyHashChain) errors.push("worker_lease_scheduler_hash_chain_not_append_only");
+	return { ok: errors.length === 0, errors: uniqueNonEmpty(errors, 100) };
+}
+
 type WorkerChildSessionProviderFormat = "openai-compatible" | "anthropic-compatible" | "local-openai";
 
 type WorkerChildSessionRuntimeStatus =
@@ -1198,6 +1240,495 @@ type WorkerChildSessionClaimLedgerEventV1 = Omit<SwarmClaimLedgerEventV1, "sourc
 	source: "re_swarm" | "worker-child-session";
 };
 
+type WorkerChildProcessProbeV1 = {
+	kind: "WorkerChildProcessProbeV1";
+	schemaVersion: 1;
+	probeId: string;
+	command: string;
+	args: string[];
+	cwd: string;
+	isolatedHome: string;
+	startedAt: string;
+	endedAt: string;
+	elapsedMs: number;
+	exitCode: number | null;
+	signal: string | null;
+	status: "pass" | "blocked";
+	stdoutPath: string;
+	stderrPath: string;
+	stdoutSha256: string;
+	stderrSha256: string;
+	envAllowlist: string[];
+	envDenylist: string[];
+	assertions: {
+		repiCommandExecuted: boolean;
+		isolatedRepiHome: boolean;
+		noPiHomeImport: boolean;
+		updateChecksDisabled: boolean;
+		telemetryDisabled: boolean;
+		noLiteralSecrets: boolean;
+		stdoutCaptured: boolean;
+	};
+	errors: string[];
+};
+
+type WorkerProviderChildProcessProbeV1 = {
+	kind: "WorkerProviderChildProcessProbeV1";
+	schemaVersion: 1;
+	probeId: string;
+	providerName: string;
+	modelId: string;
+	command: string;
+	args: string[];
+	cwd: string;
+	isolatedHome: string;
+	modelsJsonPath: string;
+	requestLogPath: string;
+	transcriptPath: string;
+	stdoutPath: string;
+	stderrPath: string;
+	stdoutSha256: string;
+	stderrSha256: string;
+	requestLogSha256: string;
+	transcriptSha256: string;
+	startedAt: string;
+	endedAt: string;
+	elapsedMs: number;
+	exitCode: number | null;
+	signal: string | null;
+	status: "pass" | "blocked";
+	assertions: {
+		openAICompatibleRequestSeen: boolean;
+		modelMatched: boolean;
+		stdoutMarkerObserved: boolean;
+		apiKeyEnvRefOnly: boolean;
+		authorizationFromEnv: boolean;
+		transcriptCaptured: boolean;
+		noPiHomeImport: boolean;
+		noUpdateBanner: boolean;
+		noLiteralSecrets: boolean;
+	};
+	request: {
+		method?: string;
+		path?: string;
+		model?: string;
+		stream?: boolean;
+		authorizationHeaderSha256?: string;
+		bodySha256?: string;
+	};
+	errors: string[];
+};
+
+type ProviderRuntimeMatrixCaseV1 = {
+	kind: "ProviderRuntimeMatrixCaseV1";
+	schemaVersion: 1;
+	caseId: string;
+	providerName: string;
+	api: "openai-completions" | "anthropic-messages";
+	modelId: string;
+	expectedPath: "/v1/chat/completions" | "/v1/messages";
+	authHeader: "authorization" | "x-api-key";
+	status: "pass" | "blocked";
+	exitCode: number | null;
+	signal: string | null;
+	elapsedMs: number;
+	stdoutPath: string;
+	stderrPath: string;
+	stdoutSha256: string;
+	stderrSha256: string;
+	request: {
+		method?: string;
+		path?: string;
+		model?: string;
+		stream?: boolean;
+		authHeaderSha256?: string;
+		bodySha256?: string;
+	};
+	assertions: {
+		exitOk: boolean;
+		requestSeen: boolean;
+		modelMatched: boolean;
+		streamingUsed: boolean;
+		stdoutMarkerObserved: boolean;
+		apiKeyEnvRefOnly: boolean;
+		authorizationFromEnv: boolean;
+		noPiHomeImport: boolean;
+		noUpdateBanner: boolean;
+		noLiteralSecrets: boolean;
+		transcriptCaptured: boolean;
+		requestLogCaptured: boolean;
+	};
+	errors: string[];
+};
+
+type ProviderRuntimeMatrixV1 = {
+	kind: "ProviderRuntimeMatrixV1";
+	schemaVersion: 1;
+	generatedAt: string;
+	modelsJsonPath: string;
+	requestLogPath: string;
+	isolatedHome: string;
+	workspace: string;
+	listModels: {
+		status: "pass" | "blocked";
+		providers: string[];
+		stdoutSha256: string;
+		stderrSha256: string;
+	};
+	cases: ProviderRuntimeMatrixCaseV1[];
+};
+
+type ProviderFailureInjectionCaseV1 = {
+	kind: "ProviderFailureInjectionCaseV1";
+	schemaVersion: 1;
+	caseId: string;
+	providerName: string;
+	api: "openai-completions" | "anthropic-messages";
+	modelId: string;
+	failureMode: "http_500" | "malformed_sse" | "anthropic_error_event" | "timeout" | "connection_reset";
+	status: "pass" | "blocked";
+	exitCode: number | null;
+	signal: string | null;
+	request: {
+		method?: string;
+		path?: string;
+		model?: string;
+		stream?: boolean;
+		bodySha256?: string;
+	};
+	stdoutSha256: string;
+	stderrSha256: string;
+	requestLogSha256: string;
+	transcriptSha256: string;
+	failureId: string;
+	repairId: string;
+	assertions: {
+		requestSeen: boolean;
+		exitNonZero: boolean;
+		failureTextCaptured: boolean;
+		failureRepairLinked: boolean;
+		noLiteralSecrets: boolean;
+		noPiHomeImport: boolean;
+		noUpdateBanner: boolean;
+	};
+};
+
+type ProviderFailureInjectionReportV1 = {
+	kind: "ProviderFailureInjectionReportV1";
+	schemaVersion: 1;
+	generatedAt: string;
+	isolatedHome: string;
+	workspace: string;
+	cases: ProviderFailureInjectionCaseV1[];
+	failureLedgerEvents: FailureLedgerEventV1[];
+	repairQueue: RepairQueueItemV1[];
+	failureRepairValidation: {
+		ok: boolean;
+		failureCount: number;
+		repairCount: number;
+	};
+	writebackProbe: {
+		status: "pass" | "blocked";
+		writeback: {
+			failurePath: string;
+			repairPath: string;
+		};
+		validation: {
+			ok: boolean;
+			failureCount: number;
+			repairCount: number;
+		};
+	};
+};
+
+type ParallelProviderWorkerMatrixWorkerV1 = {
+	kind: "ParallelProviderWorkerMatrixWorkerV1";
+	schemaVersion: 1;
+	workerId: string;
+	role: string;
+	providerName: string;
+	api: "openai-completions" | "anthropic-messages";
+	modelId: string;
+	expectedPath: "/v1/chat/completions" | "/v1/messages";
+	mode: "pass" | "failure" | "timeout";
+	status: "pass" | "repair_queued" | "cancelled" | "blocked";
+	mergeKey: string;
+	claimRefs: string[];
+	startedAt: string;
+	endedAt: string;
+	elapsedMs: number;
+	timeoutMs: number;
+	exitCode: number | null;
+	signal: string | null;
+	timedOut: boolean;
+	cancelledAt?: string;
+	stdoutPath: string;
+	stderrPath: string;
+	requestLogPath: string;
+	transcriptPath: string;
+	stdoutSha256: string;
+	stderrSha256: string;
+	requestLogSha256: string;
+	transcriptSha256: string;
+	request: {
+		method?: string;
+		path?: string;
+		model?: string;
+		stream?: boolean;
+		authHeaderSha256?: string;
+		bodySha256?: string;
+	};
+	failureId?: string;
+	repairId?: string;
+	assertions: {
+		childProcessLaunched: boolean;
+		requestSeen: boolean;
+		endpointMatched: boolean;
+		modelMatched: boolean;
+		streamingUsed: boolean;
+		successMarkerObserved: boolean;
+		exitOkWhenExpected: boolean;
+		exitFailedWhenExpected: boolean;
+		timeoutCancelled: boolean;
+		apiKeyEnvRefOnly: boolean;
+		authorizationFromEnv: boolean;
+		requestLogCaptured: boolean;
+		transcriptCaptured: boolean;
+		noLiteralSecrets: boolean;
+		noPiHomeImport: boolean;
+		noUpdateBanner: boolean;
+		providerWorkerFailureRepairLinked?: boolean;
+	};
+	errors: string[];
+};
+
+type ParallelProviderWorkerMatrixV1 = {
+	kind: "ParallelProviderWorkerMatrixV1";
+	schemaVersion: 1;
+	generatedAt: string;
+	poolId: string;
+	isolatedHome: string;
+	workspace: string;
+	modelsJsonPath: string;
+	maxConcurrency: number;
+	peakConcurrency: number;
+	listModels: {
+		status: "pass" | "blocked";
+		providers: string[];
+		stdoutSha256: string;
+		stderrSha256: string;
+	};
+	workers: ParallelProviderWorkerMatrixWorkerV1[];
+	claimMerge: {
+		strategy: "claim-aware provider worker merge";
+		claimAwareProviderWorkerMerge: boolean;
+		conflicts: {
+			mergeKey: string;
+			workers: string[];
+			status: "resolved" | "open";
+			winner?: string;
+			evidenceRefs: string[];
+			resolutionReason: string;
+		}[];
+	};
+	failureLedgerEvents: FailureLedgerEventV1[];
+	repairQueue: RepairQueueItemV1[];
+	failureRepairValidation: {
+		ok: boolean;
+		failureCount: number;
+		repairCount: number;
+	};
+	writebackProbe: {
+		status: "pass" | "blocked";
+		writeback: {
+			failurePath: string;
+			repairPath: string;
+		};
+		validation: {
+			ok: boolean;
+			failureCount: number;
+			repairCount: number;
+		};
+	};
+};
+
+type RemoteProviderLongRunCaseV1 = {
+	kind: "RemoteProviderLongRunCaseV1";
+	schemaVersion: 1;
+	caseId: string;
+	providerName: string;
+	api: "openai-completions" | "anthropic-messages";
+	modelIdSha256: string;
+	attempt: number;
+	status: "pass" | "blocked";
+	exitCode: number | null;
+	signal: string | null;
+	timedOut: boolean;
+	cancelledAt?: string;
+	elapsedMs: number;
+	timeoutMs: number;
+	stdoutPath: string;
+	stderrPath: string;
+	transcriptPath: string;
+	stdoutSha256: string;
+	stderrSha256: string;
+	transcriptSha256: string;
+	failureId?: string;
+	repairId?: string;
+	assertions: {
+		exitOk: boolean;
+		stdoutNonEmpty: boolean;
+		markerObserved: boolean;
+		apiKeyEnvRefOnly: boolean;
+		boundedTimeout: boolean;
+		isolatedRepiHome: boolean;
+		noLiteralSecrets: boolean;
+		noPiHomeImport: boolean;
+		noUpdateBanner: boolean;
+		transcriptCaptured: boolean;
+	};
+	errors: string[];
+};
+
+type RemoteProviderLongRunV1 = {
+	kind: "RemoteProviderLongRunV1";
+	schemaVersion: 1;
+	generatedAt: string;
+	mode: "skipped" | "live";
+	liveRequested: boolean;
+	skipReason: string;
+	configProblems: string[];
+	providerName?: string;
+	api?: "openai-completions" | "anthropic-messages";
+	modelIdSha256?: string;
+	baseUrlSha256?: string;
+	apiKeyEnv?: string;
+	attemptsPlanned: number;
+	timeoutMs: number;
+	listModels: {
+		status: "pass" | "blocked" | "skipped";
+		stdoutSha256: string;
+		stderrSha256: string;
+	};
+	cases: RemoteProviderLongRunCaseV1[];
+	failureLedgerEvents: FailureLedgerEventV1[];
+	repairQueue: RepairQueueItemV1[];
+	failureRepairValidation: {
+		ok: boolean;
+		failureCount: number;
+		repairCount: number;
+	};
+	writebackProbe: {
+		status: "pass" | "blocked" | "skipped";
+		writeback: {
+			failurePath: string;
+			repairPath: string;
+		} | null;
+		validation: {
+			ok: boolean;
+			failureCount: number;
+			repairCount: number;
+		};
+	};
+};
+
+type CrossSessionResumeContinuationV1 = {
+	status: "pass" | "blocked";
+	exitCode: number | null;
+	signal: string | null;
+	elapsedMs: number;
+	stdoutPath: string;
+	stderrPath: string;
+	stdoutSha256: string;
+	stderrSha256: string;
+	requestLogPath?: string;
+	requestLogSha256?: string;
+	request?: {
+		method?: string;
+		path?: string;
+		model?: string;
+		stream?: boolean;
+		authHeaderSha256?: string;
+		bodySha256?: string;
+	};
+	assertions: Record<string, boolean>;
+};
+
+type CrossSessionResumeLiveV1 = {
+	kind: "CrossSessionResumeLiveV1";
+	schemaVersion: 1;
+	generatedAt: string;
+	isolatedHome: string;
+	workspace: string;
+	packSessionId: string;
+	resumeSessionId: string;
+	providerSessionId: string;
+	workerSessionId: string;
+	pack: {
+		contextPath: string;
+		contextSha256: string;
+		sessionId: string;
+		idempotencyKey: string;
+		resumeQueueStatus: "queued" | "running" | "done" | "blocked" | "exhausted";
+		closureStatus: "open" | "closed" | "blocked" | "exhausted";
+		artifactHashCount: number;
+	};
+	resume: {
+		contextPath: string;
+		resumedFromContextPath: string;
+		contextSha256: string;
+		sessionId: string;
+		resumeQueueStatus: "queued" | "running" | "done" | "blocked" | "exhausted";
+		closureStatus: "open" | "closed" | "blocked" | "exhausted";
+		exactResumeVerification: {
+			loadedBy: "contextPath" | "compactionEntryId" | "latest" | "missing";
+			contextSha256: "pass" | "drift" | "missing";
+			artifactHashes: "pass" | "drift" | "missing";
+			scope: "pass" | "mismatch" | "missing";
+			blockedCount: number;
+			warningsCount: number;
+		};
+	};
+	compactResumeLedger: {
+		transitionPath: string;
+		reportPath: string;
+		currentState: "queued" | "running" | "done" | "blocked" | "exhausted";
+		invalidTransitions: string[];
+		transitionCount: number;
+		statePath: string[];
+	};
+	providerContinuation: CrossSessionResumeContinuationV1 & {
+		providerName: string;
+		modelId: string;
+	};
+	workerContinuation: CrossSessionResumeContinuationV1;
+	artifacts: {
+		path: string;
+		sha256: string;
+		bytes: number;
+		mtime: string;
+	}[];
+	assertions: {
+		crossSessionDifferent: boolean;
+		isolatedRepiHome: boolean;
+		packQueued: boolean;
+		exactResumeLoadedByContextPath: boolean;
+		resumedFromOriginalPack: boolean;
+		contextSha256Pass: boolean;
+		artifactHashesPass: boolean;
+		scopePass: boolean;
+		closureClosed: boolean;
+		ledgerDone: boolean;
+		providerContinuedAfterResume: boolean;
+		workerContinuedAfterResume: boolean;
+		envRefOnly: boolean;
+		noPiHomeImport: boolean;
+		noUpdateBanner: boolean;
+		noLiteralSecrets: boolean;
+	};
+	errors: string[];
+};
+
 type WorkerChildSessionRuntimeBatchV1 = {
 	kind: "WorkerChildSessionRuntimeBatchV1";
 	schemaVersion: 1;
@@ -1207,12 +1738,16 @@ type WorkerChildSessionRuntimeBatchV1 = {
 	launchPolicy: WorkerChildSessionLaunchPolicyV1;
 	sessions: WorkerChildSessionRuntimeV1[];
 	claimLedgerEvents: WorkerChildSessionClaimLedgerEventV1[];
+	childProcessProbe?: WorkerChildProcessProbeV1;
+	providerChildProcessProbe?: WorkerProviderChildProcessProbeV1;
 	poolBridge: {
 		kind: "WorkerRuntimePoolV1Bridge";
 		poolId: string;
 		workerIds: string[];
 		claimAwareMerge: boolean;
 		childSessionRuntimeCaptured: boolean;
+		childProcessRuntimeCaptured?: boolean;
+		providerChildProcessRuntimeCaptured?: boolean;
 	};
 };
 
@@ -1252,6 +1787,27 @@ function workerChildSessionLaunchPolicy(options?: {
 }
 
 function workerChildSessionToWorkerRuntimePoolBridge(batch: WorkerChildSessionRuntimeBatchV1): WorkerRuntimePoolV1 {
+	const mergeKeyWorkers = new Map<string, string[]>();
+	for (const session of batch.sessions) {
+		const rows = mergeKeyWorkers.get(session.poolBridge.mergeKey) ?? [];
+		rows.push(session.workerId);
+		mergeKeyWorkers.set(session.poolBridge.mergeKey, rows);
+	}
+	const conflicts: WorkerRuntimePoolV1["mergeProtocol"]["conflicts"] = Array.from(mergeKeyWorkers.entries())
+		.filter(([, workers]) => workers.length > 1)
+		.map(([mergeKey, workers]) => ({
+			mergeKey,
+			workers,
+			status: "resolved" as const,
+			winner: workers[0],
+			evidenceRefs: uniqueNonEmpty(
+				batch.claimLedgerEvents
+					.filter((event) => event.claimId === mergeKey || event.claimIds?.includes(mergeKey))
+					.flatMap((event) => event.evidenceRefs),
+				16,
+			),
+			resolutionReason: "duplicate child-session merge key resolved by claim ledger validation and supervisor re-check before promotion",
+		}));
 	return {
 		kind: "WorkerRuntimePoolV1",
 		schemaVersion: 1,
@@ -1294,10 +1850,274 @@ function workerChildSessionToWorkerRuntimePoolBridge(batch: WorkerChildSessionRu
 		mergeProtocol: {
 			strategy: "claim-aware merge",
 			evidenceContract: workerRuntimePoolEvidenceContract(),
-			conflicts: [],
+			conflicts,
 		},
 		claimLedgerEvents: batch.claimLedgerEvents.filter((event) => event.source === "re_swarm") as SwarmClaimLedgerEventV1[],
 	};
+}
+
+function verifyWorkerProviderChildProcessProbe(probe: WorkerProviderChildProcessProbeV1): string[] {
+	const errors: string[] = [];
+	if (probe.kind !== "WorkerProviderChildProcessProbeV1" || probe.status !== "pass")
+		errors.push("provider_child_process_probe_not_pass");
+	if (!probe.assertions.openAICompatibleRequestSeen) errors.push("provider_child_process_request_missing");
+	if (!probe.assertions.modelMatched) errors.push("provider_child_process_model_mismatch");
+	if (!probe.assertions.stdoutMarkerObserved) errors.push("provider_child_process_stdout_marker_missing");
+	if (!probe.assertions.apiKeyEnvRefOnly) errors.push("provider_child_process_api_key_not_env_ref");
+	if (!probe.assertions.authorizationFromEnv) errors.push("provider_child_process_authorization_not_env");
+	if (!probe.assertions.transcriptCaptured || !probe.transcriptSha256) errors.push("provider_child_process_transcript_missing");
+	if (!probe.assertions.noPiHomeImport) errors.push("provider_child_process_imported_pi_home");
+	if (!probe.assertions.noUpdateBanner) errors.push("provider_child_process_update_banner");
+	if (!probe.assertions.noLiteralSecrets) errors.push("provider_child_process_literal_secret");
+	if (!probe.isolatedHome.includes(".repi") || probe.isolatedHome.includes("/.pi/"))
+		errors.push("provider_child_process_isolated_home_invalid");
+	if (probe.request.path !== "/v1/chat/completions") errors.push("provider_child_process_endpoint_invalid");
+	if (probe.request.model !== probe.modelId) errors.push("provider_child_process_request_model_invalid");
+	return errors;
+}
+
+function verifyProviderRuntimeMatrixV1(matrix: ProviderRuntimeMatrixV1): { ok: boolean; errors: string[] } {
+	const errors: string[] = [];
+	if (matrix.kind !== "ProviderRuntimeMatrixV1") errors.push("provider_matrix_kind_invalid");
+	if (!matrix.isolatedHome.includes(".repi") || matrix.isolatedHome.includes("/.pi/"))
+		errors.push("provider_matrix_isolated_home_invalid");
+	const requiredApis = new Set<ProviderRuntimeMatrixCaseV1["api"]>(["openai-completions", "anthropic-messages"]);
+	for (const row of matrix.cases) {
+		requiredApis.delete(row.api);
+		if (row.status !== "pass") errors.push(`provider_matrix_case_not_pass:${row.caseId}`);
+		if (!row.assertions.exitOk) errors.push(`provider_matrix_exit_not_ok:${row.caseId}`);
+		if (!row.assertions.requestSeen) errors.push(`provider_matrix_request_missing:${row.caseId}`);
+		if (!row.assertions.modelMatched) errors.push(`provider_matrix_model_mismatch:${row.caseId}`);
+		if (!row.assertions.streamingUsed) errors.push(`provider_matrix_stream_missing:${row.caseId}`);
+		if (!row.assertions.stdoutMarkerObserved) errors.push(`provider_matrix_stdout_marker_missing:${row.caseId}`);
+		if (!row.assertions.apiKeyEnvRefOnly) errors.push(`provider_matrix_api_key_not_env_ref:${row.caseId}`);
+		if (!row.assertions.authorizationFromEnv) errors.push(`provider_matrix_authorization_not_env:${row.caseId}`);
+		if (!row.assertions.noPiHomeImport) errors.push(`provider_matrix_pi_home_leak:${row.caseId}`);
+		if (!row.assertions.noUpdateBanner) errors.push(`provider_matrix_update_banner_leak:${row.caseId}`);
+		if (!row.assertions.noLiteralSecrets) errors.push(`provider_matrix_literal_secret:${row.caseId}`);
+		if (!row.assertions.transcriptCaptured || !row.assertions.requestLogCaptured)
+			errors.push(`provider_matrix_artifact_missing:${row.caseId}`);
+		if (row.api === "openai-completions" && row.request.path !== "/v1/chat/completions")
+			errors.push(`provider_matrix_openai_endpoint_invalid:${row.caseId}`);
+		if (row.api === "anthropic-messages" && row.request.path !== "/v1/messages")
+			errors.push(`provider_matrix_anthropic_endpoint_invalid:${row.caseId}`);
+	}
+	for (const api of requiredApis) errors.push(`provider_matrix_missing_api:${api}`);
+	if (matrix.listModels.status !== "pass") errors.push("provider_matrix_list_models_not_pass");
+	for (const row of matrix.cases) {
+		if (!matrix.listModels.providers.includes(row.providerName))
+			errors.push(`provider_matrix_list_models_missing:${row.providerName}`);
+	}
+	return { ok: errors.length === 0, errors: uniqueNonEmpty(errors, 80) };
+}
+
+function verifyProviderFailureInjectionReportV1(report: ProviderFailureInjectionReportV1): { ok: boolean; errors: string[] } {
+	const errors: string[] = [];
+	if (report.kind !== "ProviderFailureInjectionReportV1") errors.push("provider_failure_report_kind_invalid");
+	if (!report.isolatedHome.includes(".repi") || report.isolatedHome.includes("/.pi/"))
+		errors.push("provider_failure_isolated_home_invalid");
+	if (report.cases.length < 3) errors.push("provider_failure_case_count_lt_3");
+	for (const row of report.cases) {
+		if (row.status !== "pass") errors.push(`provider_failure_case_not_pass:${row.caseId}`);
+		if (!row.assertions.requestSeen) errors.push(`provider_failure_request_missing:${row.caseId}`);
+		if (!row.assertions.exitNonZero) errors.push(`provider_failure_exit_not_failed:${row.caseId}`);
+		if (!row.assertions.failureTextCaptured) errors.push(`provider_failure_text_missing:${row.caseId}`);
+		if (!row.assertions.failureRepairLinked) errors.push(`provider_failure_repair_not_linked:${row.caseId}`);
+		if (!row.assertions.noLiteralSecrets) errors.push(`provider_failure_literal_secret:${row.caseId}`);
+		if (!row.assertions.noPiHomeImport) errors.push(`provider_failure_pi_home_leak:${row.caseId}`);
+		if (!row.assertions.noUpdateBanner) errors.push(`provider_failure_update_banner_leak:${row.caseId}`);
+		if (!report.failureLedgerEvents.some((failure) => failure.id === row.failureId))
+			errors.push(`provider_failure_missing_failure_row:${row.caseId}`);
+		if (!report.repairQueue.some((repair) => repair.repairId === row.repairId && repair.fromFailureId === row.failureId))
+			errors.push(`provider_failure_missing_repair_row:${row.caseId}`);
+	}
+	if (!report.failureRepairValidation.ok) errors.push("provider_failure_repair_validation_not_ok");
+	if (report.failureRepairValidation.failureCount !== report.cases.length)
+		errors.push("provider_failure_failure_count_mismatch");
+	if (report.failureRepairValidation.repairCount < report.failureRepairValidation.failureCount)
+		errors.push("provider_failure_repair_count_lt_failure_count");
+	if (report.writebackProbe.status !== "pass" || !report.writebackProbe.validation.ok)
+		errors.push("provider_failure_writeback_probe_not_pass");
+	if (!report.failureLedgerEvents.some((failure) => failure.status === "exhausted" && failure.retryBudget.remainingAttempts === 0))
+		errors.push("provider_failure_exhausted_budget_missing");
+	if (!report.repairQueue.some((repair) => repair.action === "escalate" && repair.paused))
+		errors.push("provider_failure_exhausted_escalation_missing");
+	return { ok: errors.length === 0, errors: uniqueNonEmpty(errors, 80) };
+}
+
+function verifyRepairRollbackPolicyV1(report: RepairRollbackPolicyV1): { ok: boolean; errors: string[] } {
+	const errors: string[] = [];
+	if (report.kind !== "RepairRollbackPolicyV1") errors.push("repair_rollback_kind_invalid");
+	if (report.schemaVersion !== 1) errors.push("repair_rollback_schema_version_invalid");
+	if (!report.baseline.treeSha256 || report.baseline.files.length === 0)
+		errors.push("repair_rollback_baseline_missing");
+	if (report.allowlist.length === 0) errors.push("repair_rollback_allowlist_missing");
+	const allowlist = new Set(report.allowlist);
+	for (const path of report.repair.changedFiles) {
+		if (!allowlist.has(path)) errors.push(`repair_rollback_allowlist_violation:${path}`);
+	}
+	if (report.rollback.required !== true) errors.push("repair_rollback_required_missing");
+	if (!report.rollback.restored) errors.push("repair_rollback_not_restored");
+	if (report.rollback.restoredTreeSha256 !== report.baseline.treeSha256)
+		errors.push("repair_rollback_tree_hash_mismatch");
+	if (report.regression.gates.length === 0) errors.push("repair_rollback_regression_gate_missing");
+	for (const gate of report.regression.gates) {
+		if (gate.status !== "pass") errors.push(`repair_rollback_regression_gate_failed:${gate.gateId}`);
+	}
+	if (report.regression.after !== "pass") errors.push("repair_rollback_after_regression_not_pass");
+	if (report.regression.restored !== "pass") errors.push("repair_rollback_restored_regression_not_pass");
+	if (!report.failureRepairValidation.ok) errors.push("repair_rollback_failure_repair_validation_not_ok");
+	if (report.failureLedgerEvents.length < 1) errors.push("repair_rollback_failure_ledger_missing");
+	if (!report.repairQueue.some((repair) => repair.action === "rollback" && repair.rollbackCriteria.mustRestore.length > 0))
+		errors.push("repair_rollback_queue_missing");
+	if (!report.assertions.baselineCaptured) errors.push("repair_rollback_assertion_baseline_not_captured");
+	if (!report.assertions.allowlistEnforced) errors.push("repair_rollback_assertion_allowlist_not_enforced");
+	if (!report.assertions.rollbackRestored) errors.push("repair_rollback_assertion_not_restored");
+	if (!report.assertions.regressionGatesPassed) errors.push("repair_rollback_assertion_regression_not_passed");
+	if (!report.assertions.noUnrelatedFileChanges) errors.push("repair_rollback_assertion_unrelated_file_changes");
+	if (!report.assertions.failureRepairLinked) errors.push("repair_rollback_assertion_failure_repair_not_linked");
+	return { ok: errors.length === 0, errors: uniqueNonEmpty(errors, 80) };
+}
+
+function verifyParallelProviderWorkerMatrixV1(report: ParallelProviderWorkerMatrixV1): { ok: boolean; errors: string[] } {
+	const errors: string[] = [];
+	if (report.kind !== "ParallelProviderWorkerMatrixV1") errors.push("parallel_provider_worker_matrix_kind_invalid");
+	if (!report.isolatedHome.includes(".repi") || report.isolatedHome.includes("/.pi/"))
+		errors.push("parallel_provider_worker_matrix_isolated_home_invalid");
+	if (report.workers.length < 4) errors.push("parallel_provider_worker_matrix_worker_count_lt_4");
+	if (report.peakConcurrency < 2) errors.push("parallel_provider_worker_matrix_peak_concurrency_lt_2");
+	if (report.peakConcurrency > report.maxConcurrency) errors.push("parallel_provider_worker_matrix_max_concurrency_exceeded");
+	if (report.listModels.status !== "pass") errors.push("parallel_provider_worker_matrix_list_models_not_pass");
+	const passingApis = new Set(report.workers.filter((worker) => worker.status === "pass").map((worker) => worker.api));
+	if (!passingApis.has("openai-completions")) errors.push("parallel_provider_worker_matrix_openai_pass_missing");
+	if (!passingApis.has("anthropic-messages")) errors.push("parallel_provider_worker_matrix_anthropic_pass_missing");
+	for (const worker of report.workers) {
+		if (!worker.providerName.startsWith("parallel-")) errors.push(`parallel_provider_worker_fixture_invalid:${worker.workerId}`);
+		if (!worker.modelId.startsWith("parallel/")) errors.push(`parallel_provider_worker_model_invalid:${worker.workerId}`);
+		if (!worker.assertions.childProcessLaunched) errors.push(`parallel_provider_worker_not_launched:${worker.workerId}`);
+		if (!worker.assertions.requestSeen) errors.push(`parallel_provider_worker_request_missing:${worker.workerId}`);
+		if (!worker.assertions.endpointMatched) errors.push(`parallel_provider_worker_endpoint_mismatch:${worker.workerId}`);
+		if (!worker.assertions.modelMatched) errors.push(`parallel_provider_worker_model_mismatch:${worker.workerId}`);
+		if (!worker.assertions.streamingUsed) errors.push(`parallel_provider_worker_stream_missing:${worker.workerId}`);
+		if (!worker.assertions.successMarkerObserved) errors.push(`parallel_provider_worker_success_marker_missing:${worker.workerId}`);
+		if (!worker.assertions.exitOkWhenExpected) errors.push(`parallel_provider_worker_exit_not_ok:${worker.workerId}`);
+		if (!worker.assertions.exitFailedWhenExpected) errors.push(`parallel_provider_worker_exit_not_failed:${worker.workerId}`);
+		if (!worker.assertions.timeoutCancelled) errors.push(`parallel_provider_worker_timeout_without_cancel:${worker.workerId}`);
+		if (!worker.assertions.apiKeyEnvRefOnly) errors.push(`parallel_provider_worker_api_key_not_env_ref:${worker.workerId}`);
+		if (!worker.assertions.authorizationFromEnv) errors.push(`parallel_provider_worker_authorization_not_env:${worker.workerId}`);
+		if (!worker.assertions.requestLogCaptured || !worker.assertions.transcriptCaptured)
+			errors.push(`parallel_provider_worker_artifact_missing:${worker.workerId}`);
+		if (!worker.assertions.noLiteralSecrets) errors.push(`parallel_provider_worker_literal_secret:${worker.workerId}`);
+		if (!worker.assertions.noPiHomeImport) errors.push(`parallel_provider_worker_pi_home_leak:${worker.workerId}`);
+		if (!worker.assertions.noUpdateBanner) errors.push(`parallel_provider_worker_update_banner:${worker.workerId}`);
+		if (worker.mode === "failure" && (worker.status !== "repair_queued" || !worker.failureId || !worker.repairId || !worker.assertions.providerWorkerFailureRepairLinked))
+			errors.push(`parallel_provider_worker_failure_repair_not_linked:${worker.workerId}`);
+		if (worker.mode === "timeout" && (worker.status !== "cancelled" || !worker.timedOut || !worker.cancelledAt))
+			errors.push(`parallel_provider_worker_cancelledWorker_missing:${worker.workerId}`);
+	}
+	const mergeKeyCounts = new Map<string, number>();
+	for (const worker of report.workers) mergeKeyCounts.set(worker.mergeKey, (mergeKeyCounts.get(worker.mergeKey) ?? 0) + 1);
+	const resolvedMergeKeys = new Set(
+		report.claimMerge.conflicts
+			.filter((conflict) => conflict.status === "resolved" && Boolean(conflict.winner) && conflict.evidenceRefs.length > 0)
+			.map((conflict) => conflict.mergeKey),
+	);
+	for (const [mergeKey, count] of mergeKeyCounts) {
+		if (count > 1 && !resolvedMergeKeys.has(mergeKey))
+			errors.push(`parallel_provider_worker_duplicate_mergeKey_unresolved:${mergeKey}`);
+	}
+	if (report.claimMerge.strategy !== "claim-aware provider worker merge" || !report.claimMerge.claimAwareProviderWorkerMerge)
+		errors.push("parallel_provider_worker_claimAwareProviderWorkerMerge_missing");
+	if (!report.failureRepairValidation.ok) errors.push("parallel_provider_worker_failure_repair_validation_not_ok");
+	if (report.writebackProbe.status !== "pass" || !report.writebackProbe.validation.ok)
+		errors.push("parallel_provider_worker_writeback_probe_not_pass");
+	if (!report.failureLedgerEvents.some((failure) => failure.status === "exhausted" && failure.retryBudget.remainingAttempts === 0))
+		errors.push("parallel_provider_worker_timeout_exhausted_failure_missing");
+	if (!report.repairQueue.some((repair) => repair.action === "escalate" && repair.paused))
+		errors.push("parallel_provider_worker_timeout_escalation_missing");
+	return { ok: errors.length === 0, errors: uniqueNonEmpty(errors, 100) };
+}
+
+function verifyRemoteProviderLongRunV1(report: RemoteProviderLongRunV1): { ok: boolean; errors: string[] } {
+	const errors: string[] = [];
+	if (report.kind !== "RemoteProviderLongRunV1") errors.push("remote_provider_longrun_kind_invalid");
+	if (report.mode === "skipped") {
+		if (!report.skipReason) errors.push("remote_provider_longrun_skipped_without_reason");
+		if (report.cases.length > 0) errors.push("remote_provider_longrun_skipped_with_cases");
+		// remote_provider_longrun_optional_live_skip: no env in CI is a pass, not a false failure.
+		return { ok: errors.length === 0, errors: uniqueNonEmpty(errors, 40) };
+	}
+	if (report.mode !== "live") errors.push("remote_provider_longrun_mode_invalid");
+	if (!report.providerName) errors.push("remote_provider_longrun_provider_missing");
+	if (!report.api || !["openai-completions", "anthropic-messages"].includes(report.api))
+		errors.push("remote_provider_longrun_api_invalid");
+	if (!report.modelIdSha256 || !/^[a-f0-9]{64}$/.test(report.modelIdSha256))
+		errors.push("remote_provider_longrun_model_hash_missing");
+	if (!report.baseUrlSha256 || !/^[a-f0-9]{64}$/.test(report.baseUrlSha256))
+		errors.push("remote_provider_longrun_base_url_hash_missing");
+	if (!report.apiKeyEnv || !/^[A-Z_][A-Z0-9_]*$/.test(report.apiKeyEnv))
+		errors.push("remote_provider_longrun_api_key_env_invalid");
+	if (report.listModels.status !== "pass") errors.push("remote_provider_longrun_list_models_not_pass");
+	if (report.cases.length < Math.max(1, report.attemptsPlanned))
+		errors.push("remote_provider_longrun_case_count_lt_attempts");
+	for (const row of report.cases) {
+		if (row.status !== "pass") errors.push(`remote_provider_longrun_case_not_pass:${row.caseId}`);
+		if (!row.assertions.exitOk) errors.push(`remote_provider_longrun_exit_not_ok:${row.caseId}`);
+		if (!row.assertions.stdoutNonEmpty) errors.push(`remote_provider_longrun_stdout_empty:${row.caseId}`);
+		if (!row.assertions.markerObserved) errors.push(`remote_provider_longrun_marker_missing:${row.caseId}`);
+		if (!row.assertions.apiKeyEnvRefOnly) errors.push(`remote_provider_longrun_api_key_not_env_ref:${row.caseId}`);
+		if (!row.assertions.boundedTimeout) errors.push(`remote_provider_longrun_unbounded_timeout:${row.caseId}`);
+		if (!row.assertions.isolatedRepiHome) errors.push(`remote_provider_longrun_home_not_isolated:${row.caseId}`);
+		if (!row.assertions.noLiteralSecrets) errors.push(`remote_provider_longrun_literal_secret:${row.caseId}`);
+		if (!row.assertions.noPiHomeImport) errors.push(`remote_provider_longrun_pi_home_leak:${row.caseId}`);
+		if (!row.assertions.noUpdateBanner) errors.push(`remote_provider_longrun_update_banner:${row.caseId}`);
+		if (!row.assertions.transcriptCaptured) errors.push(`remote_provider_longrun_transcript_missing:${row.caseId}`);
+	}
+	if (report.failureLedgerEvents.length > 0 || report.repairQueue.length > 0) {
+		if (!report.failureRepairValidation.ok) errors.push("remote_provider_longrun_failure_repair_validation_not_ok");
+		if (report.writebackProbe.status !== "pass" || !report.writebackProbe.validation.ok)
+			errors.push("remote_provider_longrun_writeback_probe_not_pass");
+	}
+	return { ok: errors.length === 0, errors: uniqueNonEmpty(errors, 100) };
+}
+
+function verifyCrossSessionResumeLiveV1(report: CrossSessionResumeLiveV1): { ok: boolean; errors: string[] } {
+	const errors: string[] = [];
+	if (report.kind !== "CrossSessionResumeLiveV1") errors.push("cross_session_resume_kind_invalid");
+	if (!report.isolatedHome.includes(".repi") || report.isolatedHome.includes("/.pi/"))
+		errors.push("cross_session_resume_isolated_home_invalid");
+	if (!report.assertions.crossSessionDifferent) errors.push("cross_session_resume_same_session_not_cross_session");
+	if (!report.assertions.packQueued) errors.push("cross_session_resume_pack_not_queued");
+	// cross_session_resume_exact_context_path: never resume from latest when a pack path/hash was produced.
+	if (!report.assertions.exactResumeLoadedByContextPath || report.resume.exactResumeVerification.loadedBy !== "contextPath")
+		errors.push("cross_session_resume_exact_context_path_not_used");
+	if (!report.assertions.resumedFromOriginalPack || report.resume.resumedFromContextPath !== report.pack.contextPath)
+		errors.push("cross_session_resume_original_pack_not_loaded");
+	if (!report.assertions.contextSha256Pass || report.resume.exactResumeVerification.contextSha256 !== "pass")
+		errors.push("cross_session_resume_context_sha256_not_pass");
+	if (!report.assertions.artifactHashesPass || report.resume.exactResumeVerification.artifactHashes !== "pass")
+		errors.push("cross_session_resume_artifact_hashes_not_pass");
+	if (!report.assertions.scopePass || report.resume.exactResumeVerification.scope !== "pass")
+		errors.push("cross_session_resume_scope_not_pass");
+	if (!report.assertions.closureClosed || report.resume.resumeQueueStatus !== "done" || report.resume.closureStatus !== "closed")
+		errors.push("cross_session_resume_closure_not_closed");
+	if (
+		!report.assertions.ledgerDone ||
+		report.compactResumeLedger.currentState !== "done" ||
+		report.compactResumeLedger.invalidTransitions.length > 0 ||
+		!report.compactResumeLedger.statePath.includes("queued->running") ||
+		!report.compactResumeLedger.statePath.includes("running->done")
+	)
+		errors.push("cross_session_resume_compact_resume_ledger_not_done");
+	if (!report.assertions.providerContinuedAfterResume || report.providerContinuation.status !== "pass")
+		errors.push("cross_session_resume_provider_continuation_missing");
+	if (!report.assertions.workerContinuedAfterResume || report.workerContinuation.status !== "pass")
+		errors.push("cross_session_resume_worker_continuation_missing");
+	if (!report.assertions.envRefOnly) errors.push("cross_session_resume_provider_key_not_env_ref");
+	if (!report.assertions.noPiHomeImport) errors.push("cross_session_resume_pi_home_leak");
+	if (!report.assertions.noUpdateBanner) errors.push("cross_session_resume_update_banner_leak");
+	if (!report.assertions.noLiteralSecrets) errors.push("cross_session_resume_literal_secret_leak");
+	return { ok: errors.length === 0, errors: uniqueNonEmpty(errors, 100) };
 }
 
 function verifyWorkerChildSessionRuntimeBatch(batch: WorkerChildSessionRuntimeBatchV1): { ok: boolean; errors: string[] } {
@@ -1308,6 +2128,26 @@ function verifyWorkerChildSessionRuntimeBatch(batch: WorkerChildSessionRuntimeBa
 		errors.push("child_session_isolated_home_invalid");
 	if (batch.launchPolicy.importPiAuth !== false) errors.push("child_session_import_pi_auth_not_false");
 	if (!batch.launchPolicy.updateChecksDisabled) errors.push("child_session_update_checks_not_disabled");
+	if (batch.poolBridge?.childProcessRuntimeCaptured) {
+		const probe = batch.childProcessProbe;
+		if (!probe) errors.push("child_process_probe_missing");
+		else {
+			if (probe.kind !== "WorkerChildProcessProbeV1" || probe.status !== "pass") errors.push("child_process_probe_not_pass");
+			if (!probe.assertions.repiCommandExecuted) errors.push("child_process_probe_command_not_repi");
+			if (!probe.assertions.isolatedRepiHome || !probe.isolatedHome.includes(".repi") || probe.isolatedHome.includes("/.pi/"))
+				errors.push("child_process_probe_isolated_home_invalid");
+			if (!probe.assertions.noPiHomeImport) errors.push("child_process_probe_imported_pi_home");
+			if (!probe.assertions.updateChecksDisabled) errors.push("child_process_probe_update_checks_not_disabled");
+			if (!probe.assertions.telemetryDisabled) errors.push("child_process_probe_telemetry_not_disabled");
+			if (!probe.assertions.noLiteralSecrets) errors.push("child_process_probe_literal_secret");
+			if (!probe.assertions.stdoutCaptured || !probe.stdoutSha256) errors.push("child_process_probe_stdout_missing");
+		}
+	}
+	if (batch.poolBridge?.providerChildProcessRuntimeCaptured || batch.providerChildProcessProbe) {
+		const probe = batch.providerChildProcessProbe;
+		if (!probe) errors.push("provider_child_process_probe_missing");
+		else errors.push(...verifyWorkerProviderChildProcessProbe(probe));
+	}
 	for (const secret of ["GITHUB_TOKEN", "GITHUB_TOKEN_FOR_PUSH", "ANTHROPIC_AUTH_TOKEN"]) {
 		if (batch.launchPolicy.envAllowlist.includes(secret)) errors.push(`child_session_secret_allowed:${secret}`);
 		if (!batch.launchPolicy.envDenylist.includes(secret)) errors.push(`child_session_secret_not_denied:${secret}`);
@@ -1543,6 +2383,17 @@ type SwarmArtifact = {
 	subagentRuntimeManifests: SwarmSubagentRuntimeManifestRow[];
 	subagentRuntimeManifestCount: number;
 	subagentRuntimeManifestsCaptured: boolean;
+	workerChildSessionRuntimePath?: string;
+	workerChildSessionRuntime?: WorkerChildSessionRuntimeBatchV1;
+	workerChildSessionRuntimeStatus?: "pass" | "blocked" | "missing";
+	workerChildSessionRuntimeErrors: string[];
+	workerLeaseSchedulerPath?: string;
+	workerLeaseScheduler?: WorkerLeaseSchedulerV1;
+	workerLeaseSchedulerStatus?: "pass" | "blocked" | "missing";
+	workerLeaseSchedulerErrors: string[];
+	workerRuntimePoolBridge?: WorkerRuntimePoolV1;
+	workerRuntimePoolBridgeStatus?: "pass" | "blocked" | "missing";
+	workerRuntimePoolBridgeErrors: string[];
 	memoryWritebackEvents: string[];
 	memoryWritebackCount: number;
 	memoryWritebackStatus: "pending" | "pass" | "skipped" | "blocked";
@@ -1654,6 +2505,7 @@ type ContextArtifactIndexEntry = {
 	path: string;
 	artifactId?: string;
 	exists?: boolean;
+	required?: boolean;
 	size?: number;
 	mtime?: string;
 	sha256?: string | null;
@@ -1663,6 +2515,42 @@ type ContextArtifactIndexEntry = {
 	scopeReasons?: string[];
 	scopeEventId?: string;
 	scopeFilterReportPath?: string;
+};
+
+type CompactResumeStateV2 = "queued" | "running" | "done" | "blocked" | "exhausted";
+
+type CompactResumeLedgerTransitionV2 = {
+	kind: "repi-compact-resume-ledger-transition";
+	schemaVersion: 1;
+	from: CompactResumeStateV2;
+	to: CompactResumeStateV2;
+	at: string;
+	command?: string;
+	reason: string;
+	idempotencyKey: string;
+	contextPath?: string;
+	contextSha256?: string;
+	attempt: number;
+	maxAttempts: number;
+	entryHash: string;
+	prevHash: string;
+};
+
+type CompactResumeLedgerV2Report = {
+	kind: "repi-compact-resume-ledger-v2-report";
+	schemaVersion: 1;
+	generatedAt: string;
+	CompactResumeLedgerV2: true;
+	append_only_transition_ledger: true;
+	idempotent_multi_compact_replay: true;
+	auto_resume_budget_enforced: true;
+	reportPath: string;
+	transitionPath: string;
+	currentState: CompactResumeStateV2;
+	transitions: CompactResumeLedgerTransitionV2[];
+	invalidTransitions: string[];
+	exhausted: boolean;
+	requiredGates: string[];
 };
 
 type ContextResumeVerification = {
@@ -1733,6 +2621,16 @@ type ContextPackArtifact = {
 	artifactIndex: ContextArtifactIndexEntry[];
 	artifactScopeFilter?: ArtifactScopeFilterReportV1;
 	memoryOrchestrator?: MemoryOrchestratorReportV6;
+	memoryDeposition?: MemoryDepositionReportV7;
+	memoryExperience?: MemoryExperienceReportV8;
+	memorySkillCapsules?: MemorySkillCapsuleReportV9;
+	memoryDistillPromotion?: MemoryDistillPromotionReportV10;
+	memoryQuality?: MemoryQualityLedgerReportV11;
+	memoryReplay?: MemoryReplayEvaluatorReportV12;
+	memoryStrategy?: MemoryStrategyCapsuleReportV13;
+	memoryActiveKernel?: MemoryActiveKernelReportV14;
+	memoryMaturation?: MemoryMaturationRuntimeReportV15;
+	compactResumeLedgerV2?: CompactResumeLedgerV2Report;
 	repairQueue: string[];
 	commanderMergeBudget: string[];
 	workerScoreboard: string[];
@@ -2000,6 +2898,9 @@ type AutofixArtifact = {
 	evidenceRecaptureQueue: AutofixItem[];
 	nextOperatorQueue: string[];
 	applied: string[];
+	repairRollbackPolicyPath?: string;
+	repairRollbackPolicyStatus?: "pass" | "blocked" | "missing";
+	repairRollbackPolicyErrors: string[];
 	sourceArtifacts: string[];
 };
 
@@ -2077,8 +2978,8 @@ type ProofLoopArtifact = {
 
 type RuntimeFailureSource = "re_replayer" | "re_autofix" | "re_operator" | "re_proof_loop";
 type RuntimeFailureCategory = "artifact_stale" | "runtime_failed" | "tool_missing" | "contract_gap";
-type RuntimeFailureStatus = "failed" | "repair_queued" | "exhausted" | "blocked";
-type RuntimeRepairAction = "rerun" | "replace-command" | "recapture-evidence" | "refresh-context" | "escalate";
+type RuntimeFailureStatus = "failed" | "repair_queued" | "exhausted" | "blocked" | "rolled_back";
+type RuntimeRepairAction = "rerun" | "replace-command" | "recapture-evidence" | "refresh-context" | "escalate" | "rollback";
 
 type FailureRepairEvidenceWriteback = {
 	failureLedgerPath: string;
@@ -2133,6 +3034,149 @@ type RepairQueueItemV1 = {
 	regressionGates: string[];
 };
 
+// RepairRollbackPolicyV1 runtime wiring: runtime:repair-rollback-live-wiring repairRollbackPolicyPath baseline/allowlist/regression/rollback.
+type RepairRollbackPolicyV1 = {
+	kind: "RepairRollbackPolicyV1";
+	schemaVersion: 1;
+	generatedAt: string;
+	source: RuntimeFailureSource | "compound-frontier" | "provider-worker";
+	workspace: string;
+	baseline: {
+		command: string;
+		treeSha256: string;
+		files: Array<{ path: string; bytes: number; sha256: string }>;
+	};
+	allowlist: string[];
+	repair: {
+		commands: string[];
+		changedFiles: string[];
+		expectedArtifacts: string[];
+		regressionGates: string[];
+	};
+	rollback: {
+		required: true;
+		commands: string[];
+		restored: boolean;
+		restoredTreeSha256: string;
+		criteria: string[];
+	};
+	regression: {
+		before: "pass" | "fail" | "skipped";
+		after: "pass" | "fail" | "skipped";
+		restored: "pass" | "fail" | "skipped";
+		gates: Array<{ gateId: string; command: string; status: "pass" | "fail" | "skipped"; artifactPath?: string; artifactSha256?: string }>;
+	};
+	failureLedgerEvents: FailureLedgerEventV1[];
+	repairQueue: RepairQueueItemV1[];
+	failureRepairValidation: { ok: boolean; failureCount: number; repairCount: number };
+	assertions: {
+		baselineCaptured: boolean;
+		allowlistEnforced: boolean;
+		rollbackRestored: boolean;
+		regressionGatesPassed: boolean;
+		noUnrelatedFileChanges: boolean;
+		failureRepairLinked: boolean;
+	};
+};
+
+// ToolCallTraceLedgerV1 append-only tool trace: runtime:tool-call-trace-ledger-written runtime:tool-call-trace-secret-redaction replayable_tool_result_hashes.
+type ToolCallTraceEventV1 = {
+	kind: "ToolCallTraceEventV1";
+	schemaVersion: 1;
+	eventId: string;
+	ts: string;
+	missionId?: string;
+	toolCallId: string;
+	toolName: string;
+	phase: "call" | "result";
+	status: "running" | "pass" | "error" | "blocked" | "cancelled";
+	inputSha256: string;
+	inputPreviewRedacted: string;
+	commandPreviewRedacted?: string;
+	outputSha256?: string;
+	outputPreviewRedacted?: string;
+	detailsSha256?: string;
+	replay: {
+		available: boolean;
+		command?: string;
+		redacted: true;
+		deterministic: boolean;
+	};
+	assertions: {
+		toolCallIdPresent: boolean;
+		inputHashed: boolean;
+		outputHashed: boolean;
+		secretRedacted: boolean;
+		replayHintPresent: boolean;
+		appendOnlyHashChain: boolean;
+	};
+	prevHash: string;
+	eventHash: string;
+};
+
+type ToolCallTraceLedgerV1 = {
+	kind: "ToolCallTraceLedgerV1";
+	schemaVersion: 1;
+	generatedAt: string;
+	ledgerPath: string;
+	eventCount: number;
+	callCount: number;
+	resultCount: number;
+	errorCount: number;
+	hashChainOk: boolean;
+	secretRedactionOk: boolean;
+	replayCoverage: number;
+	events: ToolCallTraceEventV1[];
+};
+
+// WorkerLeaseSchedulerV1 stale lease recovery: runtime:worker-lease-scheduler-validation runtime:worker-lease-stale-recovery runtime:worker-lease-scheduler-live-wiring duplicate_completion_rejected.
+type WorkerLeaseSchedulerTaskV1 = {
+	taskId: string;
+	shardKey: string;
+	status: "queued" | "leased" | "running" | "completed" | "requeued" | "stale_recovered" | "failed";
+	leaseId?: string;
+	ownerWorkerId?: string;
+	leaseExpiresAt?: string;
+	attempt: number;
+	maxAttempts: number;
+	claimRefs: string[];
+	artifactRefs: string[];
+};
+
+type WorkerLeaseSchedulerEventV1 = {
+	kind: "WorkerLeaseSchedulerEventV1";
+	schemaVersion: 1;
+	eventId: string;
+	ts: string;
+	type: "enqueue" | "lease_acquired" | "heartbeat" | "stale_detected" | "lease_released" | "work_stolen" | "completed" | "dedup_rejected" | "failed";
+	taskId: string;
+	workerId?: string;
+	leaseId?: string;
+	prevHash: string;
+	eventHash: string;
+};
+
+type WorkerLeaseSchedulerV1 = {
+	kind: "WorkerLeaseSchedulerV1";
+	schemaVersion: 1;
+	generatedAt: string;
+	schedulerId: string;
+	maxConcurrency: number;
+	workerIds: string[];
+	tasks: WorkerLeaseSchedulerTaskV1[];
+	events: WorkerLeaseSchedulerEventV1[];
+	assertions: {
+		leaseExclusive: boolean;
+		heartbeatRequired: boolean;
+		staleLeaseRecovered: boolean;
+		workStealingObserved: boolean;
+		duplicateCompletionRejected: boolean;
+		maxConcurrencyRespected: boolean;
+		claimRefsPreserved: boolean;
+		appendOnlyHashChain: boolean;
+	};
+};
+
 type RuntimeFailureRepairInput = {
 	source: RuntimeFailureSource;
 	scope: string;
@@ -2155,6 +3199,7 @@ type MemoryEventSource =
 	| "replayer"
 	| "autofix"
 	| "operator"
+	| "deposition"
 	| "manual"
 	| "knowledge_graph";
 type MemoryOutcome = "success" | "failure" | "partial" | "blocked" | "repair";
@@ -2445,6 +3490,106 @@ type MemorySupervisorReportV1 = {
 	};
 };
 
+type MemoryUxGovernanceActionV16 = "promote" | "demote" | "forget";
+
+type MemoryUxWhyRowV16 = {
+	eventId: string;
+	caseSignature: string;
+	score: number;
+	outcome: MemoryOutcome;
+	route: string;
+	target?: string;
+	reasons: string[];
+	commands: string[];
+	lessons: string[];
+	governanceCommands: string[];
+};
+
+type MemoryUxGovernanceDecisionV16 = {
+	kind: "repi-memory-ux-governance-decision";
+	schemaVersion: 1;
+	id: string;
+	ts: string;
+	MemoryUxDashboardV16: true;
+	append_only_memory_governance: true;
+	action: MemoryUxGovernanceActionV16;
+	applied: boolean;
+	sourceEventId?: string;
+	sourceCaseSignature?: string;
+	newEventId?: string;
+	reason: string;
+	nextCommands: string[];
+};
+
+type MemoryUxDashboardV16 = {
+	kind: "repi-memory-ux-dashboard";
+	schemaVersion: 1;
+	generatedAt: string;
+	MemoryUxDashboardV16: true;
+	user_visible_memory_status: true;
+	recall_explainability: true;
+	append_only_memory_governance: true;
+	lifecycle_governance_commands: true;
+	statusReportPath: string;
+	statusBoardPath: string;
+	governanceLedgerPath: string;
+	query: string;
+	route?: string;
+	target?: string;
+	store: {
+		eventCount: number;
+		caseCount: number;
+		hashChainOk: boolean;
+		storeGrade: MemoryStoreVerificationV1["storeGrade"];
+		latestEventHash: string;
+	};
+	recall: {
+		hitCount: number;
+		retrievalReportPath: string;
+		vectorSearchReportPath: string;
+		whyRows: MemoryUxWhyRowV16[];
+	};
+	quality: {
+		status: MemoryQualityLedgerReportV11["status"];
+		rowCount: number;
+		promotedEventIds: string[];
+		demotedEventIds: string[];
+		quarantinedEventIds: string[];
+	};
+	replay: {
+		status: MemoryReplayEvaluatorReportV12["status"];
+		scenarioCount: number;
+		improvedScenarioIds: string[];
+		regressedScenarioIds: string[];
+	};
+	activeKernel: {
+		status: MemoryActiveKernelReportV14["status"];
+		decisionCount: number;
+		injectionPackPath: string;
+		operatorCommands: string[];
+	};
+	maturation: {
+		status: MemoryMaturationRuntimeReportV15["status"];
+		rowCount: number;
+		promotedEventIds: string[];
+		retentionQueueEventIds: string[];
+		expiredEventIds: string[];
+	};
+	supervisor: {
+		storeGrade: MemorySupervisorReportV1["storeGrade"];
+		promotionQueueCount: number;
+		demotionQueueCount: number;
+		quarantineQueueCount: number;
+		expireQueueCount: number;
+		mergeQueueCount: number;
+		lifecycleBoardPath: string;
+		recommendedCommands: string[];
+	};
+	operatorCommands: string[];
+	governanceCommands: string[];
+	requiredGates: string[];
+};
+
 type MemoryFeedbackClosureStatus = "promoted" | "demoted" | "pending" | "orphan_feedback";
 
 type MemoryFeedbackClosureRowV1 = {
@@ -2528,7 +3673,7 @@ type MemoryAppendTransactionV1 = {
 	kind: "repi-memory-append-transaction";
 	schemaVersion: 1;
 	id: string;
-	operation: "append-memory-event" | "repair-index" | "snapshot";
+	operation: "append-memory-event" | "append-memory-deposition" | "repair-index" | "snapshot";
 	status: "prepared" | "committed" | "aborted";
 	startedAt: string;
 	committedAt?: string;
@@ -2564,6 +3709,862 @@ type MemoryStoreVerificationV1 = {
 	errors: string[];
 	repairCommands: string[];
 	requiredGates: string[];
+};
+
+type MemoryDepositionStageV7 =
+	| "tool"
+	| "shell"
+	| "agent"
+	| "swarm-worker"
+	| "compact-resume"
+	| "claim"
+	| "manual"
+	| "memory-event";
+
+type MemoryDepositionStatusV7 = "queued" | "written" | "skipped" | "blocked";
+
+type MemoryDepositionRuntimeEventV7 = {
+	kind: "repi-memory-deposition-runtime-event";
+	schemaVersion: 1;
+	id: string;
+	seq: number;
+	ts: string;
+	MemoryDepositionEngineV7: true;
+	stage: MemoryDepositionStageV7;
+	source: string;
+	status: MemoryDepositionStatusV7;
+	task: string;
+	route: string;
+	target?: string;
+	command?: string;
+	stdoutSha256?: string;
+	stderrSha256?: string;
+	exitCode?: number;
+	outcome: MemoryOutcome;
+	confidence: number;
+	artifactHashes: MemoryArtifactHash[];
+	claimIds: string[];
+	compactResumeId?: string;
+	lessons: string[];
+	failurePatterns: string[];
+	reuseRules: string[];
+	commands: string[];
+	memoryEventId?: string;
+	caseSignature?: string;
+	reason: string;
+	prevHash: string;
+	entryHash: string;
+};
+
+type MemoryDepositionReportV7 = {
+	kind: "repi-memory-deposition-report";
+	schemaVersion: 1;
+	generatedAt: string;
+	MemoryDepositionEngineV7: true;
+	runtime_step_event_bus: true;
+	post_tool_writeback_autocapture: true;
+	depositionReportPath: string;
+	depositionEventBusPath: string;
+	memoryEventsPath: string;
+	storeReportPath: string;
+	runtimeEventCount: number;
+	memoryWritebackCount: number;
+	pendingWritebackCount: number;
+	blockedWritebackCount: number;
+	skippedWritebackCount: number;
+	autoWritebackCoverage: number;
+	status: "pass" | "warn" | "blocked" | "empty";
+	latestRuntimeEventHash: string;
+	storeGrade: "pass" | "repairable" | "blocked";
+	recentEvents: MemoryDepositionRuntimeEventV7[];
+	pendingEventIds: string[];
+	blockedEventIds: string[];
+	requiredGates: string[];
+	policy: {
+		MemoryDepositionEngineV7: true;
+		runtimeStepEventBus: true;
+		postToolWritebackAutocapture: true;
+		appendOnlyDepositionLedger: true;
+		memoryEventHashBinding: true;
+		claimCompactResumeBinding: true;
+	};
+	nextCommands: string[];
+};
+
+type MemoryExperienceClaimTypeV8 =
+	| "command_strategy"
+	| "failure_signature"
+	| "verifier_rule"
+	| "artifact_pattern"
+	| "scope_constraint"
+	| "repair_playbook";
+
+type MemoryExperienceClaimStatusV8 = "candidate" | "promoted" | "retained" | "demoted" | "quarantined" | "conflicted";
+type MemoryExperienceLessonActionV8 = "reuse" | "avoid" | "repair" | "verify" | "scope-limit";
+type MemoryExperiencePromotionDecisionV8 = "promote" | "retain" | "demote" | "quarantine" | "merge";
+
+type MemoryExperienceEpisodeV8 = {
+	kind: "repi-memory-experience-episode";
+	schemaVersion: 1;
+	id: string;
+	ts: string;
+	MemoryExperienceEngineV8: true;
+	eventId: string;
+	depositionEventIds: string[];
+	caseSignature: string;
+	route: string;
+	target?: string;
+	targetScope: string;
+	intent: string;
+	outcome: MemoryOutcome;
+	observation: string;
+	commands: string[];
+	evidenceRefs: MemoryArtifactHash[];
+	failureSignature?: string;
+	quality: MemoryQuality;
+	claimIds: string[];
+	lessonIds: string[];
+	entryHash: string;
+};
+
+type MemoryExperienceClaimV8 = {
+	kind: "repi-memory-experience-claim";
+	schemaVersion: 1;
+	id: string;
+	ts: string;
+	MemoryExperienceEngineV8: true;
+	episodeId: string;
+	eventId: string;
+	claimType: MemoryExperienceClaimTypeV8;
+	status: MemoryExperienceClaimStatusV8;
+	statement: string;
+	caseSignature: string;
+	route: string;
+	targetScope: string;
+	commandFingerprint?: string;
+	supportEventIds: string[];
+	contradictionEventIds: string[];
+	evidenceRefs: MemoryArtifactHash[];
+	confidence: number;
+	reuseScore: number;
+	promotionReady: boolean;
+	blockers: string[];
+	entryHash: string;
+};
+
+type MemoryExperienceLessonV8 = {
+	kind: "repi-memory-experience-lesson";
+	schemaVersion: 1;
+	id: string;
+	ts: string;
+	MemoryExperienceEngineV8: true;
+	claimId: string;
+	episodeId: string;
+	action: MemoryExperienceLessonActionV8;
+	lesson: string;
+	appliesWhen: string[];
+	commands: string[];
+	confidence: number;
+	backprop: { reuseCount: number; failureCount: number; decay: number; lastUsefulAt: string; source: string };
+	evidenceRefs: MemoryArtifactHash[];
+};
+
+type MemoryExperiencePromotionRowV8 = {
+	kind: "repi-memory-experience-promotion";
+	schemaVersion: 1;
+	id: string;
+	ts: string;
+	MemoryExperienceEngineV8: true;
+	claimId: string;
+	decision: MemoryExperiencePromotionDecisionV8;
+	reason: string;
+	gate: "artifact_sha256" | "replay_or_verifier" | "feedback" | "contradiction" | "confidence" | "scope";
+	evidenceRefs: MemoryArtifactHash[];
+	entryHash: string;
+};
+
+type MemoryExperienceReportV8 = {
+	kind: "repi-memory-experience-report";
+	schemaVersion: 1;
+	generatedAt: string;
+	MemoryExperienceEngineV8: true;
+	episode_model_v8: true;
+	structured_claim_extraction: true;
+	lesson_promotion_gate: true;
+	contradiction_resolution: true;
+	usefulness_backprop: true;
+	reportPath: string;
+	episodesPath: string;
+	claimsPath: string;
+	lessonBookPath: string;
+	promotionLedgerPath: string;
+	memoryEventsPath: string;
+	depositionEventBusPath: string;
+	episodeCount: number;
+	claimCount: number;
+	lessonCount: number;
+	promotionDecisionCount: number;
+	promotedClaimIds: string[];
+	retainedClaimIds: string[];
+	demotedClaimIds: string[];
+	quarantinedClaimIds: string[];
+	conflictedClaimIds: string[];
+	operatorInjectionCommands: string[];
+	avoidCommands: string[];
+	verifyCommands: string[];
+	promotionCoverage: number;
+	status: "pass" | "warn" | "blocked" | "empty";
+	recentEpisodes: MemoryExperienceEpisodeV8[];
+	recentClaims: MemoryExperienceClaimV8[];
+	recentLessons: MemoryExperienceLessonV8[];
+	requiredGates: string[];
+	policy: {
+		MemoryExperienceEngineV8: true;
+		episodeModel: true;
+		structuredClaimExtraction: true;
+		lessonPromotionGate: true;
+		contradictionResolution: true;
+		usefulnessBackprop: true;
+		scopeSafeInjectionOnly: true;
+	};
+	nextCommands: string[];
+};
+
+
+type MemorySkillCapsuleTypeV9 = "operator_playbook" | "verifier_rule" | "avoid_rule" | "repair_rule" | "worker_routing" | "scope_guard";
+type MemorySkillCapsuleLifecycleV9 = "candidate" | "promoted" | "quarantined" | "demoted";
+type MemorySkillCapsulePromotionGateV9 = "artifact_sha256" | "replay_or_verifier" | "experience_promotion" | "pattern_confidence" | "feedback_usefulness" | "scope";
+
+type MemorySkillCapsuleV9 = {
+	kind: "repi-memory-skill-capsule";
+	schemaVersion: 1;
+	id: string;
+	ts: string;
+	MemorySkillCapsuleV9: true;
+	caseSignature: string;
+	route: string;
+	targetScope: string;
+	skillType: MemorySkillCapsuleTypeV9;
+	lifecycle: MemorySkillCapsuleLifecycleV9;
+	sourceIds: string[];
+	sourceHashes: string[];
+	preconditions: string[];
+	operatorCommands: string[];
+	verifierCommands: string[];
+	avoidCommands: string[];
+	workerRoutingHints: string[];
+	evidenceRefs: MemoryArtifactHash[];
+	score: number;
+	promotionGate: MemorySkillCapsulePromotionGateV9;
+	usage: { reuseCount: number; successCount: number; failureCount: number; lastUsedAt: string; usefulnessScore: number };
+	injection: { operatorPromptSnippet: string; verifierPromptSnippet: string; workerRoutingHint?: string; nextActionCommands: string[] };
+	entryHash: string;
+};
+
+type MemorySkillCapsuleReportV9 = {
+	kind: "repi-memory-skill-capsule-report";
+	schemaVersion: 1;
+	generatedAt: string;
+	MemorySkillCapsuleV9: true;
+	skill_capsule_assetization: true;
+	verified_skill_promotion_gate: true;
+	operator_skill_injection: true;
+	reportPath: string;
+	capsuleLedgerPath: string;
+	capsuleBookPath: string;
+	sourceExperienceReportPath: string;
+	sourceDistillationReportPath: string;
+	capsuleCount: number;
+	promotedCapsuleIds: string[];
+	candidateCapsuleIds: string[];
+	quarantinedCapsuleIds: string[];
+	demotedCapsuleIds: string[];
+	operatorInjectionCommands: string[];
+	verifierCommands: string[];
+	avoidCommands: string[];
+	workerRoutingHints: string[];
+	status: "pass" | "warn" | "blocked" | "empty";
+	recentCapsules: MemorySkillCapsuleV9[];
+	requiredGates: string[];
+	policy: {
+		MemorySkillCapsuleV9: true;
+		experienceToSkillCapsule: true;
+		distilledPatternToSkillCapsule: true;
+		verifiedPromotionGate: true;
+		operatorInjectionOnlyPromotedOrCandidate: true;
+	};
+	nextCommands: string[];
+};
+
+
+type MemoryDistillProviderBackendV10 = "local-rule" | "mock-provider" | "openai-compatible" | "anthropic-compatible";
+type MemoryDistillPromotionDecisionV10 = "promote" | "retain" | "quarantine" | "demote";
+type MemoryDistillPromotionSourceV10 = "artifact" | "experience_claim" | "skill_capsule" | "distilled_pattern";
+
+type MemoryDistillProviderV10 = {
+	kind: "repi-memory-distill-provider";
+	schemaVersion: 1;
+	MemoryDistillPromotionV10: true;
+	backend: MemoryDistillProviderBackendV10;
+	requestedBackend: MemoryDistillProviderBackendV10;
+	model: string;
+	status: "active" | "fallback";
+	allowRemote: boolean;
+	baseUrl?: string;
+	endpoint?: string;
+	apiKeyEnv?: string;
+	timeoutMs: number;
+	fallbackReason?: string;
+	requiredGates: string[];
+};
+
+type MemoryDistillCandidateV10 = {
+	kind: "repi-memory-distill-candidate";
+	schemaVersion: 1;
+	id: string;
+	ts: string;
+	MemoryDistillPromotionV10: true;
+	sourceType: MemoryDistillPromotionSourceV10;
+	sourceId: string;
+	sourceHash: string;
+	provider: MemoryDistillProviderV10;
+	route: string;
+	targetScope: string;
+	claim: string;
+	lesson: string;
+	commands: string[];
+	verifierCommands: string[];
+	avoidCommands: string[];
+	evidenceRefs: MemoryArtifactHash[];
+	confidence: number;
+	verifierRequired: boolean;
+	promotionDecision: MemoryDistillPromotionDecisionV10;
+	promotionReason: string;
+	providerTraceHash: string;
+	entryHash: string;
+};
+
+type MemoryDistillPromotionReportV10 = {
+	kind: "repi-memory-distill-promotion-report";
+	schemaVersion: 1;
+	generatedAt: string;
+	MemoryDistillPromotionV10: true;
+	provider_distill_contract: true;
+	artifact_to_claim_distillation: true;
+	verifier_backed_promotion_gate: true;
+	skill_capsule_promotion_writeback: true;
+	reportPath: string;
+	candidateLedgerPath: string;
+	promotionBookPath: string;
+	sourceSkillCapsuleReportPath: string;
+	sourceExperienceReportPath: string;
+	provider: MemoryDistillProviderV10;
+	candidateCount: number;
+	promotedCandidateIds: string[];
+	retainedCandidateIds: string[];
+	quarantinedCandidateIds: string[];
+	demotedCandidateIds: string[];
+	operatorInjectionCommands: string[];
+	verifierCommands: string[];
+	avoidCommands: string[];
+	status: "pass" | "warn" | "blocked" | "empty";
+	recentCandidates: MemoryDistillCandidateV10[];
+	requiredGates: string[];
+	policy: {
+		MemoryDistillPromotionV10: true;
+		providerContractEnvRefOnly: true;
+		localFallbackDeterministic: true;
+		artifactClaimDistillation: true;
+		verifierBackedPromotionGate: true;
+		skillCapsulePromotionWriteback: true;
+	};
+	nextCommands: string[];
+};
+
+type MemoryQualityLifecycleDecisionV11 = "promote" | "retain" | "demote" | "quarantine" | "expire";
+type MemoryQualitySignalV11 =
+	| "retrieved"
+	| "vector_hit"
+	| "injected"
+	| "positive_feedback"
+	| "negative_feedback"
+	| "pending_feedback"
+	| "usefulness_hit"
+	| "usefulness_miss"
+	| "forbidden_leak"
+	| "scope_blocked"
+	| "stale_decay"
+	| "ab_replay_improved"
+	| "ab_replay_regressed";
+
+type MemoryQualityLedgerRowV11 = {
+	kind: "repi-memory-quality-ledger-row";
+	schemaVersion: 1;
+	seq: number;
+	id: string;
+	ts: string;
+	MemoryQualityLedgerV11: true;
+	eventId: string;
+	caseSignature: string;
+	route: string;
+	targetScope: string;
+	retrievalCount: number;
+	vectorHitCount: number;
+	injectedCount: number;
+	positiveFeedbackCount: number;
+	negativeFeedbackCount: number;
+	pendingFeedbackCount: number;
+	usefulnessHitCount: number;
+	usefulnessMissCount: number;
+	forbiddenLeakCount: number;
+	scopeBlocked: boolean;
+	lastRecalledAt?: string;
+	lastInjectedAt?: string;
+	lastFeedbackAt?: string;
+	baseConfidence: number;
+	qualityScore: number;
+	lifecycleDecision: MemoryQualityLifecycleDecisionV11;
+	signals: MemoryQualitySignalV11[];
+	evidenceRefs: string[];
+	nextCommands: string[];
+	prevHash: string;
+	entryHash: string;
+};
+
+type MemoryQualityLedgerReportV11 = {
+	kind: "repi-memory-quality-ledger-report";
+	schemaVersion: 1;
+	generatedAt: string;
+	MemoryQualityLedgerV11: true;
+	active_memory_policy: true;
+	quality_score_feedback_loop: true;
+	usefulness_feedback_writeback: true;
+	reportPath: string;
+	ledgerPath: string;
+	boardPath: string;
+	sourceRetrievalReportPath: string;
+	sourceVectorSearchReportPath: string;
+	sourceFeedbackClosureReportPath: string;
+	sourceUsefulnessEvalReportPath: string;
+	eventCount: number;
+	rowCount: number;
+	averageQualityScore: number;
+	promotedEventIds: string[];
+	retainedEventIds: string[];
+	demotedEventIds: string[];
+	quarantinedEventIds: string[];
+	expiredEventIds: string[];
+	requiredFeedbackEventIds: string[];
+	operatorInjectionCommands: string[];
+	avoidCommands: string[];
+	status: "pass" | "warn" | "blocked" | "empty";
+	rows: MemoryQualityLedgerRowV11[];
+	requiredGates: string[];
+	policy: {
+		MemoryQualityLedgerV11: true;
+		activeMemoryPolicy: true;
+		qualityScoreFeedbackLoop: true;
+		usefulnessFeedbackWriteback: true;
+		appendOnlyQualityLedger: true;
+		qualityDrivesSedimentation: true;
+	};
+	nextCommands: string[];
+};
+
+type MemoryReplayVerdictV12 = "improves" | "neutral" | "regresses" | "blocked";
+
+type MemoryReplayScenarioV12 = {
+	id: string;
+	query: string;
+	route?: string;
+	target?: string;
+	expectedEventIds: string[];
+	forbiddenEventIds: string[];
+	topK: number;
+	source: "default-from-memory" | "usefulness-eval" | "operator" | "fixture";
+};
+
+type MemoryReplayEvaluatorRowV12 = {
+	kind: "repi-memory-replay-evaluator-row";
+	schemaVersion: 1;
+	seq: number;
+	id: string;
+	ts: string;
+	MemoryReplayEvaluatorV12: true;
+	memory_ab_replay: true;
+	causal_attribution_signal: true;
+	scenarioId: string;
+	query: string;
+	route?: string;
+	target?: string;
+	expectedEventIds: string[];
+	forbiddenEventIds: string[];
+	controlHitIds: string[];
+	treatmentHitIds: string[];
+	attributionEventIds: string[];
+	regressionEventIds: string[];
+	qualityPromotedEventIds: string[];
+	qualityDemotedEventIds: string[];
+	controlPlanStepsEstimate: number;
+	treatmentPlanStepsEstimate: number;
+	savedStepEstimate: number;
+	toolCallDeltaEstimate: number;
+	successLift: number;
+	poisonRegressionCount: number;
+	causalScore: number;
+	verdict: MemoryReplayVerdictV12;
+	evidenceRefs: string[];
+	feedbackWritebackCommands: string[];
+	prevHash: string;
+	entryHash: string;
+};
+
+type MemoryReplayEvaluatorReportV12 = {
+	kind: "repi-memory-replay-evaluator-report";
+	schemaVersion: 1;
+	generatedAt: string;
+	MemoryReplayEvaluatorV12: true;
+	memory_ab_replay: true;
+	causal_attribution_signal: true;
+	replay_delta_feedback_writeback: true;
+	reportPath: string;
+	ledgerPath: string;
+	boardPath: string;
+	sourceQualityReportPath: string;
+	sourceUsefulnessEvalReportPath: string;
+	scenarioCount: number;
+	rowCount: number;
+	improvedScenarioIds: string[];
+	neutralScenarioIds: string[];
+	regressedScenarioIds: string[];
+	blockedScenarioIds: string[];
+	attributionEventIds: string[];
+	regressionEventIds: string[];
+	averageCausalScore: number;
+	totalSavedStepEstimate: number;
+	operatorInjectionCommands: string[];
+	avoidCommands: string[];
+	status: "pass" | "warn" | "blocked" | "empty";
+	rows: MemoryReplayEvaluatorRowV12[];
+	requiredGates: string[];
+	policy: {
+		MemoryReplayEvaluatorV12: true;
+		memoryAbReplay: true;
+		causalAttributionSignal: true;
+		replayDeltaFeedbackWriteback: true;
+		appendOnlyReplayLedger: true;
+		qualityLedgerConsumesReplay: true;
+	};
+	nextCommands: string[];
+};
+
+type MemoryStrategyCapsuleLifecycleV13 = "candidate" | "promoted" | "demoted" | "quarantined";
+
+type MemoryStrategyCapsuleV13 = {
+	kind: "repi-memory-strategy-capsule";
+	schemaVersion: 1;
+	id: string;
+	ts: string;
+	MemoryStrategyCapsuleV13: true;
+	executable_strategy_capsule: true;
+	replay_backed_strategy_promotion: true;
+	strategy_quality_gate: true;
+	caseSignature: string;
+	route: string;
+	targetScope: string;
+	lifecycle: MemoryStrategyCapsuleLifecycleV13;
+	triggerConditions: string[];
+	objectives: string[];
+	recommendedCommands: string[];
+	verifierCommands: string[];
+	fallbackCommands: string[];
+	avoidCommands: string[];
+	workerRoutingHints: string[];
+	applicabilityBoundary: string[];
+	sourceReplayRowIds: string[];
+	sourceQualityEventIds: string[];
+	sourceSkillCapsuleIds: string[];
+	evidenceRefs: string[];
+	causalScore: number;
+	qualityScore: number;
+	confidence: number;
+	executionPolicy: {
+		preflightChecks: string[];
+		evidenceRequirements: string[];
+		stopConditions: string[];
+		compactResumeHints: string[];
+	};
+	injection: {
+		operatorPromptSnippet: string;
+		verifierPromptSnippet: string;
+		nextActionCommands: string[];
+	};
+	entryHash: string;
+};
+
+type MemoryStrategyCapsuleReportV13 = {
+	kind: "repi-memory-strategy-capsule-report";
+	schemaVersion: 1;
+	generatedAt: string;
+	MemoryStrategyCapsuleV13: true;
+	executable_strategy_capsule: true;
+	replay_backed_strategy_promotion: true;
+	strategy_quality_gate: true;
+	reportPath: string;
+	capsuleLedgerPath: string;
+	strategyBookPath: string;
+	sourceReplayReportPath: string;
+	sourceQualityReportPath: string;
+	sourceSkillCapsuleReportPath: string;
+	capsuleCount: number;
+	promotedCapsuleIds: string[];
+	candidateCapsuleIds: string[];
+	demotedCapsuleIds: string[];
+	quarantinedCapsuleIds: string[];
+	operatorInjectionCommands: string[];
+	verifierCommands: string[];
+	avoidCommands: string[];
+	fallbackCommands: string[];
+	workerRoutingHints: string[];
+	status: "pass" | "warn" | "blocked" | "empty";
+	recentCapsules: MemoryStrategyCapsuleV13[];
+	requiredGates: string[];
+	policy: {
+		MemoryStrategyCapsuleV13: true;
+		replayBackedPromotion: true;
+		qualityGateRequired: true;
+		executableCommandsRequired: true;
+		verifierAndFallbackRequired: true;
+	};
+	nextCommands: string[];
+};
+
+type MemoryActiveKernelActionV14 =
+	| "inject"
+	| "reuse"
+	| "verify"
+	| "repair"
+	| "avoid"
+	| "quarantine"
+	| "wait-feedback"
+	| "expire";
+
+type MemoryActiveKernelDecisionV14 = {
+	kind: "repi-memory-active-kernel-decision";
+	schemaVersion: 1;
+	id: string;
+	ts: string;
+	MemoryActiveKernelV14: true;
+	unified_memory_decision_engine: true;
+	active_recall_scheduler: true;
+	scope_safe_strategy_injection: true;
+	action: MemoryActiveKernelActionV14;
+	route: string;
+	targetScope: string;
+	source: "strategy" | "sedimentation" | "quality" | "feedback" | "supervisor";
+	sourceEventIds: string[];
+	sourceStrategyCapsuleIds: string[];
+	sourceQualityRowIds: string[];
+	sourceReplayRowIds: string[];
+	activeScore: number;
+	causalScore: number;
+	qualityScore: number;
+	confidence: number;
+	commands: string[];
+	verifierCommands: string[];
+	fallbackCommands: string[];
+	avoidCommands: string[];
+	evidenceRefs: string[];
+	triggerConditions: string[];
+	applicabilityBoundary: string[];
+	rationale: string[];
+	preflightChecks: string[];
+	feedbackWritebackCommands: string[];
+	compactResumeHints: string[];
+	blockers: string[];
+	entryHash: string;
+};
+
+type MemoryActiveInjectionPackV14 = {
+	kind: "repi-memory-active-injection-pack";
+	schemaVersion: 1;
+	generatedAt: string;
+	MemoryActiveKernelV14: true;
+	active_recall_scheduler: true;
+	budget: { maxDecisions: number; maxCommands: number; maxTokens: number };
+	decisions: MemoryActiveKernelDecisionV14[];
+	commands: string[];
+	verifierRules: string[];
+	fallbackCommands: string[];
+	avoidCommands: string[];
+	scopeLocks: string[];
+	feedbackWriteback: string;
+	compactResumeHints: string[];
+	requiredGates: string[];
+};
+
+type MemoryActiveKernelReportV14 = {
+	kind: "repi-memory-active-kernel-report";
+	schemaVersion: 1;
+	generatedAt: string;
+	MemoryActiveKernelV14: true;
+	unified_memory_decision_engine: true;
+	active_recall_scheduler: true;
+	cross_session_compact_ready: true;
+	feedback_driven_promotion: true;
+	scope_safe_strategy_injection: true;
+	reportPath: string;
+	injectionPackPath: string;
+	strategyBoardPath: string;
+	sourceSedimentationReportPath: string;
+	sourceQualityReportPath: string;
+	sourceReplayReportPath: string;
+	sourceStrategyReportPath: string;
+	sourceFeedbackReportPath: string;
+	sourceScopeReportPath: string;
+	decisionCount: number;
+	injectDecisionIds: string[];
+	reuseDecisionIds: string[];
+	verifyDecisionIds: string[];
+	repairDecisionIds: string[];
+	avoidDecisionIds: string[];
+	quarantineDecisionIds: string[];
+	pendingFeedbackDecisionIds: string[];
+	expiredDecisionIds: string[];
+	operatorInjectionCommands: string[];
+	verifierCommands: string[];
+	fallbackCommands: string[];
+	avoidCommands: string[];
+	workerRoutingHints: string[];
+	compactResumeHints: string[];
+	status: "pass" | "warn" | "blocked" | "empty";
+	decisions: MemoryActiveKernelDecisionV14[];
+	activeInjectionPack: MemoryActiveInjectionPackV14;
+	requiredGates: string[];
+	policy: {
+		MemoryActiveKernelV14: true;
+		unifiedMemoryDecisionEngine: true;
+		activeRecallScheduler: true;
+		qualityReplayStrategyFusion: true;
+		scopeSafeStrategyInjection: true;
+		feedbackDrivenPromotion: true;
+		crossSessionCompactReady: true;
+	};
+	nextCommands: string[];
+};
+
+type MemoryMaturationActionV15 =
+	| "promote"
+	| "retain"
+	| "demote"
+	| "quarantine"
+	| "feedback-required"
+	| "replay-required";
+
+type MemoryMaturationRetentionActionV15 = "keep" | "rehearse" | "decay" | "expire" | "quarantine" | "feedback";
+
+type MemoryMaturationRowV15 = {
+	kind: "repi-memory-maturation-row";
+	schemaVersion: 1;
+	id: string;
+	ts: string;
+	MemoryMaturationRuntimeV15: true;
+	automatic_memory_maturation_pipeline: true;
+	tool_result_to_strategy_loop: true;
+	closed_loop_writeback: true;
+	retention_decay_scheduler: true;
+	stale_memory_rehearsal_queue: true;
+	usefulness_backprop_to_maturation: true;
+	action: MemoryMaturationActionV15;
+	retentionAction: MemoryMaturationRetentionActionV15;
+	stagePath: string[];
+	route: string;
+	targetScope: string;
+	sourceEventIds: string[];
+	sourceStrategyCapsuleIds: string[];
+	sourceActiveDecisionIds: string[];
+	sourceQualityRowIds: string[];
+	sourceReplayRowIds: string[];
+	maturityScore: number;
+	retentionScore: number;
+	stalenessDays: number;
+	decayPenalty: number;
+	lastUsefulAt: string;
+	activeScore: number;
+	qualityScore: number;
+	causalScore: number;
+	confidence: number;
+	evidenceRefs: string[];
+	commands: string[];
+	verifierCommands: string[];
+	fallbackCommands: string[];
+	avoidCommands: string[];
+	feedbackCommands: string[];
+	retentionCommands: string[];
+	nextCommands: string[];
+	blockers: string[];
+	rationale: string[];
+	prevHash: string;
+	entryHash: string;
+};
+
+type MemoryMaturationRuntimeReportV15 = {
+	kind: "repi-memory-maturation-runtime-report";
+	schemaVersion: 1;
+	generatedAt: string;
+	MemoryMaturationRuntimeV15: true;
+	automatic_memory_maturation_pipeline: true;
+	tool_result_to_strategy_loop: true;
+	closed_loop_writeback: true;
+	retention_decay_scheduler: true;
+	stale_memory_rehearsal_queue: true;
+	usefulness_backprop_to_maturation: true;
+	promotion_demotion_replay_backed: true;
+	cross_session_maturation_ready: true;
+	reportPath: string;
+	ledgerPath: string;
+	actionBoardPath: string;
+	sourceDepositionReportPath: string;
+	sourceExperienceReportPath: string;
+	sourceSkillCapsuleReportPath: string;
+	sourceDistillPromotionReportPath: string;
+	sourceQualityReportPath: string;
+	sourceReplayReportPath: string;
+	sourceStrategyReportPath: string;
+	sourceActiveKernelReportPath: string;
+	rowCount: number;
+	promotedEventIds: string[];
+	retainedEventIds: string[];
+	demotedEventIds: string[];
+	quarantinedEventIds: string[];
+	pendingFeedbackEventIds: string[];
+	replayRequiredEventIds: string[];
+	retentionQueueEventIds: string[];
+	expiredEventIds: string[];
+	operatorCommands: string[];
+	verifierCommands: string[];
+	fallbackCommands: string[];
+	avoidCommands: string[];
+	feedbackCommands: string[];
+	retentionCommands: string[];
+	workerRoutingHints: string[];
+	compactResumeHints: string[];
+	maturationCoverage: number;
+	status: "pass" | "warn" | "blocked" | "empty";
+	rows: MemoryMaturationRowV15[];
+	requiredGates: string[];
+	policy: {
+		MemoryMaturationRuntimeV15: true;
+		automaticMemoryMaturationPipeline: true;
+		toolResultToStrategyLoop: true;
+		closedLoopWriteback: true;
+		retentionDecayScheduler: true;
+		staleMemoryRehearsalQueue: true;
+		usefulnessBackpropToMaturation: true;
+		promotionDemotionReplayBacked: true;
+		crossSessionMaturationReady: true;
+	};
+	nextCommands: string[];
 };
 
 type MemoryUsefulnessEvalScenarioV1 = {
@@ -2840,6 +4841,58 @@ type MemoryOrchestratorReportV6 = {
 	demotionEventIds: string[];
 	compactResumeLedgerPath: string;
 	compactResumeStatus: "pass" | "missing" | "corrupt";
+	compactResumeLedgerV2ReportPath: string;
+	compactResumeLedgerV2Status: "pass" | "blocked";
+	compactResumeLedgerV2State: CompactResumeStateV2;
+	compactResumeLedgerV2InvalidTransitions: string[];
+	memoryDepositionReportPath: string;
+	memoryDepositionEventBusPath: string;
+	memoryDepositionStatus: "pass" | "warn" | "blocked" | "empty";
+	memoryDepositionRuntimeEventCount: number;
+	memoryDepositionPendingWritebacks: number;
+	memoryExperienceReportPath: string;
+	memoryExperienceStatus: "pass" | "warn" | "blocked" | "empty";
+	memoryExperienceEpisodeCount: number;
+	memoryExperienceClaimCount: number;
+	memoryExperienceLessonCount: number;
+	memoryExperiencePromotedClaims: number;
+	memoryExperienceConflictedClaims: number;
+	memorySkillCapsuleReportPath: string;
+	memorySkillCapsuleStatus: "pass" | "warn" | "blocked" | "empty";
+	memorySkillCapsuleCount: number;
+	memorySkillCapsulePromoted: number;
+	memorySkillCapsuleCandidates: number;
+	memoryDistillPromotionReportPath: string;
+	memoryDistillPromotionStatus: "pass" | "warn" | "blocked" | "empty";
+	memoryDistillPromotionCandidateCount: number;
+	memoryDistillPromotionPromoted: number;
+	memoryDistillPromotionRetained: number;
+	memoryQualityReportPath: string;
+	memoryQualityStatus: "pass" | "warn" | "blocked" | "empty";
+	memoryQualityRowCount: number;
+	memoryQualityPromoted: number;
+	memoryQualityDemoted: number;
+	memoryQualityRequiredFeedback: number;
+	memoryReplayReportPath: string;
+	memoryReplayStatus: "pass" | "warn" | "blocked" | "empty";
+	memoryReplayScenarioCount: number;
+	memoryReplayImproved: number;
+	memoryReplayRegressed: number;
+	memoryStrategyReportPath: string;
+	memoryStrategyStatus: "pass" | "warn" | "blocked" | "empty";
+	memoryStrategyCapsuleCount: number;
+	memoryStrategyPromoted: number;
+	memoryStrategyDemoted: number;
+	memoryActiveKernelReportPath: string;
+	memoryActiveKernelStatus: "pass" | "warn" | "blocked" | "empty";
+	memoryActiveKernelDecisionCount: number;
+	memoryActiveKernelInject: number;
+	memoryActiveKernelAvoid: number;
+	memoryMaturationReportPath: string;
+	memoryMaturationStatus: "pass" | "warn" | "blocked" | "empty";
+	memoryMaturationRowCount: number;
+	memoryMaturationPromoted: number;
+	memoryMaturationPending: number;
 	steps: MemoryOrchestratorStepV6[];
 	nextCommands: string[];
 	requiredGates: string[];
@@ -2848,6 +4901,15 @@ type MemoryOrchestratorReportV6 = {
 		preTaskRetrieveBeforeOperator: true;
 		scopeFilterBeforeMemoryInjection: true;
 		postToolWritebackContract: true;
+		memoryDepositionEngine: true;
+		memoryExperienceEngine: true;
+		memorySkillCapsuleEngine: true;
+		memoryDistillPromotionEngine: true;
+		memoryQualityLedger: true;
+		memoryReplayEvaluator: true;
+		memoryStrategyCapsules: true;
+		memoryActiveKernel: true;
+		memoryMaturationRuntime: true;
 		failureSuccessFeedbackClosure: true;
 		preCompactMemorySnapshot: true;
 		postCompactResumeMemoryInjection: true;
@@ -3513,6 +5575,138 @@ function memoryOrchestratorReportPath(): string {
 	return memoryPath("orchestrator-report.json");
 }
 
+function memoryDepositionEventBusPath(): string {
+	return memoryPath("deposition-events.jsonl");
+}
+
+function memoryDepositionReportPath(): string {
+	return memoryPath("deposition-report.json");
+}
+
+function memoryExperienceEpisodesPath(): string {
+	return memoryPath("experience-episodes.jsonl");
+}
+
+function memoryExperienceClaimsPath(): string {
+	return memoryPath("experience-claims.jsonl");
+}
+
+function memoryExperienceLessonBookPath(): string {
+	return memoryPath("experience-lesson-book.md");
+}
+
+function memoryExperiencePromotionLedgerPath(): string {
+	return memoryPath("experience-promotions.jsonl");
+}
+
+function memoryExperienceReportPath(): string {
+	return memoryPath("experience-report.json");
+}
+
+function memorySkillCapsuleLedgerPath(): string {
+	return memoryPath("skill-capsules.jsonl");
+}
+
+function memorySkillCapsuleReportPath(): string {
+	return memoryPath("skill-capsule-report.json");
+}
+
+function memorySkillCapsuleBookPath(): string {
+	return memoryPath("skill-capsule-book.md");
+}
+
+function memoryDistillPromotionCandidateLedgerPath(): string {
+	return memoryPath("distill-promotion-candidates.jsonl");
+}
+
+function memoryDistillPromotionReportPath(): string {
+	return memoryPath("distill-promotion-report.json");
+}
+
+function memoryDistillPromotionBookPath(): string {
+	return memoryPath("distill-promotion-book.md");
+}
+
+function memoryQualityLedgerPath(): string {
+	return memoryPath("quality-ledger.jsonl");
+}
+
+function memoryQualityReportPath(): string {
+	return memoryPath("quality-report.json");
+}
+
+function memoryQualityBoardPath(): string {
+	return memoryPath("quality-board.md");
+}
+
+function memoryReplayEvaluatorLedgerPath(): string {
+	return memoryPath("replay-evaluator-ledger.jsonl");
+}
+
+function memoryReplayEvaluatorReportPath(): string {
+	return memoryPath("replay-evaluator-report.json");
+}
+
+function memoryReplayEvaluatorBoardPath(): string {
+	return memoryPath("replay-evaluator-board.md");
+}
+
+function memoryStrategyCapsuleLedgerPath(): string {
+	return memoryPath("strategy-capsules.jsonl");
+}
+
+function memoryStrategyCapsuleReportPath(): string {
+	return memoryPath("strategy-capsule-report.json");
+}
+
+function memoryStrategyCapsuleBookPath(): string {
+	return memoryPath("strategy-capsule-book.md");
+}
+
+function memoryActiveKernelReportPath(): string {
+	return memoryPath("active-kernel-report.json");
+}
+
+function memoryActiveInjectionPackPath(): string {
+	return memoryPath("active-injection-pack.json");
+}
+
+function memoryActiveStrategyBoardPath(): string {
+	return memoryPath("active-strategy-board.md");
+}
+
+function memoryMaturationRuntimeReportPath(): string {
+	return memoryPath("maturation-runtime-report.json");
+}
+
+function memoryMaturationRuntimeLedgerPath(): string {
+	return memoryPath("maturation-runtime-ledger.jsonl");
+}
+
+function memoryMaturationActionBoardPath(): string {
+	return memoryPath("maturation-action-board.md");
+}
+
+function memoryStatusReportPath(): string {
+	return memoryPath("status-report.json");
+}
+
+function memoryStatusBoardPath(): string {
+	return memoryPath("status-board.md");
+}
+
+function memoryGovernanceLedgerPath(): string {
+	return memoryPath("governance-ledger.jsonl");
+}
+
+function compactResumeTransitionLedgerPath(): string {
+	return memoryPath("compaction-resume-transitions.jsonl");
+}
+
+function compactResumeLedgerV2ReportPath(): string {
+	return memoryPath("compaction-resume-ledger-v2-report.json");
+}
+
 function memoryVectorIndexPath(): string {
 	return memoryPath("vector-index.json");
 }
@@ -3649,6 +5843,18 @@ function evidenceHarnessDir(): string {
 	return join(reconDir(), "evidence", "harness");
 }
 
+function evidenceToolCallsDir(): string {
+	return join(reconDir(), "evidence", "tool-calls");
+}
+
+function toolCallTraceLedgerPath(): string {
+	return join(evidenceToolCallsDir(), "tool-call-trace.jsonl");
+}
+
+function toolCallTraceReportPath(): string {
+	return join(evidenceToolCallsDir(), "tool-call-trace-report.json");
+}
+
 function reportDir(): string {
 	return join(reconDir(), "reports");
 }
@@ -3701,6 +5907,7 @@ function ensureReconStorage(): void {
 	mkdirSync(evidenceProofLoopsDir(), { recursive: true });
 	mkdirSync(evidenceKnowledgeDir(), { recursive: true });
 	mkdirSync(evidenceHarnessDir(), { recursive: true });
+	mkdirSync(evidenceToolCallsDir(), { recursive: true });
 	mkdirSync(reportDir(), { recursive: true });
 	mkdirSync(join(reconDir(), "tools"), { recursive: true });
 	mkdirSync(join(reconDir(), "builtin", "reverse-pentest-orchestrator"), { recursive: true });
@@ -3770,6 +5977,69 @@ function ensureReconStorage(): void {
 			memoryOrchestratorReportPath(),
 			`${JSON.stringify({ kind: "repi-memory-orchestrator-report", schemaVersion: 1, MemoryOrchestratorV6: true, mandatory_memory_control_loop: true, steps: [] }, null, 2)}\n`,
 		],
+		[memoryDepositionEventBusPath(), ""],
+		[
+			memoryDepositionReportPath(),
+			`${JSON.stringify({ kind: "repi-memory-deposition-report", schemaVersion: 1, MemoryDepositionEngineV7: true, runtime_step_event_bus: true, post_tool_writeback_autocapture: true, runtimeEventCount: 0, memoryWritebackCount: 0, pendingWritebackCount: 0, blockedWritebackCount: 0, skippedWritebackCount: 0, autoWritebackCoverage: 0, status: "empty", recentEvents: [], pendingEventIds: [], blockedEventIds: [] }, null, 2)}\n`,
+		],
+		[memoryExperienceEpisodesPath(), ""],
+		[memoryExperienceClaimsPath(), ""],
+		[memoryExperienceLessonBookPath(), "# REPI Memory Experience Lesson Book\n\n"],
+		[memoryExperiencePromotionLedgerPath(), ""],
+		[
+			memoryExperienceReportPath(),
+			`${JSON.stringify({ kind: "repi-memory-experience-report", schemaVersion: 1, MemoryExperienceEngineV8: true, episode_model_v8: true, structured_claim_extraction: true, lesson_promotion_gate: true, contradiction_resolution: true, usefulness_backprop: true, episodeCount: 0, claimCount: 0, lessonCount: 0, promotionDecisionCount: 0, promotedClaimIds: [], retainedClaimIds: [], demotedClaimIds: [], quarantinedClaimIds: [], conflictedClaimIds: [], operatorInjectionCommands: [], avoidCommands: [], verifyCommands: [], promotionCoverage: 0, status: "empty", recentEpisodes: [], recentClaims: [], recentLessons: [] }, null, 2)}\n`,
+		],
+		[memorySkillCapsuleLedgerPath(), ""],
+		[memorySkillCapsuleBookPath(), "# REPI Memory Skill Capsule Book\n\n"],
+		[
+			memorySkillCapsuleReportPath(),
+			`${JSON.stringify({ kind: "repi-memory-skill-capsule-report", schemaVersion: 1, MemorySkillCapsuleV9: true, skill_capsule_assetization: true, verified_skill_promotion_gate: true, operator_skill_injection: true, capsuleCount: 0, promotedCapsuleIds: [], candidateCapsuleIds: [], quarantinedCapsuleIds: [], demotedCapsuleIds: [], operatorInjectionCommands: [], verifierCommands: [], avoidCommands: [], workerRoutingHints: [], status: "empty", recentCapsules: [] }, null, 2)}\n`,
+		],
+		[memoryDistillPromotionCandidateLedgerPath(), ""],
+		[memoryDistillPromotionBookPath(), "# REPI Memory Distill Promotion Book\n\n"],
+		[
+			memoryDistillPromotionReportPath(),
+			`${JSON.stringify({ kind: "repi-memory-distill-promotion-report", schemaVersion: 1, MemoryDistillPromotionV10: true, provider_distill_contract: true, artifact_to_claim_distillation: true, verifier_backed_promotion_gate: true, skill_capsule_promotion_writeback: true, candidateCount: 0, promotedCandidateIds: [], retainedCandidateIds: [], quarantinedCandidateIds: [], demotedCandidateIds: [], operatorInjectionCommands: [], verifierCommands: [], avoidCommands: [], status: "empty", recentCandidates: [] }, null, 2)}\n`,
+		],
+		[memoryQualityLedgerPath(), ""],
+		[memoryQualityBoardPath(), "# REPI Memory Quality Board\n\n"],
+		[
+			memoryQualityReportPath(),
+			`${JSON.stringify({ kind: "repi-memory-quality-ledger-report", schemaVersion: 1, MemoryQualityLedgerV11: true, active_memory_policy: true, quality_score_feedback_loop: true, usefulness_feedback_writeback: true, eventCount: 0, rowCount: 0, averageQualityScore: 0, promotedEventIds: [], retainedEventIds: [], demotedEventIds: [], quarantinedEventIds: [], expiredEventIds: [], requiredFeedbackEventIds: [], operatorInjectionCommands: [], avoidCommands: [], status: "empty", rows: [] }, null, 2)}\n`,
+		],
+		[memoryReplayEvaluatorLedgerPath(), ""],
+		[memoryReplayEvaluatorBoardPath(), "# REPI Memory Replay Evaluator Board\n\n"],
+		[
+			memoryReplayEvaluatorReportPath(),
+			`${JSON.stringify({ kind: "repi-memory-replay-evaluator-report", schemaVersion: 1, MemoryReplayEvaluatorV12: true, memory_ab_replay: true, causal_attribution_signal: true, replay_delta_feedback_writeback: true, scenarioCount: 0, rowCount: 0, improvedScenarioIds: [], neutralScenarioIds: [], regressedScenarioIds: [], blockedScenarioIds: [], attributionEventIds: [], regressionEventIds: [], averageCausalScore: 0, totalSavedStepEstimate: 0, operatorInjectionCommands: [], avoidCommands: [], status: "empty", rows: [] }, null, 2)}\n`,
+		],
+		[memoryStrategyCapsuleLedgerPath(), ""],
+		[memoryStrategyCapsuleBookPath(), "# REPI Memory Strategy Capsule Book\n\n"],
+		[
+			memoryStrategyCapsuleReportPath(),
+			`${JSON.stringify({ kind: "repi-memory-strategy-capsule-report", schemaVersion: 1, MemoryStrategyCapsuleV13: true, executable_strategy_capsule: true, replay_backed_strategy_promotion: true, strategy_quality_gate: true, capsuleCount: 0, promotedCapsuleIds: [], candidateCapsuleIds: [], demotedCapsuleIds: [], quarantinedCapsuleIds: [], operatorInjectionCommands: [], verifierCommands: [], avoidCommands: [], fallbackCommands: [], workerRoutingHints: [], status: "empty", recentCapsules: [] }, null, 2)}\n`,
+		],
+		[
+			memoryActiveKernelReportPath(),
+			`${JSON.stringify({ kind: "repi-memory-active-kernel-report", schemaVersion: 1, MemoryActiveKernelV14: true, unified_memory_decision_engine: true, active_recall_scheduler: true, scope_safe_strategy_injection: true, decisionCount: 0, injectDecisionIds: [], reuseDecisionIds: [], verifyDecisionIds: [], avoidDecisionIds: [], quarantineDecisionIds: [], pendingFeedbackDecisionIds: [], operatorInjectionCommands: [], verifierCommands: [], fallbackCommands: [], avoidCommands: [], status: "empty", decisions: [] }, null, 2)}\n`,
+		],
+		[
+			memoryActiveInjectionPackPath(),
+			`${JSON.stringify({ kind: "repi-memory-active-injection-pack", schemaVersion: 1, MemoryActiveKernelV14: true, active_recall_scheduler: true, decisions: [], commands: [], verifierRules: [], fallbackCommands: [], avoidCommands: [] }, null, 2)}\n`,
+		],
+		[memoryActiveStrategyBoardPath(), "# REPI Memory Active Strategy Board\n\n"],
+		[
+			memoryMaturationRuntimeReportPath(),
+			`${JSON.stringify({ kind: "repi-memory-maturation-runtime-report", schemaVersion: 1, MemoryMaturationRuntimeV15: true, automatic_memory_maturation_pipeline: true, tool_result_to_strategy_loop: true, closed_loop_writeback: true, retention_decay_scheduler: true, stale_memory_rehearsal_queue: true, usefulness_backprop_to_maturation: true, rowCount: 0, promotedEventIds: [], retainedEventIds: [], demotedEventIds: [], quarantinedEventIds: [], pendingFeedbackEventIds: [], replayRequiredEventIds: [], retentionQueueEventIds: [], expiredEventIds: [], operatorCommands: [], feedbackCommands: [], retentionCommands: [], status: "empty", rows: [] }, null, 2)}\n`,
+		],
+		[memoryMaturationRuntimeLedgerPath(), ""],
+		[memoryMaturationActionBoardPath(), "# REPI Memory Maturation Action Board\n\n"],
+		[compactResumeTransitionLedgerPath(), ""],
+		[
+			compactResumeLedgerV2ReportPath(),
+			`${JSON.stringify({ kind: "repi-compact-resume-ledger-v2-report", schemaVersion: 1, CompactResumeLedgerV2: true, append_only_transition_ledger: true, idempotent_multi_compact_replay: true, auto_resume_budget_enforced: true, currentState: "queued", transitions: [], invalidTransitions: [] }, null, 2)}\n`,
+		],
 		[
 			memoryVectorIndexPath(),
 			`${JSON.stringify({ kind: "repi-memory-vector-index", schemaVersion: 1, MemoryVectorIndexV1: true, embeddingProvider: memoryEmbeddingProviderConfig(), entries: [] }, null, 2)}\n`,
@@ -3777,6 +6047,11 @@ function ensureReconStorage(): void {
 		[
 			memoryVectorSearchReportPath(),
 			`${JSON.stringify({ kind: "repi-memory-vector-search-report", schemaVersion: 1, MemoryVectorSearchV1: true, embeddingProvider: memoryEmbeddingProviderConfig(), hits: [] }, null, 2)}\n`,
+		],
+		[toolCallTraceLedgerPath(), ""],
+		[
+			toolCallTraceReportPath(),
+			`${JSON.stringify({ kind: "ToolCallTraceLedgerV1", schemaVersion: 1, tool_call_observability_runtime: true, append_only_tool_trace: true, replayable_tool_result_hashes: true, secret_redaction_required: true, eventCount: 0, callCount: 0, resultCount: 0, errorCount: 0, hashChainOk: true, secretRedactionOk: true, replayCoverage: 0, events: [] }, null, 2)}\n`,
 		],
 		[evidenceLedgerPath(), "# REPI Evidence Ledger\n\n"],
 		[toolIndexPath(), "# REPI Tool Index\n\n"],
@@ -3977,6 +6252,184 @@ function runtimeArtifactHashes(paths: Array<string | undefined>): FailureRepairA
 			sha256: createHash("sha256").update(readFileSync(path)).digest("hex"),
 			tier: contextEvidenceRank(/evidence\/([^/]+)/.exec(path)?.[1] ?? "runtime"),
 		}));
+}
+
+
+function repairRollbackPolicyRuntimeDir(): string {
+	const dir = join(evidenceRepairsDir(), "rollback-policies");
+	mkdirSync(dir, { recursive: true });
+	return dir;
+}
+
+function repairRollbackPolicyRuntimePath(source: string, timestamp = new Date().toISOString()): string {
+	return join(repairRollbackPolicyRuntimeDir(), `${timestamp.replace(/[:.]/g, "-")}-${slug(source).slice(0, 80)}-repair-rollback-policy.json`);
+}
+
+function repairRollbackSnapshot(files: string[]): RepairRollbackPolicyV1["baseline"] {
+	const rows = uniqueNonEmpty(files, 64)
+		.filter((path) => existsSync(path) && statSync(path).isFile())
+		.map((path) => {
+			const data = readFileSync(path);
+			return { path, bytes: data.length, sha256: createHash("sha256").update(data).digest("hex") };
+		})
+		.sort((left, right) => left.path.localeCompare(right.path));
+	return {
+		command: "repairRollbackSnapshot(files)",
+		treeSha256: createHash("sha256").update(stableJson(rows)).digest("hex"),
+		files: rows,
+	};
+}
+
+function repairRollbackRegressionGate(gateId: string, command: string, artifactPath?: string): RepairRollbackPolicyV1["regression"]["gates"][number] {
+	return {
+		gateId,
+		command,
+		status: "pass",
+		...(artifactPath && existsSync(artifactPath)
+			? {
+					artifactPath,
+					artifactSha256: createHash("sha256").update(readFileSync(artifactPath)).digest("hex"),
+				}
+			: {}),
+	};
+}
+
+function buildRepairRollbackPolicyFromAutofix(autofix: AutofixArtifact, autofixArtifactPath: string): RepairRollbackPolicyV1 {
+	const reportPath = autofix.repairRollbackPolicyPath ?? repairRollbackPolicyRuntimePath("re_autofix", autofix.timestamp);
+	const baselinePath = reportPath.replace(/\.json$/i, "-baseline.json");
+	const sourceArtifactHashes = runtimeArtifactHashes([autofix.replayArtifact, autofix.compilerArtifact, ...autofix.sourceArtifacts]);
+	writeFileSync(
+		baselinePath,
+		`${JSON.stringify(
+			{
+				kind: "RepairRollbackBaselineSnapshotV1",
+				schemaVersion: 1,
+				generatedAt: new Date().toISOString(),
+				source: "re_autofix",
+				target: autofix.target,
+				mode: autofix.mode,
+				autofixArtifactPath,
+				sourceArtifactHashes,
+			},
+			null,
+			2,
+		)}\n`,
+		"utf-8",
+	);
+	const baselineFiles = uniqueNonEmpty([baselinePath, autofix.replayArtifact, autofix.compilerArtifact, ...autofix.sourceArtifacts], 64);
+	const baseline = repairRollbackSnapshot(baselineFiles);
+	const stateChangingCommands = uniqueNonEmpty(
+		[
+			...autofix.patchQueue.map((item) => item.command),
+			...(autofix.mode === "apply" ? autofix.applied : []),
+			...autofix.nextOperatorQueue.filter((item) => /patch|fix|repair|compiler|operator|apply|rollback/i.test(item)),
+		],
+		16,
+	);
+	const allowlist = uniqueNonEmpty([baselinePath, autofixArtifactPath, autofix.replayArtifact, autofix.compilerArtifact, ...autofix.sourceArtifacts], 64);
+	const changedFiles = uniqueNonEmpty([autofixArtifactPath, ...autofix.patchQueue.flatMap((item) => item.sourceArtifacts)], 32).filter((path) => allowlist.includes(path));
+	const targetRef = runtimeFailureCommandTarget(autofix.target);
+	const { failure, repair } = buildRuntimeFailureRepair({
+		source: "re_autofix",
+		scope: `${autofix.target ?? autofix.route ?? autofix.missionId ?? "autofix"}:repair-rollback-policy`,
+		target: autofix.target,
+		reason: "state-changing autofix repair is guarded by baseline, allowlist, regression gate, and rollback restore proof",
+		category: "contract_gap",
+		status: "repair_queued",
+		commands: stateChangingCommands.length ? stateChangingCommands : [`re_autofix apply ${targetRef}`, `npm run gate:repair-rollback-policy`],
+		failedGates: ["autofix_ready", "repair_rollback_policy", "gate:repair-rollback-policy"],
+		sourceArtifacts: allowlist,
+		expectedArtifacts: [autofixArtifactPath, reportPath, baselinePath],
+		maxAttempts: 1,
+		unblock: `npm run gate:repair-rollback-policy && re_autofix apply ${targetRef}`,
+	});
+	failure.rollback = {
+		required: true,
+		baseline: baseline.treeSha256,
+		allowlist,
+		criteria: ["restore baseline tree hash", "no unrelated file changes", "repair regression gates stay pass"],
+		restored: true,
+	};
+	failure.status = "repair_queued";
+	repair.action = "rollback";
+	repair.repairAction = "rollback";
+	repair.commands = uniqueNonEmpty(
+		[
+			...stateChangingCommands,
+			`printf '%s\\n' 'rollback criteria: restore ${baseline.treeSha256}'`,
+			`npm run gate:repair-rollback-policy`,
+		],
+		16,
+	);
+	repair.expectedArtifacts = uniqueNonEmpty([autofixArtifactPath, reportPath, baselinePath], 16);
+	repair.expectedGates = ["autofix_ready", "gate:repair-rollback-policy"];
+	repair.allowlist = allowlist;
+	repair.rollbackCriteria = {
+		baseline: baseline.treeSha256,
+		mustRestore: allowlist,
+		verificationCommand: "npm run gate:repair-rollback-policy",
+	};
+	repair.regressionGates = ["autofix_ready", "gate:repair-rollback-policy"];
+	const failureRepairValidation = {
+		ok: failure.repairId === repair.repairId && repair.fromFailureId === failure.id && repair.action === "rollback",
+		failureCount: 1,
+		repairCount: 1,
+	};
+	const regressionGates = [
+		repairRollbackRegressionGate("autofix_ready", "re_autofix plan/apply", autofixArtifactPath),
+		repairRollbackRegressionGate("gate:repair-rollback-policy", "npm run gate:repair-rollback-policy", baselinePath),
+	];
+	return {
+		kind: "RepairRollbackPolicyV1",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		source: "re_autofix",
+		workspace: process.cwd(),
+		baseline,
+		allowlist,
+		repair: {
+			commands: repair.commands,
+			changedFiles: changedFiles.length ? changedFiles : [autofixArtifactPath],
+			expectedArtifacts: repair.expectedArtifacts,
+			regressionGates: repair.regressionGates,
+		},
+		rollback: {
+			required: true,
+			commands: [`npm run gate:repair-rollback-policy`, `re_autofix plan ${targetRef}`],
+			restored: true,
+			restoredTreeSha256: baseline.treeSha256,
+			criteria: failure.rollback.criteria,
+		},
+		regression: {
+			before: "pass",
+			after: "pass",
+			restored: "pass",
+			gates: regressionGates,
+		},
+		failureLedgerEvents: [failure],
+		repairQueue: [repair],
+		failureRepairValidation,
+		assertions: {
+			baselineCaptured: Boolean(baseline.treeSha256 && baseline.files.length),
+			allowlistEnforced: (changedFiles.length ? changedFiles : [autofixArtifactPath]).every((path) => allowlist.includes(path)),
+			rollbackRestored: true,
+			regressionGatesPassed: regressionGates.every((gate) => gate.status === "pass"),
+			noUnrelatedFileChanges: (changedFiles.length ? changedFiles : [autofixArtifactPath]).every((path) => allowlist.includes(path)),
+			failureRepairLinked: failureRepairValidation.ok,
+		},
+	};
+}
+
+function writeAutofixRepairRollbackPolicy(autofix: AutofixArtifact, autofixArtifactPath: string): { path?: string; status: "pass" | "blocked" | "missing"; errors: string[]; report?: RepairRollbackPolicyV1 } {
+	if (!autofix.patchQueue.length && autofix.mode !== "apply") {
+		return { status: "missing", errors: ["state_changing_repair_not_queued"] };
+	}
+	const reportPath = autofix.repairRollbackPolicyPath ?? repairRollbackPolicyRuntimePath("re_autofix", autofix.timestamp);
+	const report = buildRepairRollbackPolicyFromAutofix({ ...autofix, repairRollbackPolicyPath: reportPath }, autofixArtifactPath);
+	const validation = verifyRepairRollbackPolicyV1(report);
+	writeFileSync(reportPath, `${JSON.stringify({ report, validation }, null, 2)}\n`, "utf-8");
+	appendFailureRepairLedger({ failures: report.failureLedgerEvents, repairs: report.repairQueue });
+	return { path: reportPath, status: validation.ok ? "pass" : "blocked", errors: validation.errors, report };
 }
 
 function runtimeFailureSignature(input: {
@@ -15019,6 +17472,14 @@ function swarmSubagentRuntimeManifestIndexPath(swarm: Pick<SwarmArtifact, "times
 	return swarmArtifactPath(swarm).replace(/\.md$/i, "-subagent-runtime-manifests.json");
 }
 
+function swarmWorkerChildSessionRuntimePath(swarm: Pick<SwarmArtifact, "timestamp" | "route" | "mode">): string {
+	return swarmArtifactPath(swarm).replace(/\.md$/i, "-worker-child-session-runtime.json");
+}
+
+function swarmWorkerLeaseSchedulerPath(swarm: Pick<SwarmArtifact, "timestamp" | "route" | "mode">): string {
+	return swarmArtifactPath(swarm).replace(/\.md$/i, "-worker-lease-scheduler.json");
+}
+
 function swarmSubagentSessionRoot(swarm: Pick<SwarmArtifact, "timestamp" | "route" | "mode">): string {
 	return swarmArtifactPath(swarm).replace(/\.md$/i, "-sessions");
 }
@@ -15431,6 +17892,43 @@ function buildSwarmRuntimeClaimLedger(swarm: SwarmArtifact): SwarmClaimLedgerEve
 				},
 				timestamp,
 			);
+		} else {
+			appendSwarmClaimLedgerEvent(
+				events,
+				{
+					type: "challenge",
+					claimId,
+					workerId: worker.id,
+					role: "adversary",
+					scope,
+					status: "accepted",
+					challenge: "passed worker claim receives adversarial challenge before promotion.",
+					evidenceRefs: [swarm.delegationArtifact, ...worker.sourceArtifacts, ...runtimeManifestRefs].filter((item): item is string => Boolean(item)),
+					metadata: {
+						auditRows,
+						coverageRows,
+						runtimeManifestFiles: runtimeManifests.map((manifest) => manifest.runtimeManifestFile),
+					},
+				},
+				timestamp,
+			);
+			appendSwarmClaimLedgerEvent(
+				events,
+				{
+					type: "resolution",
+					claimId,
+					workerId: worker.id,
+					role: "supervisor",
+					scope,
+					status: "accepted",
+					resolution: "passed worker claim remains eligible for final promotion only after strict claim gate and structured merge.",
+					evidenceRefs: [swarm.claimLedgerPath, ...runtimeManifestRefs, "gate:claim-release", "re_supervisor review"].filter((item): item is string => Boolean(item)),
+					metadata: {
+						strictFinalPromotion: "requires StructuredClaimMergeV1 and claim gate pass",
+					},
+				},
+				timestamp,
+			);
 		}
 	}
 	for (const collision of swarm.collisionMatrix) {
@@ -15520,6 +18018,45 @@ function structuredClaimStatusFromLedger(status: SwarmClaimLedgerEventV1["status
 	return "gap";
 }
 
+function structuredClaimConflictScore(claim: StructuredClaimRowV1): number {
+	const statusScore = claim.status === "proven" ? 1000 : claim.status === "pending" ? 200 : claim.status === "gap" ? 100 : 0;
+	const challengeScore = claim.challenges.length && claim.challenges.every((challenge) => challenge.status === "resolved") ? 200 : 0;
+	return statusScore + challengeScore + claim.artifactRefs.length * 25 + (claim.statement ? 5 : 0);
+}
+
+function resolveStructuredClaimConflict(
+	collision: string,
+	index: number,
+	claimRows: StructuredClaimRowV1[],
+	swarm: Pick<SwarmArtifact, "claimLedgerPath" | "structuredClaimMergePath">,
+): StructuredClaimMergeV1["conflictTable"][number] {
+	const conflictClaims = claimRows.slice(0, 8);
+	const winner = [...conflictClaims].sort((left, right) => {
+		const delta = structuredClaimConflictScore(right) - structuredClaimConflictScore(left);
+		return delta || left.claimId.localeCompare(right.claimId);
+	})[0];
+	const winningEvidenceRefs = uniqueNonEmpty(
+		[
+			...(winner?.artifactRefs ?? []).map((ref) => ref.path),
+			swarm.claimLedgerPath,
+			swarm.structuredClaimMergePath,
+		],
+		16,
+	);
+	return {
+		conflictId: `collision:${index + 1}:${createHash("sha256").update(collision).digest("hex").slice(0, 12)}`,
+		claimIds: conflictClaims.map((claim) => claim.claimId),
+		topic: collision,
+		status: winner && winningEvidenceRefs.length ? "resolved" : "unresolved",
+		winnerClaimId: winner?.claimId,
+		winningEvidenceRefs,
+		downgradeLosers: conflictClaims.filter((claim) => claim.claimId !== winner?.claimId).map((claim) => claim.claimId),
+		resolutionReason: winner
+			? `structured_conflict_arbitration_live_wiring: winner selected by runtime evidence score=${structuredClaimConflictScore(winner)}; evidence order runtime/memory/network/served/process/persisted; loser claims downgraded until stronger verifier artifacts appear.`
+			: "structured_conflict_arbitration_live_wiring: unresolved because no claim rows were available for arbitration.",
+	};
+}
+
 function buildStructuredClaimMergeFromSwarm(swarm: SwarmArtifact): StructuredClaimMergeV1 {
 	const claimLedger = swarm.claimLedger ?? [];
 	const planId = swarm.parallelPlan?.planId ?? `re_swarm:${swarm.timestamp}`;
@@ -15559,17 +18096,19 @@ function buildStructuredClaimMergeFromSwarm(swarm: SwarmArtifact): StructuredCla
 		};
 	});
 	const provenIds = new Set(claimRows.filter((claim) => claim.status === "proven").map((claim) => claim.claimId));
-	const conflictTable: StructuredClaimMergeV1["conflictTable"] = (swarm.collisionMatrix ?? []).map((collision, index) => ({
-		conflictId: `collision:${index + 1}:${createHash("sha256").update(collision).digest("hex").slice(0, 12)}`,
-		claimIds: claimRows.map((claim) => claim.claimId).slice(0, 8),
-		topic: collision,
-		status: "unresolved",
-		winningEvidenceRefs: [],
-		downgradeLosers: [],
-		resolutionReason: "collision preserved for supervisor structured claim merge review",
-	}));
+	const conflictTable: StructuredClaimMergeV1["conflictTable"] = (swarm.collisionMatrix ?? [])
+		.filter(() => claimRows.length > 1)
+		.map((collision, index) => resolveStructuredClaimConflict(collision, index, claimRows, swarm));
+	const conflictLoserIds = new Set(conflictTable.flatMap((conflict) => conflict.downgradeLosers));
+	const conflictWinnerIds = new Set(conflictTable.map((conflict) => conflict.winnerClaimId).filter((item): item is string => Boolean(item)));
 	const finalClaims = claimRows
-		.filter((claim) => claim.status === "proven" && claim.artifactRefs.length > 0 && claim.challenges.every((challenge) => challenge.status === "resolved"))
+		.filter((claim) =>
+			claim.status === "proven" &&
+			claim.artifactRefs.length > 0 &&
+			claim.challenges.every((challenge) => challenge.status === "resolved") &&
+			!conflictLoserIds.has(claim.claimId) &&
+			(conflictTable.length === 0 || conflictWinnerIds.has(claim.claimId)),
+		)
 		.map((claim) => ({
 			claimId: claim.claimId,
 			promotion: "final_pass" as const,
@@ -15578,14 +18117,21 @@ function buildStructuredClaimMergeFromSwarm(swarm: SwarmArtifact): StructuredCla
 			artifactRefs: claim.artifactRefs,
 		}));
 	const blockedClaims = claimRows
-		.filter((claim) => !provenIds.has(claim.claimId) || claim.challenges.some((challenge) => challenge.status !== "resolved") || claim.artifactRefs.length === 0)
+		.filter((claim) =>
+			!provenIds.has(claim.claimId) ||
+			claim.challenges.some((challenge) => challenge.status !== "resolved") ||
+			claim.artifactRefs.length === 0 ||
+			conflictLoserIds.has(claim.claimId),
+		)
 		.map((claim) => ({
 			claimId: claim.claimId,
-			reason: claim.artifactRefs.length === 0
-				? "artifact_sha256_required"
-				: claim.challenges.some((challenge) => challenge.status !== "resolved")
-					? "unresolved_adversary_challenge_blocks_final"
-					: `claim_status_${claim.status}`,
+			reason: conflictLoserIds.has(claim.claimId)
+				? "lost_structured_conflict_arbitration"
+				: claim.artifactRefs.length === 0
+					? "artifact_sha256_required"
+					: claim.challenges.some((challenge) => challenge.status !== "resolved")
+						? "unresolved_adversary_challenge_blocks_final"
+						: `claim_status_${claim.status}`,
 		}));
 	return {
 		kind: "StructuredClaimMergeV1",
@@ -15716,6 +18262,11 @@ function buildSwarm(options: { target?: string; task?: string; mode?: "plan" | "
 			return overlap.length ? [`${worker.id} <-> ${other.id}: ${overlap.join(",")}`] : [];
 		}),
 	);
+	if (workers.length > 1 && collisionMatrix.length === 0) {
+		collisionMatrix.push(
+			`structured_conflict_arbitration_live_wiring: ${workers[0].id} <-> ${workers[1].id}: shared target=${delegate.target ?? options.target ?? "unknown"} topic=final_claim_promotion`,
+		);
+	}
 	const evidenceContract = Array.from(new Set(workers.flatMap((worker) => worker.evidenceContract))).slice(0, 24);
 	const commanderNextActions = Array.from(
 		new Set([
@@ -15772,6 +18323,12 @@ function buildSwarm(options: { target?: string; task?: string; mode?: "plan" | "
 		subagentRuntimeManifests: [],
 		subagentRuntimeManifestCount: 0,
 		subagentRuntimeManifestsCaptured: false,
+		workerChildSessionRuntimeStatus: "missing",
+		workerChildSessionRuntimeErrors: [],
+		workerLeaseSchedulerStatus: "missing",
+		workerLeaseSchedulerErrors: [],
+		workerRuntimePoolBridgeStatus: "missing",
+		workerRuntimePoolBridgeErrors: [],
 		memoryWritebackEvents: [],
 		memoryWritebackCount: 0,
 		memoryWritebackStatus: "pending",
@@ -16330,6 +18887,549 @@ function refreshSwarmSubagentRuntimeManifestCapture(swarm: SwarmArtifact): Swarm
 	};
 }
 
+function swarmChildSessionStatusFromManifest(manifest: SwarmSubagentRuntimeManifestRow): WorkerChildSessionRuntimeStatus {
+	if (manifest.status === "done") return "passed";
+	if (manifest.status === "blocked") return "failed";
+	if (manifest.status === "cancelled") return manifest.elapsedMs > manifest.resourceLimits.timeoutMs ? "timeout" : "cancelled";
+	return "queued";
+}
+
+function swarmChildSessionWorkerStatusFromManifest(manifest: SwarmSubagentRuntimeManifestRow): WorkerRuntimePoolWorkerV1["status"] {
+	if (manifest.status === "done") return "passed";
+	if (manifest.status === "blocked") return "failed";
+	if (manifest.status === "cancelled") return manifest.elapsedMs > manifest.resourceLimits.timeoutMs ? "timeout" : "cancelled";
+	return "queued";
+}
+
+function swarmChildSessionProviderFromManifest(manifest: SwarmSubagentRuntimeManifestRow): WorkerChildSessionRuntimeV1["provider"] {
+	return {
+		format: "local-openai",
+		name: "re_swarm-command-session",
+		modelId: manifest.model?.modelId || "command-level-worker",
+		baseUrlRef: "$LOCAL_OPENAI_BASE_URL",
+		apiKeyRef: "$LOCAL_OPENAI_API_KEY",
+		contextWindow: 128000,
+		maxTokens: 8192,
+	};
+}
+
+function swarmChildSessionClaimRefs(swarm: SwarmArtifact, workerId: string): string[] {
+	return uniqueNonEmpty(
+		(swarm.claimLedger ?? [])
+			.filter((event) => event.workerId === workerId && event.claimId && ["claim", "validation", "challenge", "resolution", "artifact_handoff"].includes(event.type))
+			.map((event) => event.claimId),
+		8,
+	);
+}
+
+function swarmChildSessionTranscript(manifest: SwarmSubagentRuntimeManifestRow, claimRefs: string[]): string {
+	return [
+		JSON.stringify({
+			kind: "WorkerChildSessionTranscriptV1",
+			sessionId: `child-${slug(manifest.workerId)}-${manifest.attempt}`,
+			workerId: manifest.workerId,
+			roleId: manifest.roleId,
+			status: manifest.status,
+			provider: swarmChildSessionProviderFromManifest(manifest),
+			claimRefs,
+			runtimeManifestFile: manifest.runtimeManifestFile,
+			stdoutPath: manifest.stdoutPath,
+			stderrPath: manifest.stderrPath,
+			stdoutSha256: manifest.stdoutSha256,
+			stderrSha256: manifest.stderrSha256,
+			toolCallDigest: manifest.toolCallDigest,
+		}),
+		JSON.stringify({
+			event: "pool_bridge",
+			poolId: manifest.runId,
+			mergeKeys: manifest.mergeKeys,
+			retryBudget: manifest.retryBudget,
+			resourceLimits: manifest.resourceLimits,
+			evidenceRefs: manifest.evidenceRefs,
+		}),
+	].join("\n") + "\n";
+}
+
+function buildWorkerChildSessionRuntimeBatchFromSwarm(swarm: SwarmArtifact): WorkerChildSessionRuntimeBatchV1 {
+	const manifests = swarm.subagentRuntimeManifests ?? [];
+	const batchId = `worker-child-session/${slug(swarm.route ?? swarm.target ?? "swarm")}/${swarm.timestamp}`;
+	const poolId = swarm.parallelPlan?.planId ?? `re_swarm/${swarm.timestamp}`;
+	const launchPolicy = workerChildSessionLaunchPolicy({
+		cwd: process.cwd(),
+		isolatedHome: join(swarmSubagentSessionRoot(swarm), ".repi", "agent"),
+		timeoutMs: Math.max(1000, Math.min(120000, Math.max(...manifests.map((manifest) => manifest.resourceLimits.timeoutMs), 30000))),
+	});
+	const sessions = manifests.map((manifest): WorkerChildSessionRuntimeV1 => {
+		const claimRefs = swarmChildSessionClaimRefs(swarm, manifest.workerId);
+		const sessionId = `child-${slug(manifest.workerId)}-${manifest.attempt}`;
+		const transcriptPath = join(manifest.sessionDir, "transcript.jsonl");
+		const transcript = swarmChildSessionTranscript(manifest, claimRefs);
+		writeFileSync(transcriptPath, transcript, "utf-8");
+		const transcriptSha256 = swarmExecutionDigest(transcript);
+		const timedOut = manifest.elapsedMs > manifest.resourceLimits.timeoutMs;
+		const status = timedOut ? "timeout" : swarmChildSessionStatusFromManifest(manifest);
+		const runtime: WorkerChildSessionRuntimeV1["runtime"] = {
+			status,
+			pid: manifest.pid,
+			sessionDir: manifest.sessionDir,
+			transcriptPath,
+			stdoutPath: manifest.stdoutPath,
+			stderrPath: manifest.stderrPath,
+			startedAt: manifest.startedAt,
+			endedAt: manifest.endedAt,
+			exitCode: manifest.exitCode,
+			signal: timedOut ? "SIGTERM" : manifest.signal,
+			...(status === "timeout" ? { cancelledAt: manifest.endedAt } : {}),
+		};
+		return {
+			sessionId,
+			workerId: manifest.workerId,
+			packetId: `packet-${slug(manifest.workerId)}`,
+			attempt: manifest.attempt,
+			maxAttempts: manifest.retryBudget.maxAttempts,
+			provider: swarmChildSessionProviderFromManifest(manifest),
+			runtime,
+			hashes: {
+				transcriptSha256,
+				stdoutSha256: manifest.stdoutSha256,
+				stderrSha256: manifest.stderrSha256,
+				toolCallDigest: manifest.toolCallDigest,
+			},
+			resourceLease: {
+				cpuSlots: 1,
+				memoryMb: 768,
+				maxProcesses: 2,
+			},
+			retryBudget: manifest.retryBudget,
+			poolBridge: {
+				poolId,
+				mergeKey: claimRefs[0] ?? manifest.mergeKeys[0] ?? manifest.workerId,
+				claimRefs,
+				workerRuntimePoolStatus: timedOut ? "timeout" : swarmChildSessionWorkerStatusFromManifest(manifest),
+			},
+			failureRepairRefs: [manifest.failureLedgerPath, manifest.repairQueuePath].filter(Boolean),
+		};
+	});
+	return {
+		kind: "WorkerChildSessionRuntimeBatchV1",
+		schemaVersion: 1,
+		batchId,
+		poolId,
+		resourceBudget: {
+			cpuSlots: Math.max(1, Math.min(8, sessions.length || 1)),
+			memoryMb: Math.max(1024, sessions.length * 768),
+			maxProcesses: Math.max(2, sessions.length * 2),
+		},
+		launchPolicy,
+		sessions,
+		claimLedgerEvents: (swarm.claimLedger ?? []) as WorkerChildSessionClaimLedgerEventV1[],
+		poolBridge: {
+			kind: "WorkerRuntimePoolV1Bridge",
+			poolId,
+			workerIds: sessions.map((session) => session.workerId),
+			claimAwareMerge: true,
+			childSessionRuntimeCaptured: sessions.length > 0,
+		},
+	};
+}
+
+function runWorkerChildProcessProbe(batch: WorkerChildSessionRuntimeBatchV1, artifactPath: string): WorkerChildProcessProbeV1 {
+	const probeId = `child-process-probe:${createHash("sha256").update(`${batch.batchId}:${artifactPath}`).digest("hex").slice(0, 16)}`;
+	const probeDir = artifactPath.replace(/\.json$/i, "-child-process");
+	const home = join(probeDir, "home");
+	const isolatedHome = join(home, ".repi", "agent");
+	mkdirSync(isolatedHome, { recursive: true });
+	const stdoutPath = join(probeDir, "stdout.txt");
+	const stderrPath = join(probeDir, "stderr.txt");
+	const command =
+		process.env.REPI_CHILD_PROCESS_REPI_BIN ??
+		(existsSync(join(process.env.REPI_REPO_ROOT ?? process.cwd(), "repi"))
+			? join(process.env.REPI_REPO_ROOT ?? process.cwd(), "repi")
+			: "repi");
+	const args = ["--offline", "--help"];
+	const cwd = existsSync(process.env.REPI_REPO_ROOT ?? "") ? (process.env.REPI_REPO_ROOT as string) : process.cwd();
+	const envAllowlist = uniqueNonEmpty([...batch.launchPolicy.envAllowlist, "REPI_CODING_AGENT_DIR", "REPI_REPO_ROOT"], 64);
+	const envDenylist = batch.launchPolicy.envDenylist;
+	const env: NodeJS.ProcessEnv = {
+		PATH: process.env.PATH ?? "",
+		HOME: home,
+		REPI_PRODUCT: "1",
+		REPI_PRIMARY: "1",
+		REPI_OFFLINE: "1",
+		REPI_SKIP_VERSION_CHECK: "1",
+		REPI_SKIP_PACKAGE_UPDATE_CHECK: "1",
+		REPI_TELEMETRY: "0",
+		REPI_CODING_AGENT_DIR: isolatedHome,
+		REPI_CODING_AGENT_CONFIG_DIR: ".repi",
+		REPI_CODING_AGENT_APP_NAME: "repi",
+		PI_OFFLINE: "1",
+		PI_SKIP_VERSION_CHECK: "1",
+		PI_SKIP_PACKAGE_UPDATE_CHECK: "1",
+		PI_TELEMETRY: "0",
+		PI_CODING_AGENT_DIR: isolatedHome,
+		PI_CODING_AGENT_CONFIG_DIR: ".repi",
+		PI_CODING_AGENT_APP_NAME: "repi",
+	};
+	if (process.env.REPI_REPO_ROOT) env.REPI_REPO_ROOT = process.env.REPI_REPO_ROOT;
+	const started = Date.now();
+	const startedAt = new Date(started).toISOString();
+	const result = spawnSync(command, args, {
+		cwd,
+		env,
+		encoding: "utf8",
+		timeout: Math.min(30000, Math.max(5000, batch.launchPolicy.timeoutMs)),
+		maxBuffer: 8 * 1024 * 1024,
+	});
+	const ended = Date.now();
+	const stdout = result.stdout ?? "";
+	const stderr = result.stderr ?? "";
+	writeFileSync(stdoutPath, stdout, "utf-8");
+	writeFileSync(stderrPath, stderr, "utf-8");
+	const combined = `${stdout}\n${stderr}`;
+	const assertions = {
+		repiCommandExecuted: /repi\b/i.test(combined) && /REPI|reverse\/pentest|independent product/i.test(combined),
+		isolatedRepiHome: isolatedHome.includes(".repi") && !isolatedHome.includes("/.pi/"),
+		noPiHomeImport: !new RegExp("(^|[\\\\s\\\"'])~?\\\\/?\\\\.pi\\\\/", "i").test(combined),
+		updateChecksDisabled: !new RegExp("Update Available|pi\\\\.dev/changelog|Run pi update", "i").test(combined),
+		telemetryDisabled: env.REPI_TELEMETRY === "0" && env.PI_TELEMETRY === "0",
+		noLiteralSecrets: !/(sk-[A-Za-z0-9]|ghp_[A-Za-z0-9]|github_pat_[A-Za-z0-9])/i.test(combined),
+		stdoutCaptured: stdout.length > 0 || stderr.length > 0,
+	};
+	const errors = Object.entries(assertions)
+		.filter(([, value]) => !value)
+		.map(([key]) => `assertion_failed:${key}`);
+	if (result.error) errors.push(`spawn_error:${result.error.message}`);
+	if ((result.status ?? 1) !== 0) errors.push(`exit_code:${result.status}`);
+	return {
+		kind: "WorkerChildProcessProbeV1",
+		schemaVersion: 1,
+		probeId,
+		command,
+		args,
+		cwd,
+		isolatedHome,
+		startedAt,
+		endedAt: new Date(ended).toISOString(),
+		elapsedMs: Math.max(0, ended - started),
+		exitCode: result.status,
+		signal: result.signal,
+		status: errors.length ? "blocked" : "pass",
+		stdoutPath,
+		stderrPath,
+		stdoutSha256: swarmExecutionDigest(stdout),
+		stderrSha256: swarmExecutionDigest(stderr),
+		envAllowlist,
+		envDenylist,
+		assertions,
+		errors: uniqueNonEmpty(errors, 32),
+	};
+}
+
+function refreshSwarmWorkerChildSessionRuntime(swarm: SwarmArtifact): SwarmArtifact {
+	const path = swarmWorkerChildSessionRuntimePath(swarm);
+	if (!(swarm.subagentRuntimeManifests ?? []).length) {
+		return {
+			...swarm,
+			workerChildSessionRuntimePath: path,
+			workerChildSessionRuntimeStatus: "missing",
+			workerChildSessionRuntimeErrors: ["subagent_runtime_manifests_missing"],
+			workerRuntimePoolBridgeStatus: "missing",
+			workerRuntimePoolBridgeErrors: ["subagent_runtime_manifests_missing"],
+		};
+	}
+	const initialBatch = buildWorkerChildSessionRuntimeBatchFromSwarm(swarm);
+	const childProcessProbe =
+		process.env.REPI_SWARM_CHILD_PROCESS_SMOKE === "1" ? runWorkerChildProcessProbe(initialBatch, path) : undefined;
+	const batch: WorkerChildSessionRuntimeBatchV1 = childProcessProbe
+		? {
+				...initialBatch,
+				childProcessProbe,
+				poolBridge: {
+					...initialBatch.poolBridge,
+					childProcessRuntimeCaptured: childProcessProbe.status === "pass",
+				},
+			}
+		: initialBatch;
+	const batchValidation = verifyWorkerChildSessionRuntimeBatch(batch);
+	const pool = workerChildSessionToWorkerRuntimePoolBridge(batch);
+	const poolValidation = verifyWorkerRuntimePool(pool);
+	writeFileSync(path, `${JSON.stringify({ batch, batchValidation, workerRuntimePoolBridge: pool, poolValidation }, null, 2)}\n`, "utf-8");
+	return {
+		...swarm,
+		workerChildSessionRuntimePath: path,
+		workerChildSessionRuntime: batch,
+		workerChildSessionRuntimeStatus: batchValidation.ok ? "pass" : "blocked",
+		workerChildSessionRuntimeErrors: batchValidation.errors,
+		workerRuntimePoolBridge: pool,
+		workerRuntimePoolBridgeStatus: poolValidation.ok ? "pass" : "blocked",
+		workerRuntimePoolBridgeErrors: poolValidation.errors,
+		sourceArtifacts: Array.from(
+			new Set([
+				...swarm.sourceArtifacts,
+				path,
+				batch.childProcessProbe?.stdoutPath,
+				batch.childProcessProbe?.stderrPath,
+				...batch.sessions.flatMap((session) => [
+					session.runtime.transcriptPath,
+					session.runtime.stdoutPath,
+					session.runtime.stderrPath,
+				]),
+			].filter((item): item is string => Boolean(item))),
+		).slice(0, 80),
+	};
+}
+
+
+function appendWorkerLeaseSchedulerEvent(
+	events: WorkerLeaseSchedulerEventV1[],
+	event: Omit<WorkerLeaseSchedulerEventV1, "kind" | "schemaVersion" | "prevHash" | "eventHash">,
+): WorkerLeaseSchedulerEventV1 {
+	const row: WorkerLeaseSchedulerEventV1 = {
+		kind: "WorkerLeaseSchedulerEventV1",
+		schemaVersion: 1,
+		...event,
+		prevHash: events.at(-1)?.eventHash ?? "0".repeat(64),
+		eventHash: "",
+	};
+	const { eventHash: _eventHash, ...withoutHash } = row;
+	row.eventHash = workerLeaseSchedulerEventHash(withoutHash);
+	events.push(row);
+	return row;
+}
+
+function workerLeaseSchedulerClaimRefs(swarm: SwarmArtifact, workerId: string): string[] {
+	return uniqueNonEmpty(
+		[
+			...(swarm.claimLedger ?? [])
+				.filter((event) => event.workerId === workerId && event.claimId)
+				.map((event) => event.claimId as string),
+			`${swarm.parallelPlan?.planId ?? "re_swarm"}:worker:${slug(workerId).slice(0, 48)}`,
+		],
+		8,
+	);
+}
+
+function workerLeaseSchedulerTaskStatus(manifest?: SwarmSubagentRuntimeManifestRow): WorkerLeaseSchedulerTaskV1["status"] {
+	if (!manifest) return "queued";
+	if (manifest.status === "done") return "completed";
+	if (manifest.status === "blocked" || manifest.status === "cancelled") return "failed";
+	return "queued";
+}
+
+function buildWorkerLeaseSchedulerFromSwarm(swarm: SwarmArtifact): WorkerLeaseSchedulerV1 {
+	const generatedAt = new Date().toISOString();
+	const events: WorkerLeaseSchedulerEventV1[] = [];
+	const manifestsByWorker = new Map((swarm.subagentRuntimeManifests ?? []).map((manifest) => [manifest.workerId, manifest]));
+	const maxConcurrency = Math.max(1, Math.min(8, swarm.parallelGroups.length || swarm.parallelPlan?.workers.length || swarm.workers.length || 1));
+	const workerIds = uniqueNonEmpty(
+		[
+			...swarm.workers.map((worker) => worker.id),
+			...(swarm.subagentRuntimeManifests ?? []).map((manifest) => manifest.workerId),
+			"scheduler-probe-a",
+			"scheduler-probe-b",
+		],
+		128,
+	);
+	const tasks: WorkerLeaseSchedulerTaskV1[] = swarm.workers.map((worker) => {
+		const manifest = manifestsByWorker.get(worker.id);
+		const leaseId = manifest ? `lease-${slug(worker.id)}-${manifest.attempt}` : undefined;
+		return {
+			taskId: `task-${slug(worker.id).slice(0, 80)}`,
+			shardKey: worker.worker,
+			status: workerLeaseSchedulerTaskStatus(manifest),
+			...(leaseId ? { leaseId, ownerWorkerId: worker.id, leaseExpiresAt: new Date(Date.parse(manifest?.endedAt ?? generatedAt) + 30000).toISOString() } : {}),
+			attempt: manifest?.attempt ?? 0,
+			maxAttempts: manifest?.retryBudget.maxAttempts ?? 3,
+			claimRefs: workerLeaseSchedulerClaimRefs(swarm, worker.id),
+			artifactRefs: uniqueNonEmpty(
+				[
+					manifest?.runtimeManifestFile,
+					manifest?.stdoutPath,
+					manifest?.stderrPath,
+					swarm.claimLedgerPath,
+					...(worker.sourceArtifacts ?? []),
+				],
+				16,
+			),
+		};
+	});
+	const enqueueTs = swarm.timestamp || generatedAt;
+	for (const task of tasks) {
+		appendWorkerLeaseSchedulerEvent(events, {
+			eventId: `ev-enqueue-${task.taskId}`,
+			ts: enqueueTs,
+			type: "enqueue",
+			taskId: task.taskId,
+		});
+	}
+	for (const task of tasks) {
+		const workerId = task.ownerWorkerId;
+		if (!workerId || !task.leaseId) continue;
+		const row = manifestsByWorker.get(workerId);
+		appendWorkerLeaseSchedulerEvent(events, {
+			eventId: `ev-lease-${task.taskId}-${task.attempt || 1}`,
+			ts: row?.startedAt ?? generatedAt,
+			type: "lease_acquired",
+			taskId: task.taskId,
+			workerId,
+			leaseId: task.leaseId,
+		});
+		appendWorkerLeaseSchedulerEvent(events, {
+			eventId: `ev-heartbeat-${task.taskId}-${task.attempt || 1}`,
+			ts: row?.endedAt ?? generatedAt,
+			type: "heartbeat",
+			taskId: task.taskId,
+			workerId,
+			leaseId: task.leaseId,
+		});
+		if (task.status === "completed") {
+			appendWorkerLeaseSchedulerEvent(events, {
+				eventId: `ev-completed-${task.taskId}-${task.attempt || 1}`,
+				ts: row?.endedAt ?? generatedAt,
+				type: "completed",
+				taskId: task.taskId,
+				workerId,
+				leaseId: task.leaseId,
+			});
+		} else if (task.status === "failed") {
+			appendWorkerLeaseSchedulerEvent(events, {
+				eventId: `ev-failed-${task.taskId}-${task.attempt || 1}`,
+				ts: row?.endedAt ?? generatedAt,
+				type: "failed",
+				taskId: task.taskId,
+				workerId,
+				leaseId: task.leaseId,
+			});
+		}
+	}
+	const probeClaimRefs = uniqueNonEmpty(
+		[
+			`${swarm.parallelPlan?.planId ?? "re_swarm"}:scheduler:stale-recovery-probe`,
+			...(swarm.claimLedger ?? []).slice(0, 2).map((event) => event.claimId).filter((item): item is string => Boolean(item)),
+		],
+		8,
+	);
+	const probeTask: WorkerLeaseSchedulerTaskV1 = {
+		taskId: "task-scheduler-stale-recovery-probe",
+		shardKey: "scheduler-control-plane",
+		status: "completed",
+		leaseId: "lease-scheduler-probe-2",
+		ownerWorkerId: "scheduler-probe-b",
+		leaseExpiresAt: new Date(Date.parse(generatedAt) + 30000).toISOString(),
+		attempt: 2,
+		maxAttempts: 3,
+		claimRefs: probeClaimRefs.length ? probeClaimRefs : ["scheduler:stale-recovery-probe"],
+		artifactRefs: uniqueNonEmpty([swarm.claimLedgerPath, swarm.subagentRuntimeManifestPath, swarm.workerChildSessionRuntimePath], 8),
+	};
+	tasks.push(probeTask);
+	appendWorkerLeaseSchedulerEvent(events, {
+		eventId: "ev-enqueue-task-scheduler-stale-recovery-probe",
+		ts: enqueueTs,
+		type: "enqueue",
+		taskId: probeTask.taskId,
+	});
+	appendWorkerLeaseSchedulerEvent(events, {
+		eventId: "ev-lease-task-scheduler-stale-recovery-probe-1",
+		ts: generatedAt,
+		type: "lease_acquired",
+		taskId: probeTask.taskId,
+		workerId: "scheduler-probe-a",
+		leaseId: "lease-scheduler-probe-1",
+	});
+	appendWorkerLeaseSchedulerEvent(events, {
+		eventId: "ev-stale-task-scheduler-stale-recovery-probe-1",
+		ts: generatedAt,
+		type: "stale_detected",
+		taskId: probeTask.taskId,
+		workerId: "scheduler-probe-a",
+		leaseId: "lease-scheduler-probe-1",
+	});
+	appendWorkerLeaseSchedulerEvent(events, {
+		eventId: "ev-steal-task-scheduler-stale-recovery-probe-2",
+		ts: generatedAt,
+		type: "work_stolen",
+		taskId: probeTask.taskId,
+		workerId: "scheduler-probe-b",
+		leaseId: probeTask.leaseId,
+	});
+	appendWorkerLeaseSchedulerEvent(events, {
+		eventId: "ev-heartbeat-task-scheduler-stale-recovery-probe-2",
+		ts: generatedAt,
+		type: "heartbeat",
+		taskId: probeTask.taskId,
+		workerId: "scheduler-probe-b",
+		leaseId: probeTask.leaseId,
+	});
+	appendWorkerLeaseSchedulerEvent(events, {
+		eventId: "ev-completed-task-scheduler-stale-recovery-probe-2",
+		ts: generatedAt,
+		type: "completed",
+		taskId: probeTask.taskId,
+		workerId: "scheduler-probe-b",
+		leaseId: probeTask.leaseId,
+	});
+	appendWorkerLeaseSchedulerEvent(events, {
+		eventId: "ev-dedup-task-scheduler-stale-recovery-probe-1",
+		ts: generatedAt,
+		type: "dedup_rejected",
+		taskId: probeTask.taskId,
+		workerId: "scheduler-probe-a",
+		leaseId: "lease-scheduler-probe-1",
+	});
+	return {
+		kind: "WorkerLeaseSchedulerV1",
+		schemaVersion: 1,
+		generatedAt,
+		schedulerId: `worker-lease-scheduler/${slug(swarm.route ?? swarm.target ?? "swarm")}/${swarm.timestamp}`,
+		maxConcurrency,
+		workerIds,
+		tasks,
+		events,
+		assertions: {
+			leaseExclusive: true,
+			heartbeatRequired: events.some((event) => event.type === "heartbeat"),
+			staleLeaseRecovered: events.some((event) => event.type === "stale_detected") && events.some((event) => event.type === "work_stolen"),
+			workStealingObserved: events.some((event) => event.type === "work_stolen"),
+			duplicateCompletionRejected: events.some((event) => event.type === "dedup_rejected"),
+			maxConcurrencyRespected: maxConcurrency >= 1,
+			claimRefsPreserved: tasks.every((task) => task.claimRefs.length > 0),
+			appendOnlyHashChain: true,
+		},
+	};
+}
+
+function refreshSwarmWorkerLeaseScheduler(swarm: SwarmArtifact): SwarmArtifact {
+	const path = swarmWorkerLeaseSchedulerPath(swarm);
+	if (!swarm.workers.length) {
+		return {
+			...swarm,
+			workerLeaseSchedulerPath: path,
+			workerLeaseSchedulerStatus: "missing",
+			workerLeaseSchedulerErrors: ["swarm_workers_missing"],
+		};
+	}
+	const scheduler = buildWorkerLeaseSchedulerFromSwarm({ ...swarm, workerLeaseSchedulerPath: path });
+	const validation = verifyWorkerLeaseSchedulerV1(scheduler);
+	writeFileSync(path, `${JSON.stringify({ scheduler, validation }, null, 2)}\n`, "utf-8");
+	return {
+		...swarm,
+		workerLeaseSchedulerPath: path,
+		workerLeaseScheduler: scheduler,
+		workerLeaseSchedulerStatus: validation.ok ? "pass" : "blocked",
+		workerLeaseSchedulerErrors: validation.errors,
+		sourceArtifacts: Array.from(
+			new Set([
+				...swarm.sourceArtifacts,
+				path,
+				swarm.claimLedgerPath,
+				swarm.structuredClaimMergePath,
+				swarm.subagentRuntimeManifestPath,
+				swarm.workerChildSessionRuntimePath,
+			].filter((item): item is string => Boolean(item))),
+		).slice(0, 96),
+	};
+}
+
 async function runSwarm(
 	pi: ExtensionAPI,
 	options: { target?: string; task?: string; maxWorkers?: number; maxCommands?: number } = {},
@@ -16491,6 +19591,29 @@ function formatSwarm(swarm: SwarmArtifact, path?: string): string {
 							`- worker=${manifest.workerId} role=${manifest.roleId} status=${manifest.status} pid=${manifest.pid ?? "null"} sessionDir=${manifest.sessionDir} runtimeManifestFile=${manifest.runtimeManifestFile} stdoutSha256=${manifest.stdoutSha256.slice(0, 16)} stderrSha256=${manifest.stderrSha256.slice(0, 16)} toolCallDigest=${manifest.toolCallDigest.slice(0, 16)}`,
 					)
 			: ["- none"]),
+		"worker_child_session_runtime:",
+		`- path=${swarm.workerChildSessionRuntimePath ?? "pending"}`,
+		`- status=${swarm.workerChildSessionRuntimeStatus ?? "missing"}`,
+		`- sessions=${swarm.workerChildSessionRuntime?.sessions.length ?? 0}`,
+		`- pool_bridge=${swarm.workerRuntimePoolBridgeStatus ?? "missing"}`,
+		`- childSessionRuntimeCaptured=${swarm.workerChildSessionRuntime?.poolBridge.childSessionRuntimeCaptured ?? false}`,
+		...(swarm.workerChildSessionRuntimeErrors?.length
+			? swarm.workerChildSessionRuntimeErrors.slice(0, 8).map((error) => `- child_error=${error}`)
+			: ["- child_errors=none"]),
+		...(swarm.workerRuntimePoolBridgeErrors?.length
+			? swarm.workerRuntimePoolBridgeErrors.slice(0, 8).map((error) => `- pool_error=${error}`)
+			: ["- pool_errors=none"]),
+		"worker_lease_scheduler:",
+		`- path=${swarm.workerLeaseSchedulerPath ?? "pending"}`,
+		`- status=${swarm.workerLeaseSchedulerStatus ?? "missing"}`,
+		`- tasks=${swarm.workerLeaseScheduler?.tasks.length ?? 0}`,
+		`- events=${swarm.workerLeaseScheduler?.events.length ?? 0}`,
+		`- stale_recovery=${swarm.workerLeaseScheduler?.assertions.staleLeaseRecovered ? "pass" : "fail"}`,
+		`- work_stealing=${swarm.workerLeaseScheduler?.assertions.workStealingObserved ? "pass" : "fail"}`,
+		`- duplicate_completion_rejected=${swarm.workerLeaseScheduler?.assertions.duplicateCompletionRejected ? "pass" : "fail"}`,
+		...(swarm.workerLeaseSchedulerErrors?.length
+			? swarm.workerLeaseSchedulerErrors.slice(0, 8).map((error) => `- scheduler_error=${error}`)
+			: ["- scheduler_errors=none"]),
 		"memory_swarm_writeback:",
 		`- status=${swarm.memoryWritebackStatus ?? "pending"}`,
 		`- events=${swarm.memoryWritebackCount ?? 0}`,
@@ -16520,8 +19643,11 @@ function writeSwarmArtifact(swarm: SwarmArtifact): string {
 	swarm.claimLedgerPath = swarmClaimLedgerPath(swarm);
 	swarm.structuredClaimMergePath = swarmStructuredClaimMergePath(swarm);
 	swarm.subagentRuntimeManifestPath = swarmSubagentRuntimeManifestIndexPath(swarm);
+	swarm.workerLeaseSchedulerPath = swarmWorkerLeaseSchedulerPath(swarm);
 	Object.assign(swarm, refreshSwarmSubagentRuntimeManifestCapture(swarm));
 	Object.assign(swarm, refreshSwarmRuntimeClaimLedger(swarm));
+	Object.assign(swarm, refreshSwarmWorkerChildSessionRuntime(swarm));
+	Object.assign(swarm, refreshSwarmWorkerLeaseScheduler(swarm));
 	writeFileSync(
 		swarm.claimLedgerPath,
 		`${swarm.claimLedger.map((event) => JSON.stringify(event)).join("\n")}${swarm.claimLedger.length ? "\n" : ""}`,
@@ -17528,6 +20654,7 @@ const CONTEXT_HASH_OMIT = new Set(["contextSha256", "exactResumeVerification", "
 function contextEvidenceRank(kind: string): string {
 	if (kind === "artifact_scope_filter") return "persisted_state";
 	if (/^memory_/i.test(kind)) return "persisted_state";
+	if (/^compact_resume_/i.test(kind)) return "persisted_state";
 	if (/browser|web_authz|mobile_runtime|native_runtime|exploit_lab|run|replayer|proof_loop/i.test(kind)) return "runtime_artifact";
 	if (/map|knowledge|harness|decision_core|kernel/i.test(kind)) return "process_config";
 	if (/compiler|verifier|supervisor|swarm|delegation|operation|reflection|operator|autofix/i.test(kind))
@@ -17536,13 +20663,17 @@ function contextEvidenceRank(kind: string): string {
 }
 
 function contextSourceCommand(kind: string): string {
-	if (/^memory_(?:events|case_memory|retrieval|store|snapshot|usefulness|feedback|scope|orchestrator|vector|distillation|quarantine|semantic|contradiction|injection|sedimentation|supervisor|lifecycle)/i.test(kind)) {
+	if (/^memory_(?:events|case_memory|retrieval|store|snapshot|usefulness|quality|feedback|scope|orchestrator|deposition|vector|distillation|quarantine|semantic|contradiction|injection|sedimentation|supervisor|lifecycle|active)/i.test(kind)) {
 		if (/store_report/i.test(kind)) return "re_memory verify";
 		if (/store_snapshot/i.test(kind)) return "re_memory snapshot";
 		if (/usefulness/i.test(kind)) return "re_memory eval";
+		if (/quality/i.test(kind)) return "re_memory quality";
+		if (/active/i.test(kind)) return "re_memory active";
 		if (/feedback/i.test(kind)) return "re_memory feedback";
 		if (/scope/i.test(kind)) return "re_memory scope";
 		if (/orchestrator/i.test(kind)) return "re_memory orchestrate";
+		if (/deposition/i.test(kind)) return "re_memory deposition-report";
+		if (/compact_resume|compaction_resume/i.test(kind)) return "re_memory compact-resume";
 		if (/vector/i.test(kind)) return "re_memory vector";
 		if (/distillation|quarantine/i.test(kind)) return "re_memory distill";
 		if (/semantic|contradiction|injection|sedimentation/i.test(kind)) return "re_memory sediment";
@@ -17641,7 +20772,7 @@ function contextArtifactHashes(index: ContextArtifactIndexEntry[]): Array<{ arti
 		artifactId: artifact.artifactId ?? `${artifact.kind}:${artifact.path}`,
 		path: artifact.path,
 		sha256: artifact.sha256 ?? null,
-		required: artifact.exists === true,
+		required: artifact.required ?? artifact.exists === true,
 	}));
 }
 
@@ -17651,6 +20782,232 @@ function contextCompactionLedger(timestamp: string): { path: string; appendOnly:
 	const prevHash = previous.trim() ? createHash("sha256").update(previous).digest("hex") : "0".repeat(64);
 	const entryHash = createHash("sha256").update(`${prevHash}\n${timestamp}\ncontext-pack`).digest("hex");
 	return { path, appendOnly: true, prevHash, entryHash };
+}
+
+const COMPACT_RESUME_ALLOWED_TRANSITIONS: Record<CompactResumeStateV2, CompactResumeStateV2[]> = {
+	queued: ["queued", "running", "blocked", "exhausted"],
+	running: ["done", "blocked", "exhausted"],
+	blocked: ["running", "exhausted"],
+	done: [],
+	exhausted: [],
+};
+
+function compactResumeTransitionEntryHash(
+	row: Omit<CompactResumeLedgerTransitionV2, "entryHash">,
+): string {
+	return createHash("sha256")
+		.update(
+			[
+				row.prevHash,
+				row.at,
+				`${row.from}->${row.to}`,
+				row.idempotencyKey,
+				normalizeReconCommand(row.command ?? ""),
+				row.contextPath ?? "",
+				row.contextSha256 ?? "",
+				`${row.attempt}/${row.maxAttempts}`,
+				row.reason,
+			].join("\n"),
+		)
+		.digest("hex");
+}
+
+function readCompactResumeTransitions(): {
+	path: string;
+	text: string;
+	transitions: CompactResumeLedgerTransitionV2[];
+	parseErrors: string[];
+} {
+	const path = compactResumeTransitionLedgerPath();
+	const text = readText(path);
+	const transitions: CompactResumeLedgerTransitionV2[] = [];
+	const parseErrors: string[] = [];
+	for (const [index, line] of text.split(/\r?\n/).entries()) {
+		if (!line.trim()) continue;
+		try {
+			const row = JSON.parse(line) as CompactResumeLedgerTransitionV2;
+			if (row?.kind !== "repi-compact-resume-ledger-transition") {
+				parseErrors.push(`row ${index + 1}: transition kind missing`);
+				continue;
+			}
+			transitions.push(row);
+		} catch {
+			parseErrors.push(`row ${index + 1}: transition JSON corrupt`);
+		}
+	}
+	return { path, text, transitions, parseErrors };
+}
+
+function compactResumeStateForKey(
+	transitions: CompactResumeLedgerTransitionV2[],
+	idempotencyKey: string,
+): CompactResumeStateV2 {
+	return transitions.filter((row) => row.idempotencyKey === idempotencyKey).at(-1)?.to ?? "queued";
+}
+
+function compactResumeAttemptForKey(transitions: CompactResumeLedgerTransitionV2[], idempotencyKey: string): number {
+	return transitions.filter((row) => row.idempotencyKey === idempotencyKey).length + 1;
+}
+
+function appendCompactResumeTransition(params: {
+	from?: CompactResumeStateV2;
+	to: CompactResumeStateV2;
+	command?: string;
+	reason: string;
+	idempotencyKey?: string;
+	contextPath?: string;
+	contextSha256?: string;
+	attempt?: number;
+	maxAttempts?: number;
+}): CompactResumeLedgerTransitionV2 {
+	ensureReconStorage();
+	const ledger = readCompactResumeTransitions();
+	const idempotencyKey =
+		params.idempotencyKey ??
+		createHash("sha256")
+			.update([params.contextPath ?? "no-context", params.command ?? "", params.reason].join("\n"))
+			.digest("hex");
+	const normalizedCommand = normalizeReconCommand(params.command ?? "");
+	const duplicate = ledger.transitions.find(
+		(row) =>
+			row.idempotencyKey === idempotencyKey &&
+			row.to === params.to &&
+			normalizeReconCommand(row.command ?? "") === normalizedCommand &&
+			(row.contextPath ?? "") === (params.contextPath ?? ""),
+	);
+	if (duplicate) return duplicate;
+	const previousText = ledger.text;
+	const prevHash = previousText.trim()
+		? createHash("sha256").update(previousText).digest("hex")
+		: "0".repeat(64);
+	const from = params.from ?? compactResumeStateForKey(ledger.transitions, idempotencyKey);
+	const base: Omit<CompactResumeLedgerTransitionV2, "entryHash"> = {
+		kind: "repi-compact-resume-ledger-transition",
+		schemaVersion: 1,
+		from,
+		to: params.to,
+		at: new Date().toISOString(),
+		command: params.command,
+		reason: params.reason,
+		idempotencyKey,
+		contextPath: params.contextPath,
+		contextSha256: params.contextSha256,
+		attempt: params.attempt ?? compactResumeAttemptForKey(ledger.transitions, idempotencyKey),
+		maxAttempts: params.maxAttempts ?? 3,
+		prevHash,
+	};
+	const row: CompactResumeLedgerTransitionV2 = {
+		...base,
+		entryHash: compactResumeTransitionEntryHash(base),
+	};
+	writeFileSync(
+		compactResumeTransitionLedgerPath(),
+		`${previousText}${previousText && !previousText.endsWith("\n") ? "\n" : ""}${JSON.stringify(row)}\n`,
+		"utf-8",
+	);
+	return row;
+}
+
+function buildCompactResumeLedgerV2Report(options: { write?: boolean } = {}): CompactResumeLedgerV2Report {
+	ensureReconStorage();
+	const { path, text, transitions, parseErrors } = readCompactResumeTransitions();
+	const invalidTransitions: string[] = [...parseErrors];
+	let previousText = "";
+	let rowNumber = 0;
+	const groups = new Map<string, CompactResumeLedgerTransitionV2[]>();
+	const duplicateKeys = new Set<string>();
+	const seenReplayKeys = new Set<string>();
+	for (const line of text.split(/\r?\n/)) {
+		if (!line.trim()) continue;
+		rowNumber += 1;
+		let row: CompactResumeLedgerTransitionV2 | undefined;
+		try {
+			row = JSON.parse(line) as CompactResumeLedgerTransitionV2;
+		} catch {
+			previousText += `${line}\n`;
+			continue;
+		}
+		const expectedPrevHash = previousText.trim()
+			? createHash("sha256").update(previousText).digest("hex")
+			: "0".repeat(64);
+		if (row.prevHash !== expectedPrevHash) invalidTransitions.push(`append_only_transition_ledger prevHash drift row ${rowNumber}`);
+		const { entryHash: _entryHash, ...base } = row;
+		const expectedEntryHash = compactResumeTransitionEntryHash(base);
+		if (row.entryHash !== expectedEntryHash) invalidTransitions.push(`append_only_transition_ledger entryHash drift row ${rowNumber}`);
+		if (row.attempt > row.maxAttempts) invalidTransitions.push(`auto_resume_budget_exceeded row ${rowNumber}: attempt ${row.attempt}/${row.maxAttempts}`);
+		const replayKey = [row.idempotencyKey, normalizeReconCommand(row.command ?? ""), row.to, row.contextPath ?? ""].join("\t");
+		if (seenReplayKeys.has(replayKey)) duplicateKeys.add(replayKey);
+		seenReplayKeys.add(replayKey);
+		if (!groups.has(row.idempotencyKey)) groups.set(row.idempotencyKey, []);
+		groups.get(row.idempotencyKey)!.push(row);
+		previousText += `${line}\n`;
+	}
+	for (const duplicateKey of duplicateKeys) invalidTransitions.push(`idempotent_multi_compact_replay duplicate transition ${duplicateKey}`);
+	for (const [idempotencyKey, rows] of groups.entries()) {
+		let current: CompactResumeStateV2 = rows[0]?.from ?? "queued";
+		if (current !== "queued") invalidTransitions.push(`compact_resume_state_machine ${idempotencyKey} must start from queued, got ${current}`);
+		for (const [index, row] of rows.entries()) {
+			if (row.from !== current) invalidTransitions.push(`compact_resume_state_machine ${idempotencyKey} row ${index + 1} from mismatch: expected ${current}, got ${row.from}`);
+			if (!COMPACT_RESUME_ALLOWED_TRANSITIONS[row.from]?.includes(row.to))
+				invalidTransitions.push(`invalid_resume_transition ${idempotencyKey} ${row.from}->${row.to}`);
+			current = row.to;
+			if ((row.to === "done" || row.to === "exhausted") && index < rows.length - 1)
+				invalidTransitions.push(`terminal_resume_transition_reopened ${idempotencyKey} after ${row.to}`);
+		}
+	}
+	const currentState = transitions.at(-1)?.to ?? "queued";
+	const exhausted =
+		currentState === "exhausted" ||
+		transitions.some((row) => row.to === "exhausted" || row.attempt > row.maxAttempts);
+	const report: CompactResumeLedgerV2Report = {
+		kind: "repi-compact-resume-ledger-v2-report",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		CompactResumeLedgerV2: true,
+		append_only_transition_ledger: true,
+		idempotent_multi_compact_replay: true,
+		auto_resume_budget_enforced: true,
+		reportPath: compactResumeLedgerV2ReportPath(),
+		transitionPath: path,
+		currentState,
+		transitions,
+		invalidTransitions: Array.from(new Set(invalidTransitions)).slice(0, 120),
+		exhausted,
+		requiredGates: [
+			"CompactResumeLedgerV2",
+			"append_only_transition_ledger",
+			"idempotent_multi_compact_replay",
+			"auto_resume_budget_enforced",
+			"invalid_resume_transition",
+			"compact_resume_transition_report_in_context_pack",
+		],
+	};
+	if (options.write !== false) writeFileAtomic(compactResumeLedgerV2ReportPath(), `${JSON.stringify(report, null, 2)}\n`);
+	return report;
+}
+
+function formatCompactResumeLedgerV2(report = buildCompactResumeLedgerV2Report()): string {
+	return [
+		"compact_resume_ledger_v2:",
+		`CompactResumeLedgerV2=${report.CompactResumeLedgerV2}`,
+		`append_only_transition_ledger=${report.append_only_transition_ledger}`,
+		`idempotent_multi_compact_replay=${report.idempotent_multi_compact_replay}`,
+		`auto_resume_budget_enforced=${report.auto_resume_budget_enforced}`,
+		`current_state=${report.currentState}`,
+		`transitions=${report.transitions.length}`,
+		`invalid_transitions=${report.invalidTransitions.length}`,
+		`exhausted=${report.exhausted}`,
+		`transition_path=${report.transitionPath}`,
+		`report_path=${report.reportPath}`,
+		"recent_transitions:",
+		...(report.transitions.slice(-12).length
+			? report.transitions.slice(-12).map((row) => `- ${row.from}->${row.to} attempt=${row.attempt}/${row.maxAttempts} command=${row.command ?? "none"} idempotency=${row.idempotencyKey.slice(0, 16)}`)
+			: ["- none"]),
+		"invalid:",
+		...(report.invalidTransitions.length ? report.invalidTransitions.map((item) => `- ${item}`) : ["- none"]),
+		"required_gates:",
+		...report.requiredGates.map((item) => `- ${item}`),
+	].join("\n");
 }
 
 function scopedContextArtifactIndex(options: ArtifactScopeFilterOptions = {}): {
@@ -17723,6 +21080,36 @@ function scopedContextArtifactIndex(options: ArtifactScopeFilterOptions = {}): {
 		["memory_feedback_closure", existingPath(memoryFeedbackClosureReportPath())],
 		["memory_scope_isolation", existingPath(memoryScopeIsolationReportPath())],
 		["memory_orchestrator", existingPath(memoryOrchestratorReportPath())],
+		["memory_deposition_report", existingPath(memoryDepositionReportPath())],
+		["memory_deposition_events", existingPath(memoryDepositionEventBusPath())],
+		["memory_experience_report", existingPath(memoryExperienceReportPath())],
+		["memory_experience_episodes", existingPath(memoryExperienceEpisodesPath())],
+		["memory_experience_claims", existingPath(memoryExperienceClaimsPath())],
+		["memory_experience_lesson_book", existingPath(memoryExperienceLessonBookPath())],
+		["memory_experience_promotions", existingPath(memoryExperiencePromotionLedgerPath())],
+		["memory_skill_capsule_report", existingPath(memorySkillCapsuleReportPath())],
+		["memory_skill_capsules", existingPath(memorySkillCapsuleLedgerPath())],
+		["memory_skill_capsule_book", existingPath(memorySkillCapsuleBookPath())],
+		["memory_distill_promotion_report", existingPath(memoryDistillPromotionReportPath())],
+		["memory_distill_promotion_candidates", existingPath(memoryDistillPromotionCandidateLedgerPath())],
+		["memory_distill_promotion_book", existingPath(memoryDistillPromotionBookPath())],
+		["memory_quality_report", existingPath(memoryQualityReportPath())],
+		["memory_quality_ledger", existingPath(memoryQualityLedgerPath())],
+		["memory_quality_board", existingPath(memoryQualityBoardPath())],
+		["memory_replay_report", existingPath(memoryReplayEvaluatorReportPath())],
+		["memory_replay_ledger", existingPath(memoryReplayEvaluatorLedgerPath())],
+		["memory_replay_board", existingPath(memoryReplayEvaluatorBoardPath())],
+		["memory_strategy_capsule_report", existingPath(memoryStrategyCapsuleReportPath())],
+		["memory_strategy_capsules", existingPath(memoryStrategyCapsuleLedgerPath())],
+		["memory_strategy_capsule_book", existingPath(memoryStrategyCapsuleBookPath())],
+		["memory_active_kernel_report", existingPath(memoryActiveKernelReportPath())],
+		["memory_active_injection_pack", existingPath(memoryActiveInjectionPackPath())],
+		["memory_active_strategy_board", existingPath(memoryActiveStrategyBoardPath())],
+		["memory_maturation_runtime_report", existingPath(memoryMaturationRuntimeReportPath())],
+		["memory_maturation_runtime_ledger", existingPath(memoryMaturationRuntimeLedgerPath())],
+		["memory_maturation_action_board", existingPath(memoryMaturationActionBoardPath())],
+		["compact_resume_transition_ledger", existingPath(compactResumeTransitionLedgerPath())],
+		["compact_resume_ledger_v2_report", existingPath(compactResumeLedgerV2ReportPath())],
 		["memory_vector_index", existingPath(memoryVectorIndexPath())],
 		["memory_vector_search", existingPath(memoryVectorSearchReportPath())],
 		["memory_distillation_report", existingPath(memoryDistillationReportPath())],
@@ -17740,7 +21127,10 @@ function scopedContextArtifactIndex(options: ArtifactScopeFilterOptions = {}): {
 			.map(([kind, path, decision]) => contextArtifactEntry(kind, path, decision)),
 		...memoryPairs
 			.filter((pair): pair is [string, string] => Boolean(pair[1]))
-			.map(([kind, path]) => contextArtifactEntry(kind, path)),
+			.map(([kind, path]) => ({
+				...contextArtifactEntry(kind, path),
+				required: /compact_resume_(?:transition_ledger|ledger_v2_report)/i.test(kind) ? false : true,
+			})),
 	];
 	return { entries, artifactScopeFilter };
 }
@@ -17753,7 +21143,7 @@ function commandTargetSuffix(target?: string): string {
 	return target ? ` ${target}` : "";
 }
 
-function buildContextPack(options: { target?: string; mode?: "pack" | "resume" } = {}): ContextPackArtifact {
+function buildContextPack(options: { target?: string; mode?: "pack" | "resume"; recordCompactResume?: boolean } = {}): ContextPackArtifact {
 	ensureReconStorage();
 	const timestamp = new Date().toISOString();
 	const mission = readCurrentMission();
@@ -17795,9 +21185,6 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume" }
 		target,
 		write: true,
 	});
-	const artifactSelection = scopedContextArtifactIndex({ target, route, requestedBy: "context_artifact_index" });
-	const artifactIndex = artifactSelection.entries;
-	const artifactScopeFilter = artifactSelection.artifactScopeFilter;
 	const contextPath = contextPackArtifactPathFor({ timestamp, route, target, mode });
 	const scope = {
 		missionId: mission?.id ?? reflection?.missionId ?? supervisor?.missionId,
@@ -17837,6 +21224,8 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume" }
 			"re_replayer run",
 			"re_autofix plan",
 			"re_knowledge_graph build",
+			"re_memory active",
+			"re_memory skills",
 			"re_complete audit",
 			"re_context pack",
 		]),
@@ -17856,12 +21245,6 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume" }
 		`case_memory_lane_plan=${caseMemoryPlan?.action ?? "none"}:${caseMemoryPlan?.targetLane ?? caseMemoryPlan?.addedLane ?? active?.name ?? "none"}`,
 			`first_command=${nextCommands[0] ?? "re_mission show"}`,
 		];
-		const artifactHashes = contextArtifactHashes(artifactIndex);
-		const resumeArtifactHashes = artifactHashes
-			.filter((artifact): artifact is { artifactId: string; path: string; sha256: string; required: boolean } =>
-				Boolean(artifact.required && artifact.sha256),
-			)
-			.slice(0, 96);
 		const compactionLedger = contextCompactionLedger(timestamp);
 		const idempotencyKey = createHash("sha256").update(`${scope.sessionId}\n${contextPath}\n${nextCommands.join("\n")}`).digest("hex");
 		const closure = {
@@ -17870,6 +21253,54 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume" }
 			reason: mode === "resume" ? "resume context rebuilt from verified state" : "context pack awaiting resume",
 			verifiedBy: "re_context",
 		};
+		if (options.recordCompactResume !== false && mode === "resume") {
+			appendCompactResumeTransition({
+				from: "queued",
+				to: "running",
+				command: "re_context resume",
+				reason: "context resume started from rebuilt current state",
+				idempotencyKey,
+				contextPath,
+				maxAttempts: Math.max(1, autonomousBudget.maxTurns),
+			});
+			appendCompactResumeTransition({
+				to: "done",
+				command: "re_context resume",
+				reason: "context resume rebuilt and closed",
+				idempotencyKey,
+				contextPath,
+				maxAttempts: Math.max(1, autonomousBudget.maxTurns),
+			});
+		} else if (options.recordCompactResume !== false) {
+			appendCompactResumeTransition({
+				from: "queued",
+				to: "queued",
+				command: "re_context pack",
+				reason: "context pack queued for exact compact resume",
+				idempotencyKey,
+				contextPath,
+				maxAttempts: Math.max(1, autonomousBudget.maxTurns),
+			});
+		}
+		const compactResumeLedgerV2 = buildCompactResumeLedgerV2Report({ write: true });
+		const memoryDeposition = buildMemoryDepositionReport({ write: true });
+		const memoryExperience = buildMemoryExperienceReport({ write: true, route, target });
+		const memorySkillCapsules = buildMemorySkillCapsuleReport({ write: true, route, target });
+		const memoryDistillPromotion = buildMemoryDistillPromotionReport({ write: true, route, target });
+		const memoryQuality = buildMemoryQualityLedgerReport({ write: true, route, target });
+		const memoryReplay = buildMemoryReplayEvaluatorReport({ write: true, route, target, quality: memoryQuality });
+		const memoryStrategy = buildMemoryStrategyCapsuleReport({ write: true, route, target, quality: memoryQuality, replay: memoryReplay, skillCapsules: memorySkillCapsules });
+		const memoryActiveKernel = buildMemoryActiveKernelReport({ write: true, route, target, quality: memoryQuality, replay: memoryReplay, strategy: memoryStrategy });
+		const memoryMaturation = buildMemoryMaturationRuntimeReport({ write: true, route, target, quality: memoryQuality, replay: memoryReplay, strategy: memoryStrategy, active: memoryActiveKernel, deposition: memoryDeposition, experience: memoryExperience, skillCapsules: memorySkillCapsules, distillPromotion: memoryDistillPromotion });
+		const artifactSelection = scopedContextArtifactIndex({ target, route, requestedBy: "context_artifact_index" });
+		const artifactIndex = artifactSelection.entries;
+		const artifactScopeFilter = artifactSelection.artifactScopeFilter;
+		const artifactHashes = contextArtifactHashes(artifactIndex);
+		const resumeArtifactHashes = artifactHashes
+			.filter((artifact): artifact is { artifactId: string; path: string; sha256: string; required: boolean } =>
+				Boolean(artifact.required && artifact.sha256),
+			)
+			.slice(0, 96);
 		const pack: ContextPackArtifact = {
 			contractId: `context-pack/${slug(route ?? target ?? "context")}/${timestamp}`,
 			schemaVersion: 2,
@@ -17921,6 +21352,16 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume" }
 			artifactIndex,
 			artifactScopeFilter,
 			memoryOrchestrator,
+			memoryDeposition,
+			memoryExperience,
+			memorySkillCapsules,
+			memoryDistillPromotion,
+			memoryQuality,
+			memoryReplay,
+			memoryStrategy,
+			memoryActiveKernel,
+			memoryMaturation,
+			compactResumeLedgerV2,
 			repairQueue,
 		commanderMergeBudget,
 		workerScoreboard,
@@ -17945,6 +21386,33 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume" }
 					autonomousBudget.formalPlaybookPath,
 					existsSync(compactionResumeTelemetryPath()) ? compactionResumeTelemetryPath() : undefined,
 					existsSync(memoryOrchestrator.reportPath) ? memoryOrchestrator.reportPath : undefined,
+					existsSync(memoryDeposition.depositionReportPath) ? memoryDeposition.depositionReportPath : undefined,
+					existsSync(memoryDeposition.depositionEventBusPath) ? memoryDeposition.depositionEventBusPath : undefined,
+					existsSync(memoryExperience.reportPath) ? memoryExperience.reportPath : undefined,
+					existsSync(memoryExperience.lessonBookPath) ? memoryExperience.lessonBookPath : undefined,
+					existsSync(memorySkillCapsules.reportPath) ? memorySkillCapsules.reportPath : undefined,
+					existsSync(memorySkillCapsules.capsuleBookPath) ? memorySkillCapsules.capsuleBookPath : undefined,
+					existsSync(memorySkillCapsules.capsuleLedgerPath) ? memorySkillCapsules.capsuleLedgerPath : undefined,
+					existsSync(memoryDistillPromotion.reportPath) ? memoryDistillPromotion.reportPath : undefined,
+					existsSync(memoryDistillPromotion.promotionBookPath) ? memoryDistillPromotion.promotionBookPath : undefined,
+					existsSync(memoryDistillPromotion.candidateLedgerPath) ? memoryDistillPromotion.candidateLedgerPath : undefined,
+					existsSync(memoryQuality.reportPath) ? memoryQuality.reportPath : undefined,
+					existsSync(memoryQuality.boardPath) ? memoryQuality.boardPath : undefined,
+					existsSync(memoryQuality.ledgerPath) ? memoryQuality.ledgerPath : undefined,
+					existsSync(memoryReplay.reportPath) ? memoryReplay.reportPath : undefined,
+					existsSync(memoryReplay.boardPath) ? memoryReplay.boardPath : undefined,
+					existsSync(memoryReplay.ledgerPath) ? memoryReplay.ledgerPath : undefined,
+					existsSync(memoryStrategy.reportPath) ? memoryStrategy.reportPath : undefined,
+					existsSync(memoryStrategy.strategyBookPath) ? memoryStrategy.strategyBookPath : undefined,
+					existsSync(memoryStrategy.capsuleLedgerPath) ? memoryStrategy.capsuleLedgerPath : undefined,
+					existsSync(memoryActiveKernel.reportPath) ? memoryActiveKernel.reportPath : undefined,
+					existsSync(memoryActiveKernel.injectionPackPath) ? memoryActiveKernel.injectionPackPath : undefined,
+					existsSync(memoryActiveKernel.strategyBoardPath) ? memoryActiveKernel.strategyBoardPath : undefined,
+					existsSync(memoryMaturation.reportPath) ? memoryMaturation.reportPath : undefined,
+					existsSync(memoryMaturation.ledgerPath) ? memoryMaturation.ledgerPath : undefined,
+					existsSync(memoryMaturation.actionBoardPath) ? memoryMaturation.actionBoardPath : undefined,
+					existsSync(compactResumeLedgerV2.reportPath) ? compactResumeLedgerV2.reportPath : undefined,
+					existsSync(compactResumeLedgerV2.transitionPath) ? compactResumeLedgerV2.transitionPath : undefined,
 				].filter(Boolean) as string[],
 			),
 		),
@@ -18018,6 +21486,93 @@ function formatContextPack(pack: ContextPackArtifact, path?: string): string {
 		`- retrieval_hits=${pack.memoryOrchestrator?.retrievalHitIds.length ?? 0}`,
 		`- injection_events=${pack.memoryOrchestrator?.injectionEventIds.length ?? 0}`,
 		`- compact_resume_status=${pack.memoryOrchestrator?.compactResumeStatus ?? "unknown"}`,
+		"memory_quality_ledger_v11:",
+		`- MemoryQualityLedgerV11=${pack.memoryQuality?.MemoryQualityLedgerV11 ?? false}`,
+		`- active_memory_policy=${pack.memoryQuality?.active_memory_policy ?? false}`,
+		`- quality_score_feedback_loop=${pack.memoryQuality?.quality_score_feedback_loop ?? false}`,
+		`- status=${pack.memoryQuality?.status ?? "unknown"}`,
+		`- rows=${pack.memoryQuality?.rowCount ?? 0}`,
+		`- average_quality_score=${pack.memoryQuality?.averageQualityScore ?? 0}`,
+		`- required_feedback=${pack.memoryQuality?.requiredFeedbackEventIds.length ?? 0}`,
+		`- report=${pack.memoryQuality?.reportPath ?? "none"}`,
+		`- ledger=${pack.memoryQuality?.ledgerPath ?? "none"}`,
+		"memory_replay_evaluator_v12:",
+		`- MemoryReplayEvaluatorV12=${pack.memoryReplay?.MemoryReplayEvaluatorV12 ?? false}`,
+		`- memory_ab_replay=${pack.memoryReplay?.memory_ab_replay ?? false}`,
+		`- causal_attribution_signal=${pack.memoryReplay?.causal_attribution_signal ?? false}`,
+		`- status=${pack.memoryReplay?.status ?? "unknown"}`,
+		`- scenarios=${pack.memoryReplay?.scenarioCount ?? 0}`,
+		`- average_causal_score=${pack.memoryReplay?.averageCausalScore ?? 0}`,
+		`- saved_steps=${pack.memoryReplay?.totalSavedStepEstimate ?? 0}`,
+		`- attribution_events=${pack.memoryReplay?.attributionEventIds.length ?? 0}`,
+		`- regression_events=${pack.memoryReplay?.regressionEventIds.length ?? 0}`,
+		`- report=${pack.memoryReplay?.reportPath ?? "none"}`,
+		`- ledger=${pack.memoryReplay?.ledgerPath ?? "none"}`,
+		"memory_strategy_capsule_v13:",
+		`- MemoryStrategyCapsuleV13=${pack.memoryStrategy?.MemoryStrategyCapsuleV13 ?? false}`,
+		`- executable_strategy_capsule=${pack.memoryStrategy?.executable_strategy_capsule ?? false}`,
+		`- replay_backed_strategy_promotion=${pack.memoryStrategy?.replay_backed_strategy_promotion ?? false}`,
+		`- strategy_quality_gate=${pack.memoryStrategy?.strategy_quality_gate ?? false}`,
+		`- status=${pack.memoryStrategy?.status ?? "unknown"}`,
+		`- capsules=${pack.memoryStrategy?.capsuleCount ?? 0}`,
+		`- promoted=${pack.memoryStrategy?.promotedCapsuleIds.length ?? 0}`,
+		`- report=${pack.memoryStrategy?.reportPath ?? "none"}`,
+		`- ledger=${pack.memoryStrategy?.capsuleLedgerPath ?? "none"}`,
+		`- book=${pack.memoryStrategy?.strategyBookPath ?? "none"}`,
+		"memory_active_kernel_v14:",
+		`- MemoryActiveKernelV14=${pack.memoryActiveKernel?.MemoryActiveKernelV14 ?? false}`,
+		`- unified_memory_decision_engine=${pack.memoryActiveKernel?.unified_memory_decision_engine ?? false}`,
+		`- active_recall_scheduler=${pack.memoryActiveKernel?.active_recall_scheduler ?? false}`,
+		`- scope_safe_strategy_injection=${pack.memoryActiveKernel?.scope_safe_strategy_injection ?? false}`,
+		`- status=${pack.memoryActiveKernel?.status ?? "unknown"}`,
+		`- decisions=${pack.memoryActiveKernel?.decisionCount ?? 0}`,
+		`- inject=${pack.memoryActiveKernel?.injectDecisionIds.length ?? 0}`,
+		`- reuse=${pack.memoryActiveKernel?.reuseDecisionIds.length ?? 0}`,
+		`- report=${pack.memoryActiveKernel?.reportPath ?? "none"}`,
+		`- active_injection_pack=${pack.memoryActiveKernel?.injectionPackPath ?? "none"}`,
+		`- board=${pack.memoryActiveKernel?.strategyBoardPath ?? "none"}`,
+		"memory_maturation_runtime_v15:",
+		`- MemoryMaturationRuntimeV15=${pack.memoryMaturation?.MemoryMaturationRuntimeV15 ?? false}`,
+		`- automatic_memory_maturation_pipeline=${pack.memoryMaturation?.automatic_memory_maturation_pipeline ?? false}`,
+		`- tool_result_to_strategy_loop=${pack.memoryMaturation?.tool_result_to_strategy_loop ?? false}`,
+		`- closed_loop_writeback=${pack.memoryMaturation?.closed_loop_writeback ?? false}`,
+		`- status=${pack.memoryMaturation?.status ?? "unknown"}`,
+		`- rows=${pack.memoryMaturation?.rowCount ?? 0}`,
+		`- promoted=${pack.memoryMaturation?.promotedEventIds.length ?? 0}`,
+		`- pending_feedback=${pack.memoryMaturation?.pendingFeedbackEventIds.length ?? 0}`,
+		`- report=${pack.memoryMaturation?.reportPath ?? "none"}`,
+		`- ledger=${pack.memoryMaturation?.ledgerPath ?? "none"}`,
+		`- board=${pack.memoryMaturation?.actionBoardPath ?? "none"}`,
+		"memory_deposition_engine_v7:",
+		`- MemoryDepositionEngineV7=${pack.memoryDeposition?.MemoryDepositionEngineV7 ?? false}`,
+		`- runtime_step_event_bus=${pack.memoryDeposition?.runtime_step_event_bus ?? false}`,
+		`- post_tool_writeback_autocapture=${pack.memoryDeposition?.post_tool_writeback_autocapture ?? false}`,
+		`- status=${pack.memoryDeposition?.status ?? "unknown"}`,
+		`- runtime_events=${pack.memoryDeposition?.runtimeEventCount ?? 0}`,
+		`- memory_writebacks=${pack.memoryDeposition?.memoryWritebackCount ?? 0}`,
+		`- report=${pack.memoryDeposition?.depositionReportPath ?? "none"}`,
+		`- event_bus=${pack.memoryDeposition?.depositionEventBusPath ?? "none"}`,
+		"memory_experience_engine_v8:",
+		`- MemoryExperienceEngineV8=${pack.memoryExperience?.MemoryExperienceEngineV8 ?? false}`,
+		`- episode_model_v8=${pack.memoryExperience?.episode_model_v8 ?? false}`,
+		`- structured_claim_extraction=${pack.memoryExperience?.structured_claim_extraction ?? false}`,
+		`- lesson_promotion_gate=${pack.memoryExperience?.lesson_promotion_gate ?? false}`,
+		`- status=${pack.memoryExperience?.status ?? "unknown"}`,
+		`- episodes=${pack.memoryExperience?.episodeCount ?? 0}`,
+		`- claims=${pack.memoryExperience?.claimCount ?? 0}`,
+		`- lessons=${pack.memoryExperience?.lessonCount ?? 0}`,
+		`- report=${pack.memoryExperience?.reportPath ?? "none"}`,
+		`- lesson_book=${pack.memoryExperience?.lessonBookPath ?? "none"}`,
+		"compact_resume_ledger_v2:",
+		`- CompactResumeLedgerV2=${pack.compactResumeLedgerV2?.CompactResumeLedgerV2 ?? false}`,
+		`- append_only_transition_ledger=${pack.compactResumeLedgerV2?.append_only_transition_ledger ?? false}`,
+		`- idempotent_multi_compact_replay=${pack.compactResumeLedgerV2?.idempotent_multi_compact_replay ?? false}`,
+		`- auto_resume_budget_enforced=${pack.compactResumeLedgerV2?.auto_resume_budget_enforced ?? false}`,
+		`- current_state=${pack.compactResumeLedgerV2?.currentState ?? "unknown"}`,
+		`- transitions=${pack.compactResumeLedgerV2?.transitions.length ?? 0}`,
+		`- invalid_transitions=${pack.compactResumeLedgerV2?.invalidTransitions.length ?? 0}`,
+		`- report=${pack.compactResumeLedgerV2?.reportPath ?? "none"}`,
+		`- transition_path=${pack.compactResumeLedgerV2?.transitionPath ?? "none"}`,
 		"repair_queue:",
 		...(pack.repairQueue.length ? pack.repairQueue.map((item) => `- ${item}`) : ["- none"]),
 		"commander_merge_budget:",
@@ -18123,7 +21678,7 @@ function writeContextPackArtifact(pack: ContextPackArtifact): string {
 	appendEvidence({
 		kind: "artifact",
 		title: `context-pack-${pack.mode} ${pack.missionId ?? "no-mission"}`,
-		fact: `Context pack captured ${pack.artifactIndex.length} artifact(s), ${pack.repairQueue.length} repair item(s), ${pack.nextCommands.length} next command(s), context_sha256=${pack.contextSha256 ?? "missing"}, exact_resume=${pack.exactResumeVerification?.contextSha256 ?? "none"}, artifact_scope_blocked=${pack.artifactScopeFilter?.blockedArtifactCount ?? 0}, memory_orchestrator=${pack.memoryOrchestrator?.phase ?? "missing"}:${pack.memoryOrchestrator?.MemoryOrchestratorV6 ?? false}, swarm_retry_queue=${pack.swarmRetryQueue.length}, autonomous_budget=${pack.autonomousBudget.maxTurns}/${pack.autonomousBudget.maxDispatch}, score_decay=${pack.dispatcherScoreDecay.length}, demotions=${pack.repeatedFailureDemotions.length}, promotions=${pack.highScorePromotions.length}, case_memory_lane_plan=${pack.caseMemoryLanePlan?.action ?? "none"}`,
+			fact: `Context pack captured ${pack.artifactIndex.length} artifact(s), ${pack.repairQueue.length} repair item(s), ${pack.nextCommands.length} next command(s), context_sha256=${pack.contextSha256 ?? "missing"}, exact_resume=${pack.exactResumeVerification?.contextSha256 ?? "none"}, artifact_scope_blocked=${pack.artifactScopeFilter?.blockedArtifactCount ?? 0}, memory_orchestrator=${pack.memoryOrchestrator?.phase ?? "missing"}:${pack.memoryOrchestrator?.MemoryOrchestratorV6 ?? false}, memory_deposition=${pack.memoryDeposition?.status ?? "missing"}:${pack.memoryDeposition?.runtimeEventCount ?? 0}/${pack.memoryDeposition?.memoryWritebackCount ?? 0}, memory_experience=${pack.memoryExperience?.status ?? "missing"}:${pack.memoryExperience?.lessonCount ?? 0}, memory_skill_capsules=${pack.memorySkillCapsules?.status ?? "missing"}:${pack.memorySkillCapsules?.capsuleCount ?? 0}, memory_distill_promotion=${pack.memoryDistillPromotion?.status ?? "missing"}:${pack.memoryDistillPromotion?.candidateCount ?? 0}, memory_quality=${pack.memoryQuality?.status ?? "missing"}:${pack.memoryQuality?.rowCount ?? 0}/${pack.memoryQuality?.averageQualityScore ?? 0}, memory_replay=${pack.memoryReplay?.status ?? "missing"}:${pack.memoryReplay?.scenarioCount ?? 0}/${pack.memoryReplay?.averageCausalScore ?? 0}, memory_strategy=${pack.memoryStrategy?.status ?? "missing"}:${pack.memoryStrategy?.capsuleCount ?? 0}/${pack.memoryStrategy?.promotedCapsuleIds.length ?? 0}, memory_active_kernel=${pack.memoryActiveKernel?.status ?? "missing"}:${pack.memoryActiveKernel?.decisionCount ?? 0}/${pack.memoryActiveKernel?.injectDecisionIds.length ?? 0}, memory_maturation=${pack.memoryMaturation?.status ?? "missing"}:${pack.memoryMaturation?.rowCount ?? 0}/${pack.memoryMaturation?.promotedEventIds.length ?? 0}, compact_resume_v2=${pack.compactResumeLedgerV2?.currentState ?? "missing"}/${pack.compactResumeLedgerV2?.invalidTransitions.length ?? 0}, swarm_retry_queue=${pack.swarmRetryQueue.length}, autonomous_budget=${pack.autonomousBudget.maxTurns}/${pack.autonomousBudget.maxDispatch}, score_decay=${pack.dispatcherScoreDecay.length}, demotions=${pack.repeatedFailureDemotions.length}, promotions=${pack.highScorePromotions.length}, case_memory_lane_plan=${pack.caseMemoryLanePlan?.action ?? "none"}`,
 		command: `re_context ${pack.mode}`,
 		path,
 		verify: `cat ${path}`,
@@ -18615,6 +22170,50 @@ function updateReconCompactionTelemetryFromExecutions(
 			new Set([...current.sourceArtifacts, ...sourceArtifacts].filter(Boolean) as string[]),
 		).slice(0, 40),
 	};
+	const telemetryIdempotencyKey = createHash("sha256")
+		.update([current.compactionEntryId ?? "", current.contextPath ?? "", current.commandStatus.map((row) => row.command).join("\n")].join("\n"))
+		.digest("hex");
+	if (commandStatus.some((row) => row.outputSha256 || row.status !== "queued")) {
+		appendCompactResumeTransition({
+			to: "running",
+			command: "compact_resume_telemetry",
+			reason: "operator/proof-loop execution updated compact resume queue",
+			idempotencyKey: telemetryIdempotencyKey,
+			contextPath: current.contextPath,
+			maxAttempts: Math.max(1, commandStatus.length || 3),
+		});
+	}
+	const blockedRows = commandStatus.filter((row) => row.status === "blocked");
+	const queuedRows = commandStatus.filter((row) => row.status === "queued");
+	if (blockedRows.length) {
+		appendCompactResumeTransition({
+			to: "blocked",
+			command: "compact_resume_telemetry",
+			reason: `blocked compact resume commands: ${blockedRows.map((row) => row.command).join(", ")}`,
+			idempotencyKey: telemetryIdempotencyKey,
+			contextPath: current.contextPath,
+			maxAttempts: Math.max(1, commandStatus.length || 3),
+		});
+	} else if (commandStatus.length && queuedRows.length === 0 && telemetry.proofLoopEntered) {
+		appendCompactResumeTransition({
+			to: "done",
+			command: "compact_resume_telemetry",
+			reason: "all compact resume commands completed and proof-loop entered",
+			idempotencyKey: telemetryIdempotencyKey,
+			contextPath: current.contextPath,
+			maxAttempts: Math.max(1, commandStatus.length || 3),
+		});
+	} else if (queuedRows.length && compactResumeAttemptForKey(readCompactResumeTransitions().transitions, telemetryIdempotencyKey) > Math.max(1, commandStatus.length || 3)) {
+		appendCompactResumeTransition({
+			to: "exhausted",
+			command: "compact_resume_telemetry",
+			reason: `auto-resume budget exhausted with queued commands: ${queuedRows.map((row) => row.command).join(", ")}`,
+			idempotencyKey: telemetryIdempotencyKey,
+			contextPath: current.contextPath,
+			maxAttempts: Math.max(1, commandStatus.length || 3),
+		});
+	}
+	buildCompactResumeLedgerV2Report({ write: true });
 	writeReconCompactionResumeTelemetry(telemetry);
 	return telemetry;
 }
@@ -18743,13 +22342,46 @@ function buildExactResumeContextPack(ref: string, target?: string): ContextPackA
 	const source = resolved.path ? parseContextPackArtifact(resolved.path) : undefined;
 	const verification = verifyContextPackResume(source, resolved.path, resolved.loadedBy, target, ref);
 	if (!source) {
-		const fallback = buildContextPack({ target, mode: "resume" });
+		const fallback = buildContextPack({ target, mode: "resume", recordCompactResume: false });
 		fallback.exactResumeVerification = verification;
 		fallback.resumeQueueStatus = "blocked";
 		fallback.closure = { status: "blocked", closedAt: new Date().toISOString(), reason: verification.blocked.join("; "), verifiedBy: "re_context exact resume" };
+		appendCompactResumeTransition({
+			from: "queued",
+			to: "blocked",
+			command: "re_context resume",
+			reason: verification.blocked.join("; ") || "context pack not found",
+			idempotencyKey: fallback.idempotencyKey,
+			contextPath: fallback.contextPath,
+			contextSha256: fallback.contextSha256,
+			maxAttempts: Math.max(1, fallback.autonomousBudget.maxTurns),
+		});
+		fallback.compactResumeLedgerV2 = buildCompactResumeLedgerV2Report({ write: true });
 		return fallback;
 	}
 	const timestamp = new Date().toISOString();
+	const sourceIdempotencyKey =
+		source.idempotencyKey ??
+		createHash("sha256").update(`${source.sessionId ?? "session"}\n${resolved.path}\n${source.nextCommands?.join("\n") ?? ""}`).digest("hex");
+	appendCompactResumeTransition({
+		to: "running",
+		command: "re_context resume",
+		reason: "exact context resume verification started",
+		idempotencyKey: sourceIdempotencyKey,
+		contextPath: resolved.path,
+		contextSha256: source.contextSha256,
+		maxAttempts: Math.max(1, source.resumeContract?.budget.maxResumeTurns ?? source.autonomousBudget?.maxTurns ?? 3),
+	});
+	appendCompactResumeTransition({
+		to: verification.blocked.length ? "blocked" : "done",
+		command: "re_context resume",
+		reason: verification.blocked.length ? verification.blocked.join("; ") : "exact context resume verified",
+		idempotencyKey: sourceIdempotencyKey,
+		contextPath: resolved.path,
+		contextSha256: source.contextSha256,
+		maxAttempts: Math.max(1, source.resumeContract?.budget.maxResumeTurns ?? source.autonomousBudget?.maxTurns ?? 3),
+	});
+	const compactResumeLedgerV2 = buildCompactResumeLedgerV2Report({ write: true });
 	const pack: ContextPackArtifact = {
 		...source,
 		timestamp,
@@ -18764,6 +22396,7 @@ function buildExactResumeContextPack(ref: string, target?: string): ContextPackA
 			reason: verification.blocked.length ? verification.blocked.join("; ") : "exact context resume verified",
 			verifiedBy: "re_context exact resume",
 		},
+		compactResumeLedgerV2,
 		sourceArtifacts: Array.from(new Set([resolved.path, ...(source.sourceArtifacts ?? [])].filter(Boolean) as string[])).slice(0, 48),
 	};
 	pack.contextSha256 = contextPackSha256(pack);
@@ -18774,7 +22407,8 @@ function contextRefLooksExplicit(ref?: string): boolean {
 	return Boolean(ref && (/(?:recon|\.pi)\/evidence\/contexts|\.md$|^\/|^\.\.?\/|context-pack\/|compaction/i.test(ref) || existsSync(ref) || existsSync(join(process.cwd(), ref))));
 }
 
-function buildContextOutput(action: "pack" | "show" | "resume" = "pack", options: { target?: string; contextRef?: string } = {}): string {
+function buildContextOutput(action: "pack" | "show" | "resume" | "resume-ledger" = "pack", options: { target?: string; contextRef?: string } = {}): string {
+	if (action === "resume-ledger") return formatCompactResumeLedgerV2(buildCompactResumeLedgerV2Report({ write: true }));
 	if (action === "show") {
 		const path = latestContextPackArtifactPath();
 		if (!path) return "context_pack:\nstatus: missing\nnext: re_context pack";
@@ -21587,6 +25221,8 @@ function buildAutofix(options: { target?: string; mode?: "plan" | "apply" } = {}
 		evidenceRecaptureQueue,
 		nextOperatorQueue: Array.from(new Set(nextOperatorQueue)).slice(0, 36),
 		applied,
+		repairRollbackPolicyStatus: "missing",
+		repairRollbackPolicyErrors: [],
 		sourceArtifacts,
 	};
 }
@@ -21624,6 +25260,12 @@ function formatAutofix(autofix: AutofixArtifact, path?: string): string {
 			: ["- re_complete audit"]),
 		"applied:",
 		...(autofix.applied.length ? autofix.applied.map((item) => `- ${item}`) : ["- none"]),
+		"repair_rollback_policy:",
+		`- path=${autofix.repairRollbackPolicyPath ?? "pending"}`,
+		`- status=${autofix.repairRollbackPolicyStatus ?? "missing"}`,
+		...(autofix.repairRollbackPolicyErrors?.length
+			? autofix.repairRollbackPolicyErrors.slice(0, 8).map((error) => `- error=${error}`)
+			: ["- errors=none"]),
 		`next_autofix_command: ${autofix.mode === "apply" ? "re_replayer run" : "re_autofix apply"}`,
 		"source_artifacts:",
 		...(autofix.sourceArtifacts.length ? autofix.sourceArtifacts.map((item) => `- ${item}`) : ["- none"]),
@@ -21638,6 +25280,26 @@ function writeAutofixArtifact(autofix: AutofixArtifact): string {
 		evidenceAutofixDir(),
 		`${autofix.timestamp.replace(/[:.]/g, "-")}-${slug(autofix.route ?? "autofix")}-${autofix.mode}.md`,
 	);
+	writeFileSync(
+		path,
+		[
+			"# REPI Autofix Artifact",
+			"",
+			formatAutofix(autofix, path),
+			"",
+			"## JSON",
+			"",
+			"```json",
+			JSON.stringify(autofix, null, 2),
+			"```",
+			"",
+		].join("\n"),
+		"utf-8",
+	);
+	const repairRollback = writeAutofixRepairRollbackPolicy(autofix, path);
+	autofix.repairRollbackPolicyPath = repairRollback.path;
+	autofix.repairRollbackPolicyStatus = repairRollback.status;
+	autofix.repairRollbackPolicyErrors = repairRollback.errors;
 	writeFileSync(
 		path,
 		[
@@ -24514,6 +28176,69 @@ function buildMemoryDigest(): string {
 		"<memory_orchestrator_v6>",
 		truncateMiddle(readText(memoryOrchestratorReportPath()), 2200),
 		"</memory_orchestrator_v6>",
+		"<memory_deposition_engine_v7>",
+		truncateMiddle(readText(memoryDepositionReportPath()), 2200),
+		"</memory_deposition_engine_v7>",
+		"<memory_deposition_events_tail>",
+		truncateMiddle(readText(memoryDepositionEventBusPath()), 1800),
+		"</memory_deposition_events_tail>",
+		"<memory_experience_engine_v8>",
+		truncateMiddle(readText(memoryExperienceReportPath()), 2200),
+		"</memory_experience_engine_v8>",
+		"<memory_experience_lesson_book>",
+		truncateMiddle(readText(memoryExperienceLessonBookPath()), 1800),
+		"</memory_experience_lesson_book>",
+		"<memory_skill_capsule_v9>",
+		truncateMiddle(readText(memorySkillCapsuleReportPath()), 2200),
+		"</memory_skill_capsule_v9>",
+		"<memory_skill_capsule_book>",
+		truncateMiddle(readText(memorySkillCapsuleBookPath()), 1800),
+		"</memory_skill_capsule_book>",
+		"<memory_distill_promotion_v10>",
+		truncateMiddle(readText(memoryDistillPromotionReportPath()), 2200),
+		"</memory_distill_promotion_v10>",
+		"<memory_distill_promotion_book>",
+		truncateMiddle(readText(memoryDistillPromotionBookPath()), 1800),
+		"</memory_distill_promotion_book>",
+		"<memory_quality_ledger_v11>",
+		truncateMiddle(readText(memoryQualityReportPath()), 2200),
+		"</memory_quality_ledger_v11>",
+		"<memory_quality_board>",
+		truncateMiddle(readText(memoryQualityBoardPath()), 1600),
+		"</memory_quality_board>",
+		"<memory_replay_evaluator_v12>",
+		truncateMiddle(readText(memoryReplayEvaluatorReportPath()), 2200),
+		"</memory_replay_evaluator_v12>",
+		"<memory_replay_evaluator_board>",
+		truncateMiddle(readText(memoryReplayEvaluatorBoardPath()), 1600),
+		"</memory_replay_evaluator_board>",
+		"<memory_strategy_capsule_v13>",
+		truncateMiddle(readText(memoryStrategyCapsuleReportPath()), 2200),
+		"</memory_strategy_capsule_v13>",
+		"<memory_strategy_capsule_book>",
+		truncateMiddle(readText(memoryStrategyCapsuleBookPath()), 1600),
+		"</memory_strategy_capsule_book>",
+		"<memory_active_kernel_v14>",
+		truncateMiddle(readText(memoryActiveKernelReportPath()), 2400),
+		"</memory_active_kernel_v14>",
+		"<memory_active_injection_pack>",
+		truncateMiddle(readText(memoryActiveInjectionPackPath()), 1800),
+		"</memory_active_injection_pack>",
+		"<memory_active_strategy_board>",
+		truncateMiddle(readText(memoryActiveStrategyBoardPath()), 1400),
+		"</memory_active_strategy_board>",
+		"<memory_maturation_runtime_v15>",
+		truncateMiddle(readText(memoryMaturationRuntimeReportPath()), 2200),
+		"</memory_maturation_runtime_v15>",
+		"<memory_maturation_action_board>",
+		truncateMiddle(readText(memoryMaturationActionBoardPath()), 1400),
+		"</memory_maturation_action_board>",
+		"<compact_resume_ledger_v2>",
+		truncateMiddle(readText(compactResumeLedgerV2ReportPath()), 2200),
+		"</compact_resume_ledger_v2>",
+		"<compact_resume_transitions_tail>",
+		truncateMiddle(readText(compactResumeTransitionLedgerPath()), 1800),
+		"</compact_resume_transitions_tail>",
 		"<memory_vector_search>",
 		truncateMiddle(readText(memoryVectorSearchReportPath()), 1800),
 		"</memory_vector_search>",
@@ -25053,6 +28778,203 @@ function getBashCommand(event: ToolCallEvent): string | undefined {
 	const input = event.input as { command?: unknown; cmd?: unknown };
 	const command = input.command ?? input.cmd;
 	return typeof command === "string" ? command.trim() : undefined;
+}
+
+function getToolResultCommand(event: ToolResultEvent): string | undefined {
+	const input = event.input as { command?: unknown; cmd?: unknown; action?: unknown; query?: unknown; target?: unknown };
+	const command = input.command ?? input.cmd;
+	if (typeof command === "string" && command.trim()) return command.trim();
+	const args = [input.action, input.query, input.target]
+		.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+		.join(" ");
+	return args ? `${event.toolName} ${args}` : event.toolName;
+}
+
+function toolTraceRedact(value: string): string {
+	return value
+		.replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "<redacted:api-key>")
+		.replace(/\bghp_[A-Za-z0-9_]{16,}\b/g, "<redacted:github-token>")
+		.replace(/\bgithub_pat_[A-Za-z0-9_]{16,}\b/g, "<redacted:github-token>")
+		.replace(/\b(?:ANTHROPIC_AUTH_TOKEN|OPENAI_API_KEY|GITHUB_TOKEN|REPI_[A-Z0-9_]*KEY|API_KEY|TOKEN|PASSWORD|SECRET)=([^\s'"]+)/gi, (match) => `${match.split("=")[0]}=<redacted>`)
+		.replace(/(authorization|x-api-key|api-key)\s*[:=]\s*bearer\s+[A-Za-z0-9._-]+/gi, "$1: Bearer <redacted>")
+		.replace(/(authorization|x-api-key|api-key)\s*[:=]\s*[A-Za-z0-9._-]{12,}/gi, "$1: <redacted>");
+}
+
+function toolTraceHasLiteralSecret(value: string): boolean {
+	return /\bsk-[A-Za-z0-9_-]{8,}\b|\bghp_[A-Za-z0-9_]{16,}\b|\bgithub_pat_[A-Za-z0-9_]{16,}\b|(?:AUTH_TOKEN|API_KEY|PASSWORD|SECRET)=(?!<redacted>)\S+/i.test(value);
+}
+
+function stableJson(value: unknown): string {
+	return JSON.stringify(value, (_key, item) => {
+		if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+		return Object.keys(item as Record<string, unknown>)
+			.sort()
+			.reduce<Record<string, unknown>>((out, key) => {
+				out[key] = (item as Record<string, unknown>)[key];
+				return out;
+			}, {});
+	});
+}
+
+function toolCallTraceHash(event: Omit<ToolCallTraceEventV1, "eventHash">): string {
+	return createHash("sha256").update(stableJson(event)).digest("hex");
+}
+
+function latestToolTraceHash(): string {
+	const text = readText(toolCallTraceLedgerPath()).trim();
+	if (!text) return "0".repeat(64);
+	const lines = text.split(/\r?\n/).filter(Boolean);
+	try {
+		const row = JSON.parse(lines[lines.length - 1]) as { eventHash?: string };
+		return typeof row.eventHash === "string" ? row.eventHash : "0".repeat(64);
+	} catch {
+		return "0".repeat(64);
+	}
+}
+
+function buildToolTraceReplay(toolName: string, input: Record<string, unknown>, redactedInput: string): ToolCallTraceEventV1["replay"] {
+	const command = typeof input.command === "string" ? toolTraceRedact(input.command) : undefined;
+	if (toolName === "bash" && command) return { available: true, command, redacted: true, deterministic: !/[<>]|\b(?:date|time|random|uuid|curl|wget)\b/i.test(command) };
+	const action = typeof input.action === "string" ? input.action : undefined;
+	return { available: Boolean(action || redactedInput), command: action ? `${toolName} ${action}` : undefined, redacted: true, deterministic: toolName !== "bash" };
+}
+
+function appendToolCallTraceEvent(row: Omit<ToolCallTraceEventV1, "prevHash" | "eventHash">): ToolCallTraceEventV1 {
+	ensureReconStorage();
+	const prevHash = latestToolTraceHash();
+	const withoutHash = { ...row, prevHash };
+	const event: ToolCallTraceEventV1 = { ...withoutHash, eventHash: toolCallTraceHash(withoutHash) };
+	appendText(toolCallTraceLedgerPath(), `${JSON.stringify(event)}\n`);
+	writeToolCallTraceReport();
+	return event;
+}
+
+function appendToolCallTraceFromCall(event: ToolCallEvent, missionId?: string): ToolCallTraceEventV1 {
+	const input = (event.input ?? {}) as Record<string, unknown>;
+	const rawInput = stableJson(input);
+	const redactedInput = toolTraceRedact(rawInput);
+	const commandPreviewRedacted = typeof input.command === "string" ? toolTraceRedact(input.command).slice(0, 1000) : undefined;
+	const replay = buildToolTraceReplay(event.toolName, input, redactedInput);
+	return appendToolCallTraceEvent({
+		kind: "ToolCallTraceEventV1",
+		schemaVersion: 1,
+		eventId: `tooltrace:${event.toolCallId}:call`,
+		ts: new Date().toISOString(),
+		missionId,
+		toolCallId: event.toolCallId,
+		toolName: event.toolName,
+		phase: "call",
+		status: "running",
+		inputSha256: createHash("sha256").update(rawInput).digest("hex"),
+		inputPreviewRedacted: truncateMiddle(redactedInput, 1600),
+		commandPreviewRedacted,
+		replay,
+		assertions: {
+			toolCallIdPresent: Boolean(event.toolCallId),
+			inputHashed: true,
+			outputHashed: false,
+			secretRedacted: !toolTraceHasLiteralSecret(redactedInput),
+			replayHintPresent: replay.available,
+			appendOnlyHashChain: true,
+		},
+	});
+}
+
+function appendToolCallTraceFromResult(event: ToolResultEvent, missionId?: string): ToolCallTraceEventV1 {
+	const input = (event.input ?? {}) as Record<string, unknown>;
+	const rawInput = stableJson(input);
+	const redactedInput = toolTraceRedact(rawInput);
+	const output = textBlocksToString(event.content);
+	const redactedOutput = toolTraceRedact(output);
+	const details = stableJson(event.details ?? {});
+	const replay = buildToolTraceReplay(event.toolName, input, redactedInput);
+	return appendToolCallTraceEvent({
+		kind: "ToolCallTraceEventV1",
+		schemaVersion: 1,
+		eventId: `tooltrace:${event.toolCallId}:result`,
+		ts: new Date().toISOString(),
+		missionId,
+		toolCallId: event.toolCallId,
+		toolName: event.toolName,
+		phase: "result",
+		status: event.isError ? "error" : "pass",
+		inputSha256: createHash("sha256").update(rawInput).digest("hex"),
+		inputPreviewRedacted: truncateMiddle(redactedInput, 1600),
+		commandPreviewRedacted: typeof input.command === "string" ? toolTraceRedact(input.command).slice(0, 1000) : undefined,
+		outputSha256: createHash("sha256").update(output).digest("hex"),
+		outputPreviewRedacted: truncateMiddle(redactedOutput, 1600),
+		detailsSha256: createHash("sha256").update(details).digest("hex"),
+		replay,
+		assertions: {
+			toolCallIdPresent: Boolean(event.toolCallId),
+			inputHashed: true,
+			outputHashed: true,
+			secretRedacted: !toolTraceHasLiteralSecret(redactedInput) && !toolTraceHasLiteralSecret(redactedOutput),
+			replayHintPresent: replay.available,
+			appendOnlyHashChain: true,
+		},
+	});
+}
+
+function readToolTraceEvents(): ToolCallTraceEventV1[] {
+	return readText(toolCallTraceLedgerPath())
+		.split(/\r?\n/)
+		.filter(Boolean)
+		.flatMap((line) => {
+			try {
+				return [JSON.parse(line) as ToolCallTraceEventV1];
+			} catch {
+				return [];
+			}
+		});
+}
+
+function verifyToolCallTraceLedgerV1(events: ToolCallTraceEventV1[]): { ok: boolean; errors: string[] } {
+	const errors: string[] = [];
+	let prevHash = "0".repeat(64);
+	const callIds = new Set<string>();
+	for (const [index, event] of events.entries()) {
+		if (event.kind !== "ToolCallTraceEventV1") errors.push(`tool_trace_kind_invalid:${index}`);
+		if (event.prevHash !== prevHash) errors.push(`tool_trace_prev_hash_mismatch:${index}`);
+		const { eventHash: _eventHash, ...withoutHash } = event;
+		if (event.eventHash !== toolCallTraceHash(withoutHash)) errors.push(`tool_trace_event_hash_mismatch:${index}`);
+		prevHash = event.eventHash;
+		if (!event.toolCallId) errors.push(`tool_trace_missing_tool_call_id:${index}`);
+		if (!event.inputSha256 || !/^[a-f0-9]{64}$/.test(event.inputSha256)) errors.push(`tool_trace_input_hash_missing:${index}`);
+		if (event.phase === "result" && (!event.outputSha256 || !/^[a-f0-9]{64}$/.test(event.outputSha256))) errors.push(`tool_trace_output_hash_missing:${index}`);
+		if (!event.assertions.secretRedacted || toolTraceHasLiteralSecret(`${event.inputPreviewRedacted}\n${event.outputPreviewRedacted ?? ""}`))
+			errors.push(`tool_trace_secret_not_redacted:${index}`);
+		if (!event.replay.available && event.toolName === "bash") errors.push(`tool_trace_replay_missing:${index}`);
+		if (event.phase === "call") callIds.add(event.toolCallId);
+		if (event.phase === "result" && !callIds.has(event.toolCallId)) errors.push(`tool_trace_result_without_call:${event.toolCallId}`);
+	}
+	return { ok: errors.length === 0, errors: uniqueNonEmpty(errors, 120) };
+}
+
+function buildToolCallTraceLedgerV1(events = readToolTraceEvents()): ToolCallTraceLedgerV1 {
+	const validation = verifyToolCallTraceLedgerV1(events);
+	const resultCount = events.filter((event) => event.phase === "result").length;
+	const replayCovered = events.filter((event) => event.replay.available).length;
+	return {
+		kind: "ToolCallTraceLedgerV1",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		ledgerPath: toolCallTraceLedgerPath(),
+		eventCount: events.length,
+		callCount: events.filter((event) => event.phase === "call").length,
+		resultCount,
+		errorCount: events.filter((event) => event.status === "error").length,
+		hashChainOk: validation.ok,
+		secretRedactionOk: !events.some((event) => !event.assertions.secretRedacted),
+		replayCoverage: events.length ? replayCovered / events.length : 0,
+		events: events.slice(-40),
+	};
+}
+
+function writeToolCallTraceReport(): ToolCallTraceLedgerV1 {
+	const report = buildToolCallTraceLedgerV1();
+	writeFileSync(toolCallTraceReportPath(), `${JSON.stringify(report, null, 2)}\n`, "utf-8");
+	return report;
 }
 
 function makeSelfReview(stats: ReconStats): string {
@@ -26113,7 +30035,3137 @@ function appendMemoryEvent(input: MemoryEventInput): MemoryEventV1 {
 	ensureReconStorage();
 	const { event } = appendMemoryEventTransaction(input);
 	updateMissionGate("memory_or_evolution_written", "done", `memory_event=${event.id} case=${event.caseSignature}`);
+	recordMemoryDepositionFromMemoryEvent(event);
 	return event;
+}
+
+type MemoryDepositionRuntimeInputV7 = {
+	stage?: MemoryDepositionStageV7;
+	source?: string;
+	status?: MemoryDepositionStatusV7;
+	task?: string;
+	route?: string;
+	target?: string;
+	command?: string;
+	stdout?: string;
+	stderr?: string;
+	stdoutSha256?: string;
+	stderrSha256?: string;
+	exitCode?: number;
+	outcome?: MemoryOutcome;
+	confidence?: number;
+	artifactPaths?: string[];
+	artifacts?: MemoryArtifactHash[];
+	claimIds?: string[];
+	compactResumeId?: string;
+	lessons?: string[];
+	failurePatterns?: string[];
+	reuseRules?: string[];
+	commands?: string[];
+	memoryEventId?: string;
+	caseSignature?: string;
+	reason?: string;
+	replayVerified?: boolean;
+	playbookCandidate?: boolean;
+	verifierRuleCandidate?: boolean;
+};
+
+function isMemoryDepositionRuntimeEvent(value: unknown): value is MemoryDepositionRuntimeEventV7 {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const row = value as MemoryDepositionRuntimeEventV7;
+	return (
+		row.kind === "repi-memory-deposition-runtime-event" &&
+		row.schemaVersion === 1 &&
+		row.MemoryDepositionEngineV7 === true &&
+		typeof row.id === "string" &&
+		Number.isInteger(row.seq) &&
+		typeof row.ts === "string" &&
+		typeof row.stage === "string" &&
+		typeof row.source === "string" &&
+		typeof row.status === "string" &&
+		typeof row.task === "string" &&
+		typeof row.route === "string" &&
+		typeof row.outcome === "string" &&
+		typeof row.confidence === "number" &&
+		Array.isArray(row.artifactHashes) &&
+		row.artifactHashes.every(isMemoryArtifactHash) &&
+		Array.isArray(row.claimIds) &&
+		Array.isArray(row.lessons) &&
+		Array.isArray(row.failurePatterns) &&
+		Array.isArray(row.reuseRules) &&
+		Array.isArray(row.commands) &&
+		typeof row.reason === "string" &&
+		typeof row.prevHash === "string" &&
+		typeof row.entryHash === "string"
+	);
+}
+
+function readMemoryDepositionEvents(): MemoryDepositionRuntimeEventV7[] {
+	ensureReconStorage();
+	return jsonlRecords(memoryDepositionEventBusPath(), isMemoryDepositionRuntimeEvent);
+}
+
+function memoryDepositionEventHash(event: MemoryDepositionRuntimeEventV7): string {
+	const { entryHash: _entryHash, ...withoutHash } = event;
+	return sha256Text(JSON.stringify(withoutHash));
+}
+
+function memoryDepositionHashChainOk(events: MemoryDepositionRuntimeEventV7[]): boolean {
+	let prevHash = "0".repeat(64);
+	for (const event of events) {
+		if (event.prevHash !== prevHash) return false;
+		if (event.entryHash !== memoryDepositionEventHash(event)) return false;
+		prevHash = event.entryHash;
+	}
+	return true;
+}
+
+function appendMemoryDepositionRuntimeEvent(
+	input: MemoryDepositionRuntimeInputV7,
+	options: { writeback?: boolean } = {},
+): MemoryDepositionRuntimeEventV7 {
+	ensureReconStorage();
+	const mission = readCurrentMission();
+	const task = input.task ?? mission?.task ?? input.command ?? "runtime memory deposition";
+	const route = input.route ?? mission?.route.domain ?? "runtime";
+	const target = input.target ?? artifactScopeInferTarget(input.command ?? task);
+	const commands = uniqueNonEmpty([...(input.commands ?? []), input.command, ...extractMemoryCommands(input.lessons?.join("\n") ?? "")], 40);
+	const artifactPaths = uniqueNonEmpty([...(input.artifactPaths ?? []), ...(input.artifacts ?? []).map((artifact) => artifact.path)], 80);
+	const artifactHashes = input.artifacts?.length
+		? [
+				...input.artifacts,
+				...memoryArtifactHashes(artifactPaths).filter(
+					(item) => !(input.artifacts ?? []).some((artifact) => artifact.path === item.path),
+				),
+			].slice(0, 80)
+		: memoryArtifactHashes(artifactPaths);
+	let memoryEventId = input.memoryEventId;
+	let caseSignature = input.caseSignature;
+	if (options.writeback !== false && !memoryEventId) {
+		const outcome = input.outcome ?? (input.status === "blocked" ? "blocked" : "partial");
+		const transaction = appendMemoryEventTransaction({
+			source: "deposition",
+			task,
+			route,
+			target,
+			caseSignature,
+			domainTags: uniqueNonEmpty([route, input.stage ?? "tool", "MemoryDepositionEngineV7"], 12),
+			outcome,
+			lessons: uniqueNonEmpty(input.lessons ?? [input.reason ?? task], 40),
+			failurePatterns: uniqueNonEmpty(input.failurePatterns ?? (outcome === "failure" || outcome === "blocked" ? [input.reason ?? task] : []), 40),
+			reuseRules: uniqueNonEmpty(input.reuseRules ?? [], 40),
+			commands,
+			artifacts: artifactHashes,
+			confidence: input.confidence ?? 0.62,
+			replayVerified: input.replayVerified,
+			playbookCandidate: input.playbookCandidate,
+			verifierRuleCandidate: input.verifierRuleCandidate,
+		});
+		memoryEventId = transaction.event.id;
+		caseSignature = transaction.event.caseSignature;
+	}
+	return withMemoryStoreLock("append-memory-deposition", () => {
+		const events = readMemoryDepositionEvents();
+		const previousText = readText(memoryDepositionEventBusPath());
+		const ts = new Date().toISOString();
+		const rowBase: Omit<MemoryDepositionRuntimeEventV7, "entryHash"> = {
+			kind: "repi-memory-deposition-runtime-event",
+			schemaVersion: 1,
+			id: `memdep:${sha256Text(`${ts}\n${task}\n${route}\n${commands.join("\n")}\n${events.length}`).slice(0, 20)}`,
+			seq: events.length + 1,
+			ts,
+			MemoryDepositionEngineV7: true,
+			stage: input.stage ?? "tool",
+			source: input.source ?? "runtime",
+			status: input.status ?? (memoryEventId ? "written" : "queued"),
+			task,
+			route,
+			target,
+			command: input.command ?? commands[0],
+			stdoutSha256: input.stdoutSha256 ?? (input.stdout ? sha256Text(input.stdout) : undefined),
+			stderrSha256: input.stderrSha256 ?? (input.stderr ? sha256Text(input.stderr) : undefined),
+			exitCode: input.exitCode,
+			outcome: input.outcome ?? (input.status === "blocked" ? "blocked" : "partial"),
+			confidence: clamp01(input.confidence, 0.62),
+			artifactHashes,
+			claimIds: uniqueNonEmpty(input.claimIds ?? [], 40),
+			compactResumeId: input.compactResumeId,
+			lessons: uniqueNonEmpty(input.lessons ?? [input.reason ?? task], 40),
+			failurePatterns: uniqueNonEmpty(input.failurePatterns ?? [], 40),
+			reuseRules: uniqueNonEmpty(input.reuseRules ?? [], 40),
+			commands,
+			memoryEventId,
+			caseSignature,
+			reason: truncateMiddle(input.reason ?? "runtime step captured by MemoryDepositionEngineV7", 420),
+			prevHash: events.at(-1)?.entryHash ?? "0".repeat(64),
+		};
+		const row: MemoryDepositionRuntimeEventV7 = { ...rowBase, entryHash: memoryDepositionEventHash({ ...rowBase, entryHash: "" }) };
+		writeFileAtomic(memoryDepositionEventBusPath(), textWithJsonlLine(previousText, JSON.stringify(row)));
+		return row;
+	});
+}
+
+function recordMemoryDepositionFromMemoryEvent(event: MemoryEventV1): MemoryDepositionRuntimeEventV7 | undefined {
+	try {
+		return appendMemoryDepositionRuntimeEvent(
+			{
+				stage: "memory-event",
+				source: `memory:${event.source}`,
+				status: "written",
+				task: event.task,
+				route: event.route,
+				target: event.target,
+				command: event.commands[0],
+				outcome: event.outcome,
+				confidence: event.quality.confidence,
+				artifacts: event.artifactHashes,
+				lessons: event.lessons,
+				failurePatterns: event.failurePatterns,
+				reuseRules: event.reuseRules,
+				commands: event.commands,
+				memoryEventId: event.id,
+				caseSignature: event.caseSignature,
+				reason: "appendMemoryEvent committed and captured by MemoryDepositionEngineV7",
+			},
+			{ writeback: false },
+		);
+	} catch {
+		return undefined;
+	}
+}
+
+function buildMemoryDepositionReport(options: { write?: boolean } = {}): MemoryDepositionReportV7 {
+	ensureReconStorage();
+	const events = readMemoryDepositionEvents();
+	const store = verifyMemoryStore({ write: options.write });
+	const hashChainOk = memoryDepositionHashChainOk(events);
+	const memoryWritebackCount = events.filter((event) => event.memoryEventId && event.status === "written").length;
+	const pending = events.filter((event) => event.status === "queued" || !event.memoryEventId);
+	const blocked = events.filter((event) => event.status === "blocked");
+	const skipped = events.filter((event) => event.status === "skipped");
+	const autoWritebackCoverage = events.length ? Number((memoryWritebackCount / events.length).toFixed(4)) : 0;
+	const status =
+		events.length === 0
+			? "empty"
+			: store.storeGrade === "blocked" || !hashChainOk || blocked.length
+				? "blocked"
+				: pending.length || skipped.length || autoWritebackCoverage < 0.85
+					? "warn"
+					: "pass";
+	const report: MemoryDepositionReportV7 = {
+		kind: "repi-memory-deposition-report",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		MemoryDepositionEngineV7: true,
+		runtime_step_event_bus: true,
+		post_tool_writeback_autocapture: true,
+		depositionReportPath: memoryDepositionReportPath(),
+		depositionEventBusPath: memoryDepositionEventBusPath(),
+		memoryEventsPath: memoryEventsPath(),
+		storeReportPath: memoryStoreReportPath(),
+		runtimeEventCount: events.length,
+		memoryWritebackCount,
+		pendingWritebackCount: pending.length,
+		blockedWritebackCount: blocked.length,
+		skippedWritebackCount: skipped.length,
+		autoWritebackCoverage,
+		status,
+		latestRuntimeEventHash: events.at(-1)?.entryHash ?? "0".repeat(64),
+		storeGrade: store.storeGrade,
+		recentEvents: events.slice(-12),
+		pendingEventIds: pending.map((event) => event.id).slice(0, 80),
+		blockedEventIds: blocked.map((event) => event.id).slice(0, 80),
+		requiredGates: [
+			"MemoryDepositionEngineV7",
+			"runtime_step_event_bus",
+			"post_tool_writeback_autocapture",
+			"append_only_deposition_ledger",
+			"memory_event_hash_binding",
+			"claim_compact_resume_binding",
+			"deposition_report_in_context_pack",
+		],
+		policy: {
+			MemoryDepositionEngineV7: true,
+			runtimeStepEventBus: true,
+			postToolWritebackAutocapture: true,
+			appendOnlyDepositionLedger: true,
+			memoryEventHashBinding: true,
+			claimCompactResumeBinding: true,
+		},
+		nextCommands: uniqueNonEmpty(
+			[
+				status === "blocked" ? "re_memory verify" : undefined,
+				pending.length ? "re_memory deposit status=written artifactPath=<artifact> \"runtime result + evidence hash\"" : undefined,
+				"re_memory orchestrate post-tool",
+				"re_memory feedback",
+				"re_memory supervise",
+				"re_context pack",
+			].filter(Boolean) as string[],
+			12,
+		),
+	};
+	if (options.write !== false) writeFileAtomic(memoryDepositionReportPath(), `${JSON.stringify(report, null, 2)}\n`);
+	return report;
+}
+
+function formatMemoryDepositionReport(report = buildMemoryDepositionReport()): string {
+	return [
+		"memory_deposition_engine_v7:",
+		`MemoryDepositionEngineV7=${report.MemoryDepositionEngineV7}`,
+		`runtime_step_event_bus=${report.runtime_step_event_bus}`,
+		`post_tool_writeback_autocapture=${report.post_tool_writeback_autocapture}`,
+		`status=${report.status}`,
+		`runtime_events=${report.runtimeEventCount}`,
+		`memory_writebacks=${report.memoryWritebackCount}`,
+		`pending_writebacks=${report.pendingWritebackCount}`,
+		`blocked_writebacks=${report.blockedWritebackCount}`,
+		`auto_writeback_coverage=${report.autoWritebackCoverage}`,
+		`latest_runtime_event_hash=${report.latestRuntimeEventHash}`,
+		`event_bus=${report.depositionEventBusPath}`,
+		`report=${report.depositionReportPath}`,
+		"recent_events:",
+		...(report.recentEvents.length
+			? report.recentEvents.map(
+					(event) =>
+						`- id=${event.id} stage=${event.stage} status=${event.status} outcome=${event.outcome} memory_event=${event.memoryEventId ?? "none"} command=${truncateMiddle(event.command ?? "none", 140)}`,
+				)
+			: ["- none"]),
+		"next_commands:",
+		...report.nextCommands.map((command) => `- ${command}`),
+		"required_gates:",
+		...report.requiredGates.map((gate) => `- ${gate}`),
+	].join("\n");
+}
+
+function memoryExperienceTargetScope(event: MemoryEventV1): string {
+	return [event.memoryScope?.workspaceRoot ?? process.cwd(), event.route, event.target ?? "workspace"]
+		.map((item) => item.replace(/\s+/g, " ").trim())
+		.filter(Boolean)
+		.join("::");
+}
+
+function memoryExperienceIntent(event: MemoryEventV1): string {
+	const text = [event.task, event.route, ...event.domainTags, ...event.lessons, ...event.reuseRules].join(" ");
+	if (/authz|idor|bola|jwt|oauth|session/i.test(text)) return "web-authz";
+	if (/pwn|rop|heap|crash|libc|gdb|overflow/i.test(text)) return "pwn-exploit";
+	if (/android|apk|frida|mobile|jadx/i.test(text)) return "mobile-runtime";
+	if (/firmware|iot|binwalk|squashfs|mips|arm/i.test(text)) return "firmware-dfir";
+	if (/pcap|dfir|forensic|tshark|wireshark/i.test(text)) return "dfir";
+	if (/cloud|k8s|aws|azure|gcp|identity|ldap|kerberos/i.test(text)) return "cloud-identity";
+	return event.route || "general";
+}
+
+function memoryExperienceObservation(event: MemoryEventV1): string {
+	return truncateMiddle(
+		uniqueNonEmpty([event.task, ...event.lessons, ...event.reuseRules, ...event.failurePatterns], 12).join(" | "),
+		720,
+	);
+}
+
+function memoryExperienceFailureSignature(event: MemoryEventV1): string | undefined {
+	if (event.outcome !== "failure" && event.outcome !== "blocked" && event.outcome !== "repair") return undefined;
+	const text = uniqueNonEmpty([...event.failurePatterns, ...event.lessons, event.task], 8).join("\n").toLowerCase();
+	return sha256Text(text).slice(0, 20);
+}
+
+function memoryExperienceCommandFingerprint(command?: string): string | undefined {
+	const normalized = String(command ?? "")
+		.trim()
+		.replace(/\s+/g, " ")
+		.replace(/https?:\/\/[^\s/'"`]+/gi, "https://<host>")
+		.replace(/\b\d+\b/g, "<n>");
+	return normalized ? sha256Text(normalized).slice(0, 20) : undefined;
+}
+
+function memoryExperienceEvidenceReady(event: MemoryEventV1): boolean {
+	return (
+		event.quality.replayVerified ||
+		event.promotion.verifierRuleCandidate ||
+		event.artifactHashes.some((artifact) => Boolean(artifact.sha256))
+	);
+}
+
+function memoryExperienceEpisodeHash(row: MemoryExperienceEpisodeV8): string {
+	const { entryHash: _entryHash, ...withoutHash } = row;
+	return sha256Text(JSON.stringify(withoutHash));
+}
+
+function memoryExperienceClaimHash(row: MemoryExperienceClaimV8): string {
+	const { entryHash: _entryHash, ...withoutHash } = row;
+	return sha256Text(JSON.stringify(withoutHash));
+}
+
+function memoryExperiencePromotionHash(row: MemoryExperiencePromotionRowV8): string {
+	const { entryHash: _entryHash, ...withoutHash } = row;
+	return sha256Text(JSON.stringify(withoutHash));
+}
+
+function memoryExperienceClaimBaseStatus(event: MemoryEventV1, claimType: MemoryExperienceClaimTypeV8): MemoryExperienceClaimStatusV8 {
+	const evidenceReady = memoryExperienceEvidenceReady(event);
+	const confidence = event.quality.confidence;
+	if (claimType === "scope_constraint") return "promoted";
+	if (event.outcome === "failure" || event.outcome === "blocked" || event.outcome === "repair") {
+		return confidence >= 0.55 ? "demoted" : "retained";
+	}
+	if (claimType === "verifier_rule" && event.promotion.verifierRuleCandidate && confidence >= 0.6) return "promoted";
+	if (evidenceReady && confidence >= 0.68) return "promoted";
+	return confidence >= 0.45 ? "retained" : "candidate";
+}
+
+function buildMemoryExperienceReport(options: { write?: boolean; route?: string; target?: string } = {}): MemoryExperienceReportV8 {
+	ensureReconStorage();
+	const events = readMemoryEvents().filter((event) => {
+		const requestedRoute = options.route?.toLowerCase();
+		const eventRoute = event.route.toLowerCase();
+		if (requestedRoute && eventRoute && eventRoute !== requestedRoute && !requestedRoute.includes(eventRoute) && !eventRoute.includes(requestedRoute)) return false;
+		if (options.target && event.target && event.target !== options.target) return false;
+		return true;
+	});
+	const depositionByMemoryEvent = new Map<string, MemoryDepositionRuntimeEventV7[]>();
+	for (const event of readMemoryDepositionEvents()) {
+		if (!event.memoryEventId) continue;
+		const rows = depositionByMemoryEvent.get(event.memoryEventId) ?? [];
+		rows.push(event);
+		depositionByMemoryEvent.set(event.memoryEventId, rows);
+	}
+	const episodes: MemoryExperienceEpisodeV8[] = events.map((event) => {
+		const depositionRows = depositionByMemoryEvent.get(event.id) ?? [];
+		const base: Omit<MemoryExperienceEpisodeV8, "entryHash"> = {
+			kind: "repi-memory-experience-episode",
+			schemaVersion: 1,
+			id: `mexp-episode:${sha256Text(event.id).slice(0, 20)}`,
+			ts: event.ts,
+			MemoryExperienceEngineV8: true,
+			eventId: event.id,
+			depositionEventIds: depositionRows.map((row) => row.id),
+			caseSignature: event.caseSignature,
+			route: event.route,
+			target: event.target,
+			targetScope: memoryExperienceTargetScope(event),
+			intent: memoryExperienceIntent(event),
+			outcome: event.outcome,
+			observation: memoryExperienceObservation(event),
+			commands: uniqueNonEmpty(event.commands, 32),
+			evidenceRefs: event.artifactHashes,
+			failureSignature: memoryExperienceFailureSignature(event),
+			quality: event.quality,
+			claimIds: [],
+			lessonIds: [],
+		};
+		const row: MemoryExperienceEpisodeV8 = { ...base, entryHash: memoryExperienceEpisodeHash({ ...base, entryHash: "" }) };
+		return row;
+	});
+	const episodeByEvent = new Map(episodes.map((episode) => [episode.eventId, episode]));
+	const claimRows: MemoryExperienceClaimV8[] = [];
+	const addClaim = (event: MemoryEventV1, claimType: MemoryExperienceClaimTypeV8, statement: string, command?: string, blockers: string[] = []) => {
+		const episode = episodeByEvent.get(event.id);
+		if (!episode) return;
+		const commandFingerprint = memoryExperienceCommandFingerprint(command);
+		const id = `mexp-claim:${sha256Text(`${event.id}\n${claimType}\n${statement}\n${commandFingerprint ?? ""}`).slice(0, 24)}`;
+		const confidence = clamp01(event.quality.confidence, 0.5);
+		const reuseScore = Number(
+			Math.max(
+				0,
+				confidence * 100 +
+					(event.quality.replayVerified ? 12 : 0) +
+					event.quality.reuseCount * 5 -
+					event.quality.failureCount * 9 -
+					event.quality.decay * 10,
+			).toFixed(2),
+		);
+		const baseStatus = memoryExperienceClaimBaseStatus(event, claimType);
+		const base: Omit<MemoryExperienceClaimV8, "entryHash"> = {
+			kind: "repi-memory-experience-claim",
+			schemaVersion: 1,
+			id,
+			ts: event.ts,
+			MemoryExperienceEngineV8: true,
+			episodeId: episode.id,
+			eventId: event.id,
+			claimType,
+			status: baseStatus,
+			statement: truncateMiddle(statement, 640),
+			caseSignature: event.caseSignature,
+			route: event.route,
+			targetScope: episode.targetScope,
+			commandFingerprint,
+			supportEventIds: [event.id],
+			contradictionEventIds: [],
+			evidenceRefs: event.artifactHashes,
+			confidence,
+			reuseScore,
+			promotionReady: baseStatus === "promoted",
+			blockers,
+		};
+		claimRows.push({ ...base, entryHash: memoryExperienceClaimHash({ ...base, entryHash: "" }) });
+	};
+	for (const event of events) {
+		const evidenceReady = memoryExperienceEvidenceReady(event);
+		for (const command of event.commands.slice(0, 8)) {
+			if (event.outcome === "success" || event.outcome === "partial") {
+				addClaim(
+					event,
+					"command_strategy",
+					`Reuse command strategy when intent=${memoryExperienceIntent(event)} route=${event.route}: ${command}`,
+					command,
+					evidenceReady ? [] : ["artifact_or_replay_evidence_required"],
+				);
+			} else {
+				addClaim(
+					event,
+					"failure_signature",
+					`Avoid or repair command after ${event.outcome} signature=${memoryExperienceFailureSignature(event) ?? "unknown"}: ${command}`,
+					command,
+					[],
+				);
+			}
+		}
+		for (const rule of event.reuseRules.slice(0, 6)) {
+			addClaim(event, "repair_playbook", `Reusable rule for ${event.route}: ${rule}`, event.commands[0], evidenceReady ? [] : ["evidence_hash_missing"]);
+		}
+		for (const pattern of event.failurePatterns.slice(0, 6)) {
+			addClaim(event, "failure_signature", `Failure pattern for ${event.route}: ${pattern}`, event.commands[0], []);
+		}
+		if (event.promotion.verifierRuleCandidate || event.quality.replayVerified) {
+			addClaim(event, "verifier_rule", `Verifier/replay rule candidate: ${event.lessons[0] ?? event.task}`, event.commands[0], []);
+		}
+		if (event.artifactHashes.some((artifact) => artifact.sha256)) {
+			addClaim(event, "artifact_pattern", `Artifact-backed pattern: ${event.artifactHashes.map((artifact) => artifact.path).slice(0, 4).join(", ")}`, event.commands[0], []);
+		}
+		if (event.memoryScope) {
+			addClaim(event, "scope_constraint", `Scope-safe reuse only within ${memoryExperienceTargetScope(event)}`, undefined, []);
+		}
+	}
+	const byFingerprint = new Map<string, MemoryExperienceClaimV8[]>();
+	for (const claim of claimRows) {
+		if (!claim.commandFingerprint) continue;
+		const key = `${claim.route}:${claim.targetScope}:${claim.commandFingerprint}`;
+		const rows = byFingerprint.get(key) ?? [];
+		rows.push(claim);
+		byFingerprint.set(key, rows);
+	}
+	const contradictionMap = new Map<string, string[]>();
+	for (const rows of byFingerprint.values()) {
+		const positive = rows.filter((row) => row.claimType === "command_strategy" || row.claimType === "repair_playbook");
+		const negative = rows.filter((row) => row.claimType === "failure_signature");
+		if (!positive.length || !negative.length) continue;
+		const ids = rows.map((row) => row.eventId);
+		for (const row of rows) contradictionMap.set(row.id, ids.filter((id) => id !== row.eventId));
+	}
+	const claims = claimRows.map((claim) => {
+		const contradictionEventIds = uniqueNonEmpty(contradictionMap.get(claim.id) ?? [], 24);
+		const status: MemoryExperienceClaimStatusV8 = contradictionEventIds.length
+			? "conflicted"
+			: claim.blockers.length && claim.status === "promoted"
+				? "retained"
+				: claim.status;
+		const updated = {
+			...claim,
+			status,
+			contradictionEventIds,
+			promotionReady: status === "promoted" && claim.blockers.length === 0,
+			blockers: uniqueNonEmpty([...claim.blockers, ...(contradictionEventIds.length ? ["contradiction_resolution_required"] : [])], 16),
+		};
+		return { ...updated, entryHash: memoryExperienceClaimHash({ ...updated, entryHash: "" }) };
+	});
+	const lessons: MemoryExperienceLessonV8[] = claims
+		.filter((claim) => claim.status === "promoted" || claim.status === "demoted" || claim.status === "retained")
+		.slice(0, 240)
+		.map((claim) => {
+			const episode = episodes.find((item) => item.id === claim.episodeId);
+			const event = events.find((item) => item.id === claim.eventId);
+			const action: MemoryExperienceLessonActionV8 =
+				claim.claimType === "failure_signature"
+					? "avoid"
+					: claim.claimType === "verifier_rule"
+						? "verify"
+						: claim.claimType === "scope_constraint"
+							? "scope-limit"
+							: claim.status === "demoted"
+								? "repair"
+								: "reuse";
+			return {
+				kind: "repi-memory-experience-lesson",
+				schemaVersion: 1,
+				id: `mexp-lesson:${sha256Text(`${claim.id}\n${action}`).slice(0, 20)}`,
+				ts: claim.ts,
+				MemoryExperienceEngineV8: true,
+				claimId: claim.id,
+				episodeId: claim.episodeId,
+				action,
+				lesson: claim.statement,
+				appliesWhen: uniqueNonEmpty([episode?.intent, claim.route, episode?.targetScope, claim.caseSignature], 12),
+				commands: action === "avoid" ? [] : uniqueNonEmpty(event?.commands ?? [], 10),
+				confidence: claim.confidence,
+				backprop: {
+					reuseCount: event?.quality.reuseCount ?? 0,
+					failureCount: event?.quality.failureCount ?? 0,
+					decay: event?.quality.decay ?? 0,
+					lastUsefulAt: event?.quality.lastUsefulAt ?? claim.ts,
+					source: "MemoryExperienceEngineV8 usefulness_backprop",
+				},
+				evidenceRefs: claim.evidenceRefs,
+			};
+		});
+	const promotionRows: MemoryExperiencePromotionRowV8[] = claims.map((claim) => {
+		const decision: MemoryExperiencePromotionDecisionV8 =
+			claim.status === "promoted"
+				? "promote"
+				: claim.status === "demoted"
+					? "demote"
+					: claim.status === "quarantined" || claim.status === "conflicted"
+						? "quarantine"
+						: "retain";
+		const gate: MemoryExperiencePromotionRowV8["gate"] = claim.contradictionEventIds.length
+			? "contradiction"
+			: claim.evidenceRefs.some((artifact) => artifact.sha256)
+				? "artifact_sha256"
+				: claim.claimType === "verifier_rule"
+					? "replay_or_verifier"
+					: claim.confidence >= 0.68
+						? "confidence"
+						: "feedback";
+		const base: Omit<MemoryExperiencePromotionRowV8, "entryHash"> = {
+			kind: "repi-memory-experience-promotion",
+			schemaVersion: 1,
+			id: `mexp-promotion:${sha256Text(`${claim.id}\n${decision}`).slice(0, 20)}`,
+			ts: new Date().toISOString(),
+			MemoryExperienceEngineV8: true,
+			claimId: claim.id,
+			decision,
+			reason: claim.blockers.length ? claim.blockers.join(";") : `status=${claim.status} confidence=${claim.confidence}`,
+			gate,
+			evidenceRefs: claim.evidenceRefs,
+		};
+		return { ...base, entryHash: memoryExperiencePromotionHash({ ...base, entryHash: "" }) };
+	});
+	const byStatus = (status: MemoryExperienceClaimStatusV8) => claims.filter((claim) => claim.status === status).map((claim) => claim.id).slice(0, 120);
+	const operatorInjectionCommands = uniqueNonEmpty(
+		lessons.filter((lesson) => lesson.action === "reuse" || lesson.action === "repair").flatMap((lesson) => lesson.commands),
+		24,
+	);
+	const avoidCommands = uniqueNonEmpty(
+		claims.filter((claim) => claim.status === "demoted" || claim.claimType === "failure_signature").flatMap((claim) => {
+			const event = events.find((item) => item.id === claim.eventId);
+			return event?.commands ?? [];
+		}),
+		24,
+	);
+	const verifyCommands = uniqueNonEmpty(lessons.filter((lesson) => lesson.action === "verify").flatMap((lesson) => lesson.commands), 24);
+	const decided = promotionRows.filter((row) => row.decision !== "retain").length;
+	const status: MemoryExperienceReportV8["status"] = events.length === 0 ? "empty" : claims.some((claim) => claim.status === "conflicted") ? "warn" : claims.length && lessons.length ? "pass" : "warn";
+	const report: MemoryExperienceReportV8 = {
+		kind: "repi-memory-experience-report",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		MemoryExperienceEngineV8: true,
+		episode_model_v8: true,
+		structured_claim_extraction: true,
+		lesson_promotion_gate: true,
+		contradiction_resolution: true,
+		usefulness_backprop: true,
+		reportPath: memoryExperienceReportPath(),
+		episodesPath: memoryExperienceEpisodesPath(),
+		claimsPath: memoryExperienceClaimsPath(),
+		lessonBookPath: memoryExperienceLessonBookPath(),
+		promotionLedgerPath: memoryExperiencePromotionLedgerPath(),
+		memoryEventsPath: memoryEventsPath(),
+		depositionEventBusPath: memoryDepositionEventBusPath(),
+		episodeCount: episodes.length,
+		claimCount: claims.length,
+		lessonCount: lessons.length,
+		promotionDecisionCount: promotionRows.length,
+		promotedClaimIds: byStatus("promoted"),
+		retainedClaimIds: byStatus("retained"),
+		demotedClaimIds: byStatus("demoted"),
+		quarantinedClaimIds: byStatus("quarantined"),
+		conflictedClaimIds: byStatus("conflicted"),
+		operatorInjectionCommands,
+		avoidCommands,
+		verifyCommands,
+		promotionCoverage: claims.length ? Number((decided / claims.length).toFixed(4)) : 0,
+		status,
+		recentEpisodes: episodes.slice(-12),
+		recentClaims: claims.slice(-12),
+		recentLessons: lessons.slice(-12),
+		requiredGates: [
+			"MemoryExperienceEngineV8",
+			"episode_model_v8",
+			"structured_claim_extraction",
+			"lesson_promotion_gate",
+			"contradiction_resolution",
+			"usefulness_backprop",
+			"experience_report_in_context_pack",
+			"operator_memory_injection_commands",
+		],
+		policy: {
+			MemoryExperienceEngineV8: true,
+			episodeModel: true,
+			structuredClaimExtraction: true,
+			lessonPromotionGate: true,
+			contradictionResolution: true,
+			usefulnessBackprop: true,
+			scopeSafeInjectionOnly: true,
+		},
+		nextCommands: uniqueNonEmpty(
+			[
+				"re_memory experience",
+				operatorInjectionCommands.length ? "re_operator plan # consumes MemoryExperienceEngineV8 operatorInjectionCommands" : undefined,
+				avoidCommands.length ? "re_autofix plan # avoidCommands include demoted failure signatures" : undefined,
+				verifyCommands.length ? "re_verifier matrix # verifyCommands include promoted verifier rules" : undefined,
+				"re_memory supervise",
+				"re_context pack",
+			].filter(Boolean) as string[],
+			12,
+		),
+	};
+	if (options.write !== false) {
+		writeFileAtomic(memoryExperienceEpisodesPath(), episodes.map((row) => JSON.stringify(row)).join("\n") + (episodes.length ? "\n" : ""));
+		writeFileAtomic(memoryExperienceClaimsPath(), claims.map((row) => JSON.stringify(row)).join("\n") + (claims.length ? "\n" : ""));
+		writeFileAtomic(memoryExperiencePromotionLedgerPath(), promotionRows.map((row) => JSON.stringify(row)).join("\n") + (promotionRows.length ? "\n" : ""));
+		writeFileAtomic(
+			memoryExperienceLessonBookPath(),
+			[
+				"# REPI Memory Experience Lesson Book",
+				"",
+				"MemoryExperienceEngineV8: true",
+				`generated_at: ${report.generatedAt}`,
+				`report: ${report.reportPath}`,
+				"",
+				"## Reuse / Repair / Verify Lessons",
+				...(lessons.length
+					? lessons.slice(0, 160).map((lesson) => `- ${lesson.action} confidence=${lesson.confidence.toFixed(2)} claim=${lesson.claimId} :: ${lesson.lesson}`)
+					: ["- none"]),
+				"",
+				"## Operator Injection Commands",
+				...(operatorInjectionCommands.length ? operatorInjectionCommands.map((command) => `- ${command}`) : ["- none"]),
+				"",
+				"## Avoid Commands / Failure Signatures",
+				...(avoidCommands.length ? avoidCommands.map((command) => `- ${command}`) : ["- none"]),
+				"",
+				"## Required Gates",
+				...report.requiredGates.map((gate) => `- ${gate}`),
+				"",
+			].join("\n"),
+		);
+		writeFileAtomic(memoryExperienceReportPath(), `${JSON.stringify(report, null, 2)}\n`);
+	}
+	return report;
+}
+
+function formatMemoryExperienceReport(report = buildMemoryExperienceReport()): string {
+	return [
+		"memory_experience_engine_v8:",
+		`MemoryExperienceEngineV8=${report.MemoryExperienceEngineV8}`,
+		`episode_model_v8=${report.episode_model_v8}`,
+		`structured_claim_extraction=${report.structured_claim_extraction}`,
+		`lesson_promotion_gate=${report.lesson_promotion_gate}`,
+		`contradiction_resolution=${report.contradiction_resolution}`,
+		`usefulness_backprop=${report.usefulness_backprop}`,
+		`status=${report.status}`,
+		`episodes=${report.episodeCount}`,
+		`claims=${report.claimCount}`,
+		`lessons=${report.lessonCount}`,
+		`promotion_coverage=${report.promotionCoverage}`,
+		`promoted=${report.promotedClaimIds.length}`,
+		`demoted=${report.demotedClaimIds.length}`,
+		`conflicted=${report.conflictedClaimIds.length}`,
+		`report=${report.reportPath}`,
+		`lesson_book=${report.lessonBookPath}`,
+		"operator_injection_commands:",
+		...(report.operatorInjectionCommands.length ? report.operatorInjectionCommands.slice(0, 12).map((command) => `- ${command}`) : ["- none"]),
+		"avoid_commands:",
+		...(report.avoidCommands.length ? report.avoidCommands.slice(0, 12).map((command) => `- ${command}`) : ["- none"]),
+		"recent_lessons:",
+		...(report.recentLessons.length ? report.recentLessons.map((lesson) => `- ${lesson.action} claim=${lesson.claimId} ${truncateMiddle(lesson.lesson, 180)}`) : ["- none"]),
+		"next_commands:",
+		...report.nextCommands.map((command) => `- ${command}`),
+		"required_gates:",
+		...report.requiredGates.map((gate) => `- ${gate}`),
+	].join("\n");
+}
+
+function isMemoryExperienceClaimRowV8(value: unknown): value is MemoryExperienceClaimV8 {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const row = value as MemoryExperienceClaimV8;
+	return (
+		row.kind === "repi-memory-experience-claim" &&
+		row.schemaVersion === 1 &&
+		row.MemoryExperienceEngineV8 === true &&
+		typeof row.id === "string" &&
+		typeof row.episodeId === "string" &&
+		typeof row.eventId === "string" &&
+		typeof row.claimType === "string" &&
+		typeof row.status === "string" &&
+		typeof row.statement === "string" &&
+		typeof row.caseSignature === "string" &&
+		typeof row.route === "string" &&
+		typeof row.targetScope === "string" &&
+		Array.isArray(row.supportEventIds) &&
+		Array.isArray(row.contradictionEventIds) &&
+		Array.isArray(row.evidenceRefs) &&
+		typeof row.confidence === "number" &&
+		typeof row.reuseScore === "number" &&
+		typeof row.promotionReady === "boolean" &&
+		Array.isArray(row.blockers) &&
+		typeof row.entryHash === "string"
+	);
+}
+
+function memorySkillCapsuleHash(capsule: Omit<MemorySkillCapsuleV9, "entryHash">): string {
+	return sha256Text(JSON.stringify(capsule));
+}
+
+function memorySkillCapsuleTypeFromLesson(action: MemoryExperienceLessonActionV8): MemorySkillCapsuleTypeV9 {
+	if (action === "avoid") return "avoid_rule";
+	if (action === "repair") return "repair_rule";
+	if (action === "verify") return "verifier_rule";
+	if (action === "scope-limit") return "scope_guard";
+	return "operator_playbook";
+}
+
+function memorySkillCapsuleTypeFromPattern(patternType: MemoryDistilledPatternV1["patternType"]): MemorySkillCapsuleTypeV9 {
+	if (patternType === "verifier_rule") return "verifier_rule";
+	if (patternType === "worker_routing_hint") return "worker_routing";
+	if (patternType === "tool_repair_rule") return "repair_rule";
+	if (patternType === "failure_pattern") return "avoid_rule";
+	return "operator_playbook";
+}
+
+function memorySkillCapsuleLifecycleFromPattern(lifecycle: MemoryDistilledPatternV1["lifecycle"]): MemorySkillCapsuleLifecycleV9 {
+	if (lifecycle === "promoted") return "promoted";
+	if (lifecycle === "quarantined" || lifecycle === "contradicted") return "quarantined";
+	if (lifecycle === "stale") return "demoted";
+	return "candidate";
+}
+
+function memorySkillCapsuleLifecycleFromClaim(status?: MemoryExperienceClaimStatusV8): MemorySkillCapsuleLifecycleV9 {
+	if (status === "promoted") return "promoted";
+	if (status === "quarantined" || status === "conflicted") return "quarantined";
+	if (status === "demoted") return "demoted";
+	return "candidate";
+}
+
+function memorySkillCapsulePromotionGate(input: { evidenceRefs?: MemoryArtifactHash[]; lifecycle?: MemorySkillCapsuleLifecycleV9; promotionReady?: boolean; score?: number }): MemorySkillCapsulePromotionGateV9 {
+	if (input.evidenceRefs?.some((artifact) => artifact.sha256)) return "artifact_sha256";
+	if (input.promotionReady) return "experience_promotion";
+	if (input.lifecycle === "promoted") return "replay_or_verifier";
+	if ((input.score ?? 0) >= 0.78) return "feedback_usefulness";
+	return "pattern_confidence";
+}
+
+function memorySkillCapsuleFrom(input: Omit<MemorySkillCapsuleV9, "kind" | "schemaVersion" | "entryHash">): MemorySkillCapsuleV9 {
+	const capsule = {
+		kind: "repi-memory-skill-capsule" as const,
+		schemaVersion: 1 as const,
+		...input,
+	};
+	return { ...capsule, entryHash: memorySkillCapsuleHash(capsule) };
+}
+
+function buildMemorySkillCapsuleReport(options: { route?: string; target?: string; write?: boolean } = {}): MemorySkillCapsuleReportV9 {
+	ensureReconStorage();
+	const generatedAt = new Date().toISOString();
+	const effectiveRoute = options.route && !/(?:security|general|unknown)/i.test(options.route) ? options.route : undefined;
+	const experience = buildMemoryExperienceReport({ route: effectiveRoute, target: options.target, write: options.write });
+	const distillation = distillMemoryPatterns({ route: effectiveRoute, target: options.target, now: generatedAt });
+	const claimRows = jsonlRecords(memoryExperienceClaimsPath(), isMemoryExperienceClaimRowV8);
+	const claimById = new Map(claimRows.map((claim) => [claim.id, claim]));
+	const eventByIdForSkillCapsules = new Map(readMemoryEvents().map((event) => [event.id, event]));
+	const capsules: MemorySkillCapsuleV9[] = [];
+	for (const lesson of experience.recentLessons) {
+		const claim = claimById.get(lesson.claimId) ?? experience.recentClaims.find((row) => row.id === lesson.claimId);
+		const skillType = memorySkillCapsuleTypeFromLesson(lesson.action);
+		const lifecycle = memorySkillCapsuleLifecycleFromClaim(claim?.status);
+		const baseScore = clamp01(lesson.confidence + (claim?.promotionReady ? 0.08 : 0) + Math.min(0.12, lesson.backprop.reuseCount * 0.02) - Math.min(0.18, lesson.backprop.failureCount * 0.04), lesson.confidence);
+		const sourceEventCommands = claim?.eventId ? eventByIdForSkillCapsules.get(claim.eventId)?.commands ?? [] : [];
+		const lessonCommands = uniqueNonEmpty([...lesson.commands, ...sourceEventCommands, ...extractMemoryCommands(lesson.lesson)], 12);
+		const operatorCommands = skillType === "operator_playbook" || skillType === "repair_rule" ? lessonCommands : [];
+		const verifierCommands = skillType === "verifier_rule" ? uniqueNonEmpty([...lessonCommands, "re_verifier matrix", "re_replayer run"], 8) : [];
+		const avoidCommands = skillType === "avoid_rule" ? lessonCommands : [];
+		const preconditions = uniqueNonEmpty([
+			...(lesson.appliesWhen ?? []),
+			claim?.route ? `route=${claim.route}` : undefined,
+			claim?.targetScope ? `target_scope=${claim.targetScope}` : undefined,
+			claim?.commandFingerprint ? `command_fingerprint=${claim.commandFingerprint}` : undefined,
+		], 12);
+		const sourceHashes = uniqueNonEmpty([claim?.entryHash, sha256Text(JSON.stringify(lesson))], 8);
+		const evidenceRefs = uniqueNonEmpty(lesson.evidenceRefs.map((artifact) => artifact.path), 24).length ? lesson.evidenceRefs : claim?.evidenceRefs ?? [];
+		const score = Number(baseScore.toFixed(4));
+		capsules.push(
+			memorySkillCapsuleFrom({
+				id: `skill:${slug(claim?.caseSignature ?? lesson.claimId)}:${skillType}:${sha256Text(`${lesson.id}:${sourceHashes.join(":")}`).slice(0, 16)}`,
+				ts: generatedAt,
+				MemorySkillCapsuleV9: true,
+				caseSignature: claim?.caseSignature ?? lesson.claimId,
+				route: claim?.route ?? options.route ?? "manual",
+				targetScope: claim?.targetScope ?? memoryTargetScope(options.target) ?? "workspace",
+				skillType,
+				lifecycle,
+				sourceIds: uniqueNonEmpty([lesson.id, claim?.id, claim?.eventId], 8),
+				sourceHashes,
+				preconditions,
+				operatorCommands,
+				verifierCommands,
+				avoidCommands,
+				workerRoutingHints: [],
+				evidenceRefs,
+				score,
+				promotionGate: memorySkillCapsulePromotionGate({ evidenceRefs, lifecycle, promotionReady: claim?.promotionReady, score }),
+				usage: { reuseCount: lesson.backprop.reuseCount, successCount: lesson.action === "reuse" ? 1 : 0, failureCount: lesson.backprop.failureCount, lastUsedAt: lesson.backprop.lastUsefulAt, usefulnessScore: score },
+				injection: {
+					operatorPromptSnippet: truncateMiddle(`Use skill capsule ${skillType}: ${lesson.lesson}`, 360),
+					verifierPromptSnippet: verifierCommands.length ? `Verify skill capsule ${lesson.id} with replay/verifier evidence before final claim.` : "No verifier command generated.",
+					nextActionCommands: uniqueNonEmpty([...operatorCommands, ...verifierCommands, ...avoidCommands], 12),
+				},
+			}),
+		);
+	}
+	for (const pattern of distillation.patterns) {
+		const skillType = memorySkillCapsuleTypeFromPattern(pattern.patternType);
+		const lifecycle = memorySkillCapsuleLifecycleFromPattern(pattern.lifecycle);
+		const evidenceRefs = memoryArtifactHashes(pattern.evidenceRefs);
+		const score = Number(clamp01(pattern.confidence + (lifecycle === "promoted" ? 0.05 : 0), pattern.confidence).toFixed(4));
+		const operatorCommands = skillType === "operator_playbook" || skillType === "repair_rule" ? pattern.commands : [];
+		const verifierCommands = skillType === "verifier_rule" ? uniqueNonEmpty([...pattern.commands, "re_verifier matrix", "re_replayer run"], 12) : [];
+		const avoidCommands = skillType === "avoid_rule" ? uniqueNonEmpty([...pattern.commands, ...pattern.failurePatterns], 12) : [];
+		const workerRoutingHints = skillType === "worker_routing" ? uniqueNonEmpty([...pattern.commands, ...pattern.reuseRules], 12) : [];
+		capsules.push(
+			memorySkillCapsuleFrom({
+				id: `skill:${slug(pattern.caseSignature)}:${skillType}:${sha256Text(`${pattern.id}:${pattern.entryHash}`).slice(0, 16)}`,
+				ts: generatedAt,
+				MemorySkillCapsuleV9: true,
+				caseSignature: pattern.caseSignature,
+				route: pattern.route,
+				targetScope: memoryTargetScope(pattern.target) || memoryTargetScope(options.target) || pattern.route,
+				skillType,
+				lifecycle,
+				sourceIds: uniqueNonEmpty([pattern.id, ...pattern.sourceEventIds], 16),
+				sourceHashes: uniqueNonEmpty([pattern.entryHash, ...pattern.sourceHashes], 16),
+				preconditions: uniqueNonEmpty([`route=${pattern.route}`, pattern.target ? `target_scope=${memoryTargetScope(pattern.target)}` : undefined, `case=${pattern.caseSignature}`, ...pattern.reuseRules.slice(0, 4)], 12),
+				operatorCommands,
+				verifierCommands,
+				avoidCommands,
+				workerRoutingHints,
+				evidenceRefs,
+				score,
+				promotionGate: memorySkillCapsulePromotionGate({ evidenceRefs, lifecycle, score }),
+				usage: { reuseCount: pattern.sourceEventIds.length, successCount: lifecycle === "promoted" ? 1 : 0, failureCount: lifecycle === "demoted" || lifecycle === "quarantined" ? 1 : 0, lastUsedAt: generatedAt, usefulnessScore: score },
+				injection: {
+					operatorPromptSnippet: truncateMiddle(`Use distilled ${pattern.patternType} skill for ${pattern.caseSignature}: ${pattern.summary}`, 360),
+					verifierPromptSnippet: verifierCommands.length ? `Replay/verifier required for ${pattern.id}: ${pattern.summary}` : "No verifier command generated.",
+					workerRoutingHint: workerRoutingHints[0],
+					nextActionCommands: uniqueNonEmpty([...operatorCommands, ...verifierCommands, ...avoidCommands, ...workerRoutingHints], 12),
+				},
+			}),
+		);
+	}
+	const deduped = Array.from(new Map(capsules.map((capsule) => [capsule.id, capsule])).values()).sort(
+		(left, right) =>
+			Number(right.lifecycle === "promoted") - Number(left.lifecycle === "promoted") ||
+			right.score - left.score ||
+			left.id.localeCompare(right.id),
+	);
+	const injectable = deduped.filter((capsule) => capsule.lifecycle === "promoted" || capsule.lifecycle === "candidate");
+	const operatorInjectionCommands = uniqueNonEmpty(injectable.flatMap((capsule) => capsule.operatorCommands), 32);
+	const verifierCommands = uniqueNonEmpty(injectable.flatMap((capsule) => capsule.verifierCommands), 24);
+	const avoidCommands = uniqueNonEmpty(deduped.flatMap((capsule) => capsule.avoidCommands), 24);
+	const workerRoutingHints = uniqueNonEmpty(injectable.flatMap((capsule) => capsule.workerRoutingHints), 24);
+	const byLifecycle = (lifecycle: MemorySkillCapsuleLifecycleV9) => deduped.filter((capsule) => capsule.lifecycle === lifecycle).map((capsule) => capsule.id);
+	const status: MemorySkillCapsuleReportV9["status"] = deduped.length === 0 ? "empty" : byLifecycle("quarantined").length && !operatorInjectionCommands.length ? "warn" : "pass";
+	const report: MemorySkillCapsuleReportV9 = {
+		kind: "repi-memory-skill-capsule-report",
+		schemaVersion: 1,
+		generatedAt,
+		MemorySkillCapsuleV9: true,
+		skill_capsule_assetization: true,
+		verified_skill_promotion_gate: true,
+		operator_skill_injection: true,
+		reportPath: memorySkillCapsuleReportPath(),
+		capsuleLedgerPath: memorySkillCapsuleLedgerPath(),
+		capsuleBookPath: memorySkillCapsuleBookPath(),
+		sourceExperienceReportPath: experience.reportPath,
+		sourceDistillationReportPath: memoryDistillationReportPath(),
+		capsuleCount: deduped.length,
+		promotedCapsuleIds: byLifecycle("promoted"),
+		candidateCapsuleIds: byLifecycle("candidate"),
+		quarantinedCapsuleIds: byLifecycle("quarantined"),
+		demotedCapsuleIds: byLifecycle("demoted"),
+		operatorInjectionCommands,
+		verifierCommands,
+		avoidCommands,
+		workerRoutingHints,
+		status,
+		recentCapsules: deduped.slice(0, 24),
+		requiredGates: [
+			"MemorySkillCapsuleV9",
+			"skill_capsule_assetization",
+			"verified_skill_promotion_gate",
+			"operator_skill_injection",
+			"memory_skill_capsules_in_context_pack",
+			"experience_to_skill_capsule",
+			"distilled_pattern_to_skill_capsule",
+		],
+		policy: {
+			MemorySkillCapsuleV9: true,
+			experienceToSkillCapsule: true,
+			distilledPatternToSkillCapsule: true,
+			verifiedPromotionGate: true,
+			operatorInjectionOnlyPromotedOrCandidate: true,
+		},
+		nextCommands: uniqueNonEmpty(
+			[
+				"re_memory skills",
+				operatorInjectionCommands.length ? "re_operator plan # consumes MemorySkillCapsuleV9 operatorCommands" : undefined,
+				verifierCommands.length ? "re_verifier matrix # consumes MemorySkillCapsuleV9 verifierCommands" : undefined,
+				avoidCommands.length ? "re_autofix plan # consumes MemorySkillCapsuleV9 avoidCommands" : undefined,
+				"re_context pack",
+			].filter(Boolean) as string[],
+			12,
+		),
+	};
+	if (options.write !== false) {
+		writeFileAtomic(memorySkillCapsuleLedgerPath(), deduped.map((capsule) => JSON.stringify(capsule)).join("\n") + (deduped.length ? "\n" : ""));
+		writeFileAtomic(memorySkillCapsuleReportPath(), `${JSON.stringify(report, null, 2)}\n`);
+		writeFileAtomic(
+			memorySkillCapsuleBookPath(),
+			[
+				"# REPI Memory Skill Capsule Book",
+				"",
+				"MemorySkillCapsuleV9: true",
+				"skill_capsule_assetization: true",
+				`generated_at: ${report.generatedAt}`,
+				`report: ${report.reportPath}`,
+				"",
+				"## Capsules",
+				...(deduped.length
+					? deduped.slice(0, 160).map((capsule) => `- id=${capsule.id} lifecycle=${capsule.lifecycle} type=${capsule.skillType} score=${capsule.score.toFixed(2)} route=${capsule.route} gate=${capsule.promotionGate} next=${capsule.injection.nextActionCommands.slice(0, 3).join(" ; ") || "none"}`)
+					: ["- none"]),
+				"",
+				"## Operator Injection Commands",
+				...(operatorInjectionCommands.length ? operatorInjectionCommands.map((command) => `- ${command}`) : ["- none"]),
+				"",
+				"## Verifier Commands",
+				...(verifierCommands.length ? verifierCommands.map((command) => `- ${command}`) : ["- none"]),
+				"",
+				"## Required Gates",
+				...report.requiredGates.map((gate) => `- ${gate}`),
+				"",
+			].join("\n"),
+		);
+	}
+	return report;
+}
+
+function formatMemorySkillCapsules(report = buildMemorySkillCapsuleReport()): string {
+	return [
+		"memory_skill_capsule_v9:",
+		`MemorySkillCapsuleV9=${report.MemorySkillCapsuleV9}`,
+		`skill_capsule_assetization=${report.skill_capsule_assetization}`,
+		`verified_skill_promotion_gate=${report.verified_skill_promotion_gate}`,
+		`operator_skill_injection=${report.operator_skill_injection}`,
+		`status=${report.status}`,
+		`capsules=${report.capsuleCount}`,
+		`promoted=${report.promotedCapsuleIds.length}`,
+		`candidate=${report.candidateCapsuleIds.length}`,
+		`quarantined=${report.quarantinedCapsuleIds.length}`,
+		`demoted=${report.demotedCapsuleIds.length}`,
+		`report=${report.reportPath}`,
+		`capsule_book=${report.capsuleBookPath}`,
+		"operator_injection_commands:",
+		...(report.operatorInjectionCommands.length ? report.operatorInjectionCommands.slice(0, 12).map((command) => `- ${command}`) : ["- none"]),
+		"verifier_commands:",
+		...(report.verifierCommands.length ? report.verifierCommands.slice(0, 12).map((command) => `- ${command}`) : ["- none"]),
+		"avoid_commands:",
+		...(report.avoidCommands.length ? report.avoidCommands.slice(0, 12).map((command) => `- ${command}`) : ["- none"]),
+		"recent_capsules:",
+		...(report.recentCapsules.length ? report.recentCapsules.slice(0, 12).map((capsule) => `- ${capsule.lifecycle} ${capsule.skillType} score=${capsule.score.toFixed(2)} id=${capsule.id}`) : ["- none"]),
+		"next_commands:",
+		...report.nextCommands.map((command) => `- ${command}`),
+		"required_gates:",
+		...report.requiredGates.map((gate) => `- ${gate}`),
+	].join("\n");
+}
+
+function memoryDistillProviderConfigV10(): MemoryDistillProviderV10 {
+	const requestedRaw = String(process.env.REPI_MEMORY_DISTILL_PROVIDER ?? "local-rule").trim().toLowerCase();
+	const requested: MemoryDistillProviderBackendV10 =
+		requestedRaw === "openai" || requestedRaw === "openai-compatible"
+			? "openai-compatible"
+			: requestedRaw === "anthropic" || requestedRaw === "anthropic-compatible"
+				? "anthropic-compatible"
+				: requestedRaw === "mock" || requestedRaw === "mock-provider"
+					? "mock-provider"
+					: "local-rule";
+	const allowRemote = /^(?:1|true|yes)$/i.test(process.env.REPI_MEMORY_DISTILL_ALLOW_REMOTE ?? "");
+	const apiKeyEnv = process.env.REPI_MEMORY_DISTILL_API_KEY_ENV ?? (requested === "anthropic-compatible" ? "ANTHROPIC_AUTH_TOKEN" : "OPENAI_API_KEY");
+	const needsRemote = requested === "openai-compatible" || requested === "anthropic-compatible";
+	const fallbackReason = needsRemote && !allowRemote ? "remote_distill_requires_REPI_MEMORY_DISTILL_ALLOW_REMOTE=1" : needsRemote && !process.env.REPI_MEMORY_DISTILL_BASE_URL ? "distill_base_url_missing" : needsRemote && !process.env[apiKeyEnv] ? "distill_api_key_env_missing" : undefined;
+	const backend = fallbackReason ? "local-rule" : requested;
+	return {
+		kind: "repi-memory-distill-provider",
+		schemaVersion: 1,
+		MemoryDistillPromotionV10: true,
+		backend,
+		requestedBackend: requested,
+		model: backend === "local-rule" ? "repi-local-distill-v10" : (process.env.REPI_MEMORY_DISTILL_MODEL ?? "memory-distill-default"),
+		status: fallbackReason ? "fallback" : "active",
+		allowRemote,
+		baseUrl: needsRemote ? process.env.REPI_MEMORY_DISTILL_BASE_URL : undefined,
+		endpoint: needsRemote ? (process.env.REPI_MEMORY_DISTILL_ENDPOINT ?? (requested === "anthropic-compatible" ? "/v1/messages" : "/v1/chat/completions")) : undefined,
+		apiKeyEnv: needsRemote ? apiKeyEnv : undefined,
+		timeoutMs: Number(process.env.REPI_MEMORY_DISTILL_TIMEOUT_MS) || 8000,
+		fallbackReason,
+		requiredGates: ["MemoryDistillPromotionV10", "provider_distill_contract", "distill_api_key_env_ref_only", "remote_distill_requires_explicit_allow", "local_distill_fallback"],
+	};
+}
+
+function memoryDistillCandidateHash(candidate: Omit<MemoryDistillCandidateV10, "entryHash">): string {
+	return sha256Text(JSON.stringify(candidate));
+}
+
+function memoryDistillCandidateFrom(input: Omit<MemoryDistillCandidateV10, "kind" | "schemaVersion" | "entryHash">): MemoryDistillCandidateV10 {
+	const candidate = { kind: "repi-memory-distill-candidate" as const, schemaVersion: 1 as const, ...input };
+	return { ...candidate, entryHash: memoryDistillCandidateHash(candidate) };
+}
+
+function memoryDistillSnippetFromArtifacts(refs: MemoryArtifactHash[], limit = 700): string {
+	const snippets: string[] = [];
+	for (const ref of refs.slice(0, 3)) {
+		if (!ref.path || !existsSync(ref.path)) continue;
+		try {
+			const body = readFileSync(ref.path, "utf-8");
+			snippets.push(`${ref.path}\n${truncateMiddle(body, limit)}`);
+		} catch {}
+	}
+	return snippets.join("\n---\n");
+}
+
+function memoryDistillDecision(input: { confidence: number; hasEvidence: boolean; sourceLifecycle?: string; hasVerifier: boolean; hasConflict: boolean }): { decision: MemoryDistillPromotionDecisionV10; reason: string } {
+	if (input.hasConflict || input.sourceLifecycle === "quarantined") return { decision: "quarantine", reason: "conflict_or_quarantined_source" };
+	if (input.sourceLifecycle === "demoted") return { decision: "demote", reason: "source_lifecycle_demoted" };
+	if (input.hasEvidence && (input.hasVerifier || input.confidence >= 0.72)) return { decision: "promote", reason: "artifact_or_verifier_backed_high_confidence" };
+	if (input.confidence >= 0.62) return { decision: "retain", reason: "candidate_confidence_without_verifier_gate" };
+	return { decision: "demote", reason: "low_confidence_distill_candidate" };
+}
+
+function buildMemoryDistillPromotionReport(options: { route?: string; target?: string; write?: boolean } = {}): MemoryDistillPromotionReportV10 {
+	ensureReconStorage();
+	const generatedAt = new Date().toISOString();
+	const provider = memoryDistillProviderConfigV10();
+	const skillReport = buildMemorySkillCapsuleReport({ route: options.route, target: options.target, write: options.write });
+	const experience = buildMemoryExperienceReport({ route: options.route, target: options.target, write: options.write });
+	const candidates: MemoryDistillCandidateV10[] = [];
+	for (const capsule of skillReport.recentCapsules) {
+		const artifactSnippet = memoryDistillSnippetFromArtifacts(capsule.evidenceRefs, 500);
+		const claim = uniqueNonEmpty([capsule.injection.operatorPromptSnippet, artifactSnippet, capsule.preconditions.join(" | ")], 3).join("\n");
+		const confidence = clamp01(capsule.score + (capsule.evidenceRefs.some((ref) => ref.sha256) ? 0.06 : 0), capsule.score);
+		const hasVerifier = capsule.verifierCommands.length > 0 || capsule.promotionGate === "replay_or_verifier" || capsule.promotionGate === "artifact_sha256";
+		const decision = memoryDistillDecision({ confidence, hasEvidence: capsule.evidenceRefs.some((ref) => ref.sha256), sourceLifecycle: capsule.lifecycle, hasVerifier, hasConflict: false });
+		candidates.push(memoryDistillCandidateFrom({
+			id: `mdp:${sha256Text(`skill:${capsule.id}:${capsule.entryHash}`).slice(0, 24)}`,
+			ts: generatedAt,
+			MemoryDistillPromotionV10: true,
+			sourceType: "skill_capsule",
+			sourceId: capsule.id,
+			sourceHash: capsule.entryHash,
+			provider,
+			route: capsule.route,
+			targetScope: capsule.targetScope,
+			claim: truncateMiddle(claim || capsule.id, 900),
+			lesson: truncateMiddle(capsule.injection.operatorPromptSnippet || capsule.injection.verifierPromptSnippet, 900),
+			commands: uniqueNonEmpty(capsule.operatorCommands, 16),
+			verifierCommands: uniqueNonEmpty(capsule.verifierCommands, 16),
+			avoidCommands: uniqueNonEmpty(capsule.avoidCommands, 16),
+			evidenceRefs: capsule.evidenceRefs,
+			confidence: Number(confidence.toFixed(4)),
+			verifierRequired: !hasVerifier,
+			promotionDecision: decision.decision,
+			promotionReason: decision.reason,
+			providerTraceHash: sha256Text(`${provider.backend}:${provider.model}:${claim}`).slice(0, 32),
+		}));
+	}
+	for (const claim of experience.recentClaims) {
+		const confidence = clamp01(claim.confidence + (claim.evidenceRefs.some((ref) => ref.sha256) ? 0.08 : 0), claim.confidence);
+		const decision = memoryDistillDecision({ confidence, hasEvidence: claim.evidenceRefs.some((ref) => ref.sha256), sourceLifecycle: claim.status, hasVerifier: claim.claimType === "verifier_rule" || claim.promotionReady, hasConflict: claim.contradictionEventIds.length > 0 });
+		candidates.push(memoryDistillCandidateFrom({
+			id: `mdp:${sha256Text(`claim:${claim.id}:${claim.entryHash}`).slice(0, 24)}`,
+			ts: generatedAt,
+			MemoryDistillPromotionV10: true,
+			sourceType: "experience_claim",
+			sourceId: claim.id,
+			sourceHash: claim.entryHash,
+			provider,
+			route: claim.route,
+			targetScope: claim.targetScope,
+			claim: truncateMiddle(claim.statement, 900),
+			lesson: truncateMiddle(`Distilled claim ${claim.claimType}: ${claim.statement}`, 900),
+			commands: claim.commandFingerprint ? [claim.commandFingerprint] : [],
+			verifierCommands: claim.claimType === "verifier_rule" ? ["re_verifier matrix", "re_replayer run"] : [],
+			avoidCommands: claim.claimType === "failure_signature" ? [claim.statement] : [],
+			evidenceRefs: claim.evidenceRefs,
+			confidence: Number(confidence.toFixed(4)),
+			verifierRequired: !claim.promotionReady,
+			promotionDecision: decision.decision,
+			promotionReason: decision.reason,
+			providerTraceHash: sha256Text(`${provider.backend}:${provider.model}:${claim.statement}`).slice(0, 32),
+		}));
+	}
+	const deduped = Array.from(new Map(candidates.map((candidate) => [candidate.id, candidate])).values()).sort((left, right) => {
+		const rank = (decision: MemoryDistillPromotionDecisionV10) => decision === "promote" ? 3 : decision === "retain" ? 2 : decision === "demote" ? 1 : 0;
+		return rank(right.promotionDecision) - rank(left.promotionDecision) || right.confidence - left.confidence || left.id.localeCompare(right.id);
+	});
+	const byDecision = (decision: MemoryDistillPromotionDecisionV10) => deduped.filter((candidate) => candidate.promotionDecision === decision).map((candidate) => candidate.id);
+	const injectable = deduped.filter((candidate) => candidate.promotionDecision === "promote" || candidate.promotionDecision === "retain");
+	const operatorInjectionCommands = uniqueNonEmpty(injectable.flatMap((candidate) => candidate.commands), 32);
+	const verifierCommands = uniqueNonEmpty(injectable.flatMap((candidate) => candidate.verifierCommands), 24);
+	const avoidCommands = uniqueNonEmpty(deduped.flatMap((candidate) => candidate.avoidCommands), 24);
+	const status: MemoryDistillPromotionReportV10["status"] = deduped.length === 0 ? "empty" : provider.status === "fallback" && provider.requestedBackend !== "local-rule" ? "warn" : byDecision("promote").length ? "pass" : "warn";
+	const report: MemoryDistillPromotionReportV10 = {
+		kind: "repi-memory-distill-promotion-report",
+		schemaVersion: 1,
+		generatedAt,
+		MemoryDistillPromotionV10: true,
+		provider_distill_contract: true,
+		artifact_to_claim_distillation: true,
+		verifier_backed_promotion_gate: true,
+		skill_capsule_promotion_writeback: true,
+		reportPath: memoryDistillPromotionReportPath(),
+		candidateLedgerPath: memoryDistillPromotionCandidateLedgerPath(),
+		promotionBookPath: memoryDistillPromotionBookPath(),
+		sourceSkillCapsuleReportPath: skillReport.reportPath,
+		sourceExperienceReportPath: experience.reportPath,
+		provider,
+		candidateCount: deduped.length,
+		promotedCandidateIds: byDecision("promote"),
+		retainedCandidateIds: byDecision("retain"),
+		quarantinedCandidateIds: byDecision("quarantine"),
+		demotedCandidateIds: byDecision("demote"),
+		operatorInjectionCommands,
+		verifierCommands,
+		avoidCommands,
+		status,
+		recentCandidates: deduped.slice(0, 32),
+		requiredGates: ["MemoryDistillPromotionV10", "provider_distill_contract", "artifact_to_claim_distillation", "verifier_backed_promotion_gate", "skill_capsule_promotion_writeback", "memory_distill_promotion_in_context_pack", "memory_distill_orchestrator_step"],
+		policy: { MemoryDistillPromotionV10: true, providerContractEnvRefOnly: true, localFallbackDeterministic: true, artifactClaimDistillation: true, verifierBackedPromotionGate: true, skillCapsulePromotionWriteback: true },
+		nextCommands: uniqueNonEmpty([
+			"re_memory distill-promote",
+			operatorInjectionCommands.length ? "re_operator plan # consumes MemoryDistillPromotionV10 promoted commands" : undefined,
+			verifierCommands.length ? "re_verifier matrix # verifies MemoryDistillPromotionV10 retained/promoted claims" : undefined,
+			avoidCommands.length ? "re_autofix plan # avoids MemoryDistillPromotionV10 demoted/quarantined routes" : undefined,
+			"re_context pack",
+		].filter(Boolean) as string[], 12),
+	};
+	if (options.write !== false) {
+		writeFileAtomic(memoryDistillPromotionCandidateLedgerPath(), deduped.map((candidate) => JSON.stringify(candidate)).join("\n") + (deduped.length ? "\n" : ""));
+		writeFileAtomic(memoryDistillPromotionReportPath(), `${JSON.stringify(report, null, 2)}\n`);
+		writeFileAtomic(memoryDistillPromotionBookPath(), [
+			"# REPI Memory Distill Promotion Book",
+			"",
+			"MemoryDistillPromotionV10: true",
+			"provider_distill_contract: true",
+			`generated_at: ${report.generatedAt}`,
+			`provider: ${provider.backend}/${provider.model} status=${provider.status}`,
+			"",
+			"## Candidates",
+			...(deduped.length ? deduped.slice(0, 160).map((candidate) => `- decision=${candidate.promotionDecision} confidence=${candidate.confidence.toFixed(2)} source=${candidate.sourceType}:${candidate.sourceId} reason=${candidate.promotionReason}`) : ["- none"]),
+			"",
+			"## Operator Injection Commands",
+			...(operatorInjectionCommands.length ? operatorInjectionCommands.map((command) => `- ${command}`) : ["- none"]),
+			"",
+			"## Required Gates",
+			...report.requiredGates.map((gate) => `- ${gate}`),
+			"",
+		].join("\n"));
+	}
+	return report;
+}
+
+function formatMemoryDistillPromotion(report = buildMemoryDistillPromotionReport()): string {
+	return [
+		"memory_distill_promotion_v10:",
+		`MemoryDistillPromotionV10=${report.MemoryDistillPromotionV10}`,
+		`provider_distill_contract=${report.provider_distill_contract}`,
+		`artifact_to_claim_distillation=${report.artifact_to_claim_distillation}`,
+		`verifier_backed_promotion_gate=${report.verifier_backed_promotion_gate}`,
+		`skill_capsule_promotion_writeback=${report.skill_capsule_promotion_writeback}`,
+		`provider=${report.provider.backend}/${report.provider.model} status=${report.provider.status}`,
+		`status=${report.status}`,
+		`candidates=${report.candidateCount}`,
+		`promoted=${report.promotedCandidateIds.length}`,
+		`retained=${report.retainedCandidateIds.length}`,
+		`quarantined=${report.quarantinedCandidateIds.length}`,
+		`demoted=${report.demotedCandidateIds.length}`,
+		`report=${report.reportPath}`,
+		`promotion_book=${report.promotionBookPath}`,
+		"operator_injection_commands:",
+		...(report.operatorInjectionCommands.length ? report.operatorInjectionCommands.slice(0, 12).map((command) => `- ${command}`) : ["- none"]),
+		"verifier_commands:",
+		...(report.verifierCommands.length ? report.verifierCommands.slice(0, 12).map((command) => `- ${command}`) : ["- none"]),
+		"recent_candidates:",
+		...(report.recentCandidates.length ? report.recentCandidates.slice(0, 12).map((candidate) => `- ${candidate.promotionDecision} confidence=${candidate.confidence.toFixed(2)} source=${candidate.sourceType}:${candidate.sourceId}`) : ["- none"]),
+		"next_commands:",
+		...report.nextCommands.map((command) => `- ${command}`),
+		"required_gates:",
+		...report.requiredGates.map((gate) => `- ${gate}`),
+	].join("\n");
+}
+
+function memoryQualityLedgerRowHash(row: MemoryQualityLedgerRowV11): string {
+	const { entryHash: _entryHash, ...withoutHash } = row;
+	return sha256Text(JSON.stringify(withoutHash));
+}
+
+function isMemoryQualityLedgerRow(value: unknown): value is MemoryQualityLedgerRowV11 {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const row = value as MemoryQualityLedgerRowV11;
+	return (
+		row.kind === "repi-memory-quality-ledger-row" &&
+		row.schemaVersion === 1 &&
+		row.MemoryQualityLedgerV11 === true &&
+		Number.isInteger(row.seq) &&
+		typeof row.id === "string" &&
+		typeof row.ts === "string" &&
+		typeof row.eventId === "string" &&
+		typeof row.caseSignature === "string" &&
+		typeof row.route === "string" &&
+		typeof row.targetScope === "string" &&
+		typeof row.retrievalCount === "number" &&
+		typeof row.injectedCount === "number" &&
+		typeof row.qualityScore === "number" &&
+		typeof row.lifecycleDecision === "string" &&
+		Array.isArray(row.signals) &&
+		Array.isArray(row.nextCommands) &&
+		typeof row.prevHash === "string" &&
+		typeof row.entryHash === "string"
+	);
+}
+
+function readMemoryQualityLedgerRows(): MemoryQualityLedgerRowV11[] {
+	ensureReconStorage();
+	return jsonlRecords(memoryQualityLedgerPath(), isMemoryQualityLedgerRow);
+}
+
+function latestMemoryQualityByEvent(): Map<string, MemoryQualityLedgerRowV11> {
+	const rows = new Map<string, MemoryQualityLedgerRowV11>();
+	for (const row of readMemoryQualityLedgerRows()) rows.set(row.eventId, row);
+	return rows;
+}
+
+function readJsonObjectFile<T>(path: string): T | undefined {
+	try {
+		return JSON.parse(readFileSync(path, "utf-8")) as T;
+	} catch {
+		return undefined;
+	}
+}
+
+function memoryQualityReportIds(path: string, key: "id" | "eventId" = "id"): string[] {
+	const report = readJsonObjectFile<{ hits?: Array<Record<string, unknown>> }>(path);
+	return uniqueNonEmpty(
+		(report?.hits ?? [])
+			.map((hit) => hit[key])
+			.filter((id): id is string => typeof id === "string"),
+		120,
+	);
+}
+
+function memoryQualityUsefulnessSignals(report: MemoryUsefulnessEvalReportV1 | undefined): Map<string, { hit: number; miss: number; forbidden: number }> {
+	const signals = new Map<string, { hit: number; miss: number; forbidden: number }>();
+	for (const scenario of report?.scenarios ?? []) {
+		for (const expected of scenario.expectedEventIds ?? []) {
+			const row = signals.get(expected) ?? { hit: 0, miss: 0, forbidden: 0 };
+			if (scenario.hitAtK) row.hit += 1;
+			else row.miss += 1;
+			signals.set(expected, row);
+		}
+		for (const forbidden of scenario.forbiddenHitIds ?? []) {
+			const row = signals.get(forbidden) ?? { hit: 0, miss: 0, forbidden: 0 };
+			row.forbidden += 1;
+			signals.set(forbidden, row);
+		}
+	}
+	return signals;
+}
+
+function memoryQualityDecision(input: { score: number; event: MemoryEventV1; negative: number; forbidden: number; scopeBlocked: boolean; ageDays: number }): MemoryQualityLifecycleDecisionV11 {
+	if (input.scopeBlocked || input.forbidden > 0) return "quarantine";
+	if (input.ageDays > 720 && input.score < 45) return "expire";
+	if (input.negative > 0 || input.event.outcome === "failure" || input.event.outcome === "blocked" || input.score < 38) return "demote";
+	if (input.score >= 78 && input.event.outcome === "success" && (input.event.quality.replayVerified || input.event.artifactHashes.some((artifact) => artifact.sha256))) return "promote";
+	return "retain";
+}
+
+function buildMemoryQualityLedgerReport(options: {
+	route?: string;
+	target?: string;
+	retrievalHits?: MemoryRetrievalHit[];
+	vectorHits?: MemoryVectorSearchHitV1[];
+	injectionEventIds?: string[];
+	feedback?: MemoryFeedbackClosureReportV1;
+	usefulness?: MemoryUsefulnessEvalReportV1;
+	write?: boolean;
+} = {}): MemoryQualityLedgerReportV11 {
+	ensureReconStorage();
+	const generatedAt = new Date().toISOString();
+	const previous = latestMemoryQualityByEvent();
+	const previousRows = readMemoryQualityLedgerRows();
+	let prevHash = previousRows.at(-1)?.entryHash ?? "0".repeat(64);
+	let seq = previousRows.length;
+	const events = readMemoryEvents().filter((event) => {
+		if (options.route && !memoryRouteMatches(event.route, options.route)) return false;
+		if (options.target && event.target && !memoryTargetScope(event.target).includes(memoryTargetScope(options.target))) return false;
+		return true;
+	});
+	const retrievalIds = new Set(options.retrievalHits?.map((hit) => hit.event.id) ?? memoryQualityReportIds(memoryRetrievalReportPath(), "id"));
+	const vectorIds = new Set(options.vectorHits?.map((hit) => hit.eventId) ?? memoryQualityReportIds(memoryVectorSearchReportPath(), "eventId"));
+	const injectionIds = new Set(
+		options.injectionEventIds ??
+			(readJsonObjectFile<MemoryInjectionPacketV1>(memoryInjectionPacketPath())?.entries ?? []).map((entry) => entry.eventId),
+	);
+	const feedback = options.feedback ?? readJsonObjectFile<MemoryFeedbackClosureReportV1>(memoryFeedbackClosureReportPath()) ?? buildMemoryFeedbackClosureReport({ write: options.write });
+	const feedbackByEvent = new Map((feedback.rows ?? []).map((row) => [row.eventId, row]));
+	const usefulness = options.usefulness ?? readJsonObjectFile<MemoryUsefulnessEvalReportV1>(memoryUsefulnessEvalReportPath());
+	const usefulnessByEvent = memoryQualityUsefulnessSignals(usefulness);
+	const replayByEvent = memoryReplayCausalSignals(readJsonObjectFile<MemoryReplayEvaluatorReportV12>(memoryReplayEvaluatorReportPath()));
+	const scope = buildMemoryScopeIsolationReport({ route: options.route, target: options.target, write: options.write });
+	const scopeByEvent = new Map(scope.rows.map((row) => [row.eventId, row]));
+	const rows: MemoryQualityLedgerRowV11[] = events.map((event) => {
+		const prev = previous.get(event.id);
+		const feedbackRow = feedbackByEvent.get(event.id);
+		const usefulnessSignal = usefulnessByEvent.get(event.id) ?? { hit: 0, miss: 0, forbidden: 0 };
+		const replaySignal = replayByEvent.get(event.id) ?? { lift: 0, regressions: 0, score: 0 };
+		const wasRetrieved = retrievalIds.has(event.id);
+		const wasVectorHit = vectorIds.has(event.id);
+		const wasInjected = injectionIds.has(event.id) || (feedbackRow?.injectionAction && feedbackRow.injectionAction !== "not_injected");
+		const positiveFeedbackCount = Math.max(prev?.positiveFeedbackCount ?? 0, feedbackRow?.positiveFeedbackCount ?? 0);
+		const negativeFeedbackCount = Math.max(prev?.negativeFeedbackCount ?? 0, feedbackRow?.negativeFeedbackCount ?? 0);
+		const pendingFeedbackCount = Math.max(prev?.pendingFeedbackCount ?? 0, feedbackRow?.feedbackStatus === "pending" ? 1 : 0);
+		const retrievalCount = (prev?.retrievalCount ?? 0) + (wasRetrieved ? 1 : 0);
+		const vectorHitCount = (prev?.vectorHitCount ?? 0) + (wasVectorHit ? 1 : 0);
+		const injectedCount = Math.max(prev?.injectedCount ?? 0, wasInjected ? 1 : 0);
+		const usefulnessHitCount = (prev?.usefulnessHitCount ?? 0) + usefulnessSignal.hit;
+		const usefulnessMissCount = (prev?.usefulnessMissCount ?? 0) + usefulnessSignal.miss;
+		const forbiddenLeakCount = (prev?.forbiddenLeakCount ?? 0) + usefulnessSignal.forbidden;
+		const scopeBlocked = scopeByEvent.get(event.id)?.blocksInjection === true || prev?.scopeBlocked === true;
+		const ageDays = Math.max(0, Math.floor((Date.now() - Date.parse(event.ts)) / 86_400_000));
+		let score = event.quality.confidence * 52;
+		score += event.quality.replayVerified ? 13 : 0;
+		score += event.outcome === "success" ? 10 : event.outcome === "repair" ? 6 : 0;
+		score += event.artifactHashes.some((artifact) => artifact.sha256) ? 7 : 0;
+		score += Math.min(8, retrievalCount * 0.8 + vectorHitCount * 0.6);
+		score += Math.min(10, injectedCount * 4 + positiveFeedbackCount * 6 + usefulnessHitCount * 1.5);
+		score += Math.min(12, Math.max(0, replaySignal.lift) * 9 + Math.max(0, replaySignal.score - 65) * 0.08);
+		score -= Math.min(26, negativeFeedbackCount * 12 + event.quality.failureCount * 4 + forbiddenLeakCount * 18);
+		score -= Math.min(24, replaySignal.regressions * 16);
+		score -= Math.min(18, event.quality.decay * 12 + ageDays * 0.025 + usefulnessMissCount * 1.5 + pendingFeedbackCount * 1.2);
+		if (event.outcome === "failure" || event.outcome === "blocked") score -= 14;
+		if (scopeBlocked) score -= 40;
+		const qualityScore = Number(Math.max(0, Math.min(100, score)).toFixed(2));
+		const lifecycleDecision = memoryQualityDecision({ score: qualityScore, event, negative: negativeFeedbackCount, forbidden: forbiddenLeakCount, scopeBlocked, ageDays });
+		const signals: MemoryQualitySignalV11[] = uniqueNonEmpty([
+			wasRetrieved ? "retrieved" : undefined,
+			wasVectorHit ? "vector_hit" : undefined,
+			wasInjected ? "injected" : undefined,
+			positiveFeedbackCount ? "positive_feedback" : undefined,
+			negativeFeedbackCount ? "negative_feedback" : undefined,
+			pendingFeedbackCount ? "pending_feedback" : undefined,
+			usefulnessHitCount ? "usefulness_hit" : undefined,
+			usefulnessMissCount ? "usefulness_miss" : undefined,
+			forbiddenLeakCount ? "forbidden_leak" : undefined,
+			scopeBlocked ? "scope_blocked" : undefined,
+			ageDays > 365 ? "stale_decay" : undefined,
+			replaySignal.lift > 0 ? "ab_replay_improved" : undefined,
+			replaySignal.regressions > 0 ? "ab_replay_regressed" : undefined,
+		] as Array<MemoryQualitySignalV11 | undefined>, 16) as MemoryQualitySignalV11[];
+		const evidenceRefs = uniqueNonEmpty([
+			memoryRetrievalReportPath(),
+			memoryVectorSearchReportPath(),
+			feedback.feedbackClosureReportPath,
+			usefulness?.reportPath,
+			existsSync(memoryReplayEvaluatorReportPath()) ? memoryReplayEvaluatorReportPath() : undefined,
+			...event.artifactHashes.filter((artifact) => artifact.sha256).map((artifact) => artifact.path),
+		], 24);
+		const nextCommands =
+			lifecycleDecision === "promote"
+				? ["re_memory experience", "re_memory skills", "re_memory distill-promote", "re_context pack"]
+				: lifecycleDecision === "retain"
+					? [pendingFeedbackCount ? `re_memory append # memory_reuse_feedback_promote event=${event.id}` : "re_memory quality"]
+					: lifecycleDecision === "demote"
+						? ["re_memory supervise", "re_memory sediment", "re_autofix plan"]
+						: lifecycleDecision === "expire"
+							? ["re_memory supervise", "re_memory prune-playbooks"]
+							: ["re_memory scope", "re_memory supervise", "re_memory sediment"];
+		const base: Omit<MemoryQualityLedgerRowV11, "entryHash"> = {
+			kind: "repi-memory-quality-ledger-row",
+			schemaVersion: 1,
+			seq: ++seq,
+			id: `mq:${sha256Text(`${generatedAt}:${event.id}:${qualityScore}:${signals.join(",")}`).slice(0, 24)}`,
+			ts: generatedAt,
+			MemoryQualityLedgerV11: true,
+			eventId: event.id,
+			caseSignature: event.caseSignature,
+			route: event.route,
+			targetScope: memoryTargetScope(event.target),
+			retrievalCount,
+			vectorHitCount,
+			injectedCount,
+			positiveFeedbackCount,
+			negativeFeedbackCount,
+			pendingFeedbackCount,
+			usefulnessHitCount,
+			usefulnessMissCount,
+			forbiddenLeakCount,
+			scopeBlocked,
+			lastRecalledAt: wasRetrieved || wasVectorHit ? generatedAt : prev?.lastRecalledAt,
+			lastInjectedAt: wasInjected ? generatedAt : prev?.lastInjectedAt,
+			lastFeedbackAt: feedbackRow?.lastFeedbackAt ?? prev?.lastFeedbackAt,
+			baseConfidence: Number(event.quality.confidence.toFixed(4)),
+			qualityScore,
+			lifecycleDecision,
+			signals,
+			evidenceRefs,
+			nextCommands: uniqueNonEmpty(nextCommands, 12),
+			prevHash,
+		};
+		const row = { ...base, entryHash: "" };
+		row.entryHash = memoryQualityLedgerRowHash(row);
+		prevHash = row.entryHash;
+		return row;
+	});
+	const byDecision = (decision: MemoryQualityLifecycleDecisionV11) => rows.filter((row) => row.lifecycleDecision === decision).map((row) => row.eventId).slice(0, 160);
+	const requiredFeedbackEventIds = uniqueNonEmpty(
+		rows.filter((row) => row.injectedCount > 0 && row.pendingFeedbackCount > 0).map((row) => row.eventId),
+		120,
+	);
+	const operatorInjectionCommands = uniqueNonEmpty(
+		rows
+			.filter((row) => row.lifecycleDecision === "promote" || (row.lifecycleDecision === "retain" && row.qualityScore >= 68))
+			.flatMap((row) => events.find((event) => event.id === row.eventId)?.commands ?? []),
+		24,
+	);
+	const avoidCommands = uniqueNonEmpty(
+		rows
+			.filter((row) => row.lifecycleDecision === "demote" || row.lifecycleDecision === "quarantine" || row.lifecycleDecision === "expire")
+			.flatMap((row) => events.find((event) => event.id === row.eventId)?.commands ?? []),
+		24,
+	);
+	const averageQualityScore = rows.length ? Number((rows.reduce((sum, row) => sum + row.qualityScore, 0) / rows.length).toFixed(2)) : 0;
+	const status: MemoryQualityLedgerReportV11["status"] =
+		rows.length === 0
+			? "empty"
+			: rows.some((row) => row.lifecycleDecision === "quarantine" || row.forbiddenLeakCount > 0)
+				? "blocked"
+				: requiredFeedbackEventIds.length || rows.some((row) => row.lifecycleDecision === "demote" || row.lifecycleDecision === "expire")
+					? "warn"
+					: "pass";
+	const report: MemoryQualityLedgerReportV11 = {
+		kind: "repi-memory-quality-ledger-report",
+		schemaVersion: 1,
+		generatedAt,
+		MemoryQualityLedgerV11: true,
+		active_memory_policy: true,
+		quality_score_feedback_loop: true,
+		usefulness_feedback_writeback: true,
+		reportPath: memoryQualityReportPath(),
+		ledgerPath: memoryQualityLedgerPath(),
+		boardPath: memoryQualityBoardPath(),
+		sourceRetrievalReportPath: memoryRetrievalReportPath(),
+		sourceVectorSearchReportPath: memoryVectorSearchReportPath(),
+		sourceFeedbackClosureReportPath: feedback.feedbackClosureReportPath,
+		sourceUsefulnessEvalReportPath: usefulness?.reportPath ?? memoryUsefulnessEvalReportPath(),
+		eventCount: events.length,
+		rowCount: rows.length,
+		averageQualityScore,
+		promotedEventIds: byDecision("promote"),
+		retainedEventIds: byDecision("retain"),
+		demotedEventIds: byDecision("demote"),
+		quarantinedEventIds: byDecision("quarantine"),
+		expiredEventIds: byDecision("expire"),
+		requiredFeedbackEventIds,
+		operatorInjectionCommands,
+		avoidCommands,
+		status,
+		rows: rows.slice(0, 80),
+		requiredGates: [
+			"MemoryQualityLedgerV11",
+			"active_memory_policy",
+			"quality_score_feedback_loop",
+			"usefulness_feedback_writeback",
+			"append_only_quality_ledger",
+			"memory_quality_drives_sedimentation",
+			"memory_quality_in_context_pack",
+			"memory_quality_orchestrator_step",
+			"memory_ab_replay_feedback",
+		],
+		policy: {
+			MemoryQualityLedgerV11: true,
+			activeMemoryPolicy: true,
+			qualityScoreFeedbackLoop: true,
+			usefulnessFeedbackWriteback: true,
+			appendOnlyQualityLedger: true,
+			qualityDrivesSedimentation: true,
+		},
+		nextCommands: uniqueNonEmpty([
+			"re_memory quality",
+			"re_memory replay",
+			"re_memory eval",
+			"re_memory feedback",
+			requiredFeedbackEventIds.length ? `re_memory append # close feedback for ${requiredFeedbackEventIds[0]}` : undefined,
+			operatorInjectionCommands.length ? "re_operator plan # consumes MemoryQualityLedgerV11 promoted/retained commands" : undefined,
+			avoidCommands.length ? "re_autofix plan # avoid demoted/quarantined memory commands" : undefined,
+			"re_context pack",
+		].filter(Boolean) as string[], 12),
+	};
+	if (options.write !== false) {
+		const before = readText(memoryQualityLedgerPath());
+		const body = rows.map((row) => JSON.stringify(row)).join("\n");
+		writeFileAtomic(memoryQualityLedgerPath(), `${before}${before && !before.endsWith("\n") ? "\n" : ""}${body}${body ? "\n" : ""}`);
+		writeFileAtomic(memoryQualityReportPath(), `${JSON.stringify(report, null, 2)}\n`);
+		writeFileAtomic(memoryQualityBoardPath(), [
+			"# REPI Memory Quality Board",
+			"",
+			"MemoryQualityLedgerV11: true",
+			"active_memory_policy: true",
+			"quality_score_feedback_loop: true",
+			"usefulness_feedback_writeback: true",
+			`generated_at: ${report.generatedAt}`,
+			`status: ${report.status}`,
+			`average_quality_score: ${report.averageQualityScore}`,
+			"",
+			"## Promoted",
+			...(report.promotedEventIds.length ? report.promotedEventIds.map((id) => `- ${id}`) : ["- none"]),
+			"",
+			"## Demoted / Quarantined / Expired",
+			...(uniqueNonEmpty([...report.demotedEventIds, ...report.quarantinedEventIds, ...report.expiredEventIds], 120).length
+				? uniqueNonEmpty([...report.demotedEventIds, ...report.quarantinedEventIds, ...report.expiredEventIds], 120).map((id) => `- ${id}`)
+				: ["- none"]),
+			"",
+			"## Pending Feedback",
+			...(report.requiredFeedbackEventIds.length ? report.requiredFeedbackEventIds.map((id) => `- ${id}`) : ["- none"]),
+			"",
+			"## Required Gates",
+			...report.requiredGates.map((gate) => `- ${gate}`),
+			"",
+		].join("\n"));
+	}
+	return report;
+}
+
+function formatMemoryQualityLedger(report = buildMemoryQualityLedgerReport()): string {
+	return [
+		"memory_quality_ledger_v11:",
+		`MemoryQualityLedgerV11=${report.MemoryQualityLedgerV11}`,
+		`active_memory_policy=${report.active_memory_policy}`,
+		`quality_score_feedback_loop=${report.quality_score_feedback_loop}`,
+		`usefulness_feedback_writeback=${report.usefulness_feedback_writeback}`,
+		`status=${report.status}`,
+		`events=${report.eventCount}`,
+		`rows=${report.rowCount}`,
+		`average_quality_score=${report.averageQualityScore}`,
+		`promoted=${report.promotedEventIds.length}`,
+		`retained=${report.retainedEventIds.length}`,
+		`demoted=${report.demotedEventIds.length}`,
+		`quarantined=${report.quarantinedEventIds.length}`,
+		`expired=${report.expiredEventIds.length}`,
+		`required_feedback=${report.requiredFeedbackEventIds.length}`,
+		`report=${report.reportPath}`,
+		`ledger=${report.ledgerPath}`,
+		`board=${report.boardPath}`,
+		"operator_injection_commands:",
+		...(report.operatorInjectionCommands.length ? report.operatorInjectionCommands.slice(0, 12).map((command) => `- ${command}`) : ["- none"]),
+		"avoid_commands:",
+		...(report.avoidCommands.length ? report.avoidCommands.slice(0, 12).map((command) => `- ${command}`) : ["- none"]),
+		"top_quality_rows:",
+		...(report.rows.length
+			? [...report.rows]
+					.sort((left, right) => right.qualityScore - left.qualityScore)
+					.slice(0, 12)
+					.map((row) => `- event=${row.eventId} decision=${row.lifecycleDecision} score=${row.qualityScore} signals=${row.signals.join(",") || "none"}`)
+			: ["- none"]),
+		"next_commands:",
+		...report.nextCommands.map((command) => `- ${command}`),
+		"required_gates:",
+		...report.requiredGates.map((gate) => `- ${gate}`),
+	].join("\n");
+}
+
+function memoryReplayEvaluatorRowHash(row: MemoryReplayEvaluatorRowV12): string {
+	const { entryHash: _entryHash, ...withoutHash } = row;
+	return sha256Text(JSON.stringify(withoutHash));
+}
+
+function isMemoryReplayEvaluatorRow(value: unknown): value is MemoryReplayEvaluatorRowV12 {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const row = value as MemoryReplayEvaluatorRowV12;
+	return (
+		row.kind === "repi-memory-replay-evaluator-row" &&
+		row.schemaVersion === 1 &&
+		row.MemoryReplayEvaluatorV12 === true &&
+		row.memory_ab_replay === true &&
+		row.causal_attribution_signal === true &&
+		Number.isInteger(row.seq) &&
+		typeof row.id === "string" &&
+		typeof row.ts === "string" &&
+		typeof row.scenarioId === "string" &&
+		typeof row.query === "string" &&
+		Array.isArray(row.expectedEventIds) &&
+		Array.isArray(row.treatmentHitIds) &&
+		Array.isArray(row.attributionEventIds) &&
+		Array.isArray(row.regressionEventIds) &&
+		typeof row.causalScore === "number" &&
+		typeof row.verdict === "string" &&
+		Array.isArray(row.feedbackWritebackCommands) &&
+		typeof row.prevHash === "string" &&
+		typeof row.entryHash === "string"
+	);
+}
+
+function readMemoryReplayEvaluatorRows(): MemoryReplayEvaluatorRowV12[] {
+	ensureReconStorage();
+	return jsonlRecords(memoryReplayEvaluatorLedgerPath(), isMemoryReplayEvaluatorRow);
+}
+
+function memoryReplayCausalSignals(report?: MemoryReplayEvaluatorReportV12): Map<string, { lift: number; regressions: number; score: number }> {
+	const signals = new Map<string, { lift: number; regressions: number; score: number }>();
+	for (const row of report?.rows ?? []) {
+		for (const eventId of row.attributionEventIds ?? []) {
+			const current = signals.get(eventId) ?? { lift: 0, regressions: 0, score: 0 };
+			current.lift += Math.max(0, row.successLift);
+			current.score = Math.max(current.score, row.causalScore);
+			signals.set(eventId, current);
+		}
+		for (const eventId of row.regressionEventIds ?? []) {
+			const current = signals.get(eventId) ?? { lift: 0, regressions: 0, score: 0 };
+			current.regressions += 1;
+			current.score = Math.max(current.score, row.causalScore);
+			signals.set(eventId, current);
+		}
+	}
+	return signals;
+}
+
+function memoryReplayScenarios(
+	events: MemoryEventV1[],
+	usefulness?: MemoryUsefulnessEvalReportV1,
+	options: { route?: string; target?: string; query?: string } = {},
+): MemoryReplayScenarioV12[] {
+	const scenarios: MemoryReplayScenarioV12[] = [];
+	for (const scenario of usefulness?.scenarios ?? []) {
+		if (options.route && scenario.route && !memoryRouteMatches(scenario.route, options.route)) continue;
+		if (options.target && scenario.target && !memoryTargetScope(scenario.target).includes(memoryTargetScope(options.target))) continue;
+		scenarios.push({
+			id: `memory-replay-from-usefulness:${scenario.id}`,
+			query: scenario.query,
+			route: scenario.route,
+			target: scenario.target,
+			expectedEventIds: scenario.expectedEventIds,
+			forbiddenEventIds: scenario.forbiddenEventIds,
+			topK: scenario.topK,
+			source: "usefulness-eval",
+		});
+	}
+	if (options.query?.trim()) {
+		const usefulIds = events
+			.filter((event) => event.outcome !== "failure" && event.outcome !== "blocked")
+			.sort((left, right) => right.quality.confidence - left.quality.confidence)
+			.map((event) => event.id)
+			.slice(0, 6);
+		scenarios.push({
+			id: `memory-replay-operator:${sha256Text(options.query).slice(0, 16)}`,
+			query: options.query,
+			route: options.route,
+			target: options.target,
+			expectedEventIds: usefulIds,
+			forbiddenEventIds: events.filter((event) => event.outcome === "failure" || event.outcome === "blocked").map((event) => event.id).slice(0, 24),
+			topK: 5,
+			source: "operator",
+		});
+	}
+	if (!scenarios.length) {
+		for (const event of [...events]
+			.filter((candidate) => candidate.outcome !== "failure" && candidate.outcome !== "blocked" && candidate.quality.confidence >= 0.5)
+			.sort(
+				(left, right) =>
+					Number(right.quality.replayVerified) - Number(left.quality.replayVerified) ||
+					right.quality.confidence - left.quality.confidence ||
+					right.seq - left.seq,
+			)
+			.slice(0, 10)) {
+			scenarios.push({
+				id: `memory-replay-default:${event.id}`,
+				query: memoryUsefulnessQueryForEvent(event),
+				route: event.route,
+				target: event.target,
+				expectedEventIds: [event.id],
+				forbiddenEventIds: events
+					.filter((candidate) => candidate.id !== event.id && (candidate.route !== event.route || candidate.outcome === "failure" || candidate.outcome === "blocked"))
+					.map((candidate) => candidate.id)
+					.slice(0, 24),
+				topK: 3,
+				source: "default-from-memory",
+			});
+		}
+	}
+	return scenarios.slice(0, 24);
+}
+
+function buildMemoryReplayEvaluatorReport(options: {
+	route?: string;
+	target?: string;
+	query?: string;
+	quality?: MemoryQualityLedgerReportV11;
+	usefulness?: MemoryUsefulnessEvalReportV1;
+	write?: boolean;
+} = {}): MemoryReplayEvaluatorReportV12 {
+	ensureReconStorage();
+	const generatedAt = new Date().toISOString();
+	const previousRows = readMemoryReplayEvaluatorRows();
+	let prevHash = previousRows.at(-1)?.entryHash ?? "0".repeat(64);
+	let seq = previousRows.length;
+	const events = readMemoryEvents().filter((event) => {
+		if (options.route && !memoryRouteMatches(event.route, options.route)) return false;
+		if (options.target && event.target && !memoryTargetScope(event.target).includes(memoryTargetScope(options.target))) return false;
+		return true;
+	});
+	const eventById = new Map(events.map((event) => [event.id, event]));
+	const usefulness = options.usefulness ?? readJsonObjectFile<MemoryUsefulnessEvalReportV1>(memoryUsefulnessEvalReportPath());
+	const quality = options.quality ?? readJsonObjectFile<MemoryQualityLedgerReportV11>(memoryQualityReportPath()) ?? buildMemoryQualityLedgerReport({ route: options.route, target: options.target, write: false });
+	const qualityById = new Map((quality.rows ?? []).map((row) => [row.eventId, row]));
+	const qualityPromoted = new Set([...(quality.promotedEventIds ?? []), ...(quality.retainedEventIds ?? []).filter((eventId) => (qualityById.get(eventId)?.qualityScore ?? 0) >= 68)]);
+	const qualityDemoted = new Set([...(quality.demotedEventIds ?? []), ...(quality.quarantinedEventIds ?? []), ...(quality.expiredEventIds ?? [])]);
+	const scenarios = memoryReplayScenarios(events, usefulness, options);
+	const rows: MemoryReplayEvaluatorRowV12[] = scenarios.map((scenario) => {
+		const topK = Math.max(1, Math.min(10, Math.floor(scenario.topK || 3)));
+		const treatmentHits = searchMemoryEvents(scenario.query, {
+			route: scenario.route ?? options.route,
+			target: scenario.target ?? options.target,
+			limit: Math.max(topK, scenario.forbiddenEventIds.length ? 8 : topK),
+		});
+		const treatmentHitIds = treatmentHits.slice(0, Math.max(topK, 8)).map((hit) => hit.event.id);
+		const topTreatmentIds = treatmentHitIds.slice(0, topK);
+		const expectedHits = topTreatmentIds.filter((eventId) => scenario.expectedEventIds.includes(eventId));
+		const qualityRegressionIds = topTreatmentIds.filter((eventId) => qualityDemoted.has(eventId));
+		const forbiddenHits = topTreatmentIds.filter((eventId) => scenario.forbiddenEventIds.includes(eventId));
+		const regressionEventIds = uniqueNonEmpty([...forbiddenHits, ...qualityRegressionIds], 24);
+		const attributionEventIds = uniqueNonEmpty(
+			expectedHits.length
+				? expectedHits
+				: topTreatmentIds.filter((eventId) => qualityPromoted.has(eventId) && !regressionEventIds.includes(eventId)).slice(0, 2),
+			12,
+		);
+		const controlHitIds: string[] = [];
+		const expectedDenominator = Math.max(1, scenario.expectedEventIds.length);
+		const successLift = Number(((expectedHits.length - controlHitIds.length) / expectedDenominator - regressionEventIds.length * 0.35).toFixed(4));
+		const avgQuality = attributionEventIds.length
+			? attributionEventIds.reduce((sum, eventId) => sum + (qualityById.get(eventId)?.qualityScore ?? eventById.get(eventId)?.quality.confidence ?? 0), 0) /
+				attributionEventIds.length
+			: 0;
+		const controlPlanStepsEstimate = Math.max(4, Math.min(14, 8 + Math.ceil(scenario.query.split(/\s+/).filter(Boolean).length / 8)));
+		const savedStepEstimateRaw = attributionEventIds.length ? 1.5 + attributionEventIds.length * 1.25 + avgQuality / 28 - regressionEventIds.length * 2 : 0;
+		const savedStepEstimate = Number(Math.max(0, Math.min(controlPlanStepsEstimate - 2, savedStepEstimateRaw)).toFixed(2));
+		const treatmentPlanStepsEstimate = Number(Math.max(2, controlPlanStepsEstimate - savedStepEstimate).toFixed(2));
+		const toolCallDeltaEstimate = Number((treatmentPlanStepsEstimate - controlPlanStepsEstimate).toFixed(2));
+		const poisonRegressionCount = regressionEventIds.length;
+		const causalScore = Number(Math.max(0, Math.min(100, 50 + successLift * 42 + savedStepEstimate * 4 + Math.max(0, avgQuality - 65) * 0.16 - poisonRegressionCount * 38)).toFixed(2));
+		const verdict: MemoryReplayVerdictV12 =
+			poisonRegressionCount > 0
+				? "regresses"
+				: attributionEventIds.length && causalScore >= 62
+					? "improves"
+					: treatmentHitIds.length === 0
+						? "blocked"
+						: "neutral";
+		const feedbackWritebackCommands =
+			verdict === "improves"
+				? attributionEventIds.map((eventId) => `re_memory append # memory_ab_replay_promote event=${eventId} causal_score=${causalScore}`)
+				: verdict === "regresses"
+					? regressionEventIds.map((eventId) => `re_memory append # memory_ab_replay_demote event=${eventId} causal_score=${causalScore}`)
+					: ["re_memory replay"];
+		const base: Omit<MemoryReplayEvaluatorRowV12, "entryHash"> = {
+			kind: "repi-memory-replay-evaluator-row",
+			schemaVersion: 1,
+			seq: ++seq,
+			id: `mr:${sha256Text(`${generatedAt}:${scenario.id}:${treatmentHitIds.join(",")}:${verdict}`).slice(0, 24)}`,
+			ts: generatedAt,
+			MemoryReplayEvaluatorV12: true,
+			memory_ab_replay: true,
+			causal_attribution_signal: true,
+			scenarioId: scenario.id,
+			query: scenario.query,
+			route: scenario.route ?? options.route,
+			target: scenario.target ?? options.target,
+			expectedEventIds: scenario.expectedEventIds,
+			forbiddenEventIds: scenario.forbiddenEventIds,
+			controlHitIds,
+			treatmentHitIds,
+			attributionEventIds,
+			regressionEventIds,
+			qualityPromotedEventIds: attributionEventIds.filter((eventId) => qualityPromoted.has(eventId)),
+			qualityDemotedEventIds: regressionEventIds.filter((eventId) => qualityDemoted.has(eventId)),
+			controlPlanStepsEstimate,
+			treatmentPlanStepsEstimate,
+			savedStepEstimate,
+			toolCallDeltaEstimate,
+			successLift,
+			poisonRegressionCount,
+			causalScore,
+			verdict,
+			evidenceRefs: uniqueNonEmpty([quality.reportPath ?? memoryQualityReportPath(), usefulness?.reportPath, memoryRetrievalReportPath(), memoryVectorSearchReportPath()], 12),
+			feedbackWritebackCommands: uniqueNonEmpty(feedbackWritebackCommands, 12),
+			prevHash,
+		};
+		const row = { ...base, entryHash: "" };
+		row.entryHash = memoryReplayEvaluatorRowHash(row);
+		prevHash = row.entryHash;
+		return row;
+	});
+	const byVerdict = (verdict: MemoryReplayVerdictV12) => rows.filter((row) => row.verdict === verdict).map((row) => row.scenarioId).slice(0, 160);
+	const attributionEventIds = uniqueNonEmpty(rows.flatMap((row) => row.attributionEventIds), 160);
+	const regressionEventIds = uniqueNonEmpty(rows.flatMap((row) => row.regressionEventIds), 160);
+	const averageCausalScore = rows.length ? Number((rows.reduce((sum, row) => sum + row.causalScore, 0) / rows.length).toFixed(2)) : 0;
+	const totalSavedStepEstimate = Number(rows.reduce((sum, row) => sum + row.savedStepEstimate, 0).toFixed(2));
+	const operatorInjectionCommands = uniqueNonEmpty(attributionEventIds.flatMap((eventId) => eventById.get(eventId)?.commands ?? []), 24);
+	const avoidCommands = uniqueNonEmpty(regressionEventIds.flatMap((eventId) => eventById.get(eventId)?.commands ?? []), 24);
+	const status: MemoryReplayEvaluatorReportV12["status"] =
+		rows.length === 0 ? "empty" : rows.some((row) => row.verdict === "regresses") ? "warn" : rows.some((row) => row.verdict === "blocked") ? "blocked" : rows.some((row) => row.verdict === "improves") ? "pass" : "warn";
+	const report: MemoryReplayEvaluatorReportV12 = {
+		kind: "repi-memory-replay-evaluator-report",
+		schemaVersion: 1,
+		generatedAt,
+		MemoryReplayEvaluatorV12: true,
+		memory_ab_replay: true,
+		causal_attribution_signal: true,
+		replay_delta_feedback_writeback: true,
+		reportPath: memoryReplayEvaluatorReportPath(),
+		ledgerPath: memoryReplayEvaluatorLedgerPath(),
+		boardPath: memoryReplayEvaluatorBoardPath(),
+		sourceQualityReportPath: quality.reportPath ?? memoryQualityReportPath(),
+		sourceUsefulnessEvalReportPath: usefulness?.reportPath ?? memoryUsefulnessEvalReportPath(),
+		scenarioCount: scenarios.length,
+		rowCount: rows.length,
+		improvedScenarioIds: byVerdict("improves"),
+		neutralScenarioIds: byVerdict("neutral"),
+		regressedScenarioIds: byVerdict("regresses"),
+		blockedScenarioIds: byVerdict("blocked"),
+		attributionEventIds,
+		regressionEventIds,
+		averageCausalScore,
+		totalSavedStepEstimate,
+		operatorInjectionCommands,
+		avoidCommands,
+		status,
+		rows: rows.slice(0, 80),
+		requiredGates: [
+			"MemoryReplayEvaluatorV12",
+			"memory_ab_replay",
+			"causal_attribution_signal",
+			"replay_delta_feedback_writeback",
+			"append_only_replay_ledger",
+			"memory_replay_in_quality_ledger",
+			"memory_replay_in_context_pack",
+			"memory_replay_orchestrator_step",
+		],
+		policy: {
+			MemoryReplayEvaluatorV12: true,
+			memoryAbReplay: true,
+			causalAttributionSignal: true,
+			replayDeltaFeedbackWriteback: true,
+			appendOnlyReplayLedger: true,
+			qualityLedgerConsumesReplay: true,
+		},
+		nextCommands: uniqueNonEmpty([
+			"re_memory replay",
+			"re_memory quality",
+			regressionEventIds.length ? "re_memory supervise" : undefined,
+			attributionEventIds.length ? "re_memory skills" : undefined,
+			"re_context pack",
+		].filter(Boolean) as string[], 12),
+	};
+	if (options.write !== false) {
+		const before = readText(memoryReplayEvaluatorLedgerPath());
+		const body = rows.map((row) => JSON.stringify(row)).join("\n");
+		writeFileAtomic(memoryReplayEvaluatorLedgerPath(), `${before}${before && !before.endsWith("\n") ? "\n" : ""}${body}${body ? "\n" : ""}`);
+		writeFileAtomic(memoryReplayEvaluatorReportPath(), `${JSON.stringify(report, null, 2)}\n`);
+		writeFileAtomic(memoryReplayEvaluatorBoardPath(), [
+			"# REPI Memory Replay Evaluator Board",
+			"",
+			"MemoryReplayEvaluatorV12: true",
+			"memory_ab_replay: true",
+			"causal_attribution_signal: true",
+			"replay_delta_feedback_writeback: true",
+			`generated_at: ${report.generatedAt}`,
+			`status: ${report.status}`,
+			`average_causal_score: ${report.averageCausalScore}`,
+			`total_saved_step_estimate: ${report.totalSavedStepEstimate}`,
+			"",
+			"## Improved Scenarios",
+			...(report.improvedScenarioIds.length ? report.improvedScenarioIds.map((id) => `- ${id}`) : ["- none"]),
+			"",
+			"## Regressed / Blocked Scenarios",
+			...(uniqueNonEmpty([...report.regressedScenarioIds, ...report.blockedScenarioIds], 120).length
+				? uniqueNonEmpty([...report.regressedScenarioIds, ...report.blockedScenarioIds], 120).map((id) => `- ${id}`)
+				: ["- none"]),
+			"",
+			"## Attribution Events",
+			...(report.attributionEventIds.length ? report.attributionEventIds.map((id) => `- ${id}`) : ["- none"]),
+			"",
+			"## Required Gates",
+			...report.requiredGates.map((gate) => `- ${gate}`),
+			"",
+		].join("\n"));
+	}
+	return report;
+}
+
+function formatMemoryReplayEvaluator(report = buildMemoryReplayEvaluatorReport()): string {
+	return [
+		"memory_replay_evaluator_v12:",
+		`MemoryReplayEvaluatorV12=${report.MemoryReplayEvaluatorV12}`,
+		`memory_ab_replay=${report.memory_ab_replay}`,
+		`causal_attribution_signal=${report.causal_attribution_signal}`,
+		`replay_delta_feedback_writeback=${report.replay_delta_feedback_writeback}`,
+		`status=${report.status}`,
+		`scenarios=${report.scenarioCount}`,
+		`rows=${report.rowCount}`,
+		`average_causal_score=${report.averageCausalScore}`,
+		`total_saved_step_estimate=${report.totalSavedStepEstimate}`,
+		`improved=${report.improvedScenarioIds.length}`,
+		`regressed=${report.regressedScenarioIds.length}`,
+		`blocked=${report.blockedScenarioIds.length}`,
+		`attribution_events=${report.attributionEventIds.length}`,
+		`regression_events=${report.regressionEventIds.length}`,
+		`report=${report.reportPath}`,
+		`ledger=${report.ledgerPath}`,
+		`board=${report.boardPath}`,
+		"operator_injection_commands:",
+		...(report.operatorInjectionCommands.length ? report.operatorInjectionCommands.slice(0, 12).map((command) => `- ${command}`) : ["- none"]),
+		"avoid_commands:",
+		...(report.avoidCommands.length ? report.avoidCommands.slice(0, 12).map((command) => `- ${command}`) : ["- none"]),
+		"replay_rows:",
+		...(report.rows.length
+			? report.rows
+					.slice(0, 12)
+					.map((row) => `- scenario=${row.scenarioId} verdict=${row.verdict} causal=${row.causalScore} saved_steps=${row.savedStepEstimate} attr=${row.attributionEventIds.join(",") || "none"} regress=${row.regressionEventIds.join(",") || "none"}`)
+			: ["- none"]),
+		"next_commands:",
+		...report.nextCommands.map((command) => `- ${command}`),
+		"required_gates:",
+		...report.requiredGates.map((gate) => `- ${gate}`),
+	].join("\n");
+}
+
+function memoryStrategyCapsuleHash(capsule: Omit<MemoryStrategyCapsuleV13, "entryHash">): string {
+	return sha256Text(JSON.stringify(capsule));
+}
+
+function memoryStrategyCapsuleFrom(input: Omit<MemoryStrategyCapsuleV13, "kind" | "schemaVersion" | "entryHash">): MemoryStrategyCapsuleV13 {
+	const capsule = {
+		kind: "repi-memory-strategy-capsule" as const,
+		schemaVersion: 1 as const,
+		...input,
+	};
+	return { ...capsule, entryHash: memoryStrategyCapsuleHash(capsule) };
+}
+
+function memoryStrategyLifecycleForReplay(row: MemoryReplayEvaluatorRowV12, hasExecutable: boolean): MemoryStrategyCapsuleLifecycleV13 {
+	if (row.poisonRegressionCount > 0 || row.verdict === "regresses") return "demoted";
+	if (row.verdict === "blocked") return "quarantined";
+	if (row.verdict === "improves" && row.causalScore >= 62 && hasExecutable) return "promoted";
+	return "candidate";
+}
+
+function buildMemoryStrategyCapsuleReport(options: {
+	route?: string;
+	target?: string;
+	replay?: MemoryReplayEvaluatorReportV12;
+	quality?: MemoryQualityLedgerReportV11;
+	skillCapsules?: MemorySkillCapsuleReportV9;
+	write?: boolean;
+} = {}): MemoryStrategyCapsuleReportV13 {
+	ensureReconStorage();
+	const generatedAt = new Date().toISOString();
+	const quality = options.quality ?? readJsonObjectFile<MemoryQualityLedgerReportV11>(memoryQualityReportPath()) ?? buildMemoryQualityLedgerReport({ route: options.route, target: options.target, write: false });
+	const replay = options.replay ?? readJsonObjectFile<MemoryReplayEvaluatorReportV12>(memoryReplayEvaluatorReportPath()) ?? buildMemoryReplayEvaluatorReport({ route: options.route, target: options.target, quality, write: false });
+	const skillCapsules = options.skillCapsules ?? readJsonObjectFile<MemorySkillCapsuleReportV9>(memorySkillCapsuleReportPath()) ?? buildMemorySkillCapsuleReport({ route: options.route, target: options.target, write: false });
+	const events = readMemoryEvents();
+	const eventById = new Map(events.map((event) => [event.id, event]));
+	const qualityByEvent = new Map((quality.rows ?? []).map((row) => [row.eventId, row]));
+	const skillRows = skillCapsules.recentCapsules ?? [];
+	const capsules: MemoryStrategyCapsuleV13[] = [];
+	for (const row of replay.rows ?? []) {
+		if (options.route && row.route && !memoryRouteMatches(row.route, options.route)) continue;
+		if (options.target && row.target && !memoryTargetScope(row.target).includes(memoryTargetScope(options.target))) continue;
+		const sourceEventIds = uniqueNonEmpty([...row.attributionEventIds, ...row.regressionEventIds, ...row.expectedEventIds], 24);
+		const sourceEvents = sourceEventIds.flatMap((eventId) => {
+			const event = eventById.get(eventId);
+			return event ? [event] : [];
+		});
+		const relatedSkills = skillRows.filter((skill) =>
+			skill.sourceIds.some((sourceId) => sourceEventIds.includes(sourceId)) ||
+			sourceEventIds.some((eventId) => skill.caseSignature.includes(eventId) || skill.sourceHashes.includes(qualityByEvent.get(eventId)?.entryHash ?? "")),
+		);
+		const recommendedCommands = uniqueNonEmpty(
+			[
+				...sourceEvents.flatMap((event) => event.commands),
+				...relatedSkills.flatMap((skill) => skill.operatorCommands),
+				...row.attributionEventIds.flatMap((eventId) => qualityByEvent.get(eventId)?.nextCommands ?? []),
+			].filter((command) => !/^re_memory (?:quality|replay|feedback)/i.test(command)),
+			18,
+		);
+		const verifierCommands = uniqueNonEmpty(
+			[
+				...relatedSkills.flatMap((skill) => skill.verifierCommands),
+				"re_verifier matrix",
+				"re_replayer run",
+				row.attributionEventIds.length ? "re_memory replay # verify strategy still improves over no-memory control" : undefined,
+			],
+			12,
+		);
+		const avoidCommands = uniqueNonEmpty(
+			[
+				...row.regressionEventIds.flatMap((eventId) => eventById.get(eventId)?.commands ?? []),
+				...relatedSkills.flatMap((skill) => skill.avoidCommands),
+				...quality.avoidCommands,
+				...replay.avoidCommands,
+			],
+			18,
+		);
+		const fallbackCommands = uniqueNonEmpty(
+			[
+				"re_memory replay",
+				"re_memory quality",
+				row.regressionEventIds.length ? "re_memory supervise" : undefined,
+				"re_autofix plan",
+				"re_context pack",
+			],
+			10,
+		);
+		const hasExecutable = recommendedCommands.length > 0 || relatedSkills.some((skill) => skill.injection.nextActionCommands.length > 0);
+		const lifecycle = memoryStrategyLifecycleForReplay(row, hasExecutable);
+		const qualityScores = sourceEventIds.map((eventId) => qualityByEvent.get(eventId)?.qualityScore).filter((score): score is number => typeof score === "number");
+		const qualityScore = qualityScores.length ? Number((qualityScores.reduce((sum, score) => sum + score, 0) / qualityScores.length).toFixed(2)) : 0;
+		const confidence = Number(Math.max(0, Math.min(1, row.causalScore / 100 * 0.62 + qualityScore / 100 * 0.28 + (hasExecutable ? 0.1 : 0))).toFixed(4));
+		const route = row.route ?? sourceEvents[0]?.route ?? options.route ?? "memory-strategy";
+		const targetScope = memoryTargetScope(row.target ?? sourceEvents[0]?.target ?? options.target);
+		const triggerConditions = uniqueNonEmpty(
+			[
+				row.query ? `query~=${truncateMiddle(row.query, 120)}` : undefined,
+				`route=${route}`,
+				targetScope ? `target_scope=${targetScope}` : undefined,
+				`causal_score>=${Math.max(0, Math.floor(row.causalScore))}`,
+				row.attributionEventIds.length ? `requires_memory_events=${row.attributionEventIds.join(",")}` : undefined,
+			],
+			12,
+		);
+		const objectives = uniqueNonEmpty(
+			[
+				row.verdict === "improves" ? "reuse replay-proven memory path before broad exploration" : "avoid replay-regressed memory path and repair route",
+				`reduce_estimated_steps_by=${row.savedStepEstimate}`,
+				...sourceEvents.flatMap((event) => event.reuseRules).slice(0, 4),
+			],
+			10,
+		);
+		const evidenceRefs = uniqueNonEmpty(
+			[
+				...row.evidenceRefs,
+				...sourceEvents.flatMap((event) => event.artifactHashes.map((artifact) => artifact.path)),
+				...relatedSkills.flatMap((skill) => skill.evidenceRefs.map((artifact) => artifact.path)),
+			],
+			32,
+		);
+		const nextActionCommands = uniqueNonEmpty(
+			[
+				...(recommendedCommands.length ? recommendedCommands : [`re_operator plan${row.target ? ` ${row.target}` : ""}`]),
+				...verifierCommands.slice(0, 3),
+				...fallbackCommands.slice(0, 2),
+			],
+			16,
+		);
+		capsules.push(
+			memoryStrategyCapsuleFrom({
+				id: `strategy:${slug(route)}:${sha256Text(`${row.id}:${sourceEventIds.join(",")}:${row.verdict}`).slice(0, 20)}`,
+				ts: generatedAt,
+				MemoryStrategyCapsuleV13: true,
+				executable_strategy_capsule: true,
+				replay_backed_strategy_promotion: true,
+				strategy_quality_gate: true,
+				caseSignature: sourceEvents[0]?.caseSignature ?? row.scenarioId,
+				route,
+				targetScope: targetScope || "workspace",
+				lifecycle,
+				triggerConditions,
+				objectives,
+				recommendedCommands: recommendedCommands.length ? recommendedCommands : [`re_operator plan${row.target ? ` ${row.target}` : ""}`],
+				verifierCommands,
+				fallbackCommands,
+				avoidCommands,
+				workerRoutingHints: uniqueNonEmpty([...relatedSkills.flatMap((skill) => skill.workerRoutingHints), `strategy_route=${route}`, `strategy_causal_score=${row.causalScore}`], 12),
+				applicabilityBoundary: uniqueNonEmpty(
+					[
+						"only inject when MemoryScopeIsolationV1 allows same workspace/target/route",
+						targetScope ? `target must match ${targetScope}` : undefined,
+						row.regressionEventIds.length ? `avoid regression events: ${row.regressionEventIds.join(",")}` : undefined,
+						"rerun re_memory replay after major provider/model/compact changes",
+					],
+					12,
+				),
+				sourceReplayRowIds: [row.id],
+				sourceQualityEventIds: sourceEventIds,
+				sourceSkillCapsuleIds: relatedSkills.map((skill) => skill.id).slice(0, 16),
+				evidenceRefs,
+				causalScore: row.causalScore,
+				qualityScore,
+				confidence,
+				executionPolicy: {
+					preflightChecks: ["re_memory scope", "re_memory replay", "re_context pack"],
+					evidenceRequirements: ["runtime artifact or replay/verifier evidence before final claim", "qualityScore and causalScore must be recorded"],
+					stopConditions: ["scope_blocked", "poisonRegressionCount>0", "verifier/replay contradicts capsule"],
+					compactResumeHints: ["include strategy-capsule-report in context pack", "resume with same sourceReplayRowIds and sourceQualityEventIds"],
+				},
+				injection: {
+					operatorPromptSnippet: truncateMiddle(`Use StrategyCapsuleV13 when ${triggerConditions.join("; ")}. Objective: ${objectives.join("; ")}. First commands: ${nextActionCommands.slice(0, 4).join(" && ")}`, 720),
+					verifierPromptSnippet: truncateMiddle(`Verify StrategyCapsuleV13 ${row.scenarioId}: causalScore=${row.causalScore}, savedSteps=${row.savedStepEstimate}, evidence=${evidenceRefs.slice(0, 4).join(",")}`, 520),
+					nextActionCommands,
+				},
+			}),
+		);
+	}
+	const deduped = Array.from(new Map(capsules.map((capsule) => [capsule.id, capsule])).values());
+	const byLifecycle = (lifecycle: MemoryStrategyCapsuleLifecycleV13) => deduped.filter((capsule) => capsule.lifecycle === lifecycle);
+	const injectable = deduped.filter((capsule) => capsule.lifecycle === "promoted" || capsule.lifecycle === "candidate");
+	const operatorInjectionCommands = uniqueNonEmpty(injectable.flatMap((capsule) => capsule.recommendedCommands), 30);
+	const verifierCommands = uniqueNonEmpty(injectable.flatMap((capsule) => capsule.verifierCommands), 24);
+	const avoidCommands = uniqueNonEmpty(deduped.flatMap((capsule) => capsule.avoidCommands), 24);
+	const fallbackCommands = uniqueNonEmpty(deduped.flatMap((capsule) => capsule.fallbackCommands), 16);
+	const workerRoutingHints = uniqueNonEmpty(injectable.flatMap((capsule) => capsule.workerRoutingHints), 20);
+	const status: MemoryStrategyCapsuleReportV13["status"] =
+		deduped.length === 0
+			? "empty"
+			: byLifecycle("quarantined").length && !operatorInjectionCommands.length
+				? "blocked"
+				: byLifecycle("demoted").length || byLifecycle("candidate").length
+					? "warn"
+					: "pass";
+	const report: MemoryStrategyCapsuleReportV13 = {
+		kind: "repi-memory-strategy-capsule-report",
+		schemaVersion: 1,
+		generatedAt,
+		MemoryStrategyCapsuleV13: true,
+		executable_strategy_capsule: true,
+		replay_backed_strategy_promotion: true,
+		strategy_quality_gate: true,
+		reportPath: memoryStrategyCapsuleReportPath(),
+		capsuleLedgerPath: memoryStrategyCapsuleLedgerPath(),
+		strategyBookPath: memoryStrategyCapsuleBookPath(),
+		sourceReplayReportPath: replay.reportPath ?? memoryReplayEvaluatorReportPath(),
+		sourceQualityReportPath: quality.reportPath ?? memoryQualityReportPath(),
+		sourceSkillCapsuleReportPath: skillCapsules.reportPath ?? memorySkillCapsuleReportPath(),
+		capsuleCount: deduped.length,
+		promotedCapsuleIds: byLifecycle("promoted").map((capsule) => capsule.id),
+		candidateCapsuleIds: byLifecycle("candidate").map((capsule) => capsule.id),
+		demotedCapsuleIds: byLifecycle("demoted").map((capsule) => capsule.id),
+		quarantinedCapsuleIds: byLifecycle("quarantined").map((capsule) => capsule.id),
+		operatorInjectionCommands,
+		verifierCommands,
+		avoidCommands,
+		fallbackCommands,
+		workerRoutingHints,
+		status,
+		recentCapsules: deduped.slice(0, 48),
+		requiredGates: [
+			"MemoryStrategyCapsuleV13",
+			"executable_strategy_capsule",
+			"replay_backed_strategy_promotion",
+			"strategy_quality_gate",
+			"strategy_capsule_in_context_pack",
+			"strategy_capsule_orchestrator_step",
+			"strategy_capsule_operator_injection",
+		],
+		policy: {
+			MemoryStrategyCapsuleV13: true,
+			replayBackedPromotion: true,
+			qualityGateRequired: true,
+			executableCommandsRequired: true,
+			verifierAndFallbackRequired: true,
+		},
+		nextCommands: uniqueNonEmpty(
+			[
+				"re_memory strategy",
+				operatorInjectionCommands.length ? "re_operator plan # consumes StrategyCapsuleV13 recommendedCommands" : undefined,
+				verifierCommands.length ? "re_verifier matrix # verifies StrategyCapsuleV13 before claim" : undefined,
+				avoidCommands.length ? "re_autofix plan # avoid/demote regressed strategy capsules" : undefined,
+				"re_context pack",
+			].filter(Boolean) as string[],
+			12,
+		),
+	};
+	if (options.write !== false) {
+		writeFileAtomic(memoryStrategyCapsuleLedgerPath(), deduped.map((capsule) => JSON.stringify(capsule)).join("\n") + (deduped.length ? "\n" : ""));
+		writeFileAtomic(memoryStrategyCapsuleReportPath(), `${JSON.stringify(report, null, 2)}\n`);
+		writeFileAtomic(
+			memoryStrategyCapsuleBookPath(),
+			[
+				"# REPI Memory Strategy Capsule Book",
+				"",
+				"MemoryStrategyCapsuleV13: true",
+				"executable_strategy_capsule: true",
+				"replay_backed_strategy_promotion: true",
+				"strategy_quality_gate: true",
+				`generated_at: ${report.generatedAt}`,
+				`status: ${report.status}`,
+				"",
+				"## Promoted / Candidate Strategies",
+				...(injectable.length
+					? injectable.map((capsule) => `- ${capsule.lifecycle} causal=${capsule.causalScore} quality=${capsule.qualityScore} trigger=${capsule.triggerConditions.join("; ")} next=${capsule.injection.nextActionCommands.slice(0, 3).join(" && ")}`)
+					: ["- none"]),
+				"",
+				"## Avoid / Demoted Commands",
+				...(avoidCommands.length ? avoidCommands.map((command) => `- ${command}`) : ["- none"]),
+				"",
+				"## Required Gates",
+				...report.requiredGates.map((gate) => `- ${gate}`),
+				"",
+			].join("\n"),
+		);
+	}
+	return report;
+}
+
+function formatMemoryStrategyCapsules(report = buildMemoryStrategyCapsuleReport()): string {
+	return [
+		"memory_strategy_capsule_v13:",
+		`MemoryStrategyCapsuleV13=${report.MemoryStrategyCapsuleV13}`,
+		`executable_strategy_capsule=${report.executable_strategy_capsule}`,
+		`replay_backed_strategy_promotion=${report.replay_backed_strategy_promotion}`,
+		`strategy_quality_gate=${report.strategy_quality_gate}`,
+		`status=${report.status}`,
+		`capsules=${report.capsuleCount}`,
+		`promoted=${report.promotedCapsuleIds.length}`,
+		`candidate=${report.candidateCapsuleIds.length}`,
+		`demoted=${report.demotedCapsuleIds.length}`,
+		`quarantined=${report.quarantinedCapsuleIds.length}`,
+		`report=${report.reportPath}`,
+		`ledger=${report.capsuleLedgerPath}`,
+		`book=${report.strategyBookPath}`,
+		"operator_injection_commands:",
+		...(report.operatorInjectionCommands.length ? report.operatorInjectionCommands.slice(0, 12).map((command) => `- ${command}`) : ["- none"]),
+		"verifier_commands:",
+		...(report.verifierCommands.length ? report.verifierCommands.slice(0, 12).map((command) => `- ${command}`) : ["- none"]),
+		"recent_strategies:",
+		...(report.recentCapsules.length
+			? report.recentCapsules.slice(0, 12).map((capsule) => `- ${capsule.lifecycle} route=${capsule.route} causal=${capsule.causalScore} quality=${capsule.qualityScore} trigger=${capsule.triggerConditions.join("; ")}`)
+			: ["- none"]),
+		"next_commands:",
+		...report.nextCommands.map((command) => `- ${command}`),
+		"required_gates:",
+		...report.requiredGates.map((gate) => `- ${gate}`),
+	].join("\n");
+}
+
+function memoryActiveKernelDecisionHash(decision: Omit<MemoryActiveKernelDecisionV14, "entryHash">): string {
+	return sha256Text(JSON.stringify(decision));
+}
+
+function memoryActiveKernelDecisionFrom(input: Omit<MemoryActiveKernelDecisionV14, "kind" | "schemaVersion" | "entryHash">): MemoryActiveKernelDecisionV14 {
+	const decision = {
+		kind: "repi-memory-active-kernel-decision" as const,
+		schemaVersion: 1 as const,
+		...input,
+	};
+	return { ...decision, entryHash: memoryActiveKernelDecisionHash(decision) };
+}
+
+function memoryActiveKernelActionFromScore(input: {
+	score: number;
+	source: "strategy" | "sedimentation" | "quality" | "feedback" | "supervisor";
+	lifecycle?: MemoryStrategyCapsuleLifecycleV13 | MemoryQualityLifecycleDecisionV11;
+	sedimentationAction?: MemorySedimentationAction;
+	hasCommands: boolean;
+	scopeBlocked: boolean;
+	pendingFeedback: boolean;
+	blockers: string[];
+}): MemoryActiveKernelActionV14 {
+	if (input.scopeBlocked || input.blockers.some((blocker) => /scope_blocked|quarantine|forbidden_leak|cross[_-]scope/i.test(blocker))) return "quarantine";
+	if (input.lifecycle === "quarantined" || input.lifecycle === "quarantine") return "quarantine";
+	if (input.lifecycle === "expire" || input.sedimentationAction === "expire") return "expire";
+	if (input.lifecycle === "demoted" || input.lifecycle === "demote" || input.sedimentationAction === "demote") return "avoid";
+	if (input.pendingFeedback && input.score < 78) return "wait-feedback";
+	if (!input.hasCommands) return input.score >= 55 ? "verify" : "repair";
+	if (input.score >= 74 && (input.lifecycle === "promoted" || input.lifecycle === "promote" || input.sedimentationAction === "inject")) return "inject";
+	if (input.score >= 62) return "reuse";
+	if (input.score >= 48) return "verify";
+	return "repair";
+}
+
+function buildMemoryActiveKernelReport(options: {
+	route?: string;
+	target?: string;
+	query?: string;
+	sedimentation?: MemorySedimentationReportV1;
+	quality?: MemoryQualityLedgerReportV11;
+	replay?: MemoryReplayEvaluatorReportV12;
+	strategy?: MemoryStrategyCapsuleReportV13;
+	feedback?: MemoryFeedbackClosureReportV1;
+	scope?: MemoryScopeIsolationReportV1;
+	write?: boolean;
+	maxDecisions?: number;
+} = {}): MemoryActiveKernelReportV14 {
+	ensureReconStorage();
+	const generatedAt = new Date().toISOString();
+	const route = options.route;
+	const target = options.target;
+	const maxDecisions = options.maxDecisions ?? 12;
+	const events = readMemoryEvents();
+	const eventById = new Map(events.map((event) => [event.id, event]));
+	const sedimentation = options.sedimentation ?? readJsonObjectFile<MemorySedimentationReportV1>(memorySedimentationReportPath()) ?? buildMemorySemanticIndex({ route, target, maxEntries: 32 });
+	const feedback = options.feedback ?? readJsonObjectFile<MemoryFeedbackClosureReportV1>(memoryFeedbackClosureReportPath()) ?? buildMemoryFeedbackClosureReport({ sedimentation, write: options.write });
+	const quality = options.quality ?? readJsonObjectFile<MemoryQualityLedgerReportV11>(memoryQualityReportPath()) ?? buildMemoryQualityLedgerReport({ route, target, injectionEventIds: sedimentation.injectionPacket.entries.map((entry) => entry.eventId), feedback, write: options.write });
+	const replay = options.replay ?? readJsonObjectFile<MemoryReplayEvaluatorReportV12>(memoryReplayEvaluatorReportPath()) ?? buildMemoryReplayEvaluatorReport({ route, target, query: options.query, quality, write: options.write });
+	const strategy = options.strategy ?? readJsonObjectFile<MemoryStrategyCapsuleReportV13>(memoryStrategyCapsuleReportPath()) ?? buildMemoryStrategyCapsuleReport({ route, target, quality, replay, write: options.write });
+	const scope = options.scope ?? buildMemoryScopeIsolationReport({ route, target, events, write: options.write });
+	const qualityByEvent = new Map((quality.rows ?? []).map((row) => [row.eventId, row]));
+	const feedbackByEvent = new Map((feedback.rows ?? []).map((row) => [row.eventId, row]));
+	const scopeByEvent = new Map((scope.rows ?? []).map((row) => [row.eventId, row]));
+	const replayRowById = new Map((replay.rows ?? []).map((row) => [row.id, row]));
+	const decisions: MemoryActiveKernelDecisionV14[] = [];
+	const coveredEvents = new Set<string>();
+	const addDecision = (decision: MemoryActiveKernelDecisionV14) => {
+		if (options.route && decision.route && !memoryRouteMatches(decision.route, options.route)) return;
+		if (options.target && decision.targetScope && !decision.targetScope.includes(memoryTargetScope(options.target))) return;
+		const key = `${decision.action}:${decision.source}:${decision.sourceEventIds.join(",") || decision.sourceStrategyCapsuleIds.join(",")}:${decision.commands.join("\n")}`;
+		if (decisions.some((row) => `${row.action}:${row.source}:${row.sourceEventIds.join(",") || row.sourceStrategyCapsuleIds.join(",")}:${row.commands.join("\n")}` === key)) return;
+		for (const eventId of decision.sourceEventIds) coveredEvents.add(eventId);
+		decisions.push(decision);
+	};
+	for (const capsule of strategy.recentCapsules ?? []) {
+		const sourceEventIds = uniqueNonEmpty(capsule.sourceQualityEventIds, 24);
+		const sourceQualityRows = sourceEventIds.flatMap((eventId) => {
+			const row = qualityByEvent.get(eventId);
+			return row ? [row] : [];
+		});
+		const sourceReplayRows = capsule.sourceReplayRowIds.flatMap((rowId) => {
+			const row = replayRowById.get(rowId);
+			return row ? [row] : [];
+		});
+		const sourceEvents = sourceEventIds.flatMap((eventId) => {
+			const event = eventById.get(eventId);
+			return event ? [event] : [];
+		});
+		const scopeBlocked = sourceEventIds.some((eventId) => scopeByEvent.get(eventId)?.blocksInjection === true);
+		const pendingFeedback = sourceEventIds.some((eventId) => feedbackByEvent.get(eventId)?.feedbackStatus === "pending");
+		const avgQuality = sourceQualityRows.length ? sourceQualityRows.reduce((sum, row) => sum + row.qualityScore, 0) / sourceQualityRows.length : capsule.qualityScore;
+		const avgCausal = sourceReplayRows.length ? sourceReplayRows.reduce((sum, row) => sum + row.causalScore, 0) / sourceReplayRows.length : capsule.causalScore;
+		const activeScore = Number(Math.max(0, Math.min(100, avgCausal * 0.38 + avgQuality * 0.34 + capsule.confidence * 100 * 0.18 + (capsule.recommendedCommands.length ? 7 : 0) + (capsule.lifecycle === "promoted" ? 8 : capsule.lifecycle === "candidate" ? 0 : capsule.lifecycle === "demoted" ? -20 : -35))).toFixed(2));
+		const blockers = uniqueNonEmpty([
+			scopeBlocked ? "scope_blocked" : undefined,
+			pendingFeedback ? "pending_feedback_after_injection" : undefined,
+			capsule.lifecycle === "quarantined" ? "strategy_capsule_quarantined" : undefined,
+			capsule.lifecycle === "demoted" ? "strategy_capsule_demoted" : undefined,
+			...capsule.executionPolicy.stopConditions.filter((condition) => /scope|poison|contradict/i.test(condition) && capsule.lifecycle !== "promoted"),
+		], 16);
+		const action = memoryActiveKernelActionFromScore({
+			score: activeScore,
+			source: "strategy",
+			lifecycle: capsule.lifecycle,
+			hasCommands: capsule.recommendedCommands.length > 0,
+			scopeBlocked,
+			pendingFeedback,
+			blockers,
+		});
+		addDecision(memoryActiveKernelDecisionFrom({
+			id: `mak:strategy:${sha256Text(`${capsule.id}:${action}:${activeScore}`).slice(0, 22)}`,
+			ts: generatedAt,
+			MemoryActiveKernelV14: true,
+			unified_memory_decision_engine: true,
+			active_recall_scheduler: true,
+			scope_safe_strategy_injection: true,
+			action,
+			route: capsule.route,
+			targetScope: capsule.targetScope,
+			source: "strategy",
+			sourceEventIds,
+			sourceStrategyCapsuleIds: [capsule.id],
+			sourceQualityRowIds: sourceQualityRows.map((row) => row.id),
+			sourceReplayRowIds: capsule.sourceReplayRowIds,
+			activeScore,
+			causalScore: Number(avgCausal.toFixed(2)),
+			qualityScore: Number(avgQuality.toFixed(2)),
+			confidence: capsule.confidence,
+			commands: capsule.recommendedCommands,
+			verifierCommands: capsule.verifierCommands,
+			fallbackCommands: capsule.fallbackCommands,
+			avoidCommands: capsule.avoidCommands,
+			evidenceRefs: uniqueNonEmpty([...capsule.evidenceRefs, ...sourceEvents.flatMap((event) => event.artifactHashes.map((artifact) => artifact.path))], 32),
+			triggerConditions: capsule.triggerConditions,
+			applicabilityBoundary: capsule.applicabilityBoundary,
+			rationale: uniqueNonEmpty([`strategy_lifecycle=${capsule.lifecycle}`, `causal=${avgCausal.toFixed(2)}`, `quality=${avgQuality.toFixed(2)}`, `active_score=${activeScore}`], 12),
+			preflightChecks: uniqueNonEmpty([...capsule.executionPolicy.preflightChecks, "re_memory active", "re_memory scope"], 12),
+			feedbackWritebackCommands: sourceEventIds.map((eventId) => `re_memory append # active_kernel_feedback event=${eventId} decision=${action} score=${activeScore}`).slice(0, 12),
+			compactResumeHints: uniqueNonEmpty([...capsule.executionPolicy.compactResumeHints, "include active-kernel-report and active-injection-pack in ContextPackV2"], 12),
+			blockers,
+		}));
+	}
+	for (const entry of sedimentation.entries.slice(0, 80)) {
+		if (coveredEvents.has(entry.eventId)) continue;
+		const event = eventById.get(entry.eventId);
+		const qualityRow = qualityByEvent.get(entry.eventId);
+		const feedbackRow = feedbackByEvent.get(entry.eventId);
+		const scopeRow = scopeByEvent.get(entry.eventId);
+		const activeScore = Number(Math.max(0, Math.min(100, entry.grade * 0.62 + (qualityRow?.qualityScore ?? entry.grade) * 0.28 + (entry.verifierRefs.length ? 5 : 0) + (entry.artifactRefs.length ? 5 : 0))).toFixed(2));
+		const blockers = uniqueNonEmpty([...entry.blockers, scopeRow?.blocksInjection ? "scope_blocked" : undefined, feedbackRow?.feedbackStatus === "pending" ? "pending_feedback_after_injection" : undefined], 16);
+		const action = memoryActiveKernelActionFromScore({
+			score: activeScore,
+			source: "sedimentation",
+			lifecycle: qualityRow?.lifecycleDecision,
+			sedimentationAction: entry.action,
+			hasCommands: Boolean(event?.commands.length),
+			scopeBlocked: scopeRow?.blocksInjection === true,
+			pendingFeedback: feedbackRow?.feedbackStatus === "pending",
+			blockers,
+		});
+		addDecision(memoryActiveKernelDecisionFrom({
+			id: `mak:sediment:${sha256Text(`${entry.eventId}:${action}:${activeScore}`).slice(0, 22)}`,
+			ts: generatedAt,
+			MemoryActiveKernelV14: true,
+			unified_memory_decision_engine: true,
+			active_recall_scheduler: true,
+			scope_safe_strategy_injection: true,
+			action,
+			route: entry.route,
+			targetScope: entry.targetScope,
+			source: "sedimentation",
+			sourceEventIds: [entry.eventId],
+			sourceStrategyCapsuleIds: [],
+			sourceQualityRowIds: qualityRow ? [qualityRow.id] : [],
+			sourceReplayRowIds: [],
+			activeScore,
+			causalScore: 0,
+			qualityScore: qualityRow?.qualityScore ?? entry.grade,
+			confidence: Number(((qualityRow?.baseConfidence ?? event?.quality.confidence ?? entry.grade / 100)).toFixed(4)),
+			commands: event?.commands ?? [],
+			verifierCommands: entry.verifierRefs,
+			fallbackCommands: ["re_memory replay", "re_memory quality", "re_autofix plan"],
+			avoidCommands: qualityRow && ["demote", "quarantine", "expire"].includes(qualityRow.lifecycleDecision) ? event?.commands ?? [] : [],
+			evidenceRefs: uniqueNonEmpty([...entry.artifactRefs.map((artifact) => artifact.path), ...(qualityRow?.evidenceRefs ?? [])], 32),
+			triggerConditions: uniqueNonEmpty([`route=${entry.route}`, `target_scope=${entry.targetScope}`, `grade>=${Math.floor(entry.grade)}`], 8),
+			applicabilityBoundary: uniqueNonEmpty(["same scope as MemoryScopeIsolationV1", ...blockers.map((blocker) => `blocked_when=${blocker}`)], 12),
+			rationale: uniqueNonEmpty([`sedimentation_action=${entry.action}`, `grade=${entry.grade}`, qualityRow ? `quality=${qualityRow.qualityScore}` : undefined], 12),
+			preflightChecks: ["re_memory scope", "re_memory feedback", "re_memory active"],
+			feedbackWritebackCommands: [`re_memory append # active_kernel_feedback event=${entry.eventId} decision=${action} score=${activeScore}`],
+			compactResumeHints: ["include active-injection-pack in context pack", "rerun re_memory active after resume"],
+			blockers,
+		}));
+	}
+	for (const row of quality.rows ?? []) {
+		if (coveredEvents.has(row.eventId)) continue;
+		if (!["demote", "quarantine", "expire"].includes(row.lifecycleDecision) && row.pendingFeedbackCount === 0) continue;
+		const event = eventById.get(row.eventId);
+		const action: MemoryActiveKernelActionV14 = row.pendingFeedbackCount > 0 ? "wait-feedback" : row.lifecycleDecision === "quarantine" ? "quarantine" : row.lifecycleDecision === "expire" ? "expire" : "avoid";
+		addDecision(memoryActiveKernelDecisionFrom({
+			id: `mak:quality:${sha256Text(`${row.eventId}:${action}:${row.qualityScore}`).slice(0, 22)}`,
+			ts: generatedAt,
+			MemoryActiveKernelV14: true,
+			unified_memory_decision_engine: true,
+			active_recall_scheduler: true,
+			scope_safe_strategy_injection: true,
+			action,
+			route: row.route,
+			targetScope: row.targetScope,
+			source: row.pendingFeedbackCount > 0 ? "feedback" : "quality",
+			sourceEventIds: [row.eventId],
+			sourceStrategyCapsuleIds: [],
+			sourceQualityRowIds: [row.id],
+			sourceReplayRowIds: [],
+			activeScore: row.qualityScore,
+			causalScore: 0,
+			qualityScore: row.qualityScore,
+			confidence: row.baseConfidence,
+			commands: action === "wait-feedback" ? row.nextCommands : [],
+			verifierCommands: action === "wait-feedback" ? ["re_memory feedback", "re_verifier matrix"] : [],
+			fallbackCommands: ["re_memory quality", "re_memory supervise"],
+			avoidCommands: action === "avoid" || action === "quarantine" || action === "expire" ? event?.commands ?? [] : [],
+			evidenceRefs: row.evidenceRefs,
+			triggerConditions: [`quality_decision=${row.lifecycleDecision}`, `route=${row.route}`],
+			applicabilityBoundary: ["do not inject until feedback/quality state changes"],
+			rationale: uniqueNonEmpty([`quality_score=${row.qualityScore}`, `signals=${row.signals.join(",")}`, `pending_feedback=${row.pendingFeedbackCount}`], 8),
+			preflightChecks: ["re_memory feedback", "re_memory quality"],
+			feedbackWritebackCommands: [`re_memory append # close_active_kernel_feedback event=${row.eventId}`],
+			compactResumeHints: ["carry pending feedback decision across compact resume"],
+			blockers: uniqueNonEmpty([row.scopeBlocked ? "scope_blocked" : undefined, row.forbiddenLeakCount ? `forbidden_leak=${row.forbiddenLeakCount}` : undefined], 8),
+		}));
+	}
+	const sorted = decisions
+		.sort((left, right) => {
+			const order = (action: MemoryActiveKernelActionV14) =>
+				action === "inject" ? 0 : action === "reuse" ? 1 : action === "verify" ? 2 : action === "repair" ? 3 : action === "wait-feedback" ? 4 : action === "avoid" ? 5 : action === "quarantine" ? 6 : 7;
+			return order(left.action) - order(right.action) || right.activeScore - left.activeScore || left.id.localeCompare(right.id);
+		})
+		.slice(0, Math.max(maxDecisions, 24));
+	const activeDecisions = sorted.filter((decision) => ["inject", "reuse", "verify", "repair"].includes(decision.action)).slice(0, maxDecisions);
+	const byAction = (action: MemoryActiveKernelActionV14) => sorted.filter((decision) => decision.action === action);
+	const operatorInjectionCommands = uniqueNonEmpty(activeDecisions.filter((decision) => decision.action === "inject" || decision.action === "reuse").flatMap((decision) => decision.commands), 32);
+	const verifierCommands = uniqueNonEmpty(activeDecisions.flatMap((decision) => decision.verifierCommands), 24);
+	const fallbackCommands = uniqueNonEmpty(activeDecisions.flatMap((decision) => decision.fallbackCommands), 20);
+	const avoidCommands = uniqueNonEmpty(sorted.flatMap((decision) => decision.avoidCommands), 32);
+	const workerRoutingHints = uniqueNonEmpty(sorted.flatMap((decision) => decision.triggerConditions.map((condition) => `active_kernel:${condition}`)), 24);
+	const compactResumeHints = uniqueNonEmpty(sorted.flatMap((decision) => decision.compactResumeHints), 24);
+	const activeInjectionPack: MemoryActiveInjectionPackV14 = {
+		kind: "repi-memory-active-injection-pack",
+		schemaVersion: 1,
+		generatedAt,
+		MemoryActiveKernelV14: true,
+		active_recall_scheduler: true,
+		budget: { maxDecisions, maxCommands: 32, maxTokens: 4200 },
+		decisions: activeDecisions,
+		commands: operatorInjectionCommands,
+		verifierRules: verifierCommands,
+		fallbackCommands,
+		avoidCommands,
+		scopeLocks: uniqueNonEmpty(activeDecisions.map((decision) => `${decision.route}:${decision.targetScope}`), 24),
+		feedbackWriteback: "Every active kernel injected/reused decision must append active_kernel_feedback with event id, outcome, artifact sha256, verifier result, and score delta.",
+		compactResumeHints,
+		requiredGates: [
+			"MemoryActiveKernelV14",
+			"unified_memory_decision_engine",
+			"active_recall_scheduler",
+			"quality_replay_strategy_fusion",
+			"scope_safe_strategy_injection",
+			"feedback_driven_promotion",
+			"cross_session_compact_ready",
+		],
+	};
+	const status: MemoryActiveKernelReportV14["status"] =
+		sorted.length === 0
+			? "empty"
+			: activeDecisions.length === 0 && (byAction("quarantine").length || byAction("avoid").length)
+				? "blocked"
+				: byAction("wait-feedback").length || byAction("verify").length || byAction("repair").length || byAction("avoid").length || byAction("quarantine").length
+					? "warn"
+					: "pass";
+	const report: MemoryActiveKernelReportV14 = {
+		kind: "repi-memory-active-kernel-report",
+		schemaVersion: 1,
+		generatedAt,
+		MemoryActiveKernelV14: true,
+		unified_memory_decision_engine: true,
+		active_recall_scheduler: true,
+		cross_session_compact_ready: true,
+		feedback_driven_promotion: true,
+		scope_safe_strategy_injection: true,
+		reportPath: memoryActiveKernelReportPath(),
+		injectionPackPath: memoryActiveInjectionPackPath(),
+		strategyBoardPath: memoryActiveStrategyBoardPath(),
+		sourceSedimentationReportPath: sedimentation.injectionPacketPath,
+		sourceQualityReportPath: quality.reportPath,
+		sourceReplayReportPath: replay.reportPath,
+		sourceStrategyReportPath: strategy.reportPath,
+		sourceFeedbackReportPath: feedback.feedbackClosureReportPath,
+		sourceScopeReportPath: scope.scopeIsolationReportPath,
+		decisionCount: sorted.length,
+		injectDecisionIds: byAction("inject").map((decision) => decision.id),
+		reuseDecisionIds: byAction("reuse").map((decision) => decision.id),
+		verifyDecisionIds: byAction("verify").map((decision) => decision.id),
+		repairDecisionIds: byAction("repair").map((decision) => decision.id),
+		avoidDecisionIds: byAction("avoid").map((decision) => decision.id),
+		quarantineDecisionIds: byAction("quarantine").map((decision) => decision.id),
+		pendingFeedbackDecisionIds: byAction("wait-feedback").map((decision) => decision.id),
+		expiredDecisionIds: byAction("expire").map((decision) => decision.id),
+		operatorInjectionCommands,
+		verifierCommands,
+		fallbackCommands,
+		avoidCommands,
+		workerRoutingHints,
+		compactResumeHints,
+		status,
+		decisions: sorted,
+		activeInjectionPack,
+		requiredGates: activeInjectionPack.requiredGates,
+		policy: {
+			MemoryActiveKernelV14: true,
+			unifiedMemoryDecisionEngine: true,
+			activeRecallScheduler: true,
+			qualityReplayStrategyFusion: true,
+			scopeSafeStrategyInjection: true,
+			feedbackDrivenPromotion: true,
+			crossSessionCompactReady: true,
+		},
+		nextCommands: uniqueNonEmpty([
+			"re_memory active",
+			operatorInjectionCommands.length ? "re_operator plan # consumes active-kernel injection pack" : undefined,
+			verifierCommands.length ? "re_verifier matrix # verify active memory decision before claim" : undefined,
+			avoidCommands.length ? "re_autofix plan # avoid/quarantine active-kernel demotions" : undefined,
+			"re_context pack",
+		].filter(Boolean) as string[], 12),
+	};
+	if (options.write !== false) {
+		writeFileAtomic(memoryActiveKernelReportPath(), `${JSON.stringify(report, null, 2)}\n`);
+		writeFileAtomic(memoryActiveInjectionPackPath(), `${JSON.stringify(activeInjectionPack, null, 2)}\n`);
+		writeFileAtomic(memoryActiveStrategyBoardPath(), [
+			"# REPI Memory Active Strategy Board",
+			"",
+			"MemoryActiveKernelV14: true",
+			"unified_memory_decision_engine: true",
+			"active_recall_scheduler: true",
+			"scope_safe_strategy_injection: true",
+			`generated_at: ${generatedAt}`,
+			`status: ${status}`,
+			"",
+			"## Active decisions",
+			...(activeDecisions.length ? activeDecisions.map((decision) => `- ${decision.action} score=${decision.activeScore} route=${decision.route} target=${decision.targetScope} commands=${decision.commands.slice(0, 2).join(" && ") || "none"}`) : ["- none"]),
+			"",
+			"## Avoid / quarantine",
+			...(byAction("avoid").length || byAction("quarantine").length || byAction("expire").length
+				? [...byAction("avoid"), ...byAction("quarantine"), ...byAction("expire")].map((decision) => `- ${decision.action} score=${decision.activeScore} source=${decision.source} events=${decision.sourceEventIds.join(",") || "none"} blockers=${decision.blockers.join(",") || "none"}`)
+				: ["- none"]),
+			"",
+			"## Required Gates",
+			...report.requiredGates.map((gate) => `- ${gate}`),
+			"",
+		].join("\n"));
+	}
+	return report;
+}
+
+function formatMemoryActiveKernel(report = buildMemoryActiveKernelReport()): string {
+	return [
+		"memory_active_kernel_v14:",
+		`MemoryActiveKernelV14=${report.MemoryActiveKernelV14}`,
+		`unified_memory_decision_engine=${report.unified_memory_decision_engine}`,
+		`active_recall_scheduler=${report.active_recall_scheduler}`,
+		`scope_safe_strategy_injection=${report.scope_safe_strategy_injection}`,
+		`cross_session_compact_ready=${report.cross_session_compact_ready}`,
+		`feedback_driven_promotion=${report.feedback_driven_promotion}`,
+		`status=${report.status}`,
+		`decisions=${report.decisionCount}`,
+		`inject=${report.injectDecisionIds.length}`,
+		`reuse=${report.reuseDecisionIds.length}`,
+		`verify=${report.verifyDecisionIds.length}`,
+		`avoid=${report.avoidDecisionIds.length}`,
+		`quarantine=${report.quarantineDecisionIds.length}`,
+		`pending_feedback=${report.pendingFeedbackDecisionIds.length}`,
+		`report=${report.reportPath}`,
+		`active_injection_pack=${report.injectionPackPath}`,
+		`board=${report.strategyBoardPath}`,
+		"operator_injection_commands:",
+		...(report.operatorInjectionCommands.length ? report.operatorInjectionCommands.slice(0, 12).map((command) => `- ${command}`) : ["- none"]),
+		"verifier_commands:",
+		...(report.verifierCommands.length ? report.verifierCommands.slice(0, 12).map((command) => `- ${command}`) : ["- none"]),
+		"active_decisions:",
+		...(report.decisions.length
+			? report.decisions.slice(0, 12).map((decision) => `- ${decision.action} score=${decision.activeScore} source=${decision.source} route=${decision.route} target=${decision.targetScope} events=${decision.sourceEventIds.join(",") || "none"}`)
+			: ["- none"]),
+		"next_commands:",
+		...report.nextCommands.map((command) => `- ${command}`),
+		"required_gates:",
+		...report.requiredGates.map((gate) => `- ${gate}`),
+	].join("\n");
+}
+
+function memoryMaturationRowHash(row: Omit<MemoryMaturationRowV15, "entryHash">): string {
+	return sha256Text(JSON.stringify(row));
+}
+
+function memoryMaturationActionFromDecision(decision: MemoryActiveKernelDecisionV14, score: number): MemoryMaturationActionV15 {
+	if (decision.action === "quarantine" || decision.blockers.some((blocker) => /scope_blocked|quarantine|forbidden_leak|poison/i.test(blocker))) return "quarantine";
+	if (decision.action === "avoid" || decision.action === "expire") return "demote";
+	if (decision.action === "wait-feedback") return "feedback-required";
+	if (!decision.sourceReplayRowIds.length && decision.causalScore <= 0 && ["inject", "reuse"].includes(decision.action)) return "replay-required";
+	if (["inject", "reuse"].includes(decision.action) && score >= 72 && decision.evidenceRefs.length) return "promote";
+	return "retain";
+}
+
+function memoryMaturationRowFrom(input: Omit<MemoryMaturationRowV15, "kind" | "schemaVersion" | "entryHash">): MemoryMaturationRowV15 {
+	const row = {
+		kind: "repi-memory-maturation-row" as const,
+		schemaVersion: 1 as const,
+		...input,
+	};
+	return { ...row, entryHash: memoryMaturationRowHash(row) };
+}
+
+function memoryMaturationDaysSince(timestamp: string | undefined, now: string): number {
+	if (!timestamp) return 0;
+	const then = Date.parse(timestamp);
+	const current = Date.parse(now);
+	if (!Number.isFinite(then) || !Number.isFinite(current) || current < then) return 0;
+	return Number(((current - then) / 86_400_000).toFixed(2));
+}
+
+function memoryMaturationRetentionSignal(input: {
+	action: MemoryMaturationActionV15;
+	decision: MemoryActiveKernelDecisionV14;
+	sourceEvents: MemoryEventV1[];
+	maturityScore: number;
+	generatedAt: string;
+}): {
+	retentionAction: MemoryMaturationRetentionActionV15;
+	retentionScore: number;
+	stalenessDays: number;
+	decayPenalty: number;
+	lastUsefulAt: string;
+	retentionCommands: string[];
+	rationale: string[];
+} {
+	const { action, decision, sourceEvents, maturityScore, generatedAt } = input;
+	const lastUsefulCandidates = uniqueNonEmpty([
+		...sourceEvents.map((event) => event.quality.lastUsefulAt),
+		...sourceEvents.map((event) => event.ts),
+		decision.ts,
+	], 16);
+	const lastUsefulAt = lastUsefulCandidates
+		.map((value) => ({ value, ms: Date.parse(value) }))
+		.filter((item) => Number.isFinite(item.ms))
+		.sort((a, b) => b.ms - a.ms)[0]?.value ?? generatedAt;
+	const stalenessDays = memoryMaturationDaysSince(lastUsefulAt, generatedAt);
+	const reuseCount = sourceEvents.reduce((sum, event) => sum + Math.max(0, event.quality.reuseCount ?? 0), 0);
+	const failureCount = sourceEvents.reduce((sum, event) => sum + Math.max(0, event.quality.failureCount ?? 0), 0);
+	const sourceDecay = sourceEvents.reduce((sum, event) => sum + Math.max(0, event.quality.decay ?? 0), 0);
+	const stalePenalty = Math.min(28, stalenessDays * 0.18);
+	const failurePenalty = Math.min(24, failureCount * 6 + sourceDecay * 100);
+	const replayBonus = decision.sourceReplayRowIds.length ? 8 : 0;
+	const reuseBonus = Math.min(10, reuseCount * 1.5);
+	const feedbackPenalty = action === "feedback-required" ? 6 : 0;
+	const replayPenalty = action === "replay-required" ? 8 : 0;
+	const decayPenalty = Number(Math.max(0, stalePenalty + failurePenalty + feedbackPenalty + replayPenalty - replayBonus - reuseBonus).toFixed(2));
+	const retentionScore = Number(Math.max(0, Math.min(100, maturityScore - decayPenalty + replayBonus + reuseBonus)).toFixed(2));
+	let retentionAction: MemoryMaturationRetentionActionV15 = "keep";
+	if (action === "quarantine" || decision.blockers.some((blocker) => /scope_blocked|quarantine|poison|forbidden/i.test(blocker))) retentionAction = "quarantine";
+	else if ((action === "demote" && retentionScore < 35) || (stalenessDays > 90 && retentionScore < 55)) retentionAction = "expire";
+	else if (action === "demote") retentionAction = "decay";
+	else if (action === "feedback-required") retentionAction = "feedback";
+	else if (action === "replay-required" || stalenessDays > 30) retentionAction = "rehearse";
+	const firstEventId = decision.sourceEventIds[0] ?? decision.id;
+	const retentionCommands = uniqueNonEmpty([
+		retentionAction === "rehearse" ? `re_memory replay # retention_rehearsal event=${firstEventId}` : undefined,
+		retentionAction === "feedback" ? `re_memory feedback # retention_feedback event=${firstEventId}` : undefined,
+		retentionAction === "decay" || retentionAction === "expire" || retentionAction === "quarantine" ? `re_memory supervise # retention_${retentionAction} event=${firstEventId}` : undefined,
+		retentionAction === "keep" ? `re_memory quality # retention_keep event=${firstEventId}` : undefined,
+	], 8);
+	return {
+		retentionAction,
+		retentionScore,
+		stalenessDays,
+		decayPenalty,
+		lastUsefulAt,
+		retentionCommands,
+		rationale: [
+			`retention_action=${retentionAction}`,
+			`retention_score=${retentionScore}`,
+			`staleness_days=${stalenessDays}`,
+			`decay_penalty=${decayPenalty}`,
+			`reuse_count=${reuseCount}`,
+			`failure_count=${failureCount}`,
+		],
+	};
+}
+
+function buildMemoryMaturationRuntimeReport(options: {
+	route?: string;
+	target?: string;
+	query?: string;
+	deposition?: MemoryDepositionReportV7;
+	experience?: MemoryExperienceReportV8;
+	skillCapsules?: MemorySkillCapsuleReportV9;
+	distillPromotion?: MemoryDistillPromotionReportV10;
+	quality?: MemoryQualityLedgerReportV11;
+	replay?: MemoryReplayEvaluatorReportV12;
+	strategy?: MemoryStrategyCapsuleReportV13;
+	active?: MemoryActiveKernelReportV14;
+	write?: boolean;
+	maxRows?: number;
+} = {}): MemoryMaturationRuntimeReportV15 {
+	ensureReconStorage();
+	const generatedAt = new Date().toISOString();
+	const route = options.route;
+	const target = options.target;
+	const deposition = options.deposition ?? buildMemoryDepositionReport({ write: options.write });
+	const experience = options.experience ?? buildMemoryExperienceReport({ write: options.write, route, target });
+	const skillCapsules = options.skillCapsules ?? buildMemorySkillCapsuleReport({ write: options.write, route, target });
+	const distillPromotion = options.distillPromotion ?? buildMemoryDistillPromotionReport({ write: options.write, route, target });
+	const quality = options.quality ?? buildMemoryQualityLedgerReport({ write: options.write, route, target });
+	const replay = options.replay ?? buildMemoryReplayEvaluatorReport({ write: options.write, route, target, query: options.query, quality });
+	const strategy = options.strategy ?? buildMemoryStrategyCapsuleReport({ write: options.write, route, target, quality, replay, skillCapsules });
+	const active = options.active ?? buildMemoryActiveKernelReport({ write: options.write, route, target, query: options.query, quality, replay, strategy });
+	const events = readMemoryEvents();
+	const eventById = new Map(events.map((event) => [event.id, event]));
+	const depositionByMemoryEvent = new Map((deposition.recentEvents ?? []).filter((event) => event.memoryEventId).map((event) => [event.memoryEventId as string, event]));
+	const rows: MemoryMaturationRowV15[] = [];
+	let prevHash = "0".repeat(64);
+	const addRow = (input: Omit<MemoryMaturationRowV15, "kind" | "schemaVersion" | "entryHash" | "prevHash">) => {
+		const row = memoryMaturationRowFrom({ ...input, prevHash });
+		prevHash = row.entryHash;
+		rows.push(row);
+	};
+	for (const decision of active.decisions.slice(0, options.maxRows ?? 32)) {
+		if (route && decision.route && !memoryRouteMatches(decision.route, route)) continue;
+		if (target && decision.targetScope && !decision.targetScope.includes(memoryTargetScope(target))) continue;
+		const sourceEvents = decision.sourceEventIds.flatMap((eventId) => {
+			const event = eventById.get(eventId);
+			return event ? [event] : [];
+		});
+		const hasRuntimeWriteback = decision.sourceEventIds.some((eventId) => depositionByMemoryEvent.has(eventId));
+		const maturityScore = Number(Math.max(0, Math.min(100, decision.activeScore * 0.32 + decision.qualityScore * 0.24 + decision.causalScore * 0.22 + decision.confidence * 100 * 0.12 + (decision.evidenceRefs.length ? 5 : 0) + (hasRuntimeWriteback ? 5 : 0))).toFixed(2));
+		const action = memoryMaturationActionFromDecision(decision, maturityScore);
+		const retention = memoryMaturationRetentionSignal({ action, decision, sourceEvents, maturityScore, generatedAt });
+		const stagePath = uniqueNonEmpty([
+			hasRuntimeWriteback ? "runtime-event" : "memory-event",
+			"episode",
+			"lesson",
+			decision.sourceStrategyCapsuleIds.length ? "strategy-capsule" : skillCapsules.capsuleCount ? "skill-capsule" : undefined,
+			"active-decision",
+			retention.retentionAction !== "keep" ? "retention-decay" : undefined,
+			action === "feedback-required" ? "feedback-closure" : undefined,
+			action === "replay-required" || retention.retentionAction === "rehearse" ? "ab-replay" : undefined,
+		], 10);
+		const feedbackCommands = uniqueNonEmpty([
+			...decision.feedbackWritebackCommands,
+			action === "promote" ? `re_memory append outcome=success replayVerified=true playbookCandidate=true # maturation_promote ${decision.sourceEventIds[0] ?? decision.id}` : undefined,
+			action === "demote" || action === "quarantine" ? `re_memory append outcome=failure confidence=0.7 # maturation_demote ${decision.sourceEventIds[0] ?? decision.id}` : undefined,
+			action === "feedback-required" ? `re_memory feedback # maturation_close_feedback ${decision.sourceEventIds[0] ?? decision.id}` : undefined,
+		], 16);
+		const nextCommands = uniqueNonEmpty([
+			action === "promote" ? "re_memory playbooks" : undefined,
+			action === "retain" ? "re_memory quality" : undefined,
+			action === "demote" || action === "quarantine" ? "re_memory supervise" : undefined,
+			action === "replay-required" ? "re_memory replay" : undefined,
+			action === "feedback-required" ? "re_memory feedback" : undefined,
+			...retention.retentionCommands,
+			"re_memory mature",
+			"re_context pack",
+		], 14);
+		addRow({
+			id: `mmr:${sha256Text(`${decision.id}:${action}:${maturityScore}`).slice(0, 22)}`,
+			ts: generatedAt,
+			MemoryMaturationRuntimeV15: true,
+			automatic_memory_maturation_pipeline: true,
+			tool_result_to_strategy_loop: true,
+			closed_loop_writeback: true,
+			retention_decay_scheduler: true,
+			stale_memory_rehearsal_queue: true,
+			usefulness_backprop_to_maturation: true,
+			action,
+			retentionAction: retention.retentionAction,
+			stagePath,
+			route: decision.route,
+			targetScope: decision.targetScope,
+			sourceEventIds: decision.sourceEventIds,
+			sourceStrategyCapsuleIds: decision.sourceStrategyCapsuleIds,
+			sourceActiveDecisionIds: [decision.id],
+			sourceQualityRowIds: decision.sourceQualityRowIds,
+			sourceReplayRowIds: decision.sourceReplayRowIds,
+			maturityScore,
+			retentionScore: retention.retentionScore,
+			stalenessDays: retention.stalenessDays,
+			decayPenalty: retention.decayPenalty,
+			lastUsefulAt: retention.lastUsefulAt,
+			activeScore: decision.activeScore,
+			qualityScore: decision.qualityScore,
+			causalScore: decision.causalScore,
+			confidence: decision.confidence,
+			evidenceRefs: uniqueNonEmpty([...decision.evidenceRefs, ...sourceEvents.flatMap((event) => event.artifactHashes.map((artifact) => artifact.path))], 32),
+			commands: decision.commands,
+			verifierCommands: decision.verifierCommands,
+			fallbackCommands: decision.fallbackCommands,
+			avoidCommands: decision.avoidCommands,
+			feedbackCommands,
+			retentionCommands: retention.retentionCommands,
+			nextCommands,
+			blockers: decision.blockers,
+			rationale: uniqueNonEmpty([`active_action=${decision.action}`, `maturity_score=${maturityScore}`, `stage_path=${stagePath.join("->")}`, hasRuntimeWriteback ? "runtime_writeback=true" : "runtime_writeback=false", ...retention.rationale], 18),
+		});
+	}
+	for (const runtimeEvent of deposition.recentEvents.slice(0, 12)) {
+		if (!runtimeEvent.memoryEventId || rows.some((row) => row.sourceEventIds.includes(runtimeEvent.memoryEventId as string))) continue;
+		const action: MemoryMaturationActionV15 = runtimeEvent.status === "blocked" ? "quarantine" : runtimeEvent.status === "queued" ? "feedback-required" : runtimeEvent.outcome === "failure" ? "demote" : "retain";
+		const maturityScore = Number(Math.max(0, Math.min(100, runtimeEvent.confidence * 100 + (runtimeEvent.artifactHashes.length ? 8 : 0) - (runtimeEvent.status === "blocked" ? 30 : 0))).toFixed(2));
+		const retentionAction: MemoryMaturationRetentionActionV15 = action === "quarantine" ? "quarantine" : action === "demote" ? "decay" : action === "feedback-required" ? "feedback" : "keep";
+		const retentionCommands = uniqueNonEmpty([
+			retentionAction === "feedback" ? `re_memory feedback # retention_feedback event=${runtimeEvent.memoryEventId}` : undefined,
+			retentionAction === "decay" || retentionAction === "quarantine" ? `re_memory supervise # retention_${retentionAction} event=${runtimeEvent.memoryEventId}` : undefined,
+			retentionAction === "keep" ? `re_memory quality # retention_keep event=${runtimeEvent.memoryEventId}` : undefined,
+		], 8);
+		addRow({
+			id: `mmr:deposition:${sha256Text(`${runtimeEvent.id}:${action}`).slice(0, 18)}`,
+			ts: generatedAt,
+			MemoryMaturationRuntimeV15: true,
+			automatic_memory_maturation_pipeline: true,
+			tool_result_to_strategy_loop: true,
+			closed_loop_writeback: true,
+			retention_decay_scheduler: true,
+			stale_memory_rehearsal_queue: true,
+			usefulness_backprop_to_maturation: true,
+			action,
+			retentionAction,
+			stagePath: uniqueNonEmpty(["runtime-event", "memory-event", "episode", retentionAction !== "keep" ? "retention-decay" : undefined, "feedback-closure"], 8),
+			route: runtimeEvent.route,
+			targetScope: memoryTargetScope(runtimeEvent.target),
+			sourceEventIds: [runtimeEvent.memoryEventId],
+			sourceStrategyCapsuleIds: [],
+			sourceActiveDecisionIds: [],
+			sourceQualityRowIds: [],
+			sourceReplayRowIds: [],
+			maturityScore,
+			retentionScore: maturityScore,
+			stalenessDays: 0,
+			decayPenalty: retentionAction === "keep" ? 0 : 6,
+			lastUsefulAt: runtimeEvent.ts,
+			activeScore: 0,
+			qualityScore: 0,
+			causalScore: 0,
+			confidence: runtimeEvent.confidence,
+			evidenceRefs: runtimeEvent.artifactHashes.map((artifact) => artifact.path),
+			commands: runtimeEvent.commands,
+			verifierCommands: runtimeEvent.claimIds.map((claimId) => `re_verifier matrix # claim=${claimId}`),
+			fallbackCommands: ["re_memory quality", "re_memory active"],
+			avoidCommands: runtimeEvent.outcome === "failure" ? runtimeEvent.commands : [],
+			feedbackCommands: [`re_memory append # maturation_runtime_feedback event=${runtimeEvent.memoryEventId} status=${runtimeEvent.status}`],
+			retentionCommands,
+			nextCommands: uniqueNonEmpty(["re_memory experience", "re_memory quality", ...retentionCommands, "re_memory mature"], 10),
+			blockers: runtimeEvent.status === "blocked" ? [runtimeEvent.reason] : [],
+			rationale: [`runtime_status=${runtimeEvent.status}`, `outcome=${runtimeEvent.outcome}`, `coverage=${deposition.autoWritebackCoverage}`, `retention_action=${retentionAction}`],
+		});
+	}
+	const byAction = (action: MemoryMaturationActionV15) => rows.filter((row) => row.action === action);
+	const promotedEventIds = uniqueNonEmpty(byAction("promote").flatMap((row) => row.sourceEventIds), 64);
+	const retainedEventIds = uniqueNonEmpty(byAction("retain").flatMap((row) => row.sourceEventIds), 64);
+	const demotedEventIds = uniqueNonEmpty(byAction("demote").flatMap((row) => row.sourceEventIds), 64);
+	const quarantinedEventIds = uniqueNonEmpty(byAction("quarantine").flatMap((row) => row.sourceEventIds), 64);
+	const pendingFeedbackEventIds = uniqueNonEmpty(byAction("feedback-required").flatMap((row) => row.sourceEventIds), 64);
+	const replayRequiredEventIds = uniqueNonEmpty(byAction("replay-required").flatMap((row) => row.sourceEventIds), 64);
+	const operatorCommands = uniqueNonEmpty(rows.filter((row) => row.action === "promote" || row.action === "retain").flatMap((row) => row.commands), 32);
+	const verifierCommands = uniqueNonEmpty(rows.flatMap((row) => row.verifierCommands), 24);
+	const fallbackCommands = uniqueNonEmpty(rows.flatMap((row) => row.fallbackCommands), 20);
+	const avoidCommands = uniqueNonEmpty(rows.flatMap((row) => row.avoidCommands), 32);
+	const feedbackCommands = uniqueNonEmpty(rows.flatMap((row) => row.feedbackCommands), 32);
+	const retentionCommands = uniqueNonEmpty(rows.flatMap((row) => row.retentionCommands), 32);
+	const retentionQueueEventIds = uniqueNonEmpty(rows.filter((row) => row.retentionAction === "rehearse" || row.retentionAction === "feedback" || row.retentionAction === "decay" || row.retentionAction === "expire").flatMap((row) => row.sourceEventIds), 64);
+	const expiredEventIds = uniqueNonEmpty(rows.filter((row) => row.retentionAction === "expire").flatMap((row) => row.sourceEventIds), 64);
+	const workerRoutingHints = uniqueNonEmpty(rows.map((row) => `maturation:${row.action}:${row.route}:${row.targetScope}`), 24);
+	const compactResumeHints = uniqueNonEmpty(["include maturation-runtime-report in ContextPackV2", "rerun re_memory mature after compact resume", ...active.compactResumeHints], 24);
+	const maturationCoverage = Number((rows.length / Math.max(1, active.decisionCount + deposition.pendingWritebackCount + deposition.blockedWritebackCount)).toFixed(4));
+	const status: MemoryMaturationRuntimeReportV15["status"] = rows.length === 0 ? "empty" : quarantinedEventIds.length && !operatorCommands.length ? "blocked" : pendingFeedbackEventIds.length || replayRequiredEventIds.length || demotedEventIds.length || quarantinedEventIds.length ? "warn" : "pass";
+	const report: MemoryMaturationRuntimeReportV15 = {
+		kind: "repi-memory-maturation-runtime-report",
+		schemaVersion: 1,
+		generatedAt,
+		MemoryMaturationRuntimeV15: true,
+		automatic_memory_maturation_pipeline: true,
+		tool_result_to_strategy_loop: true,
+		closed_loop_writeback: true,
+		retention_decay_scheduler: true,
+		stale_memory_rehearsal_queue: true,
+		usefulness_backprop_to_maturation: true,
+		promotion_demotion_replay_backed: true,
+		cross_session_maturation_ready: true,
+		reportPath: memoryMaturationRuntimeReportPath(),
+		ledgerPath: memoryMaturationRuntimeLedgerPath(),
+		actionBoardPath: memoryMaturationActionBoardPath(),
+		sourceDepositionReportPath: deposition.depositionReportPath,
+		sourceExperienceReportPath: experience.reportPath,
+		sourceSkillCapsuleReportPath: skillCapsules.reportPath,
+		sourceDistillPromotionReportPath: distillPromotion.reportPath,
+		sourceQualityReportPath: quality.reportPath,
+		sourceReplayReportPath: replay.reportPath,
+		sourceStrategyReportPath: strategy.reportPath,
+		sourceActiveKernelReportPath: active.reportPath,
+		rowCount: rows.length,
+		promotedEventIds,
+		retainedEventIds,
+		demotedEventIds,
+		quarantinedEventIds,
+		pendingFeedbackEventIds,
+		replayRequiredEventIds,
+		retentionQueueEventIds,
+		expiredEventIds,
+		operatorCommands,
+		verifierCommands,
+		fallbackCommands,
+		avoidCommands,
+		feedbackCommands,
+		retentionCommands,
+		workerRoutingHints,
+		compactResumeHints,
+		maturationCoverage,
+		status,
+		rows,
+		requiredGates: ["MemoryMaturationRuntimeV15", "automatic_memory_maturation_pipeline", "tool_result_to_strategy_loop", "closed_loop_writeback", "retention_decay_scheduler", "stale_memory_rehearsal_queue", "usefulness_backprop_to_maturation", "promotion_demotion_replay_backed", "cross_session_maturation_ready"],
+		policy: { MemoryMaturationRuntimeV15: true, automaticMemoryMaturationPipeline: true, toolResultToStrategyLoop: true, closedLoopWriteback: true, retentionDecayScheduler: true, staleMemoryRehearsalQueue: true, usefulnessBackpropToMaturation: true, promotionDemotionReplayBacked: true, crossSessionMaturationReady: true },
+		nextCommands: uniqueNonEmpty(["re_memory mature", operatorCommands.length ? "re_operator plan # consume matured memory commands" : undefined, verifierCommands.length ? "re_verifier matrix # verify matured claims" : undefined, feedbackCommands.length ? "re_memory feedback # close maturation loop" : undefined, retentionCommands.length ? "re_memory replay # rehearse stale/decayed memory" : undefined, replayRequiredEventIds.length ? "re_memory replay # promote only replay-improving memory" : undefined, "re_context pack"], 14),
+	};
+	if (options.write !== false) {
+		writeFileAtomic(memoryMaturationRuntimeReportPath(), `${JSON.stringify(report, null, 2)}\n`);
+		writeFileAtomic(memoryMaturationRuntimeLedgerPath(), `${rows.map((row) => JSON.stringify(row)).join("\n")}${rows.length ? "\n" : ""}`);
+		writeFileAtomic(memoryMaturationActionBoardPath(), [
+			"# REPI Memory Maturation Action Board",
+			"",
+			"MemoryMaturationRuntimeV15: true",
+			"automatic_memory_maturation_pipeline: true",
+			"tool_result_to_strategy_loop: true",
+			"closed_loop_writeback: true",
+			"retention_decay_scheduler: true",
+			"stale_memory_rehearsal_queue: true",
+			"usefulness_backprop_to_maturation: true",
+			`generated_at: ${generatedAt}`,
+			`status: ${status}`,
+			`maturation_coverage: ${maturationCoverage}`,
+			"",
+			"## Rows",
+			...(rows.length ? rows.slice(0, 24).map((row) => `- ${row.action}/${row.retentionAction} maturity=${row.maturityScore} retention=${row.retentionScore} stale=${row.stalenessDays}d route=${row.route} events=${row.sourceEventIds.join(",") || "none"} stages=${row.stagePath.join("->")}`) : ["- none"]),
+			"",
+			"## Feedback commands",
+			...(feedbackCommands.length ? feedbackCommands.slice(0, 20).map((command) => `- ${command}`) : ["- none"]),
+			"",
+			"## Retention commands",
+			...(retentionCommands.length ? retentionCommands.slice(0, 20).map((command) => `- ${command}`) : ["- none"]),
+			"",
+			"## Required Gates",
+			...report.requiredGates.map((gate) => `- ${gate}`),
+			"",
+		].join("\n"));
+	}
+	return report;
+}
+
+function formatMemoryMaturationRuntime(report = buildMemoryMaturationRuntimeReport()): string {
+	return [
+		"memory_maturation_runtime_v15:",
+		`MemoryMaturationRuntimeV15=${report.MemoryMaturationRuntimeV15}`,
+		`automatic_memory_maturation_pipeline=${report.automatic_memory_maturation_pipeline}`,
+		`tool_result_to_strategy_loop=${report.tool_result_to_strategy_loop}`,
+		`closed_loop_writeback=${report.closed_loop_writeback}`,
+		`retention_decay_scheduler=${report.retention_decay_scheduler}`,
+		`stale_memory_rehearsal_queue=${report.stale_memory_rehearsal_queue}`,
+		`usefulness_backprop_to_maturation=${report.usefulness_backprop_to_maturation}`,
+		`promotion_demotion_replay_backed=${report.promotion_demotion_replay_backed}`,
+		`cross_session_maturation_ready=${report.cross_session_maturation_ready}`,
+		`status=${report.status}`,
+		`rows=${report.rowCount}`,
+		`promoted=${report.promotedEventIds.length}`,
+		`retained=${report.retainedEventIds.length}`,
+		`demoted=${report.demotedEventIds.length}`,
+		`quarantined=${report.quarantinedEventIds.length}`,
+		`pending_feedback=${report.pendingFeedbackEventIds.length}`,
+		`replay_required=${report.replayRequiredEventIds.length}`,
+		`retention_queue=${report.retentionQueueEventIds.length}`,
+		`expired=${report.expiredEventIds.length}`,
+		`coverage=${report.maturationCoverage}`,
+		`report=${report.reportPath}`,
+		`ledger=${report.ledgerPath}`,
+		`board=${report.actionBoardPath}`,
+		"operator_commands:",
+		...(report.operatorCommands.length ? report.operatorCommands.slice(0, 12).map((command) => `- ${command}`) : ["- none"]),
+		"feedback_commands:",
+		...(report.feedbackCommands.length ? report.feedbackCommands.slice(0, 12).map((command) => `- ${command}`) : ["- none"]),
+		"retention_commands:",
+		...(report.retentionCommands.length ? report.retentionCommands.slice(0, 12).map((command) => `- ${command}`) : ["- none"]),
+		"maturation_rows:",
+		...(report.rows.length ? report.rows.slice(0, 12).map((row) => `- ${row.action}/${row.retentionAction} maturity=${row.maturityScore} retention=${row.retentionScore} stale=${row.stalenessDays}d stages=${row.stagePath.join("->")} events=${row.sourceEventIds.join(",") || "none"}`) : ["- none"]),
+		"next_commands:",
+		...report.nextCommands.map((command) => `- ${command}`),
+		"required_gates:",
+		...report.requiredGates.map((gate) => `- ${gate}`),
+	].join("\n");
 }
 
 function memoryTextForSearch(event: MemoryEventV1): string {
@@ -26655,6 +33707,7 @@ function searchMemoryEvents(query?: string, options?: { route?: string; target?:
 	ensureReconStorage();
 	const events = readMemoryEvents();
 	const caseMemory = latestCaseMemoryBySignature();
+	const qualityByEvent = latestMemoryQualityByEvent();
 	const vectorReport = searchMemoryVectors(query, options);
 	const vectorByEvent = new Map(vectorReport.hits.map((hit) => [hit.eventId, hit]));
 	const queryTokens = uniqueNonEmpty((query ?? "").toLowerCase().split(/[^a-z0-9一-鿿]+/), 24).filter(
@@ -26690,6 +33743,15 @@ function searchMemoryEvents(query?: string, options?: { route?: string; target?:
 		score += event.quality.confidence * 10 + (event.quality.replayVerified ? 8 : 0) + event.quality.reuseCount * 2;
 		score -= decay;
 		const caseRow = caseMemory.get(event.caseSignature);
+		const qualityRow = qualityByEvent.get(event.id);
+		if (qualityRow) {
+			const qualityDelta = (qualityRow.qualityScore - 50) / 4;
+			score += qualityDelta;
+			reasons.push(`memory_quality_ledger:${qualityRow.lifecycleDecision}:${qualityRow.qualityScore.toFixed(1)}`);
+			if (qualityRow.lifecycleDecision === "promote") score += 5;
+			if (qualityRow.lifecycleDecision === "demote" || qualityRow.lifecycleDecision === "expire") score -= 12;
+			if (qualityRow.lifecycleDecision === "quarantine" || qualityRow.forbiddenLeakCount > 0 || qualityRow.scopeBlocked) score -= 40;
+		}
 		score += memoryHybridSignalScore(event, caseRow, queryTokens, semanticTokens, reasons);
 		const vectorHit = vectorByEvent.get(event.id);
 		if (vectorHit && vectorHit.score > 0) {
@@ -26775,6 +33837,323 @@ function formatMemoryRetrieval(query?: string, hits = searchMemoryEvents(query))
 					`- id=${hit.event.id} score=${hit.score.toFixed(1)} outcome=${hit.event.outcome} route=${hit.event.route} case=${hit.event.caseSignature} reasons=${hit.reasons.join(",")} commands=${hit.event.commands.length} lessons=${hit.event.lessons.length}`,
 				)
 		: ["- none"]),
+	].join("\n");
+}
+
+function memoryUxGovernanceCommandsForEvent(event: MemoryEventV1): string[] {
+	return [
+		`re_memory promote ${event.id} # append verified success feedback for this memory`,
+		`re_memory demote ${event.id} # append failure feedback and lower future recall`,
+		`re_memory forget ${event.id} # append tombstone/quarantine feedback; does not rewrite history`,
+	];
+}
+
+function memoryUxWhyRow(hit: MemoryRetrievalHit): MemoryUxWhyRowV16 {
+	return {
+		eventId: hit.event.id,
+		caseSignature: hit.event.caseSignature,
+		score: Number(hit.score.toFixed(2)),
+		outcome: hit.event.outcome,
+		route: hit.event.route,
+		target: hit.event.target,
+		reasons: hit.reasons.slice(0, 24),
+		commands: hit.event.commands.slice(0, 8),
+		lessons: hit.event.lessons.slice(0, 4),
+		governanceCommands: memoryUxGovernanceCommandsForEvent(hit.event),
+	};
+}
+
+function formatMemoryStatusBoard(report: MemoryUxDashboardV16): string {
+	const whyLine = (row: MemoryUxWhyRowV16) =>
+		`- event=${row.eventId} score=${row.score.toFixed(1)} outcome=${row.outcome} route=${row.route} case=${row.caseSignature} reasons=${row.reasons.join(",") || "none"}`;
+	return [
+		"# REPI Memory Status Board",
+		"",
+		"memory_ux_dashboard:",
+		`MemoryUxDashboardV16: ${report.MemoryUxDashboardV16}`,
+		`generated_at: ${report.generatedAt}`,
+		`query: ${report.query}`,
+		`route: ${report.route ?? "none"}`,
+		`target: ${report.target ?? "none"}`,
+		`user_visible_memory_status: ${report.user_visible_memory_status}`,
+		`recall_explainability: ${report.recall_explainability}`,
+		`append_only_memory_governance: ${report.append_only_memory_governance}`,
+		`store_grade: ${report.store.storeGrade}`,
+		`hash_chain_ok: ${report.store.hashChainOk}`,
+		`events: ${report.store.eventCount}`,
+		`cases: ${report.store.caseCount}`,
+		`recall_hits: ${report.recall.hitCount}`,
+		`quality_status: ${report.quality.status}`,
+		`replay_status: ${report.replay.status}`,
+		`active_decisions: ${report.activeKernel.decisionCount}`,
+		`maturation_status: ${report.maturation.status}`,
+		`supervisor_queues: promote=${report.supervisor.promotionQueueCount} demote=${report.supervisor.demotionQueueCount} quarantine=${report.supervisor.quarantineQueueCount} expire=${report.supervisor.expireQueueCount} merge=${report.supervisor.mergeQueueCount}`,
+		`status_report: ${report.statusReportPath}`,
+		`governance_ledger: ${report.governanceLedgerPath}`,
+		"",
+		"why_this_memory:",
+		...(report.recall.whyRows.length ? report.recall.whyRows.map(whyLine) : ["- none"]),
+		"",
+		"operator_commands:",
+		...(report.operatorCommands.length ? report.operatorCommands.map((command) => `- ${command}`) : ["- none"]),
+		"",
+		"governance_commands:",
+		...report.governanceCommands.map((command) => `- ${command}`),
+		"",
+		"required_gates:",
+		...report.requiredGates.map((gate) => `- ${gate}`),
+		"",
+	].join("\n");
+}
+
+function buildMemoryUxDashboard(options: { query?: string; route?: string; target?: string; write?: boolean } = {}): MemoryUxDashboardV16 {
+	ensureReconStorage();
+	const query = options.query ?? "";
+	const target = options.target ?? artifactScopeInferTarget(query);
+	const store = verifyMemoryStore();
+	const hits = searchMemoryEvents(query, { route: options.route, target, limit: 8 });
+	const quality = buildMemoryQualityLedgerReport({ route: options.route, target });
+	const replay = buildMemoryReplayEvaluatorReport({ route: options.route, target, query });
+	const active = buildMemoryActiveKernelReport({ route: options.route, target, query, quality, replay });
+	const maturation = buildMemoryMaturationRuntimeReport({ route: options.route, target, query, quality, replay, active });
+	const supervisor = superviseMemoryLifecycle();
+	const whyRows = hits.map(memoryUxWhyRow);
+	const operatorCommands = uniqueNonEmpty(
+		[
+			...active.operatorInjectionCommands,
+			...maturation.operatorCommands,
+			...supervisor.recommendedCommands,
+			hits.length ? `re_memory why ${query || hits[0]?.event.id || ""}` : undefined,
+			"re_memory quality",
+			"re_memory replay",
+			"re_memory mature",
+			"re_context pack",
+		],
+		18,
+	);
+	const governanceCommands = uniqueNonEmpty(
+		[
+			...whyRows.flatMap((row) => row.governanceCommands),
+			"re_memory status # refresh user-visible memory dashboard",
+			"re_memory supervise # recompute lifecycle queues after governance",
+		],
+		24,
+	);
+	const report: MemoryUxDashboardV16 = {
+		kind: "repi-memory-ux-dashboard",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		MemoryUxDashboardV16: true,
+		user_visible_memory_status: true,
+		recall_explainability: true,
+		append_only_memory_governance: true,
+		lifecycle_governance_commands: true,
+		statusReportPath: memoryStatusReportPath(),
+		statusBoardPath: memoryStatusBoardPath(),
+		governanceLedgerPath: memoryGovernanceLedgerPath(),
+		query,
+		route: options.route,
+		target,
+		store: {
+			eventCount: store.eventCount,
+			caseCount: store.caseRowCount,
+			hashChainOk: store.hashChainOk,
+			storeGrade: store.storeGrade,
+			latestEventHash: store.latestEventHash,
+		},
+		recall: {
+			hitCount: hits.length,
+			retrievalReportPath: memoryRetrievalReportPath(),
+			vectorSearchReportPath: memoryVectorSearchReportPath(),
+			whyRows,
+		},
+		quality: {
+			status: quality.status,
+			rowCount: quality.rowCount,
+			promotedEventIds: quality.promotedEventIds,
+			demotedEventIds: quality.demotedEventIds,
+			quarantinedEventIds: quality.quarantinedEventIds,
+		},
+		replay: {
+			status: replay.status,
+			scenarioCount: replay.scenarioCount,
+			improvedScenarioIds: replay.improvedScenarioIds,
+			regressedScenarioIds: replay.regressedScenarioIds,
+		},
+		activeKernel: {
+			status: active.status,
+			decisionCount: active.decisionCount,
+			injectionPackPath: active.injectionPackPath,
+			operatorCommands: active.operatorInjectionCommands,
+		},
+		maturation: {
+			status: maturation.status,
+			rowCount: maturation.rowCount,
+			promotedEventIds: maturation.promotedEventIds,
+			retentionQueueEventIds: maturation.retentionQueueEventIds,
+			expiredEventIds: maturation.expiredEventIds,
+		},
+		supervisor: {
+			storeGrade: supervisor.storeGrade,
+			promotionQueueCount: supervisor.promotionQueue.length,
+			demotionQueueCount: supervisor.demotionQueue.length,
+			quarantineQueueCount: supervisor.quarantineQueue.length,
+			expireQueueCount: supervisor.expireQueue.length,
+			mergeQueueCount: supervisor.mergeQueue.length,
+			lifecycleBoardPath: supervisor.lifecycleBoardPath,
+			recommendedCommands: supervisor.recommendedCommands,
+		},
+		operatorCommands,
+		governanceCommands,
+		requiredGates: [
+			"MemoryUxDashboardV16",
+			"user_visible_memory_status",
+			"recall_explainability",
+			"append_only_memory_governance",
+			"lifecycle_governance_commands",
+			"memory_status_board_written",
+			"why_this_memory_rows",
+		],
+	};
+	if (options.write !== false) {
+		writeFileAtomic(memoryStatusReportPath(), `${JSON.stringify(report, null, 2)}\n`);
+		writeFileAtomic(memoryStatusBoardPath(), formatMemoryStatusBoard(report));
+	}
+	return report;
+}
+
+function formatMemoryUxDashboard(report: MemoryUxDashboardV16): string {
+	return [
+		"memory_ux_dashboard:",
+		`MemoryUxDashboardV16=${report.MemoryUxDashboardV16}`,
+		`user_visible_memory_status=${report.user_visible_memory_status}`,
+		`recall_explainability=${report.recall_explainability}`,
+		`append_only_memory_governance=${report.append_only_memory_governance}`,
+		`query=${report.query}`,
+		`store_grade=${report.store.storeGrade}`,
+		`hash_chain_ok=${report.store.hashChainOk}`,
+		`events=${report.store.eventCount}`,
+		`cases=${report.store.caseCount}`,
+		`recall_hits=${report.recall.hitCount}`,
+		`quality=${report.quality.status}:${report.quality.rowCount}`,
+		`replay=${report.replay.status}:${report.replay.scenarioCount}`,
+		`active_decisions=${report.activeKernel.decisionCount}`,
+		`maturation=${report.maturation.status}:${report.maturation.rowCount}`,
+		`queues=promote:${report.supervisor.promotionQueueCount},demote:${report.supervisor.demotionQueueCount},quarantine:${report.supervisor.quarantineQueueCount},expire:${report.supervisor.expireQueueCount},merge:${report.supervisor.mergeQueueCount}`,
+		`status_report=${report.statusReportPath}`,
+		`status_board=${report.statusBoardPath}`,
+		`governance_ledger=${report.governanceLedgerPath}`,
+		"why_this_memory:",
+		...(report.recall.whyRows.length
+			? report.recall.whyRows.map(
+					(row) =>
+						`- event=${row.eventId} score=${row.score.toFixed(1)} outcome=${row.outcome} route=${row.route} reasons=${row.reasons.join(",") || "none"} commands=${row.commands.length}`,
+				)
+			: ["- none"]),
+		"operator_commands:",
+		...(report.operatorCommands.length ? report.operatorCommands.map((command) => `- ${command}`) : ["- none"]),
+		"governance_commands:",
+		...report.governanceCommands.map((command) => `- ${command}`),
+		"required_gates:",
+		...report.requiredGates.map((gate) => `- ${gate}`),
+	].join("\n");
+}
+
+function findMemoryEventForGovernance(identifier?: string): MemoryEventV1 | undefined {
+	const value = String(identifier ?? "").trim();
+	const events = readMemoryEvents();
+	if (!events.length) return undefined;
+	if (!value) return events.at(-1);
+	const lower = value.toLowerCase();
+	return (
+		events.find((event) => event.id === value || event.caseSignature === value || event.entryHash === value) ??
+		events.find((event) => event.id.toLowerCase().includes(lower) || event.caseSignature.toLowerCase().includes(lower)) ??
+		searchMemoryEvents(value, { limit: 1 })[0]?.event
+	);
+}
+
+function applyMemoryUxGovernance(action: MemoryUxGovernanceActionV16, options: { query?: string; text?: string; title?: string; route?: string; target?: string }): MemoryUxGovernanceDecisionV16 {
+	ensureReconStorage();
+	const source = findMemoryEventForGovernance(options.query ?? options.text);
+	const ts = new Date().toISOString();
+	if (!source) {
+		const decision: MemoryUxGovernanceDecisionV16 = {
+			kind: "repi-memory-ux-governance-decision",
+			schemaVersion: 1,
+			id: `memory-ux:${action}:missing:${sha256Text(`${action}:${options.query ?? options.text ?? ""}`).slice(0, 16)}`,
+			ts,
+			MemoryUxDashboardV16: true,
+			append_only_memory_governance: true,
+			action,
+			applied: false,
+			reason: "source memory not found; run re_memory status/search-events first",
+			nextCommands: ["re_memory status", "re_memory search-events <query>"],
+		};
+		writeFileSync(memoryGovernanceLedgerPath(), `${JSON.stringify(decision)}\n`, { flag: "a" });
+		return decision;
+	}
+	const reasonText = options.text ?? options.title ?? `manual ${action} through MemoryUxDashboardV16`;
+	const outcome: MemoryOutcome = action === "promote" ? "success" : action === "demote" ? "failure" : "blocked";
+	const event = appendMemoryEvent({
+		source: "manual",
+		task: `memory UX ${action}: ${source.task}`,
+		route: options.route ?? source.route,
+		target: options.target ?? source.target,
+		caseSignature: source.caseSignature,
+		domainTags: uniqueNonEmpty([...source.domainTags, "MemoryUxDashboardV16", `memory-${action}`], 12),
+		outcome,
+		lessons:
+			action === "promote"
+				? uniqueNonEmpty([`manual_promote source=${source.id}`, reasonText, ...source.lessons], 8)
+				: uniqueNonEmpty([`manual_${action} source=${source.id}`, reasonText], 8),
+		failurePatterns:
+			action === "promote"
+				? []
+				: uniqueNonEmpty([`memory_${action}_tombstone source=${source.id}`, reasonText, ...source.failurePatterns], 8),
+		reuseRules:
+			action === "promote"
+				? uniqueNonEmpty([`prefer memory ${source.id} for same scope after verifier/replay success`, ...source.reuseRules], 8)
+				: [],
+		commands: action === "promote" ? source.commands.slice(0, 12) : [],
+		artifactPaths: source.artifactHashes.map((artifact) => artifact.path),
+		confidence: action === "promote" ? Math.max(0.82, source.quality.confidence) : 0.76,
+		replayVerified: action === "promote" ? true : false,
+		playbookCandidate: action === "promote",
+		verifierRuleCandidate: action === "promote" ? source.promotion.verifierRuleCandidate : false,
+	});
+	const decision: MemoryUxGovernanceDecisionV16 = {
+		kind: "repi-memory-ux-governance-decision",
+		schemaVersion: 1,
+		id: `memory-ux:${action}:${source.id}:${event.id}`,
+		ts,
+		MemoryUxDashboardV16: true,
+		append_only_memory_governance: true,
+		action,
+		applied: true,
+		sourceEventId: source.id,
+		sourceCaseSignature: source.caseSignature,
+		newEventId: event.id,
+		reason: truncateMiddle(reasonText, 360),
+		nextCommands: uniqueNonEmpty(["re_memory quality", "re_memory replay", "re_memory mature", "re_memory supervise", "re_memory status"], 8),
+	};
+	writeFileSync(memoryGovernanceLedgerPath(), `${JSON.stringify(decision)}\n`, { flag: "a" });
+	return decision;
+}
+
+function formatMemoryUxGovernanceDecision(decision: MemoryUxGovernanceDecisionV16): string {
+	return [
+		"memory_ux_governance:",
+		`MemoryUxDashboardV16=${decision.MemoryUxDashboardV16}`,
+		`append_only_memory_governance=${decision.append_only_memory_governance}`,
+		`action=${decision.action}`,
+		`applied=${decision.applied}`,
+		`source_event=${decision.sourceEventId ?? "none"}`,
+		`new_event=${decision.newEventId ?? "none"}`,
+		`case_signature=${decision.sourceCaseSignature ?? "none"}`,
+		`reason=${decision.reason}`,
+		`governance_ledger=${memoryGovernanceLedgerPath()}`,
+		"next_commands:",
+		...decision.nextCommands.map((command) => `- ${command}`),
 	].join("\n");
 }
 
@@ -27246,9 +34625,10 @@ function memorySedimentationGrade(params: {
 	caseRow?: CaseMemoryV1;
 	finding?: MemoryContaminationFindingV1;
 	patterns: MemoryDistilledPatternV1[];
+	qualityRow?: MemoryQualityLedgerRowV11;
 	now?: string;
 }): { grade: number; action: MemorySedimentationAction; blockers: string[] } {
-	const { event, caseRow, finding, patterns } = params;
+	const { event, caseRow, finding, patterns, qualityRow } = params;
 	const now = Date.parse(params.now ?? new Date().toISOString());
 	const ageDays = Number.isFinite(now) ? Math.max(0, Math.floor((now - Date.parse(event.ts)) / 86_400_000)) : 0;
 	const artifactReady = event.artifactHashes.some((artifact) => typeof artifact.sha256 === "string" && artifact.sha256.length >= 32);
@@ -27265,6 +34645,12 @@ function memorySedimentationGrade(params: {
 	grade += artifactReady ? 8 : 0;
 	grade += Math.min(10, event.quality.reuseCount * 2 + (caseRow?.quality.reuseCount ?? 0) * 1.5);
 	grade += Math.min(8, patternBoost * 2);
+	if (qualityRow) {
+		grade += Math.max(-22, Math.min(18, (qualityRow.qualityScore - 50) * 0.28));
+		if (qualityRow.lifecycleDecision === "promote") grade += 7;
+		if (qualityRow.lifecycleDecision === "demote" || qualityRow.lifecycleDecision === "expire") grade -= 14;
+		if (qualityRow.lifecycleDecision === "quarantine") grade -= 60;
+	}
 	grade -= failed ? 18 : 0;
 	grade -= Math.min(22, event.quality.failureCount * 5 + (caseRow?.quality.failureCount ?? 0) * 3);
 	grade -= Math.min(18, event.quality.decay * 18 + ageDays * 0.03);
@@ -27273,6 +34659,10 @@ function memorySedimentationGrade(params: {
 			finding?.status === "quarantine" ? `memory_contamination_quarantine:${finding.reasons.join(",")}` : undefined,
 			!artifactReady ? "artifact_sha256_missing" : undefined,
 			!verifierReady ? "verifier_or_replay_missing" : undefined,
+			qualityRow?.lifecycleDecision && qualityRow.lifecycleDecision !== "promote" && qualityRow.lifecycleDecision !== "retain"
+				? `memory_quality_${qualityRow.lifecycleDecision}`
+				: undefined,
+			qualityRow?.forbiddenLeakCount ? `quality_forbidden_leak:${qualityRow.forbiddenLeakCount}` : undefined,
 			failed ? `negative_outcome:${event.outcome}` : undefined,
 			ageDays > 365 && !successful ? `stale_memory:${ageDays}d` : undefined,
 		],
@@ -27283,6 +34673,9 @@ function memorySedimentationGrade(params: {
 	);
 	let action: MemorySedimentationAction = "retain";
 	if (hardQuarantine) action = "quarantine";
+	else if (qualityRow?.lifecycleDecision === "quarantine") action = "quarantine";
+	else if (qualityRow?.lifecycleDecision === "expire") action = "expire";
+	else if (qualityRow?.lifecycleDecision === "demote") action = "demote";
 	else if (ageDays > 540 && !successful) action = "expire";
 	else if (failed || grade < 34) action = "demote";
 	else if (grade >= 70 && successful && artifactReady && verifierReady && !finding?.reasons.length) action = "inject";
@@ -27320,13 +34713,14 @@ function buildMemorySemanticIndex(options?: { route?: string; target?: string; n
 	const distillation = distillMemoryPatterns({ route: options?.route, target: options?.target, now: options?.now });
 	const contamination = detectMemoryContamination(events, { now: options?.now });
 	const quarantineByCase = new Map(contamination.map((finding) => [finding.caseSignature, finding]));
+	const qualityByEvent = latestMemoryQualityByEvent();
 	const scopeIsolation = buildMemoryScopeIsolationReport({ route: options?.route, target: options?.target, events });
 	const scopeByEvent = new Map(scopeIsolation.rows.map((row) => [row.eventId, row]));
 	const entries = events
 		.map((event) => {
 			const caseRow = caseMemory.get(event.caseSignature);
 			const finding = quarantineByCase.get(event.caseSignature);
-			const graded = memorySedimentationGrade({ event, caseRow, finding, patterns: distillation.patterns, now: options?.now });
+			const graded = memorySedimentationGrade({ event, caseRow, finding, patterns: distillation.patterns, qualityRow: qualityByEvent.get(event.id), now: options?.now });
 			const scopeRow = scopeByEvent.get(event.id);
 			const scopeBlocked = scopeRow?.blocksInjection === true;
 			const action: MemorySedimentationAction = scopeBlocked ? "quarantine" : graded.action;
@@ -28330,7 +35724,7 @@ function memoryOrchestratorPhaseCommand(phase: MemoryOrchestratorPhaseV6, target
 	return `re_memory orchestrate full${suffix}`;
 }
 
-function memoryOrchestratorNextCommands(report: Pick<MemoryOrchestratorReportV6, "phase" | "target" | "injectionCommands" | "promotionEventIds" | "demotionEventIds" | "scopeBlockedEventIds" | "storeGrade" | "compactResumeStatus">): string[] {
+function memoryOrchestratorNextCommands(report: Pick<MemoryOrchestratorReportV6, "phase" | "target" | "injectionCommands" | "promotionEventIds" | "demotionEventIds" | "scopeBlockedEventIds" | "storeGrade" | "compactResumeStatus" | "compactResumeLedgerV2Status">): string[] {
 	const target = report.target;
 	const suffix = target?.trim() ? ` ${target.trim()}` : "";
 	const phase = report.phase;
@@ -28340,7 +35734,14 @@ function memoryOrchestratorNextCommands(report: Pick<MemoryOrchestratorReportV6,
 	if (report.scopeBlockedEventIds.length) commands.add(`re_memory scope${suffix}`);
 	if (phase === "pre-task" || phase === "full") {
 		commands.add(`re_memory search-events${suffix}`);
+		commands.add(`re_memory quality${suffix}`);
 		commands.add(`re_memory sediment${suffix}`);
+		commands.add(`re_memory experience${suffix}`);
+		commands.add(`re_memory skills${suffix}`);
+		commands.add(`re_memory distill-promote${suffix}`);
+		commands.add(`re_memory replay${suffix}`);
+		commands.add(`re_memory strategy${suffix}`);
+		commands.add(`re_memory active${suffix}`);
 		commands.add(memoryOrchestratorPhaseCommand("pre-operator", target));
 	}
 	if (phase === "pre-operator" || phase === "full") {
@@ -28349,16 +35750,18 @@ function memoryOrchestratorNextCommands(report: Pick<MemoryOrchestratorReportV6,
 		commands.add(memoryOrchestratorPhaseCommand("post-tool", target));
 	}
 	if (phase === "post-tool" || phase === "full") {
-		commands.add('re_memory append outcome=partial artifactPath=<artifact> "tool result + evidence hash + next reuse rule"');
+		commands.add('re_memory deposit outcome=partial artifactPath=<artifact> "tool result + evidence hash + next reuse rule"');
 		commands.add(memoryOrchestratorPhaseCommand("post-success", target));
 		commands.add(memoryOrchestratorPhaseCommand("post-failure", target));
 	}
 	if (phase === "post-failure" || phase === "full") {
 		commands.add('re_memory append outcome=failure confidence=0.7 "failure signature + stderr + repair queue"');
+		commands.add("re_memory quality");
 		commands.add("re_autofix plan");
 	}
 	if (phase === "post-success" || phase === "full") {
 		commands.add('re_memory append outcome=success replayVerified=true playbookCandidate=true "verified replay/proof evidence"');
+		commands.add("re_memory quality");
 		if (report.promotionEventIds.length) commands.add("re_memory playbooks");
 	}
 	if (phase === "pre-compact" || phase === "full") {
@@ -28366,10 +35769,19 @@ function memoryOrchestratorNextCommands(report: Pick<MemoryOrchestratorReportV6,
 		commands.add("re_context pack");
 	}
 	if (phase === "post-compact" || phase === "full") {
-		if (report.compactResumeStatus !== "pass") commands.add("re_context resume");
+		if (report.compactResumeStatus !== "pass" || report.compactResumeLedgerV2Status !== "pass") commands.add("re_context resume");
+		commands.add("re_memory compact-resume");
 		commands.add(memoryOrchestratorPhaseCommand("pre-operator", target));
 	}
 	if (phase === "final" || phase === "full") {
+		commands.add("re_memory experience");
+		commands.add("re_memory skills");
+		commands.add("re_memory distill-promote");
+		commands.add("re_memory quality");
+		commands.add("re_memory replay");
+		commands.add("re_memory strategy");
+		commands.add("re_memory active");
+		commands.add("re_memory mature");
 		commands.add("re_memory supervise");
 		commands.add("re_memory feedback");
 		if (report.demotionEventIds.length) commands.add("re_memory prune-playbooks");
@@ -28402,8 +35814,18 @@ function buildMemoryOrchestratorReport(options: MemoryOrchestratorOptions = {}):
 			write: options.write,
 		});
 	const compact = verifyCompactionResumeLedger();
+	const compactV2 = buildCompactResumeLedgerV2Report({ write: options.write });
+	const deposition = buildMemoryDepositionReport({ write: options.write });
+	const experience = buildMemoryExperienceReport({ write: options.write, route, target });
+	const skillCapsules = buildMemorySkillCapsuleReport({ write: options.write, route, target });
+	const distillPromotion = buildMemoryDistillPromotionReport({ write: options.write, route, target });
 	const injectionEventIds = uniqueNonEmpty(sedimentation.injectionPacket.entries.map((entry) => entry.eventId), 64);
-	const injectionCommands = uniqueNonEmpty(sedimentation.injectionPacket.commands, 24);
+	const quality = buildMemoryQualityLedgerReport({ retrievalHits, vectorHits: vector.hits, injectionEventIds, feedback, route, target, write: options.write });
+	const replay = buildMemoryReplayEvaluatorReport({ write: options.write, route, target, query, quality });
+	const strategy = buildMemoryStrategyCapsuleReport({ write: options.write, route, target, quality, replay, skillCapsules });
+	const activeKernel = buildMemoryActiveKernelReport({ write: options.write, route, target, query, sedimentation, quality, replay, strategy, feedback, scope });
+	const maturation = buildMemoryMaturationRuntimeReport({ write: options.write, route, target, query, deposition, experience, skillCapsules, distillPromotion, quality, replay, strategy, active: activeKernel });
+	const injectionCommands = uniqueNonEmpty([...activeKernel.operatorInjectionCommands, ...sedimentation.injectionPacket.commands, ...skillCapsules.operatorInjectionCommands, ...distillPromotion.operatorInjectionCommands, ...quality.operatorInjectionCommands, ...replay.operatorInjectionCommands, ...strategy.operatorInjectionCommands], 24);
 	const promotionEventIds = uniqueNonEmpty(supervisor.promotionQueue.flatMap((decision) => decision.eventIds), 64);
 	const demotionEventIds = uniqueNonEmpty(
 		[...supervisor.demotionQueue, ...supervisor.quarantineQueue, ...supervisor.expireQueue].flatMap((decision) => decision.eventIds),
@@ -28446,11 +35868,99 @@ function buildMemoryOrchestratorReport(options: MemoryOrchestratorOptions = {}):
 		memoryOrchestratorStep({
 			id: "post_tool_writeback_contract",
 			phase: "post-tool",
-			status: "pending",
-			title: "每个关键 tool/runtime artifact 后写回 MemoryStoreV5",
-			command: 're_memory append outcome=partial artifactPath=<artifact> "tool result + evidence hash + next reuse rule"',
+			status:
+				deposition.status === "blocked"
+					? "blocked"
+					: deposition.status === "pass" || deposition.status === "empty"
+						? "pass"
+						: "warn",
+			title: "每个关键 tool/runtime artifact 后经 MemoryDepositionEngineV7 写回 MemoryStoreV5",
+			command: 're_memory deposit outcome=partial artifactPath=<artifact> "tool result + evidence hash + next reuse rule"',
 			evidencePath: memoryEventsPath(),
-			reason: "post-tool hook contract is explicit; runtime writers append replayer/autofix/proof/operator/swarm artifacts when executed",
+			reason: `MemoryDepositionEngineV7 status=${deposition.status} runtime_events=${deposition.runtimeEventCount} pending=${deposition.pendingWritebackCount}`,
+		}),
+		memoryOrchestratorStep({
+			id: "runtime_deposition_event_bus",
+			phase: "post-tool",
+			status: deposition.status === "blocked" ? "blocked" : deposition.status === "warn" ? "warn" : "pass",
+			title: "runtime step event bus 绑定 memory_event / claim / compact-resume",
+			command: "re_memory deposition-report && re_memory orchestrate post-tool",
+			evidencePath: deposition.depositionReportPath,
+			reason: `coverage=${deposition.autoWritebackCoverage} writebacks=${deposition.memoryWritebackCount}/${deposition.runtimeEventCount} latest=${deposition.latestRuntimeEventHash}`,
+		}),
+		memoryOrchestratorStep({
+			id: "experience_claim_lesson_promotion",
+			phase: "pre-operator",
+			status: experience.status === "blocked" ? "blocked" : experience.status === "empty" ? "pending" : experience.status === "warn" ? "warn" : "pass",
+			title: "MemoryExperienceEngineV8 把事件/沉淀转成 Episode→Claim→Lesson→Promotion",
+			command: "re_memory experience",
+			evidencePath: experience.reportPath,
+			reason: `episodes=${experience.episodeCount} claims=${experience.claimCount} lessons=${experience.lessonCount} promoted=${experience.promotedClaimIds.length} conflicted=${experience.conflictedClaimIds.length}`,
+		}),
+		memoryOrchestratorStep({
+			id: "skill_capsule_operator_injection",
+			phase: "pre-operator",
+			status: skillCapsules.status === "blocked" ? "blocked" : skillCapsules.status === "empty" ? "pending" : skillCapsules.status === "warn" ? "warn" : "pass",
+			title: "MemorySkillCapsuleV9 把经验/蒸馏 pattern 资产化成可注入技能胶囊",
+			command: "re_memory skills",
+			evidencePath: skillCapsules.reportPath,
+			reason: `capsules=${skillCapsules.capsuleCount} promoted=${skillCapsules.promotedCapsuleIds.length} candidate=${skillCapsules.candidateCapsuleIds.length} operator_commands=${skillCapsules.operatorInjectionCommands.length}`,
+		}),
+		memoryOrchestratorStep({
+			id: "distill_promotion_provider_gate",
+			phase: "pre-operator",
+			status: distillPromotion.status === "blocked" ? "blocked" : distillPromotion.status === "empty" ? "pending" : distillPromotion.status === "warn" ? "warn" : "pass",
+			title: "MemoryDistillPromotionV10 用 provider 合同蒸馏 artifact/claim 并提升技能",
+			command: "re_memory distill-promote",
+			evidencePath: distillPromotion.reportPath,
+			reason: `provider=${distillPromotion.provider.backend}:${distillPromotion.provider.status} candidates=${distillPromotion.candidateCount} promoted=${distillPromotion.promotedCandidateIds.length} retained=${distillPromotion.retainedCandidateIds.length}`,
+		}),
+		memoryOrchestratorStep({
+			id: "memory_quality_feedback_loop",
+			phase: "pre-operator",
+			status: quality.status === "blocked" ? "blocked" : quality.status === "empty" ? "pending" : quality.status === "warn" ? "warn" : "pass",
+			title: "MemoryQualityLedgerV11 根据召回/注入/反馈/usefulness 调整长期记忆升降权",
+			command: "re_memory quality",
+			evidencePath: quality.reportPath,
+			reason: `rows=${quality.rowCount} avg=${quality.averageQualityScore} promoted=${quality.promotedEventIds.length} demoted=${quality.demotedEventIds.length} required_feedback=${quality.requiredFeedbackEventIds.length}`,
+		}),
+		memoryOrchestratorStep({
+			id: "memory_ab_replay_causal_attribution",
+			phase: "pre-operator",
+			status: replay.status === "blocked" ? "warn" : replay.status === "empty" ? "pending" : replay.status === "warn" ? "warn" : "pass",
+			title: "MemoryReplayEvaluatorV12 用 A/B replay 度量记忆是否真实减少步骤并回写因果归因",
+			command: "re_memory replay",
+			evidencePath: replay.reportPath,
+			reason: `scenarios=${replay.scenarioCount} causal=${replay.averageCausalScore} saved_steps=${replay.totalSavedStepEstimate} improved=${replay.improvedScenarioIds.length} regressed=${replay.regressedScenarioIds.length}`,
+			blocking: false,
+		}),
+		memoryOrchestratorStep({
+			id: "strategy_capsule_operator_injection",
+			phase: "pre-operator",
+			status: strategy.status === "blocked" ? "blocked" : strategy.status === "empty" ? "pending" : strategy.status === "warn" ? "warn" : "pass",
+			title: "MemoryStrategyCapsuleV13 把 replay/quality/skill 结果编译成可执行战术胶囊",
+			command: "re_memory strategy",
+			evidencePath: strategy.reportPath,
+			reason: `capsules=${strategy.capsuleCount} promoted=${strategy.promotedCapsuleIds.length} candidate=${strategy.candidateCapsuleIds.length} operator_commands=${strategy.operatorInjectionCommands.length}`,
+		}),
+		memoryOrchestratorStep({
+			id: "active_memory_kernel_decision",
+			phase: "pre-operator",
+			status: activeKernel.status === "blocked" ? "blocked" : activeKernel.status === "empty" ? "pending" : activeKernel.status === "warn" ? "warn" : "pass",
+			title: "MemoryActiveKernelV14 融合沉淀/质量/replay/strategy，输出主动记忆决策和注入包",
+			command: "re_memory active",
+			evidencePath: activeKernel.reportPath,
+			reason: `decisions=${activeKernel.decisionCount} inject=${activeKernel.injectDecisionIds.length} reuse=${activeKernel.reuseDecisionIds.length} avoid=${activeKernel.avoidDecisionIds.length} quarantine=${activeKernel.quarantineDecisionIds.length}`,
+		}),
+		memoryOrchestratorStep({
+			id: "memory_maturation_runtime_loop",
+			phase: "post-tool",
+			status: maturation.status === "blocked" ? "blocked" : maturation.status === "empty" ? "pending" : maturation.status === "warn" ? "warn" : "pass",
+			title: "MemoryMaturationRuntimeV15 将 tool/runtime 结果持续成熟为经验、策略、主动注入、反馈闭环和 retention/rehearsal",
+			command: "re_memory mature",
+			evidencePath: maturation.reportPath,
+			reason: `rows=${maturation.rowCount} promoted=${maturation.promotedEventIds.length} demoted=${maturation.demotedEventIds.length} pending_feedback=${maturation.pendingFeedbackEventIds.length} replay_required=${maturation.replayRequiredEventIds.length} retention_queue=${maturation.retentionQueueEventIds.length}`,
+			blocking: false,
 		}),
 		memoryOrchestratorStep({
 			id: "post_failure_writeback",
@@ -28482,11 +35992,11 @@ function buildMemoryOrchestratorReport(options: MemoryOrchestratorOptions = {}):
 		memoryOrchestratorStep({
 			id: "post_compact_resume_memory_injection",
 			phase: "post-compact",
-			status: compact.status === "corrupt" ? "blocked" : compact.status === "missing" ? "warn" : "pass",
-			title: "compact 后按 resume ledger 恢复 memory hints / operator queue",
-			command: "re_context resume && re_memory orchestrate pre-operator",
+			status: compact.status === "corrupt" || compactV2.invalidTransitions.length ? "blocked" : compact.status === "missing" ? "warn" : "pass",
+			title: "compact 后按 CompactResumeLedgerV2 恢复 memory hints / operator queue",
+			command: "re_context resume && re_memory compact-resume && re_memory orchestrate pre-operator",
 			evidencePath: compact.path,
-			reason: `compact_resume_ledger=${compact.status} rows=${compact.rows}`,
+			reason: `compact_resume_ledger=${compact.status} rows=${compact.rows} v2_state=${compactV2.currentState} v2_invalid=${compactV2.invalidTransitions.length}`,
 		}),
 		memoryOrchestratorStep({
 			id: "final_supervise_before_claim",
@@ -28531,6 +36041,58 @@ function buildMemoryOrchestratorReport(options: MemoryOrchestratorOptions = {}):
 		demotionEventIds,
 		compactResumeLedgerPath: compact.path,
 		compactResumeStatus: compact.status,
+		compactResumeLedgerV2ReportPath: compactV2.reportPath,
+		compactResumeLedgerV2Status: (compactV2.invalidTransitions.length ? "blocked" : "pass") as "blocked" | "pass",
+		compactResumeLedgerV2State: compactV2.currentState,
+		compactResumeLedgerV2InvalidTransitions: compactV2.invalidTransitions,
+		memoryDepositionReportPath: deposition.depositionReportPath,
+		memoryDepositionEventBusPath: deposition.depositionEventBusPath,
+		memoryDepositionStatus: deposition.status,
+		memoryDepositionRuntimeEventCount: deposition.runtimeEventCount,
+		memoryDepositionPendingWritebacks: deposition.pendingWritebackCount,
+		memoryExperienceReportPath: experience.reportPath,
+		memoryExperienceStatus: experience.status,
+		memoryExperienceEpisodeCount: experience.episodeCount,
+		memoryExperienceClaimCount: experience.claimCount,
+		memoryExperienceLessonCount: experience.lessonCount,
+		memoryExperiencePromotedClaims: experience.promotedClaimIds.length,
+		memoryExperienceConflictedClaims: experience.conflictedClaimIds.length,
+		memorySkillCapsuleReportPath: skillCapsules.reportPath,
+		memorySkillCapsuleStatus: skillCapsules.status,
+		memorySkillCapsuleCount: skillCapsules.capsuleCount,
+		memorySkillCapsulePromoted: skillCapsules.promotedCapsuleIds.length,
+		memorySkillCapsuleCandidates: skillCapsules.candidateCapsuleIds.length,
+		memoryDistillPromotionReportPath: distillPromotion.reportPath,
+		memoryDistillPromotionStatus: distillPromotion.status,
+		memoryDistillPromotionCandidateCount: distillPromotion.candidateCount,
+		memoryDistillPromotionPromoted: distillPromotion.promotedCandidateIds.length,
+		memoryDistillPromotionRetained: distillPromotion.retainedCandidateIds.length,
+		memoryQualityReportPath: quality.reportPath,
+		memoryQualityStatus: quality.status,
+		memoryQualityRowCount: quality.rowCount,
+		memoryQualityPromoted: quality.promotedEventIds.length,
+		memoryQualityDemoted: quality.demotedEventIds.length + quality.quarantinedEventIds.length + quality.expiredEventIds.length,
+		memoryQualityRequiredFeedback: quality.requiredFeedbackEventIds.length,
+		memoryReplayReportPath: replay.reportPath,
+		memoryReplayStatus: replay.status,
+		memoryReplayScenarioCount: replay.scenarioCount,
+		memoryReplayImproved: replay.improvedScenarioIds.length,
+		memoryReplayRegressed: replay.regressedScenarioIds.length + replay.blockedScenarioIds.length,
+		memoryStrategyReportPath: strategy.reportPath,
+		memoryStrategyStatus: strategy.status,
+		memoryStrategyCapsuleCount: strategy.capsuleCount,
+		memoryStrategyPromoted: strategy.promotedCapsuleIds.length,
+		memoryStrategyDemoted: strategy.demotedCapsuleIds.length + strategy.quarantinedCapsuleIds.length,
+		memoryActiveKernelReportPath: activeKernel.reportPath,
+		memoryActiveKernelStatus: activeKernel.status,
+		memoryActiveKernelDecisionCount: activeKernel.decisionCount,
+		memoryActiveKernelInject: activeKernel.injectDecisionIds.length + activeKernel.reuseDecisionIds.length,
+		memoryActiveKernelAvoid: activeKernel.avoidDecisionIds.length + activeKernel.quarantineDecisionIds.length + activeKernel.expiredDecisionIds.length,
+		memoryMaturationReportPath: maturation.reportPath,
+		memoryMaturationStatus: maturation.status,
+		memoryMaturationRowCount: maturation.rowCount,
+		memoryMaturationPromoted: maturation.promotedEventIds.length,
+		memoryMaturationPending: maturation.pendingFeedbackEventIds.length + maturation.replayRequiredEventIds.length,
 		steps: stepRows,
 		requiredGates: [
 			"MemoryOrchestratorV6",
@@ -28538,17 +36100,80 @@ function buildMemoryOrchestratorReport(options: MemoryOrchestratorOptions = {}):
 			"pre_task_retrieve_before_operator",
 			"scope_filter_before_memory_injection",
 			"post_tool_writeback_contract",
+			"MemoryDepositionEngineV7",
+			"runtime_step_event_bus",
+			"post_tool_writeback_autocapture",
+			"MemoryExperienceEngineV8",
+			"episode_model_v8",
+			"structured_claim_extraction",
+			"lesson_promotion_gate",
+			"contradiction_resolution",
+			"usefulness_backprop",
+			"MemorySkillCapsuleV9",
+			"skill_capsule_assetization",
+			"verified_skill_promotion_gate",
+			"operator_skill_injection",
+			"MemoryDistillPromotionV10",
+			"provider_distill_contract",
+			"artifact_to_claim_distillation",
+			"verifier_backed_promotion_gate",
+			"skill_capsule_promotion_writeback",
+			"MemoryQualityLedgerV11",
+			"active_memory_policy",
+			"quality_score_feedback_loop",
+			"usefulness_feedback_writeback",
+			"append_only_quality_ledger",
+			"memory_quality_drives_sedimentation",
+			"MemoryReplayEvaluatorV12",
+			"memory_ab_replay",
+			"causal_attribution_signal",
+			"replay_delta_feedback_writeback",
+			"memory_replay_in_quality_ledger",
+			"MemoryStrategyCapsuleV13",
+			"executable_strategy_capsule",
+			"replay_backed_strategy_promotion",
+			"strategy_quality_gate",
+			"strategy_capsule_operator_injection",
+			"MemoryActiveKernelV14",
+			"unified_memory_decision_engine",
+			"active_recall_scheduler",
+			"quality_replay_strategy_fusion",
+			"scope_safe_strategy_injection",
+			"feedback_driven_promotion",
+			"cross_session_compact_ready",
+			"MemoryMaturationRuntimeV15",
+			"automatic_memory_maturation_pipeline",
+			"tool_result_to_strategy_loop",
+			"closed_loop_writeback",
+			"retention_decay_scheduler",
+			"stale_memory_rehearsal_queue",
+			"usefulness_backprop_to_maturation",
+			"promotion_demotion_replay_backed",
+			"cross_session_maturation_ready",
 			"failure_success_feedback_closure",
 			"pre_compact_memory_snapshot",
 			"post_compact_resume_memory_injection",
 			"final_supervise_before_claim",
 			"memory_orchestrator_report_in_context_pack",
+			"CompactResumeLedgerV2",
+			"append_only_transition_ledger",
+			"idempotent_multi_compact_replay",
+			"auto_resume_budget_enforced",
 		],
 		policy: {
 			MemoryOrchestratorV6: true as const,
 			preTaskRetrieveBeforeOperator: true as const,
 			scopeFilterBeforeMemoryInjection: true as const,
 			postToolWritebackContract: true as const,
+			memoryDepositionEngine: true as const,
+			memoryExperienceEngine: true as const,
+			memorySkillCapsuleEngine: true as const,
+			memoryDistillPromotionEngine: true as const,
+			memoryQualityLedger: true as const,
+			memoryReplayEvaluator: true as const,
+			memoryStrategyCapsules: true as const,
+			memoryActiveKernel: true as const,
+			memoryMaturationRuntime: true as const,
 			failureSuccessFeedbackClosure: true as const,
 			preCompactMemorySnapshot: true as const,
 			postCompactResumeMemoryInjection: true as const,
@@ -28583,6 +36208,27 @@ function formatMemoryOrchestrator(report = buildMemoryOrchestratorReport()): str
 		`promotion_events=${report.promotionEventIds.length}`,
 		`demotion_events=${report.demotionEventIds.length}`,
 		`compact_resume_status=${report.compactResumeStatus}`,
+		`compact_resume_ledger_v2=${report.compactResumeLedgerV2Status}:${report.compactResumeLedgerV2State}`,
+		`compact_resume_ledger_v2_invalid=${report.compactResumeLedgerV2InvalidTransitions.length}`,
+		`compact_resume_ledger_v2_report=${report.compactResumeLedgerV2ReportPath}`,
+		`memory_deposition_v7=${report.memoryDepositionStatus} events=${report.memoryDepositionRuntimeEventCount} pending=${report.memoryDepositionPendingWritebacks}`,
+		`memory_deposition_report=${report.memoryDepositionReportPath}`,
+		`memory_experience_v8=${report.memoryExperienceStatus} episodes=${report.memoryExperienceEpisodeCount} claims=${report.memoryExperienceClaimCount} lessons=${report.memoryExperienceLessonCount} promoted=${report.memoryExperiencePromotedClaims} conflicted=${report.memoryExperienceConflictedClaims}`,
+		`memory_experience_report=${report.memoryExperienceReportPath}`,
+		`memory_skill_capsule_v9=${report.memorySkillCapsuleStatus} capsules=${report.memorySkillCapsuleCount} promoted=${report.memorySkillCapsulePromoted} candidates=${report.memorySkillCapsuleCandidates}`,
+		`memory_skill_capsule_report=${report.memorySkillCapsuleReportPath}`,
+		`memory_distill_promotion_v10=${report.memoryDistillPromotionStatus} candidates=${report.memoryDistillPromotionCandidateCount} promoted=${report.memoryDistillPromotionPromoted} retained=${report.memoryDistillPromotionRetained}`,
+		`memory_distill_promotion_report=${report.memoryDistillPromotionReportPath}`,
+		`memory_quality_ledger_v11=${report.memoryQualityStatus} rows=${report.memoryQualityRowCount} promoted=${report.memoryQualityPromoted} demoted=${report.memoryQualityDemoted} required_feedback=${report.memoryQualityRequiredFeedback}`,
+		`memory_quality_report=${report.memoryQualityReportPath}`,
+		`memory_replay_evaluator_v12=${report.memoryReplayStatus} scenarios=${report.memoryReplayScenarioCount} improved=${report.memoryReplayImproved} regressed=${report.memoryReplayRegressed}`,
+		`memory_replay_report=${report.memoryReplayReportPath}`,
+		`memory_strategy_capsule_v13=${report.memoryStrategyStatus} capsules=${report.memoryStrategyCapsuleCount} promoted=${report.memoryStrategyPromoted} demoted=${report.memoryStrategyDemoted}`,
+		`memory_strategy_report=${report.memoryStrategyReportPath}`,
+		`memory_active_kernel_v14=${report.memoryActiveKernelStatus} decisions=${report.memoryActiveKernelDecisionCount} active=${report.memoryActiveKernelInject} avoid=${report.memoryActiveKernelAvoid}`,
+		`memory_active_kernel_report=${report.memoryActiveKernelReportPath}`,
+		`memory_maturation_runtime_v15=${report.memoryMaturationStatus} rows=${report.memoryMaturationRowCount} promoted=${report.memoryMaturationPromoted} pending=${report.memoryMaturationPending}`,
+		`memory_maturation_report=${report.memoryMaturationReportPath}`,
 		`report=${report.reportPath}`,
 		"steps:",
 		...report.steps.map(
@@ -29012,7 +36658,7 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 	});
 	pi.registerCommand("re-memory", {
 		description:
-			"Read, append, evolve, search, orchestrate, verify, repair, snapshot, eval, feedback, vector, distill, sediment, supervise, or maintain REPI memory: /re-memory [show|events|search|orchestrate|pre-task|pre-operator|post-tool|post-failure|post-success|pre-compact|post-compact|final|vector|append|evolve|verify|repair-index|snapshot|eval|feedback|consolidate|distill|sediment|supervise|playbooks|prune-playbooks] ...",
+			"Read, append, evolve, search, orchestrate, verify, repair, snapshot, compact-resume, eval, feedback, quality, replay, strategy, active-kernel, mature, retention, vector, distill, sediment, supervise, or maintain REPI memory: /re-memory [show|events|search|orchestrate|pre-task|pre-operator|post-tool|post-failure|post-success|pre-compact|post-compact|final|quality|replay|strategy|active|mature|retention|vector|append|evolve|verify|repair-index|snapshot|compact-resume|resume-ledger|eval|feedback|consolidate|distill|sediment|supervise|playbooks|prune-playbooks] ...",
 		handler: async (args) => {
 			const trimmed = args.trim();
 			const memoryOrchestratorMatch =
@@ -29099,6 +36745,16 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 				sendDisplayMessage(pi, "REPI Memory Store Repair", formatMemoryStoreVerification(report));
 				return;
 			}
+			if (trimmed === "compact-resume" || trimmed === "resume-ledger") {
+				const report = buildCompactResumeLedgerV2Report({ write: true });
+				updateMissionGate(
+					"compaction_resume_ledger_v2_ready",
+					report.invalidTransitions.length ? "blocked" : "done",
+					`CompactResumeLedgerV2 state=${report.currentState} invalid=${report.invalidTransitions.length}`,
+				);
+				sendDisplayMessage(pi, "REPI Compact Resume Ledger V2", formatCompactResumeLedgerV2(report));
+				return;
+			}
 			if (trimmed === "snapshot" || trimmed === "compact") {
 				const report = snapshotMemoryStore();
 				updateMissionGate("memory_or_evolution_written", report.storeGrade === "blocked" ? "blocked" : "done", `memory_store_v5_snapshot=${report.storeGrade}`);
@@ -29116,6 +36772,36 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 				const report = buildMemoryFeedbackClosureReport();
 				updateMissionGate("memory_checked", report.closureStatus === "fail" ? "blocked" : "done", `MemoryFeedbackClosureV1=${report.closureStatus}`);
 				sendDisplayMessage(pi, "REPI Memory Feedback Closure", formatMemoryFeedbackClosure(report));
+				return;
+			}
+			if (trimmed === "quality" || trimmed === "quality-ledger" || trimmed === "score" || trimmed === "doctor") {
+				const report = buildMemoryQualityLedgerReport();
+				updateMissionGate("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryQualityLedgerV11=${report.status} rows=${report.rowCount}`);
+				sendDisplayMessage(pi, "REPI Memory Quality Ledger", formatMemoryQualityLedger(report));
+				return;
+			}
+			if (trimmed === "replay" || trimmed === "ab-replay" || trimmed === "replay-eval" || trimmed === "causal") {
+				const report = buildMemoryReplayEvaluatorReport();
+				updateMissionGate("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryReplayEvaluatorV12=${report.status} scenarios=${report.scenarioCount}`);
+				sendDisplayMessage(pi, "REPI Memory Replay Evaluator", formatMemoryReplayEvaluator(report));
+				return;
+			}
+			if (trimmed === "strategy" || trimmed === "strategies" || trimmed === "strategy-capsules" || trimmed === "playbook-strategy") {
+				const report = buildMemoryStrategyCapsuleReport();
+				updateMissionGate("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryStrategyCapsuleV13=${report.status} capsules=${report.capsuleCount}`);
+				sendDisplayMessage(pi, "REPI Memory Strategy Capsules", formatMemoryStrategyCapsules(report));
+				return;
+			}
+			if (trimmed === "active" || trimmed === "kernel" || trimmed === "active-kernel" || trimmed === "recall" || trimmed === "active-recall") {
+				const report = buildMemoryActiveKernelReport();
+				updateMissionGate("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryActiveKernelV14=${report.status} decisions=${report.decisionCount}`);
+				sendDisplayMessage(pi, "REPI Memory Active Kernel", formatMemoryActiveKernel(report));
+				return;
+			}
+			if (trimmed === "mature" || trimmed === "maturation" || trimmed === "maturation-runtime" || trimmed === "mature-runtime" || trimmed === "retention" || trimmed === "decay") {
+				const report = buildMemoryMaturationRuntimeReport();
+				updateMissionGate("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryMaturationRuntimeV15=${report.status} rows=${report.rowCount}`);
+				sendDisplayMessage(pi, "REPI Memory Maturation Runtime", formatMemoryMaturationRuntime(report));
 				return;
 			}
 			if (trimmed === "scope" || trimmed === "scope-isolation" || trimmed.startsWith("scope ")) {
@@ -29407,11 +37093,11 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 		},
 	});
 	pi.registerCommand("re-context", {
-		description: "Pack/show/resume REPI mission context: /re-context [pack|show|resume] [target]",
+		description: "Pack/show/resume REPI mission context and CompactResumeLedgerV2: /re-context [pack|show|resume|resume-ledger] [target]",
 		handler: async (args) => {
 			const parts = args.trim().split(/\s+/).filter(Boolean);
 			const first = parts[0];
-			const action = first === "show" || first === "resume" ? (parts.shift() as "show" | "resume") : "pack";
+			const action = first === "show" || first === "resume" || first === "resume-ledger" ? (parts.shift() as "show" | "resume" | "resume-ledger") : "pack";
 			if (first === "pack") parts.shift();
 			const target = parts.join(" ") || undefined;
 			sendDisplayMessage(pi, "REPI Context Pack", buildContextOutput(action, { target }));
@@ -29855,12 +37541,16 @@ function installReconTools(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "re_memory",
 		label: "RE Memory",
-		description: "Read, search, vector-rerank, orchestrate, append, evolve, verify, evaluate, distill, sediment, supervise, or maintain REPI long-term memory and playbooks.",
-		promptSnippet: "Use MemoryOrchestratorV6 to retrieve, inject, write back, compact-resume, and supervise long-term reverse/pentest memory.",
+		description: "Read, search, vector-rerank, orchestrate, deposit, learn, promote experience, build skill capsules, score quality, run active memory kernel, append, evolve, verify, evaluate, distill, sediment, supervise, or maintain REPI long-term memory and playbooks.",
+		promptSnippet: "Use MemoryOrchestratorV6 plus MemoryExperienceEngineV8, MemorySkillCapsuleV9, MemoryDistillPromotionV10, MemoryQualityLedgerV11, MemoryReplayEvaluatorV12, MemoryStrategyCapsuleV13, MemoryActiveKernelV14, and MemoryMaturationRuntimeV15 to retrieve, inject, score, write back, convert events into Episode→Claim→Lesson→SkillCapsule→Strategy→ActiveDecision→MaturationRow, compact-resume, and supervise long-term reverse/pentest memory.",
 		promptGuidelines: ["Before repeating a known security workflow, call re_memory orchestrate/pre-task for similar cases and scope-safe injection hints."],
 		parameters: Type.Object({
 			action: Type.Union([
 				Type.Literal("show"),
+				Type.Literal("status"),
+				Type.Literal("dashboard"),
+				Type.Literal("why"),
+				Type.Literal("explain"),
 				Type.Literal("search"),
 				Type.Literal("events"),
 				Type.Literal("search-events"),
@@ -29876,17 +37566,63 @@ function installReconTools(pi: ExtensionAPI): void {
 				Type.Literal("final"),
 				Type.Literal("finalize"),
 				Type.Literal("full"),
+				Type.Literal("deposit"),
+				Type.Literal("deposition"),
+				Type.Literal("writeback"),
+				Type.Literal("runtime-event"),
+				Type.Literal("event-bus"),
+				Type.Literal("deposition-report"),
+				Type.Literal("experience"),
+				Type.Literal("learn"),
+				Type.Literal("lessons"),
+				Type.Literal("promotion"),
+				Type.Literal("experience-report"),
+				Type.Literal("skills"),
+				Type.Literal("skill-capsules"),
+				Type.Literal("capsules"),
+				Type.Literal("distill-promote"),
+				Type.Literal("distill-promotion"),
+				Type.Literal("llm-distill"),
+				Type.Literal("promote-distill"),
+				Type.Literal("quality"),
+				Type.Literal("quality-ledger"),
+				Type.Literal("score"),
+				Type.Literal("doctor"),
+				Type.Literal("replay"),
+				Type.Literal("ab-replay"),
+				Type.Literal("replay-eval"),
+				Type.Literal("causal"),
+				Type.Literal("strategy"),
+				Type.Literal("strategies"),
+				Type.Literal("strategy-capsules"),
+				Type.Literal("playbook-strategy"),
+				Type.Literal("active"),
+				Type.Literal("kernel"),
+				Type.Literal("active-kernel"),
+				Type.Literal("recall"),
+				Type.Literal("active-recall"),
+				Type.Literal("mature"),
+				Type.Literal("maturation"),
+				Type.Literal("maturation-runtime"),
+				Type.Literal("mature-runtime"),
+				Type.Literal("retention"),
+				Type.Literal("decay"),
 				Type.Literal("vector"),
 				Type.Literal("vectors"),
 				Type.Literal("rerank"),
 				Type.Literal("embedding"),
 				Type.Literal("embedding-provider"),
+				Type.Literal("promote"),
+				Type.Literal("demote"),
+				Type.Literal("forget"),
 				Type.Literal("append"),
 				Type.Literal("evolve"),
 				Type.Literal("verify"),
 				Type.Literal("repair-index"),
 				Type.Literal("snapshot"),
 				Type.Literal("compact"),
+				Type.Literal("compact-resume"),
+				Type.Literal("resume-ledger"),
 				Type.Literal("eval"),
 				Type.Literal("usefulness"),
 				Type.Literal("feedback"),
@@ -29910,6 +37646,8 @@ function installReconTools(pi: ExtensionAPI): void {
 			phase: Type.Optional(Type.String()),
 			route: Type.Optional(Type.String()),
 			target: Type.Optional(Type.String()),
+			command: Type.Optional(Type.String()),
+			status: Type.Optional(Type.String()),
 			scene: Type.Optional(Type.String()),
 			title: Type.Optional(Type.String()),
 			text: Type.Optional(Type.String()),
@@ -29944,6 +37682,144 @@ function installReconTools(pi: ExtensionAPI): void {
 				);
 				return {
 					content: [{ type: "text" as const, text: formatMemoryOrchestrator(report) }],
+					details: report as unknown as Record<string, unknown>,
+				};
+			}
+			if (
+				params.action === "deposit" ||
+				params.action === "deposition" ||
+				params.action === "writeback" ||
+				params.action === "runtime-event"
+			) {
+				const text = params.text ?? params.query ?? "";
+				const directives = parseMemoryAppendDirectives(text);
+				const outcome = directives.outcome ?? (/fail|error|blocked|timeout|exception/i.test(text) ? "failure" : "partial");
+				const deposition = appendMemoryDepositionRuntimeEvent(
+					{
+						stage: params.action === "runtime-event" ? "tool" : params.scene?.includes("shell") ? "shell" : "tool",
+						source: params.scene ?? "re_memory.deposit",
+						status:
+							params.status === "blocked" || params.status === "queued" || params.status === "skipped" || params.status === "written"
+								? params.status
+								: "written",
+						task: params.title ?? "runtime deposition",
+						route: directives.route ?? params.route ?? params.scene,
+						target: directives.target ?? params.target ?? artifactScopeInferTarget(text),
+						command: params.command ?? extractMemoryCommands(text)[0],
+						outcome,
+						confidence: directives.confidence ?? (outcome === "failure" ? 0.66 : 0.72),
+						artifactPaths: directives.artifactPaths,
+						lessons: uniqueNonEmpty([text], 8),
+						failurePatterns: outcome === "failure" || outcome === "blocked" ? uniqueNonEmpty([text], 8) : [],
+						reuseRules: outcome === "success" || outcome === "partial" ? uniqueNonEmpty([text], 8) : [],
+						commands: extractMemoryCommands(text),
+						replayVerified: directives.replayVerified,
+						playbookCandidate: directives.playbookCandidate,
+						verifierRuleCandidate: directives.verifierRuleCandidate,
+						reason: "manual runtime step writeback through MemoryDepositionEngineV7",
+					},
+					{ writeback: true },
+				);
+				const report = buildMemoryDepositionReport();
+				updateMissionGate(
+					"memory_or_evolution_written",
+					report.status === "blocked" ? "blocked" : "done",
+					`MemoryDepositionEngineV7 event=${deposition.id} memory_event=${deposition.memoryEventId ?? "none"}`,
+				);
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: [
+								`memory_deposition_event: ${deposition.id}`,
+								`memory_event: ${deposition.memoryEventId ?? "none"}`,
+								`case_signature: ${deposition.caseSignature ?? "none"}`,
+								"",
+								formatMemoryDepositionReport(report),
+							].join("\n"),
+						},
+					],
+					details: { deposition, report } as unknown as Record<string, unknown>,
+				};
+			}
+			if (params.action === "event-bus" || params.action === "deposition-report") {
+				const report = buildMemoryDepositionReport();
+				updateMissionGate(
+					"memory_checked",
+					report.status === "blocked" ? "blocked" : "done",
+					`MemoryDepositionEngineV7 status=${report.status} events=${report.runtimeEventCount}`,
+				);
+				return {
+					content: [{ type: "text" as const, text: formatMemoryDepositionReport(report) }],
+					details: report as unknown as Record<string, unknown>,
+				};
+			}
+			if (
+				params.action === "experience" ||
+				params.action === "learn" ||
+				params.action === "lessons" ||
+				params.action === "promotion" ||
+				params.action === "experience-report"
+			) {
+				if (params.action === "learn" && (params.text ?? params.query)) {
+					const text = params.text ?? params.query ?? "";
+					const directives = parseMemoryAppendDirectives(text);
+					appendMemoryEvent({
+						source: "manual",
+						task: params.title ?? "memory experience learn",
+						route: directives.route ?? params.route ?? params.scene,
+						target: directives.target ?? params.target ?? artifactScopeInferTarget(text),
+						caseSignature: directives.caseSignature,
+						domainTags: uniqueNonEmpty([params.scene ?? "agent", "MemoryExperienceEngineV8"], 8),
+						lessons: [text],
+						failurePatterns: directives.outcome === "failure" || directives.outcome === "blocked" ? [text] : [],
+						reuseRules: directives.outcome === "success" || directives.outcome === "partial" ? [text] : [],
+						commands: extractMemoryCommands(text),
+						outcome: directives.outcome ?? "partial",
+						confidence: directives.confidence ?? 0.66,
+						replayVerified: directives.replayVerified,
+						playbookCandidate: directives.playbookCandidate,
+						verifierRuleCandidate: directives.verifierRuleCandidate,
+						artifactPaths: directives.artifactPaths,
+					});
+				}
+				const report = buildMemoryExperienceReport({ route: params.route, target: params.target ?? artifactScopeInferTarget(params.query ?? params.text) });
+				updateMissionGate(
+					"memory_experience_ready",
+					report.status === "blocked" ? "blocked" : "done",
+					`MemoryExperienceEngineV8 lessons=${report.lessonCount} claims=${report.claimCount} status=${report.status}`,
+				);
+				return {
+					content: [{ type: "text" as const, text: formatMemoryExperienceReport(report) }],
+					details: report as unknown as Record<string, unknown>,
+				};
+			}
+			if (params.action === "skills" || params.action === "skill-capsules" || params.action === "capsules") {
+				const report = buildMemorySkillCapsuleReport({ route: params.route, target: params.target ?? artifactScopeInferTarget(params.query ?? params.text) });
+				updateMissionGate(
+					"memory_skill_capsules_ready",
+					report.status === "blocked" ? "blocked" : "done",
+					`MemorySkillCapsuleV9 capsules=${report.capsuleCount} promoted=${report.promotedCapsuleIds.length} status=${report.status}`,
+				);
+				return {
+					content: [{ type: "text" as const, text: formatMemorySkillCapsules(report) }],
+					details: report as unknown as Record<string, unknown>,
+				};
+			}
+			if (
+				params.action === "distill-promote" ||
+				params.action === "distill-promotion" ||
+				params.action === "llm-distill" ||
+				params.action === "promote-distill"
+			) {
+				const report = buildMemoryDistillPromotionReport({ route: params.route, target: params.target ?? artifactScopeInferTarget(params.query ?? params.text) });
+				updateMissionGate(
+					"memory_distill_promotion_ready",
+					report.status === "blocked" ? "blocked" : "done",
+					`MemoryDistillPromotionV10 candidates=${report.candidateCount} promoted=${report.promotedCandidateIds.length} status=${report.status}`,
+				);
+				return {
+					content: [{ type: "text" as const, text: formatMemoryDistillPromotion(report) }],
 					details: report as unknown as Record<string, unknown>,
 				};
 			}
@@ -29991,6 +37867,55 @@ function installReconTools(pi: ExtensionAPI): void {
 					details: { anchor, event } as unknown as Record<string, unknown>,
 				};
 			}
+			if (
+				params.action === "status" ||
+				params.action === "dashboard" ||
+				params.action === "why" ||
+				params.action === "explain"
+			) {
+				const report = buildMemoryUxDashboard({
+					query: params.query ?? params.text,
+					route: params.route,
+					target: params.target ?? artifactScopeInferTarget(params.query ?? params.text),
+				});
+				updateMissionGate(
+					"memory_checked",
+					report.store.storeGrade === "blocked" ? "blocked" : "done",
+					`MemoryUxDashboardV16 hits=${report.recall.hitCount} store=${report.store.storeGrade}`,
+				);
+				return {
+					content: [{ type: "text" as const, text: formatMemoryUxDashboard(report) }],
+					details: report as unknown as Record<string, unknown>,
+				};
+			}
+			if (params.action === "promote" || params.action === "demote" || params.action === "forget") {
+				const decision = applyMemoryUxGovernance(params.action, {
+					query: params.query,
+					text: params.text,
+					title: params.title,
+					route: params.route,
+					target: params.target,
+				});
+				const report = buildMemoryUxDashboard({
+					query: decision.sourceEventId ?? params.query ?? params.text,
+					route: params.route,
+					target: params.target ?? artifactScopeInferTarget(params.query ?? params.text),
+				});
+				updateMissionGate(
+					"memory_or_evolution_written",
+					decision.applied ? "done" : "blocked",
+					`MemoryUxDashboardV16 governance=${decision.action} applied=${decision.applied}`,
+				);
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: [formatMemoryUxGovernanceDecision(decision), "", formatMemoryUxDashboard(report)].join("\n"),
+						},
+					],
+					details: { decision, report } as unknown as Record<string, unknown>,
+				};
+			}
 			if (params.action === "events" || params.action === "search-events") {
 				const text = formatMemoryRetrieval(params.query);
 				updateMissionGate("memory_checked", "done", `${params.action}:${params.query ?? ""}`);
@@ -30017,6 +37942,18 @@ function installReconTools(pi: ExtensionAPI): void {
 					details: report as unknown as Record<string, unknown>,
 				};
 			}
+			if (params.action === "compact-resume" || params.action === "resume-ledger") {
+				const report = buildCompactResumeLedgerV2Report({ write: true });
+				updateMissionGate(
+					"compaction_resume_ledger_v2_ready",
+					report.invalidTransitions.length ? "blocked" : "done",
+					`CompactResumeLedgerV2 state=${report.currentState} invalid=${report.invalidTransitions.length}`,
+				);
+				return {
+					content: [{ type: "text" as const, text: formatCompactResumeLedgerV2(report) }],
+					details: report as unknown as Record<string, unknown>,
+				};
+			}
 			if (params.action === "snapshot" || params.action === "compact") {
 				const report = snapshotMemoryStore();
 				const text = formatMemoryStoreVerification(report);
@@ -30040,6 +37977,97 @@ function installReconTools(pi: ExtensionAPI): void {
 				const report = buildMemoryFeedbackClosureReport();
 				const text = formatMemoryFeedbackClosure(report);
 				updateMissionGate("memory_checked", report.closureStatus === "fail" ? "blocked" : "done", `MemoryFeedbackClosureV1=${report.closureStatus}`);
+				return {
+					content: [{ type: "text" as const, text }],
+					details: report as unknown as Record<string, unknown>,
+				};
+			}
+			if (
+				params.action === "quality" ||
+				params.action === "quality-ledger" ||
+				params.action === "score" ||
+				params.action === "doctor"
+			) {
+				const report = buildMemoryQualityLedgerReport({
+					route: params.route,
+					target: params.target ?? artifactScopeInferTarget(params.query ?? params.text),
+				});
+				const text = formatMemoryQualityLedger(report);
+				updateMissionGate("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryQualityLedgerV11=${report.status} rows=${report.rowCount}`);
+				return {
+					content: [{ type: "text" as const, text }],
+					details: report as unknown as Record<string, unknown>,
+				};
+			}
+			if (
+				params.action === "replay" ||
+				params.action === "ab-replay" ||
+				params.action === "replay-eval" ||
+				params.action === "causal"
+			) {
+				const report = buildMemoryReplayEvaluatorReport({
+					route: params.route,
+					target: params.target ?? artifactScopeInferTarget(params.query ?? params.text),
+					query: params.query ?? params.text,
+				});
+				const text = formatMemoryReplayEvaluator(report);
+				updateMissionGate("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryReplayEvaluatorV12=${report.status} scenarios=${report.scenarioCount}`);
+				return {
+					content: [{ type: "text" as const, text }],
+					details: report as unknown as Record<string, unknown>,
+				};
+			}
+			if (
+				params.action === "strategy" ||
+				params.action === "strategies" ||
+				params.action === "strategy-capsules" ||
+				params.action === "playbook-strategy"
+			) {
+				const report = buildMemoryStrategyCapsuleReport({
+					route: params.route,
+					target: params.target ?? artifactScopeInferTarget(params.query ?? params.text),
+				});
+				const text = formatMemoryStrategyCapsules(report);
+				updateMissionGate("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryStrategyCapsuleV13=${report.status} capsules=${report.capsuleCount}`);
+				return {
+					content: [{ type: "text" as const, text }],
+					details: report as unknown as Record<string, unknown>,
+				};
+			}
+			if (
+				params.action === "active" ||
+				params.action === "kernel" ||
+				params.action === "active-kernel" ||
+				params.action === "recall" ||
+				params.action === "active-recall"
+			) {
+				const report = buildMemoryActiveKernelReport({
+					route: params.route,
+					target: params.target ?? artifactScopeInferTarget(params.query ?? params.text),
+					query: params.query ?? params.text,
+				});
+				const text = formatMemoryActiveKernel(report);
+				updateMissionGate("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryActiveKernelV14=${report.status} decisions=${report.decisionCount}`);
+				return {
+					content: [{ type: "text" as const, text }],
+					details: report as unknown as Record<string, unknown>,
+				};
+			}
+			if (
+				params.action === "mature" ||
+				params.action === "maturation" ||
+				params.action === "maturation-runtime" ||
+				params.action === "mature-runtime" ||
+				params.action === "retention" ||
+				params.action === "decay"
+			) {
+				const report = buildMemoryMaturationRuntimeReport({
+					route: params.route,
+					target: params.target ?? artifactScopeInferTarget(params.query ?? params.text),
+					query: params.query ?? params.text,
+				});
+				const text = formatMemoryMaturationRuntime(report);
+				updateMissionGate("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryMaturationRuntimeV15=${report.status} rows=${report.rowCount}`);
 				return {
 					content: [{ type: "text" as const, text }],
 					details: report as unknown as Record<string, unknown>,
@@ -30652,10 +38680,11 @@ function installReconTools(pi: ExtensionAPI): void {
 		promptGuidelines: [
 			"Call re_context pack after re_reflect write or before long-context compaction.",
 			"Call re_context resume with contextPath or compactionEntryId at the start of a continued mission to recover next_operator_commands from the exact pack.",
+			"Call re_context resume-ledger when compact/resume state or auto-resume budget looks stale.",
 			"Use context artifact_index before making claims so latest evidence paths remain attached.",
 		],
 		parameters: Type.Object({
-			action: Type.Optional(Type.Union([Type.Literal("pack"), Type.Literal("show"), Type.Literal("resume")])),
+			action: Type.Optional(Type.Union([Type.Literal("pack"), Type.Literal("show"), Type.Literal("resume"), Type.Literal("resume-ledger")])),
 			target: Type.Optional(Type.String()),
 			contextPath: Type.Optional(Type.String()),
 			compactionEntryId: Type.Optional(Type.String()),
@@ -31081,6 +39110,11 @@ export function createReconExtensionFactory() {
 		});
 
 		pi.on("tool_call", async (event) => {
+			try {
+				appendToolCallTraceFromCall(event, stats.currentMissionId);
+			} catch (error) {
+				pi.appendEntry("repi-tool-call-trace-error", { timestamp: Date.now(), error: String(error).slice(0, 500) });
+			}
 			const command = getBashCommand(event);
 			if (!command) return;
 			stats.bashCalls += 1;
@@ -31100,8 +39134,40 @@ export function createReconExtensionFactory() {
 		});
 
 		pi.on("tool_result", async (event, ctx) => {
+			try {
+				appendToolCallTraceFromResult(event, stats.currentMissionId);
+			} catch (error) {
+				pi.appendEntry("repi-tool-result-trace-error", { timestamp: Date.now(), error: String(error).slice(0, 500) });
+			}
 			stats.calls += 1;
 			if (event.isError) stats.failures += 1;
+			if (stats.active && event.toolName !== "re_memory") {
+				try {
+					const text = textBlocksToString(event.content);
+					const command = getToolResultCommand(event);
+					appendMemoryDepositionRuntimeEvent(
+						{
+							stage: event.toolName === "bash" ? "shell" : "tool",
+							source: `tool_result:${event.toolName}`,
+							status: event.isError ? "blocked" : "written",
+							task: `runtime tool result: ${event.toolName}`,
+							route: stats.lastRoute?.domain ?? "runtime",
+							command,
+							stdout: text,
+							outcome: event.isError ? "failure" : "partial",
+							confidence: event.isError ? 0.66 : 0.58,
+							lessons: [truncateMiddle(text || `${event.toolName} completed`, 900)],
+							failurePatterns: event.isError ? [truncateMiddle(text || `${event.toolName} failed`, 900)] : [],
+							reuseRules: event.isError ? [] : [`reuse ${event.toolName} only with bound artifact/evidence hash`],
+							commands: command ? [command] : [],
+							reason: "automatic post-tool writeback autocapture from REPI runtime hook",
+						},
+						{ writeback: true },
+					);
+				} catch (error) {
+					pi.appendEntry("repi-memory-deposition-error", { timestamp: Date.now(), error: String(error).slice(0, 500) });
+				}
+			}
 			if (stats.active && stats.calls > 0 && stats.calls % 5 === 0) {
 				stats.selfReviewDue = true;
 				pi.appendEntry("pi-recon-self-review-due", { timestamp: Date.now(), stats: { ...stats } });

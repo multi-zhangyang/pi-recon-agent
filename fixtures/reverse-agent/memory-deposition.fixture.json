@@ -1,0 +1,33 @@
+{
+  "kind": "repi-memory-deposition-fixture",
+  "schemaVersion": 1,
+  "requiredGates": [
+    "MemoryDepositionEngineV7",
+    "runtime_step_event_bus",
+    "post_tool_writeback_autocapture",
+    "append_only_deposition_ledger",
+    "memory_event_hash_binding",
+    "claim_compact_resume_binding",
+    "deposition_report_in_context_pack"
+  ],
+  "validScenarios": [
+    "manual-runtime-deposit-writes-memory-event",
+    "tool-result-autocapture-writes-deposition-row",
+    "context-pack-embeds-deposition-report",
+    "orchestrator-blocks-on-deposition-blocked-status"
+  ],
+  "negativeScenarios": [
+    {
+      "id": "missing-memory-event-binding",
+      "expect": "pendingWritebackCount > 0 and status warn"
+    },
+    {
+      "id": "blocked-runtime-result",
+      "expect": "blockedWritebackCount > 0 and status blocked"
+    },
+    {
+      "id": "hash-chain-drift",
+      "expect": "append_only_deposition_ledger must fail before promotion"
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repi.local/schemas/reverse-agent/worker-lease-scheduler.schema.json",
+  "title": "WorkerLeaseSchedulerV1",
+  "description": "lease_exclusive, heartbeat_required, stale_lease_recovery, work_stealing, duplicate_completion_rejected, claim_ref_preservation",
+  "type": "object",
+  "required": ["kind", "schemaVersion", "generatedAt", "schedulerId", "maxConcurrency", "workerIds", "tasks", "events", "assertions"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "const": "WorkerLeaseSchedulerV1" },
+    "schemaVersion": { "const": 1 },
+    "generatedAt": { "type": "string" },
+    "schedulerId": { "type": "string" },
+    "maxConcurrency": { "type": "integer", "minimum": 1 },
+    "workerIds": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "tasks": { "type": "array", "items": { "$ref": "#/$defs/Task" } },
+    "events": { "type": "array", "items": { "$ref": "#/$defs/Event" } },
+    "assertions": {
+      "type": "object",
+      "required": ["leaseExclusive", "heartbeatRequired", "staleLeaseRecovered", "workStealingObserved", "duplicateCompletionRejected", "maxConcurrencyRespected", "claimRefsPreserved", "appendOnlyHashChain"],
+      "additionalProperties": false,
+      "properties": {
+        "leaseExclusive": { "type": "boolean" },
+        "heartbeatRequired": { "type": "boolean" },
+        "staleLeaseRecovered": { "type": "boolean" },
+        "workStealingObserved": { "type": "boolean" },
+        "duplicateCompletionRejected": { "type": "boolean" },
+        "maxConcurrencyRespected": { "type": "boolean" },
+        "claimRefsPreserved": { "type": "boolean" },
+        "appendOnlyHashChain": { "type": "boolean" }
+      }
+    }
+  },
+  "$defs": {
+    "Task": {
+      "type": "object",
+      "required": ["taskId", "shardKey", "status", "attempt", "maxAttempts", "claimRefs", "artifactRefs"],
+      "additionalProperties": false,
+      "properties": {
+        "taskId": { "type": "string" },
+        "shardKey": { "type": "string" },
+        "status": { "enum": ["queued", "leased", "running", "completed", "requeued", "stale_recovered", "failed"] },
+        "leaseId": { "type": "string" },
+        "ownerWorkerId": { "type": "string" },
+        "leaseExpiresAt": { "type": "string" },
+        "attempt": { "type": "integer", "minimum": 0 },
+        "maxAttempts": { "type": "integer", "minimum": 1 },
+        "claimRefs": { "type": "array", "items": { "type": "string" } },
+        "artifactRefs": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "Event": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "eventId", "ts", "type", "taskId", "prevHash", "eventHash"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "WorkerLeaseSchedulerEventV1" },
+        "schemaVersion": { "const": 1 },
+        "eventId": { "type": "string" },
+        "ts": { "type": "string" },
+        "type": { "enum": ["enqueue", "lease_acquired", "heartbeat", "stale_detected", "lease_released", "work_stolen", "completed", "dedup_rejected", "failed"] },
+        "taskId": { "type": "string" },
+        "workerId": { "type": "string" },
+        "leaseId": { "type": "string" },
+        "prevHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "eventHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    }
+  },
+  "x-repiStrictFixture": "fixtures/reverse-agent/worker-lease-scheduler.fixture.json",
+  "x-repiInvariants": ["lease_exclusive", "heartbeat_required", "stale_lease_recovery", "work_stealing", "duplicate_completion_rejected", "claim_ref_preservation"]
+}

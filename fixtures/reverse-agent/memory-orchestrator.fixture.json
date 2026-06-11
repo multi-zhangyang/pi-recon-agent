@@ -8,11 +8,51 @@
     "pre_task_retrieve_before_operator",
     "scope_filter_before_memory_injection",
     "post_tool_writeback_contract",
+    "MemorySkillCapsuleV9",
+    "skill_capsule_assetization",
+    "verified_skill_promotion_gate",
+    "operator_skill_injection",
+    "MemoryDistillPromotionV10",
+    "provider_distill_contract",
+    "artifact_to_claim_distillation",
+    "verifier_backed_promotion_gate",
+    "skill_capsule_promotion_writeback",
     "failure_success_feedback_closure",
     "pre_compact_memory_snapshot",
     "post_compact_resume_memory_injection",
     "final_supervise_before_claim",
-    "memory_orchestrator_report_in_context_pack"
+    "memory_orchestrator_report_in_context_pack",
+    "MemoryQualityLedgerV11",
+    "active_memory_policy",
+    "quality_score_feedback_loop",
+    "usefulness_feedback_writeback",
+    "memory_quality_orchestrator_step",
+    "MemoryReplayEvaluatorV12",
+    "memory_ab_replay",
+    "causal_attribution_signal",
+    "replay_delta_feedback_writeback",
+    "memory_replay_in_quality_ledger",
+    "MemoryStrategyCapsuleV13",
+    "executable_strategy_capsule",
+    "replay_backed_strategy_promotion",
+    "strategy_quality_gate",
+    "strategy_capsule_operator_injection",
+    "MemoryActiveKernelV14",
+    "unified_memory_decision_engine",
+    "active_recall_scheduler",
+    "quality_replay_strategy_fusion",
+    "scope_safe_strategy_injection",
+    "feedback_driven_promotion",
+    "cross_session_compact_ready",
+    "MemoryMaturationRuntimeV15",
+    "automatic_memory_maturation_pipeline",
+    "tool_result_to_strategy_loop",
+    "closed_loop_writeback",
+    "retention_decay_scheduler",
+    "stale_memory_rehearsal_queue",
+    "usefulness_backprop_to_maturation",
+    "promotion_demotion_replay_backed",
+    "cross_session_maturation_ready"
   ],
   "phases": [
     "pre-task",
@@ -28,26 +68,91 @@
     {
       "id": "pre-task-retrieval-before-operator",
       "phase": "pre-task",
-      "mustHaveStepIds": ["pre_task_retrieve", "scope_filter_before_injection"],
-      "mustHaveCommands": ["re_memory search-events", "re_memory sediment", "re_memory orchestrate pre-operator"]
+      "mustHaveStepIds": [
+        "pre_task_retrieve",
+        "scope_filter_before_injection"
+      ],
+      "mustHaveCommands": [
+        "re_memory search-events",
+        "re_memory sediment",
+        "re_memory orchestrate pre-operator"
+      ]
     },
     {
       "id": "post-tool-writeback-contract",
       "phase": "post-tool",
-      "mustHaveStepIds": ["post_tool_writeback_contract"],
-      "mustHaveCommands": ["re_memory append outcome=partial"]
+      "mustHaveStepIds": [
+        "post_tool_writeback_contract"
+      ],
+      "mustHaveCommands": [
+        "re_memory append outcome=partial"
+      ]
     },
     {
       "id": "compact-resume-memory-injection",
       "phase": "post-compact",
-      "mustHaveStepIds": ["pre_compact_snapshot", "post_compact_resume_memory_injection"],
-      "mustHaveCommands": ["re_context resume", "re_memory orchestrate pre-operator"]
+      "mustHaveStepIds": [
+        "pre_compact_snapshot",
+        "post_compact_resume_memory_injection"
+      ],
+      "mustHaveCommands": [
+        "re_context resume",
+        "re_memory orchestrate pre-operator"
+      ]
+    },
+    {
+      "id": "skill-capsule-operator-injection",
+      "phase": "pre-operator",
+      "mustHaveStepIds": [
+        "experience_claim_lesson_promotion",
+        "skill_capsule_operator_injection"
+      ],
+      "mustHaveCommands": [
+        "re_memory skills",
+        "re_operator plan"
+      ]
+    },
+    {
+      "id": "distill-promotion-provider-gate",
+      "phase": "pre-operator",
+      "mustHaveStepIds": [
+        "skill_capsule_operator_injection",
+        "distill_promotion_provider_gate"
+      ],
+      "mustHaveCommands": [
+        "re_memory distill-promote",
+        "re_operator plan"
+      ]
+    },
+    {
+      "id": "active-memory-kernel-decision",
+      "phase": "pre-operator",
+      "mustHaveStepIds": [
+        "active_memory_kernel_decision"
+      ],
+      "mustHaveCommands": [
+        "re_memory active",
+        "re_operator plan"
+      ]
     },
     {
       "id": "final-supervise-before-claim",
       "phase": "final",
-      "mustHaveStepIds": ["final_supervise_before_claim"],
-      "mustHaveCommands": ["re_memory supervise", "re_complete audit"]
+      "mustHaveStepIds": [
+        "final_supervise_before_claim"
+      ],
+      "mustHaveCommands": [
+        "re_memory supervise",
+        "re_complete audit"
+      ]
     }
+  ],
+  "validScenarios": [
+    "quality-ledger-runs-before-operator-injection",
+    "quality-feedback-loop-adjusts-promotion-demotion",
+    "memory-ab-replay-causal-attribution",
+    "strategy-capsule-operator-injection",
+    "active-memory-kernel-decision",
+    "memory-maturation-retention-rehearsal"
   ]
 }

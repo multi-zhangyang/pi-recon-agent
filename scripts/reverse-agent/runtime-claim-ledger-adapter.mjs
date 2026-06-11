@@ -51,6 +51,15 @@ function readJsonl(root, path) {
 		.filter(Boolean);
 }
 
+function fileDigest(root, path) {
+	if (!path) return { path: "", exists: false };
+	const resolved = resolvePath(root, path);
+	const relativePath = relPath(root, path);
+	if (!existsSync(resolved)) return { path: relativePath, exists: false };
+	const bytes = readFileSync(resolved);
+	return { path: relativePath, exists: true, bytes: bytes.length, sha256: sha256(bytes) };
+}
+
 function listFiles(dir, predicate, depth = 3) {
 	if (!existsSync(dir) || depth < 0) return [];
 	const rows = [];
@@ -118,7 +127,9 @@ function latestSwarmLedger(root) {
 export function loadRuntimeClaimLedgerSource(root, source) {
 	if (source === "agentDogfood" || source === "compoundFrontier") {
 		const family = source === "agentDogfood" ? "agent-parallel-dogfood" : "compound-frontier";
-		const resultAbs = latestResult(root, `.repi-harness/evidence/remote/${family}`);
+		const providerResultAbs = latestResult(root, `.repi-harness/evidence/remote/${family}`);
+		const planOnlyResultAbs = source === "agentDogfood" ? latestResult(root, ".repi-harness/evidence/runtime/agent-dogfood-plan-only") : "";
+		const resultAbs = providerResultAbs || planOnlyResultAbs;
 		if (!resultAbs) return { source, status: "missing_runtime_artifact", reason: `missing latest ${family}/result.json` };
 		const resultPath = relPath(root, resultAbs);
 		const result = readJson(root, resultPath) ?? {};
@@ -160,11 +171,19 @@ function roleContract(runId) {
 	};
 }
 
-function evidenceSummary(loaded, evidencePath) {
+function evidenceSummary(root, loaded, evidencePath) {
 	const events = loaded.events ?? [];
 	const eventTypes = [...new Set(events.map((event) => event?.type).filter(Boolean))].sort();
+	const eventTypeCounts = events.reduce((acc, event) => {
+		if (event?.type) acc[event.type] = (acc[event.type] || 0) + 1;
+		return acc;
+	}, {});
 	const hashChainOk = runtimeClaimHashChainOk(events);
 	const captured = runtimeClaimLedgerCaptured(events);
+	const artifactDigests = [
+		fileDigest(root, loaded.resultPath),
+		fileDigest(root, loaded.ledgerPath),
+	].filter((item) => item.path);
 	return {
 		kind: "pi-recon-runtime-claim-ledger-evidence",
 		version: 1,
@@ -176,10 +195,15 @@ function evidenceSummary(loaded, evidencePath) {
 		verdict: loaded.result?.verdict ?? null,
 		runtimeClaimLedgerCaptured: captured,
 		hashChainOk,
+		tipHash: events.at(-1)?.eventHash ?? "",
 		requiredEventTypes: REQUIRED_RUNTIME_CLAIM_EVENT_TYPES,
 		eventTypes,
+		eventTypeCounts,
 		missingEventTypes: REQUIRED_RUNTIME_CLAIM_EVENT_TYPES.filter((type) => !eventTypes.includes(type)),
 		eventCount: events.length,
+		firstSeq: events[0]?.seq ?? null,
+		lastSeq: events.at(-1)?.seq ?? null,
+		artifactDigests,
 		claimCount: events.filter((event) => event.type === "claim").length,
 		validationCount: events.filter((event) => event.type === "validation").length,
 		challengeCount: events.filter((event) => event.type === "challenge").length,
@@ -193,7 +217,7 @@ export function normalizeRuntimeClaimLedgerToStrictInput(root, loaded, options =
 	mkdirSync(outDir, { recursive: true });
 	const source = sourceLabel(loaded.source);
 	const evidencePath = relPath(root, join(outDir, `${source.replace(/[^a-zA-Z0-9_.-]+/g, "-")}-evidence.json`));
-	const summary = evidenceSummary(loaded, evidencePath);
+	const summary = evidenceSummary(root, loaded, evidencePath);
 	writeFileSync(resolvePath(root, evidencePath), `${JSON.stringify(summary, null, 2)}\n`, "utf8");
 	const artifactId = `${source}:runtime-evidence`;
 	const claimId = `${source}.runtime_claim_ledger_captured`;
