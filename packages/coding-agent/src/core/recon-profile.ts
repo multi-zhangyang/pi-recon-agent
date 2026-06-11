@@ -1324,9 +1324,10 @@ type ProviderRuntimeMatrixCaseV1 = {
 	schemaVersion: 1;
 	caseId: string;
 	providerName: string;
-	api: "openai-completions" | "anthropic-messages";
+	api: "openai-completions" | "openai-responses" | "anthropic-messages";
 	modelId: string;
-	expectedPath: "/v1/chat/completions" | "/v1/messages";
+	expectedPath: "/v1/chat/completions" | "/v1/responses" | "/v1/messages";
+	diagnostic?: string;
 	authHeader: "authorization" | "x-api-key";
 	status: "pass" | "blocked";
 	exitCode: number | null;
@@ -1881,7 +1882,7 @@ function verifyProviderRuntimeMatrixV1(matrix: ProviderRuntimeMatrixV1): { ok: b
 	if (matrix.kind !== "ProviderRuntimeMatrixV1") errors.push("provider_matrix_kind_invalid");
 	if (!matrix.isolatedHome.includes(".repi") || matrix.isolatedHome.includes("/.pi/"))
 		errors.push("provider_matrix_isolated_home_invalid");
-	const requiredApis = new Set<ProviderRuntimeMatrixCaseV1["api"]>(["openai-completions", "anthropic-messages"]);
+	const requiredApis = new Set<ProviderRuntimeMatrixCaseV1["api"]>(["openai-completions", "openai-responses", "anthropic-messages"]);
 	for (const row of matrix.cases) {
 		requiredApis.delete(row.api);
 		if (row.status !== "pass") errors.push(`provider_matrix_case_not_pass:${row.caseId}`);
@@ -1899,6 +1900,8 @@ function verifyProviderRuntimeMatrixV1(matrix: ProviderRuntimeMatrixV1): { ok: b
 			errors.push(`provider_matrix_artifact_missing:${row.caseId}`);
 		if (row.api === "openai-completions" && row.request.path !== "/v1/chat/completions")
 			errors.push(`provider_matrix_openai_endpoint_invalid:${row.caseId}`);
+		if (row.api === "openai-responses" && row.request.path !== "/v1/responses")
+			errors.push(`provider_matrix_responses_endpoint_invalid:${row.caseId}`);
 		if (row.api === "anthropic-messages" && row.request.path !== "/v1/messages")
 			errors.push(`provider_matrix_anthropic_endpoint_invalid:${row.caseId}`);
 	}
@@ -5357,7 +5360,7 @@ const RECON_PROMPTS = [
 		description: "REPI 模型/provider/API key/auto compact 配置说明",
 		argumentHint: "[provider-or-error]",
 		content:
-			"REPI configuration help: $ARGUMENTS\n\n直接给出 ~/.repi/agent/models.json、~/.repi/agent/settings.json、~/.repi/agent/auth.json 的配置步骤；给 OpenAI-compatible / Anthropic-compatible / local runtime 示例；说明 repi 独立于 pi；给 repi --offline --list-models 和 repi --offline --list-models <provider-or-model> 做 parse-only 验证；真实调用才用 repi --provider <provider-id> --model <model-id> --thinking off --no-tools --no-session -p \"Reply exactly: PROVIDER_OK\"；说明 auto compact 默认 triggerPercent=85、warningPercent=80、reserveTokens=16384、keepRecentTokens=36000，阈值 min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)。",
+			"REPI configuration help: $ARGUMENTS\n\n直接给出 ~/.repi/agent/models.json、~/.repi/agent/settings.json、~/.repi/agent/auth.json 的配置步骤；给 OpenAI Chat Completions-compatible / OpenAI Responses-compatible / Anthropic-compatible / local runtime 示例；说明 repi 独立于 pi；给 repi --offline --list-models 和 repi --offline --list-models <provider-or-model> 做 parse-only 验证；真实调用才用 repi --provider <provider-id> --model <model-id> --thinking off --no-tools --no-session -p \"Reply exactly: PROVIDER_OK\"；说明 auto compact 默认 triggerPercent=85、warningPercent=80、reserveTokens=16384、keepRecentTokens=36000，阈值 min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)。",
 	},
 	{
 		name: "reverse",

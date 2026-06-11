@@ -299,6 +299,8 @@ export OPENAI_API_KEY=<token>
 ./pi-test.sh --provider openai --model gpt-5.4
 ```
 
+Responses-compatible 的运行时路径必须是 `POST /v1/responses`。如果真实 smoke 返回 `404 Endpoint not found: POST /v1/responses`，不要让 REPI 静默降级；先确认网关是否真的实现 Responses API。如果同一网关只暴露 `POST /v1/chat/completions`，就把该 provider 改成 `api: "openai-completions"`。`npm run gate:provider-runtime-matrix` 已把 OpenAI Chat Completions-compatible、OpenAI Responses-compatible 和 Anthropic-compatible 三条路径都放进本地 hard-eval，防止文档说支持但 runtime 没覆盖。
+
 ## 8. Anthropic Messages-compatible
 
 适用于接收 Anthropic `/v1/messages` payload 的 endpoint。

@@ -29,6 +29,18 @@ const PROVIDER_CASES = [
 		authHeader: "authorization",
 	},
 	{
+		caseId: "openai-responses-stream",
+		providerName: "child-openai-responses",
+		modelId: "child/responses-mock",
+		api: "openai-responses",
+		baseUrlKind: "openai-v1",
+		apiKeyEnv: "REPI_CHILD_RESPONSES_MATRIX_KEY",
+		marker: "RESPONSES_MATRIX_OK",
+		expectedPath: "/v1/responses",
+		authHeader: "authorization",
+		diagnostic: "openai-responses requires POST /v1/responses; if a gateway returns 404 here but /v1/chat/completions works, configure api=openai-completions instead of silently falling back.",
+	},
+	{
 		caseId: "anthropic-compatible-stream",
 		providerName: "child-anthropic-compatible",
 		modelId: "child/anthropic-mock",
@@ -41,10 +53,11 @@ const PROVIDER_CASES = [
 	},
 ];
 
-const PROVIDER_RUNTIME_MATRIX_NEGATIVE_MARKERS = ["negative:missing-env-ref", "negative:wrong-endpoint", "negative:update-banner-leak", "negative:missing-anthropic-case", "negative:list-models-missing"];
+const PROVIDER_RUNTIME_MATRIX_NEGATIVE_MARKERS = ["negative:missing-env-ref", "negative:wrong-endpoint", "negative:update-banner-leak", "negative:missing-responses-case", "negative:missing-anthropic-case", "negative:list-models-missing"];
 
 const SECRET_VALUES = new Map([
 	["REPI_CHILD_OPENAI_MATRIX_KEY", "matrix-openai-token"],
+	["REPI_CHILD_RESPONSES_MATRIX_KEY", "matrix-responses-token"],
 	["REPI_CHILD_ANTHROPIC_MATRIX_KEY", "matrix-anthropic-token"],
 ]);
 
@@ -100,6 +113,17 @@ function createMockProviderServer(requests) {
 				res.write(sseData({ id: "chatcmpl-repi-provider-matrix", object: "chat.completion.chunk", created: 0, model: parsed?.model ?? "child/openai-mock", choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }] }));
 				res.write(sseData({ id: "chatcmpl-repi-provider-matrix", object: "chat.completion.chunk", created: 0, model: parsed?.model ?? "child/openai-mock", choices: [{ index: 0, delta: { content: "OPENAI_MATRIX_OK" }, finish_reason: null }] }));
 				res.write(sseData({ id: "chatcmpl-repi-provider-matrix", object: "chat.completion.chunk", created: 0, model: parsed?.model ?? "child/openai-mock", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 8, completion_tokens: 3, total_tokens: 11 } }));
+				res.write("data: [DONE]\n\n");
+				res.end();
+				return;
+			}
+			if (req.method === "POST" && req.url === "/v1/responses") {
+				res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" });
+				res.write(sseData({ type: "response.output_item.added", item: { type: "message", id: "msg_repi_provider_matrix", role: "assistant", status: "in_progress", content: [] } }));
+				res.write(sseData({ type: "response.content_part.added", part: { type: "output_text", text: "" } }));
+				res.write(sseData({ type: "response.output_text.delta", delta: "RESPONSES_MATRIX_OK" }));
+				res.write(sseData({ type: "response.output_item.done", item: { type: "message", id: "msg_repi_provider_matrix", role: "assistant", status: "completed", content: [{ type: "output_text", text: "RESPONSES_MATRIX_OK" }] } }));
+				res.write(sseData({ type: "response.completed", response: { id: "resp_repi_provider_matrix", status: "completed", usage: { input_tokens: 8, output_tokens: 3, total_tokens: 11, input_tokens_details: { cached_tokens: 0 } } } }));
 				res.write("data: [DONE]\n\n");
 				res.end();
 				return;
@@ -242,6 +266,7 @@ function buildCaseReport(item, run, request, probeRoot, modelsJson, requestLogTe
 		api: item.api,
 		modelId: item.modelId,
 		expectedPath: item.expectedPath,
+		diagnostic: item.diagnostic,
 		authHeader: item.authHeader,
 		status: errors.length ? "blocked" : "pass",
 		exitCode: run.exitCode,
@@ -267,9 +292,11 @@ function buildCaseReport(item, run, request, probeRoot, modelsJson, requestLogTe
 function validateMatrixReport(report) {
 	const errors = [];
 	if (report.kind !== "ProviderRuntimeMatrixV1") errors.push("matrix.kind_invalid");
-	if (!Array.isArray(report.cases) || report.cases.length < 2) errors.push("matrix.case_count_lt_2");
+	if (!Array.isArray(report.cases) || report.cases.length < 3) errors.push("matrix.case_count_lt_3");
+	const requiredApis = new Set(["openai-completions", "openai-responses", "anthropic-messages"]);
 	for (const item of report.cases ?? []) {
 		const prefix = `case:${item.caseId}`;
+		requiredApis.delete(item.api);
 		if (item.status !== "pass") errors.push(`${prefix}.status_not_pass`);
 		if (!item.providerName?.startsWith("child-")) errors.push(`${prefix}.provider_not_child_fixture`);
 		if (!item.modelId?.startsWith("child/")) errors.push(`${prefix}.model_not_child_fixture`);
@@ -285,8 +312,10 @@ function validateMatrixReport(report) {
 		if (!item.assertions?.noLiteralSecrets) errors.push(`${prefix}.literal_secret_leak`);
 		if (!item.assertions?.requestLogCaptured || !item.assertions?.transcriptCaptured) errors.push(`${prefix}.artifacts_missing`);
 		if (item.api === "openai-completions" && item.request?.path !== "/v1/chat/completions") errors.push(`${prefix}.openai_endpoint_invalid`);
+		if (item.api === "openai-responses" && item.request?.path !== "/v1/responses") errors.push(`${prefix}.responses_endpoint_invalid`);
 		if (item.api === "anthropic-messages" && item.request?.path !== "/v1/messages") errors.push(`${prefix}.anthropic_endpoint_invalid`);
 	}
+	for (const api of requiredApis) errors.push(`missing_api:${api}`);
 	if (report.listModels?.status !== "pass") errors.push("list_models_not_pass");
 	for (const provider of PROVIDER_CASES.map((item) => item.providerName)) {
 		if (!report.listModels?.providers?.includes(provider)) errors.push(`list_models_missing:${provider}`);
@@ -299,6 +328,7 @@ function mutateReport(report, mutate) {
 	if (mutate === "missingEnvRef") clone.cases[0].assertions.apiKeyEnvRefOnly = false;
 	if (mutate === "wrongEndpoint") clone.cases[0].request.path = "/wrong";
 	if (mutate === "updateBannerLeak") clone.cases[0].assertions.noUpdateBanner = false;
+	if (mutate === "missingResponses") clone.cases = clone.cases.filter((item) => item.api !== "openai-responses");
 	if (mutate === "missingAnthropic") clone.cases = clone.cases.filter((item) => item.api !== "anthropic-messages");
 	if (mutate === "listModelsMissing") clone.listModels.providers = clone.listModels.providers.filter((item) => item !== "child-openai-compatible");
 	return clone;
@@ -407,7 +437,8 @@ async function main() {
 		checks.push(negativeCheck(report, "missing-env-ref", "missingEnvRef", "api_key_not_env_ref"));
 		checks.push(negativeCheck(report, "wrong-endpoint", "wrongEndpoint", "openai_endpoint_invalid"));
 		checks.push(negativeCheck(report, "update-banner-leak", "updateBannerLeak", "update_banner_leak"));
-		checks.push(negativeCheck(report, "missing-anthropic-case", "missingAnthropic", "case_count_lt_2"));
+		checks.push(negativeCheck(report, "missing-responses-case", "missingResponses", "missing_api:openai-responses"));
+		checks.push(negativeCheck(report, "missing-anthropic-case", "missingAnthropic", "missing_api:anthropic-messages"));
 		checks.push(negativeCheck(report, "list-models-missing", "listModelsMissing", "list_models_missing"));
 	} catch (error) {
 		checks.push({ id: "runtime:provider-matrix-exception", status: "fail", evidence: { error: String(error), stack: error?.stack } });
@@ -416,10 +447,10 @@ async function main() {
 	}
 	checks.push(
 		markerCheck("code:provider-runtime-matrix-types", "packages/coding-agent/src/core/recon-profile.ts", ["type ProviderRuntimeMatrixV1", "function verifyProviderRuntimeMatrixV1", "ProviderRuntimeMatrixCaseV1"]),
-		markerCheck("docs:provider-runtime-matrix", "README.md", ["Provider runtime matrix", "gate:provider-runtime-matrix", "ProviderRuntimeMatrixV1", "OpenAI-compatible", "Anthropic-compatible"]),
+		markerCheck("docs:provider-runtime-matrix", "README.md", ["Provider runtime matrix", "gate:provider-runtime-matrix", "ProviderRuntimeMatrixV1", "OpenAI Responses-compatible", "Anthropic-compatible"]),
 		markerCheck("npm:provider-runtime-matrix", "package.json", ["gate:provider-runtime-matrix", "provider-runtime-matrix-gate.mjs"]),
-		markerCheck("harness:provider-runtime-matrix", "scripts/reverse-agent/repi-top-harness.mjs", ["gate:provider-runtime-matrix", "provider:runtime-matrix-hard-eval", "ProviderRuntimeMatrixV1"]),
-		markerCheck("autonomy:provider-runtime-matrix", "scripts/reverse-agent/autonomy-control-plane.mjs", ["provider_runtime_matrix_gate", "ProviderRuntimeMatrixV1", "runtime:provider-matrix-openai-completions", "runtime:provider-matrix-anthropic-messages"]),
+		markerCheck("harness:provider-runtime-matrix", "scripts/reverse-agent/repi-top-harness.mjs", ["gate:provider-runtime-matrix", "provider:runtime-matrix-hard-eval", "ProviderRuntimeMatrixV1", "runtime:provider-matrix-openai-responses"]),
+		markerCheck("autonomy:provider-runtime-matrix", "scripts/reverse-agent/autonomy-control-plane.mjs", ["provider_runtime_matrix_gate", "ProviderRuntimeMatrixV1", "runtime:provider-matrix-openai-completions", "runtime:provider-matrix-openai-responses", "runtime:provider-matrix-anthropic-messages"]),
 	);
 	const failed = checks.filter((check) => check.status !== "pass");
 	const result = { kind: "repi-provider-runtime-matrix-gate", schemaVersion: 1, generatedAt: new Date().toISOString(), ok: failed.length === 0, root, checks };

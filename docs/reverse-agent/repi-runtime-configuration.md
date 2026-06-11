@@ -70,6 +70,8 @@ repi --offline --list-models provider/model-id
 
 真实调用时使用 `repi --provider openai-compatible --model provider/model-id --thinking off --no-tools --no-session -p "Reply exactly: PROVIDER_OK"` 并设置对应环境变量。
 
+OpenAI Responses-compatible provider 使用 `api: "openai-responses"`，运行时必须能接收 `POST /v1/responses`。如果 smoke 显示 `/v1/responses` 404，而 `/v1/chat/completions` 可用，就说明该网关当前按 Chat Completions 暴露，应改用 `api: "openai-completions"`，不要依赖自动降级。
+
 ### 可选远程 provider 长跑回归
 
 REPI 的默认 CI 不要求真实密钥；需要验证某个真实网关/模型时，用 opt-in live gate：

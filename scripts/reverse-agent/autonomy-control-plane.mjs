@@ -1038,11 +1038,12 @@ const REQUIREMENTS = [
 			},
 			{
 				id: "provider_runtime_matrix_gate",
-				description: "ProviderRuntimeMatrixV1 hard-eval 覆盖 OpenAI-compatible 与 Anthropic-compatible 两类主流自定义 provider，验证 list-models、env-ref-only、streaming request、transcript/request-log 和无 Pi 污染。",
+				description: "ProviderRuntimeMatrixV1 hard-eval 覆盖 OpenAI Chat Completions-compatible、OpenAI Responses-compatible 与 Anthropic-compatible 三类主流自定义 provider，验证 list-models、env-ref-only、streaming request、transcript/request-log 和无 Pi 污染。",
 				files: ["scripts/reverse-agent/provider-runtime-matrix-gate.mjs"],
 				markers: [
 					"ProviderRuntimeMatrixV1",
 					"runtime:provider-matrix-openai-completions",
+					"runtime:provider-matrix-openai-responses",
 					"runtime:provider-matrix-anthropic-messages",
 					"runtime:provider-matrix-env-ref-only",
 					"negative:missing-env-ref",
@@ -1190,7 +1191,7 @@ const REQUIREMENTS = [
 			},
 		],
 		hardeningNeeded: [
-			"WorkerChildSessionRuntimeBatchV1 已由 re_swarm live bounded probe 生成 runtime artifact 并桥接 WorkerRuntimePoolV1；WorkerProviderChildProcessProbeV1 已覆盖本地 mock OpenAI-compatible provider 子进程回归；ProviderRuntimeMatrixV1 已覆盖 OpenAI-compatible / Anthropic-compatible 自定义 provider 矩阵，ProviderFailureInjectionReportV1 已把 provider 失败路径接入 FailureLedgerEventV1 / RepairQueueItemV1；ParallelProviderWorkerMatrixV1 已覆盖多 worker 并发 provider pass/failure/timeout/merge；SwarmProviderManifestParityGateV1 已把 re_swarm manifest、child-session runtime 与 provider worker matrix 的 workerId/claimRefs/hash/env-ref/failure-repair refs、all_child_sessions_match_parity_rows 逐 worker child-session parity、live provider-backed shared ledger matrix、ProviderBackedLongWindowSharedMergeLedgerV1 和 ProviderWorkerExtendedRetryManifestChainV1 绑定成 closure gate；RemoteProviderLongRunV1 已接入可选远程 provider 长跑 gate（无 env 默认 skip/pass，live 显式 opt-in）。",
+			"WorkerChildSessionRuntimeBatchV1 已由 re_swarm live bounded probe 生成 runtime artifact 并桥接 WorkerRuntimePoolV1；WorkerProviderChildProcessProbeV1 已覆盖本地 mock OpenAI-compatible provider 子进程回归；ProviderRuntimeMatrixV1 已覆盖 OpenAI Chat Completions-compatible / OpenAI Responses-compatible / Anthropic-compatible 自定义 provider 矩阵，ProviderFailureInjectionReportV1 已把 provider 失败路径接入 FailureLedgerEventV1 / RepairQueueItemV1；ParallelProviderWorkerMatrixV1 已覆盖多 worker 并发 provider pass/failure/timeout/merge；SwarmProviderManifestParityGateV1 已把 re_swarm manifest、child-session runtime 与 provider worker matrix 的 workerId/claimRefs/hash/env-ref/failure-repair refs、all_child_sessions_match_parity_rows 逐 worker child-session parity、live provider-backed shared ledger matrix、ProviderBackedLongWindowSharedMergeLedgerV1 和 ProviderWorkerExtendedRetryManifestChainV1 绑定成 closure gate；RemoteProviderLongRunV1 已接入可选远程 provider 长跑 gate（无 env 默认 skip/pass，live 显式 opt-in）。",
 			"把 worker merge 从文本摘要升级为 structured claim merge，并在 supervisor 前阻断缺证据或冲突 claim；离线 duplicate mergeKey 负例已由 gate:worker-runtime-pool 保护。",
 			"继续让 SwarmProviderManifestParityGateV1 从 bounded parity 扩展到更多真实远程 worker/provider 长窗口场景。",
 		],
