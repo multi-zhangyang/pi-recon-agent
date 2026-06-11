@@ -122,7 +122,7 @@ REPI 在 `packages/coding-agent/src/core/recon-profile.ts`、`repi-profile/SYSTE
 | `scripts/reverse-agent/repair-rollback-policy-gate.mjs` | RepairRollbackPolicyV1 runtime wiring：验证 baseline snapshot → allowlisted repair → regression gate → rollback restore，并真实触发 `re_autofix` state-changing patch_queue 生成 `repairRollbackPolicyPath` / `*-repair-rollback-policy.json`，检查 `runtime:repair-rollback-live-wiring`、rollback 型 failure/repair ledger 和 baseline/allowlist/rollback/regression 负例；对应 `npm run gate:repair-rollback-policy` |
 | `scripts/reverse-agent/tool-call-trace-ledger-gate.mjs` | ToolCallTraceLedgerV1 hard-eval：触发真实 REPI `tool_call` / `tool_result` hook，验证 append-only tool trace、输入/输出 hash、脱敏预览、replay hint、prior-call 链接和 hash-chain 负例；对应 `npm run gate:tool-call-trace-ledger` |
 | `scripts/reverse-agent/parallel-provider-worker-matrix-gate.mjs` | Parallel provider worker matrix hard-eval：并发启动多个真实 `repi --provider ...` child worker，验证 OpenAI/Anthropic pass、provider failure repair、timeout/cancel、claim-aware provider worker merge、failure/repair writeback 和 secret redaction；对应 `npm run gate:parallel-provider-worker-matrix` |
-| `scripts/reverse-agent/remote-provider-longrun-gate.mjs` | Remote provider long-run opt-in hard-eval：默认无密钥 skip/pass；显式 `REPI_REMOTE_PROVIDER_LIVE=1` 后真实运行远程 OpenAI/Anthropic-compatible provider 多轮长跑，验证 timeout、session/profile 隔离、env-ref-only、脱敏和 failure/repair writeback；对应 `npm run gate:remote-provider-longrun` |
+| `scripts/reverse-agent/remote-provider-longrun-gate.mjs` | Remote provider long-run opt-in hard-eval：默认无密钥 skip/pass；显式 `REPI_REMOTE_PROVIDER_LIVE=1` 后真实运行远程 OpenAI Chat Completions / OpenAI Responses / Anthropic-compatible provider 多轮长跑，验证 timeout、session/profile 隔离、env-ref-only、脱敏和 failure/repair writeback；对应 `npm run gate:remote-provider-longrun` |
 | `scripts/reverse-agent/provider-backed-dogfood-gate.mjs` | Provider-backed dogfood opt-in release gate：默认无密钥 skip/pass；显式 `REPI_PROVIDER_BACKED_DOGFOOD_LIVE=1` 后运行 `agent-dogfood/parallel-run.mjs` 多 worker + synthesizer，验证非 plan-only、真实模型/工具调用、subagent manifest、runtime claim ledger、non-mock runtime、parallel overlap 和 orchestration/platform split；对应 `npm run gate:provider-backed-dogfood` |
 | `pi` | 非拥有型兼容 shim；不会启动 REPI，只会转交给 PATH 中的原版 Pi，找不到则提示使用 `repi` |
 | `repi` | REPI 独立产品入口，默认使用 `~/.repi/agent`；源码 wrapper 和 npm/bin 直启都会由 CLI bootstrap 自动启用 `--recon` 隔离参数 |
@@ -711,14 +711,14 @@ npm run gate:remote-provider-longrun
 
 ```bash
 export REPI_REMOTE_PROVIDER_LIVE=1
-export REPI_REMOTE_PROVIDER_API=openai-completions   # 或 anthropic-messages
+export REPI_REMOTE_PROVIDER_API=openai-completions   # 或 openai-responses / anthropic-messages
 export REPI_REMOTE_PROVIDER_BASE_URL=https://example.com/v1
 export REPI_REMOTE_PROVIDER_MODEL=provider/model-id
 export REPI_REMOTE_PROVIDER_API_KEY_ENV=REPI_REMOTE_PROVIDER_API_KEY
 export REPI_REMOTE_PROVIDER_API_KEY=...
 ```
 
-gate 会生成 isolated `~/.repi/agent/models.json`，只写 `$REPI_REMOTE_PROVIDER_API_KEY` 这种 env-ref，不写明文 key；随后运行 `repi --list-models` 和多轮 `repi --provider ... --model ... --no-tools --no-session -p ...`。`RemoteProviderLongRunV1` 要求 marker、stdout、bounded timeout、session/profile isolation、无 `.pi` profile 污染、无 update banner、无 literal secret；失败时生成 canonical `FailureLedgerEventV1` / `RepairQueueItemV1` writeback。负例覆盖 live missing marker、secret leak、unbounded timeout、skipped without reason 和 missing repair。
+gate 会生成 isolated `~/.repi/agent/models.json`，只写 `$REPI_REMOTE_PROVIDER_API_KEY` 这种 env-ref，不写明文 key；随后运行 `repi --list-models` 和多轮 `repi --provider ... --model ... --no-tools --no-session -p ...`。`RemoteProviderLongRunV1` 要求 marker、stdout、bounded timeout、session/profile isolation、无 `.pi` profile 污染、无 update banner、无 literal secret；gate 还用 `contract:remote-provider-longrun-api-coverage` 确认 `openai-completions`、`openai-responses`、`anthropic-messages` 三种配置合同都被接受；`openai-responses` 明确绑定 `POST /v1/responses`，不会静默退回 `/v1/chat/completions`；失败时生成 canonical `FailureLedgerEventV1` / `RepairQueueItemV1` writeback。负例覆盖 live missing marker、secret leak、unbounded timeout、skipped without reason 和 missing repair。
 
 Worker child-session runtime contract 进一步约束“独立子代理/模型运行态”：
 

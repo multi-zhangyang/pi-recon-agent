@@ -1103,7 +1103,7 @@ const REQUIREMENTS = [
 
 			{
 				id: "remote_provider_longrun_core_contract",
-				description: "RemoteProviderLongRunV1 把真实远程 provider 长跑做成 opt-in 合同：无密钥时可跳过，启用 live 时校验多轮 provider 调用、超时、隔离和脱敏。",
+				description: "RemoteProviderLongRunV1 把真实远程 provider 长跑做成 opt-in 合同：无密钥时可跳过，启用 live 时校验 OpenAI Chat Completions / OpenAI Responses / Anthropic provider 调用、超时、隔离和脱敏。",
 				files: ["packages/coding-agent/src/core/recon-profile.ts"],
 				markers: [
 					"type RemoteProviderLongRunV1",
@@ -1111,17 +1111,20 @@ const REQUIREMENTS = [
 					"function verifyRemoteProviderLongRunV1",
 					"remote_provider_longrun_optional_live_skip",
 					"remote_provider_longrun_marker_missing",
+					"openai-responses",
 				],
 			},
 			{
 				id: "remote_provider_longrun_gate",
-				description: "RemoteProviderLongRunV1 hard-eval 默认 skip/pass；传 --live 或 REPI_REMOTE_PROVIDER_LIVE=1 时真实运行远程 provider 多轮长跑，并验证 session/profile 隔离、timeout、env-ref-only 和 failure/repair writeback。",
+				description: "RemoteProviderLongRunV1 hard-eval 默认 skip/pass；传 --live 或 REPI_REMOTE_PROVIDER_LIVE=1 时真实运行远程 provider 多轮长跑，覆盖 openai-completions、openai-responses、anthropic-messages 配置合同，并验证 session/profile 隔离、timeout、env-ref-only 和 failure/repair writeback。",
 				files: ["scripts/reverse-agent/remote-provider-longrun-gate.mjs"],
 				markers: [
 					"RemoteProviderLongRunV1",
 					"runtime:remote-provider-longrun-skipped",
 					"runtime:remote-provider-longrun-attempts",
 					"runtime:remote-provider-longrun-env-redaction",
+					"contract:remote-provider-longrun-api-coverage",
+					"openai-responses",
 					"negative:remote-provider-live-missing-marker",
 				],
 			},
@@ -1191,7 +1194,7 @@ const REQUIREMENTS = [
 			},
 		],
 		hardeningNeeded: [
-			"WorkerChildSessionRuntimeBatchV1 已由 re_swarm live bounded probe 生成 runtime artifact 并桥接 WorkerRuntimePoolV1；WorkerProviderChildProcessProbeV1 已覆盖本地 mock OpenAI-compatible provider 子进程回归；ProviderRuntimeMatrixV1 已覆盖 OpenAI Chat Completions-compatible / OpenAI Responses-compatible / Anthropic-compatible 自定义 provider 矩阵，ProviderFailureInjectionReportV1 已把 provider 失败路径接入 FailureLedgerEventV1 / RepairQueueItemV1；ParallelProviderWorkerMatrixV1 已覆盖多 worker 并发 provider pass/failure/timeout/merge；SwarmProviderManifestParityGateV1 已把 re_swarm manifest、child-session runtime 与 provider worker matrix 的 workerId/claimRefs/hash/env-ref/failure-repair refs、all_child_sessions_match_parity_rows 逐 worker child-session parity、live provider-backed shared ledger matrix、ProviderBackedLongWindowSharedMergeLedgerV1 和 ProviderWorkerExtendedRetryManifestChainV1 绑定成 closure gate；RemoteProviderLongRunV1 已接入可选远程 provider 长跑 gate（无 env 默认 skip/pass，live 显式 opt-in）。",
+			"WorkerChildSessionRuntimeBatchV1 已由 re_swarm live bounded probe 生成 runtime artifact 并桥接 WorkerRuntimePoolV1；WorkerProviderChildProcessProbeV1 已覆盖本地 mock OpenAI-compatible provider 子进程回归；ProviderRuntimeMatrixV1 已覆盖 OpenAI Chat Completions-compatible / OpenAI Responses-compatible / Anthropic-compatible 自定义 provider 矩阵，ProviderFailureInjectionReportV1 已把 provider 失败路径接入 FailureLedgerEventV1 / RepairQueueItemV1；ParallelProviderWorkerMatrixV1 已覆盖多 worker 并发 provider pass/failure/timeout/merge；SwarmProviderManifestParityGateV1 已把 re_swarm manifest、child-session runtime 与 provider worker matrix 的 workerId/claimRefs/hash/env-ref/failure-repair refs、all_child_sessions_match_parity_rows 逐 worker child-session parity、live provider-backed shared ledger matrix、ProviderBackedLongWindowSharedMergeLedgerV1 和 ProviderWorkerExtendedRetryManifestChainV1 绑定成 closure gate；RemoteProviderLongRunV1 已接入可选远程 provider 长跑 gate（无 env 默认 skip/pass，live 显式 opt-in，支持 openai-completions / openai-responses / anthropic-messages）。",
 			"把 worker merge 从文本摘要升级为 structured claim merge，并在 supervisor 前阻断缺证据或冲突 claim；离线 duplicate mergeKey 负例已由 gate:worker-runtime-pool 保护。",
 			"继续让 SwarmProviderManifestParityGateV1 从 bounded parity 扩展到更多真实远程 worker/provider 长窗口场景。",
 		],

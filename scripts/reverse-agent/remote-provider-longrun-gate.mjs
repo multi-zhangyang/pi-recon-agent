@@ -16,13 +16,14 @@ const writeEvidence = !argv.includes("--no-write");
 const keepTmp = argv.includes("--keep-tmp") || process.env.KEEP_REPI_REMOTE_PROVIDER_LONGRUN_TMP === "1";
 const sha256 = (value) => createHash("sha256").update(String(value ?? "")).digest("hex");
 const SOURCE = "remote_provider_longrun";
-const SUPPORTED_APIS = new Set(["openai-completions", "anthropic-messages"]);
+const SUPPORTED_APIS = new Set(["openai-completions", "openai-responses", "anthropic-messages"]);
 const REMOTE_PROVIDER_LONGRUN_NEGATIVE_MARKERS = [
 	"negative:remote-provider-live-missing-marker",
 	"negative:remote-provider-secret-leak",
 	"negative:remote-provider-unbounded-timeout",
 	"negative:remote-provider-skipped-without-reason",
 	"negative:remote-provider-missing-failure-repair",
+	"negative:remote-provider-unsupported-api",
 ];
 
 function markerCheck(id, path, markers) {
@@ -41,7 +42,7 @@ function envInt(name, fallback, min, max) {
 
 function buildLiveConfig() {
 	const api = process.env.REPI_REMOTE_PROVIDER_API || "openai-completions";
-	const providerName = process.env.REPI_REMOTE_PROVIDER_NAME || (api === "anthropic-messages" ? "remote-anthropic-compatible" : "remote-openai-compatible");
+	const providerName = process.env.REPI_REMOTE_PROVIDER_NAME || (api === "anthropic-messages" ? "remote-anthropic-compatible" : api === "openai-responses" ? "remote-openai-responses-compatible" : "remote-openai-compatible");
 	const apiKeyEnv = process.env.REPI_REMOTE_PROVIDER_API_KEY_ENV || "REPI_REMOTE_PROVIDER_API_KEY";
 	return {
 		api,
@@ -69,10 +70,15 @@ function providerCompat(api) {
 	if (api === "anthropic-messages") {
 		return { supportsLongCacheRetention: false, sendSessionAffinityHeaders: false, supportsCacheControlOnTools: false, supportsEagerToolInputStreaming: true };
 	}
+	if (api === "openai-responses") {
+		return { supportsDeveloperRole: false, supportsLongCacheRetention: false, sendSessionIdHeader: false };
+	}
 	return { supportsDeveloperRole: false, supportsReasoningEffort: false, supportsStore: false, supportsStrictMode: false, supportsUsageInStreaming: false, maxTokensField: "max_tokens" };
 }
 
 function buildModelsJson(config) {
+	// openai-responses live providers are intentionally explicit: they must expose POST /v1/responses.
+	// If the same gateway only exposes /v1/chat/completions, configure api=openai-completions instead.
 	return `${JSON.stringify(
 		{
 			providers: {
@@ -292,6 +298,31 @@ function validateRemoteProviderLongRun(report) {
 	return { ok: errors.length === 0, errors };
 }
 
+function remoteProviderApiCoverageReport() {
+	const apis = ["openai-completions", "openai-responses", "anthropic-messages"];
+	return apis.map((api) => {
+		const config = {
+			api,
+			providerName: api === "anthropic-messages" ? "coverage-anthropic-compatible" : api === "openai-responses" ? "coverage-openai-responses-compatible" : "coverage-openai-compatible",
+			modelId: `coverage/${api}`,
+			baseUrl: api === "anthropic-messages" ? "https://provider.example" : "https://provider.example/v1",
+			apiKeyEnv: "REPI_REMOTE_PROVIDER_API_KEY",
+			apiKeyValue: "coverage-token-value",
+			attempts: 1,
+			timeoutMs: 60000,
+		};
+		const modelsJson = buildModelsJson(config);
+		return {
+			api,
+			providerName: config.providerName,
+			status: SUPPORTED_APIS.has(api) && !configProblems(config).some((problem) => problem.startsWith("unsupported_api")) && modelsJson.includes(`"api": "${api}"`) && modelsJson.includes('"apiKey": "$REPI_REMOTE_PROVIDER_API_KEY"') ? "pass" : "blocked",
+			modelsJsonSha256: sha256(modelsJson),
+			compatKeys: Object.keys(providerCompat(api)).sort(),
+			responsesEndpointContract: api === "openai-responses" ? "POST /v1/responses; do not silently fall back to /v1/chat/completions" : undefined,
+		};
+	});
+}
+
 function buildSyntheticLiveReport() {
 	const failure = {
 		id: "fail:remote_provider_longrun:111111111111111111111111",
@@ -339,8 +370,8 @@ function buildSyntheticLiveReport() {
 		liveRequested: true,
 		skipReason: "",
 		configProblems: [],
-		providerName: "remote-openai-compatible",
-		api: "openai-completions",
+		providerName: "remote-openai-responses-compatible",
+		api: "openai-responses",
 		modelIdSha256: "a".repeat(64),
 		baseUrlSha256: "b".repeat(64),
 		apiKeyEnv: "REPI_REMOTE_PROVIDER_API_KEY",
@@ -352,8 +383,8 @@ function buildSyntheticLiveReport() {
 				kind: "RemoteProviderLongRunCaseV1",
 				schemaVersion: 1,
 				caseId: "remote-longrun-1",
-				providerName: "remote-openai-compatible",
-				api: "openai-completions",
+				providerName: "remote-openai-responses-compatible",
+				api: "openai-responses",
 				modelIdSha256: "a".repeat(64),
 				attempt: 1,
 				status: "pass",
@@ -390,6 +421,7 @@ function mutateReport(report, mutate) {
 		clone.cases = [];
 	}
 	if (mutate === "missingFailureRepair") clone.repairQueue = [];
+	if (mutate === "unsupportedApi") clone.api = "legacy-completions";
 	return clone;
 }
 
@@ -526,12 +558,16 @@ async function main() {
 		}
 		const validation = validateRemoteProviderLongRun(report);
 		checks.push({ id: "contract:remote-provider-longrun-report", status: validation.ok ? "pass" : "fail", evidence: { validation } });
+		const apiCoverage = remoteProviderApiCoverageReport();
+		checks.push({ id: "contract:remote-provider-longrun-api-coverage", status: apiCoverage.every((item) => item.status === "pass") ? "pass" : "fail", evidence: { apis: apiCoverage } });
+		checks.push({ id: "contract:remote-provider-longrun-openai-responses-synthetic", status: validateRemoteProviderLongRun(buildSyntheticLiveReport()).ok ? "pass" : "fail", evidence: { validation: validateRemoteProviderLongRun(buildSyntheticLiveReport()), api: "openai-responses" } });
 		const synthetic = buildSyntheticLiveReport();
 		checks.push(negativeCheck(synthetic, "remote-provider-live-missing-marker", "liveMissingMarker", "marker_missing"));
 		checks.push(negativeCheck(synthetic, "remote-provider-secret-leak", "secretLeak", "literal_secret_leak"));
 		checks.push(negativeCheck(synthetic, "remote-provider-unbounded-timeout", "unboundedTimeout", "unbounded_timeout"));
 		checks.push(negativeCheck(synthetic, "remote-provider-skipped-without-reason", "skippedWithoutReason", "skipped_without_reason"));
 		checks.push(negativeCheck(synthetic, "remote-provider-missing-failure-repair", "missingFailureRepair", "failure_repair_validation_not_ok"));
+		checks.push(negativeCheck(synthetic, "remote-provider-unsupported-api", "unsupportedApi", "api_unsupported"));
 	} catch (error) {
 		checks.push({ id: "runtime:remote-provider-longrun-exception", status: "fail", evidence: { error: String(error), stack: error?.stack } });
 	} finally {
@@ -541,8 +577,8 @@ async function main() {
 		markerCheck("code:remote-provider-longrun-types", "packages/coding-agent/src/core/recon-profile.ts", ["type RemoteProviderLongRunV1", "type RemoteProviderLongRunCaseV1", "function verifyRemoteProviderLongRunV1", "remote_provider_longrun_optional_live_skip"]),
 		markerCheck("docs:remote-provider-longrun", "README.md", ["Remote provider long-run", "gate:remote-provider-longrun", "RemoteProviderLongRunV1", "REPI_REMOTE_PROVIDER_LIVE"]),
 		markerCheck("npm:remote-provider-longrun", "package.json", ["gate:remote-provider-longrun", "remote-provider-longrun-gate.mjs"]),
-		markerCheck("harness:remote-provider-longrun", "scripts/reverse-agent/repi-top-harness.mjs", ["gate:remote-provider-longrun", "provider:remote-longrun-optional-live", "RemoteProviderLongRunV1"]),
-		markerCheck("autonomy:remote-provider-longrun", "scripts/reverse-agent/autonomy-control-plane.mjs", ["remote_provider_longrun_gate", "RemoteProviderLongRunV1", "runtime:remote-provider-longrun-skipped", "runtime:remote-provider-longrun-attempts"]),
+		markerCheck("harness:remote-provider-longrun", "scripts/reverse-agent/repi-top-harness.mjs", ["gate:remote-provider-longrun", "provider:remote-longrun-optional-live", "RemoteProviderLongRunV1", "openai-responses"]),
+		markerCheck("autonomy:remote-provider-longrun", "scripts/reverse-agent/autonomy-control-plane.mjs", ["remote_provider_longrun_gate", "RemoteProviderLongRunV1", "runtime:remote-provider-longrun-skipped", "runtime:remote-provider-longrun-attempts", "openai-responses"]),
 	);
 	const failed = checks.filter((check) => check.status !== "pass");
 	const result = { kind: "repi-remote-provider-longrun-gate", schemaVersion: 1, generatedAt: new Date().toISOString(), ok: failed.length === 0, root, mode: report?.mode ?? "unknown", checks };

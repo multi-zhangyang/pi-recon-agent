@@ -1558,7 +1558,7 @@ type RemoteProviderLongRunCaseV1 = {
 	schemaVersion: 1;
 	caseId: string;
 	providerName: string;
-	api: "openai-completions" | "anthropic-messages";
+	api: "openai-completions" | "openai-responses" | "anthropic-messages";
 	modelIdSha256: string;
 	attempt: number;
 	status: "pass" | "blocked";
@@ -1600,7 +1600,7 @@ type RemoteProviderLongRunV1 = {
 	skipReason: string;
 	configProblems: string[];
 	providerName?: string;
-	api?: "openai-completions" | "anthropic-messages";
+	api?: "openai-completions" | "openai-responses" | "anthropic-messages";
 	modelIdSha256?: string;
 	baseUrlSha256?: string;
 	apiKeyEnv?: string;
@@ -2052,7 +2052,7 @@ function verifyRemoteProviderLongRunV1(report: RemoteProviderLongRunV1): { ok: b
 	}
 	if (report.mode !== "live") errors.push("remote_provider_longrun_mode_invalid");
 	if (!report.providerName) errors.push("remote_provider_longrun_provider_missing");
-	if (!report.api || !["openai-completions", "anthropic-messages"].includes(report.api))
+	if (!report.api || !["openai-completions", "openai-responses", "anthropic-messages"].includes(report.api))
 		errors.push("remote_provider_longrun_api_invalid");
 	if (!report.modelIdSha256 || !/^[a-f0-9]{64}$/.test(report.modelIdSha256))
 		errors.push("remote_provider_longrun_model_hash_missing");
