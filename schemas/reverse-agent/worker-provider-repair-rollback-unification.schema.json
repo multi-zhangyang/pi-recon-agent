@@ -1,0 +1,233 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repi.local/schemas/reverse-agent/worker-provider-repair-rollback-unification.schema.json",
+  "title": "WorkerProviderRepairRollbackUnificationGateV1",
+  "description": "worker_provider_repair_rollback_unification_gate: provider, worker, compound-frontier, and operator repairs must share FailureLedgerEventV1/RepairQueueItemV1 signatures, RepairRollbackPolicyV1 rollback proof, retry-window closure, and regression gate refs.",
+  "$defs": {
+    "RuntimeRefsV1": {
+      "type": "object",
+      "required": ["runtimeManifestFile", "requestLogFile", "rollbackPolicyFile", "regressionResultFile"],
+      "additionalProperties": false,
+      "properties": {
+        "runtimeManifestFile": { "type": "string", "minLength": 1 },
+        "requestLogFile": { "type": "string", "minLength": 1 },
+        "rollbackPolicyFile": { "type": "string", "minLength": 1 },
+        "regressionResultFile": { "type": "string", "minLength": 1 }
+      }
+    },
+    "RetryWindowV1": {
+      "type": "object",
+      "required": ["signature", "closed", "attempts"],
+      "additionalProperties": false,
+      "properties": {
+        "signature": { "type": "string", "pattern": "^[a-f0-9]{8,64}$" },
+        "closed": { "type": "boolean" },
+        "attempts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["attempt", "status", "signature"],
+            "additionalProperties": false,
+            "properties": {
+              "attempt": { "type": "integer", "minimum": 0 },
+              "status": { "enum": ["failed", "retrying", "repair_queued", "repaired", "exhausted", "rolled_back", "escalated", "blocked"] },
+              "signature": { "type": "string", "pattern": "^[a-f0-9]{8,64}$" }
+            }
+          }
+        }
+      }
+    },
+    "WorkerProviderRepairRollbackUnificationScenarioV1": {
+      "type": "object",
+      "required": [
+        "id",
+        "source",
+        "workerId",
+        "providerName",
+        "modelId",
+        "stateChangingRepair",
+        "runtimeRefs",
+        "failureLedgerEvent",
+        "repairQueueItem",
+        "rollbackPolicy",
+        "retryWindow",
+        "regressionGateRefs",
+        "assertions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "enum": [
+            "provider-worker-state-change",
+            "swarm-worker-provider-repair",
+            "compound-frontier-retry-window",
+            "operator-exhausted-escalation"
+          ]
+        },
+        "source": { "enum": ["provider-worker", "compound-frontier", "re_operator"] },
+        "workerId": { "type": "string", "minLength": 1 },
+        "providerName": { "type": "string", "minLength": 1 },
+        "modelId": { "type": "string", "minLength": 1 },
+        "stateChangingRepair": { "const": true },
+        "runtimeRefs": { "$ref": "#/$defs/RuntimeRefsV1" },
+        "failureLedgerEvent": { "type": "object" },
+        "repairQueueItem": { "type": "object" },
+        "rollbackPolicy": { "type": "object" },
+        "retryWindow": { "$ref": "#/$defs/RetryWindowV1" },
+        "regressionGateRefs": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "assertions": {
+          "type": "object",
+          "required": ["sameSignatureFailureRepairRollback", "rollbackPolicyWritten", "retryWindowClosed", "exhaustedDoesNotUnpausedRerun"],
+          "additionalProperties": true,
+          "properties": {
+            "sameSignatureFailureRepairRollback": { "const": true },
+            "rollbackPolicyWritten": { "const": true },
+            "providerWorkerRefsPreserved": { "type": "boolean" },
+            "retryWindowClosed": { "const": true },
+            "exhaustedDoesNotUnpausedRerun": { "const": true }
+          }
+        }
+      }
+    },
+    "WorkerProviderRepairRollbackUnificationReportV1": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "closureGate", "scenarios", "signatureIndex", "promotionPolicy"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "WorkerProviderRepairRollbackUnificationReportV1" },
+        "schemaVersion": { "const": 1 },
+        "closureGate": { "const": "gate:worker-provider-repair-rollback-unification" },
+        "scenarios": {
+          "type": "array",
+          "minItems": 4,
+          "items": { "$ref": "#/$defs/WorkerProviderRepairRollbackUnificationScenarioV1" }
+        },
+        "signatureIndex": {
+          "type": "array",
+          "minItems": 4,
+          "items": {
+            "type": "object",
+            "required": ["scenarioId", "signature", "failureId", "repairId", "rollbackPolicyFile", "regressionGateRefs"],
+            "additionalProperties": false,
+            "properties": {
+              "scenarioId": { "type": "string" },
+              "signature": { "type": "string", "pattern": "^[a-f0-9]{8,64}$" },
+              "failureId": { "type": "string" },
+              "repairId": { "type": "string" },
+              "rollbackPolicyFile": { "type": "string" },
+              "regressionGateRefs": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+            }
+          }
+        },
+        "promotionPolicy": {
+          "type": "object",
+          "required": ["mode", "requiresFailureRepairBatch", "requiresRollbackPolicyForStateChange", "requiresProviderWorkerRuntimeRefs", "requiresNoUnpausedRerunWhenExhausted"],
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "const": "block-until-signature-policy-regression-pass" },
+            "requiresFailureRepairBatch": { "const": true },
+            "requiresRollbackPolicyForStateChange": { "const": true },
+            "requiresProviderWorkerRuntimeRefs": { "const": true },
+            "requiresNoUnpausedRerunWhenExhausted": { "const": true }
+          }
+        }
+      }
+    },
+    "WorkerProviderRepairRollbackUnificationGateV1": {
+      "type": "object",
+      "required": [
+        "kind",
+        "schemaVersion",
+        "generatedAt",
+        "WorkerProviderRepairRollbackUnificationGateV1",
+        "requiredGates",
+        "unificationReport",
+        "negativeCases",
+        "invariants"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "WorkerProviderRepairRollbackUnificationGateV1" },
+        "schemaVersion": { "const": 1 },
+        "generatedAt": { "type": "string" },
+        "WorkerProviderRepairRollbackUnificationGateV1": { "const": true },
+        "requiredGates": {
+          "type": "array",
+          "minItems": 7,
+          "items": {
+            "enum": [
+              "WorkerProviderRepairRollbackUnificationGateV1",
+              "same_signature_failure_repair_rollback_regression",
+              "provider_worker_state_change_writes_rollback_policy",
+              "exhausted_failure_blocks_unpaused_rerun",
+              "provider_worker_refs_preserve_manifest_request_log_rollback",
+              "compound_provider_retry_window_closes_same_signature",
+              "regression_gate_refs_match_repair_queue"
+            ]
+          }
+        },
+        "unificationReport": { "$ref": "#/$defs/WorkerProviderRepairRollbackUnificationReportV1" },
+        "negativeCases": {
+          "type": "array",
+          "minItems": 6,
+          "items": {
+            "type": "object",
+            "required": ["id", "mutates", "expect", "mustNotPromote"],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "enum": [
+                  "signature-mismatch",
+                  "missing-rollback-policy",
+                  "exhausted-unpaused-rerun",
+                  "missing-provider-request-log-ref",
+                  "regression-gate-mismatch",
+                  "policy-failure-repair-unlinked"
+                ]
+              },
+              "mutates": { "type": "string" },
+              "expect": { "const": "reject" },
+              "mustNotPromote": { "const": true }
+            }
+          }
+        },
+        "invariants": {
+          "type": "array",
+          "minItems": 7,
+          "items": {
+            "enum": [
+              "worker_provider_repair_rollback_unification_gate",
+              "same_signature_failure_repair_rollback_regression",
+              "provider_worker_state_change_writes_rollback_policy",
+              "exhausted_failure_blocks_unpaused_rerun",
+              "provider_worker_refs_preserve_manifest_request_log_rollback",
+              "compound_provider_retry_window_closes_same_signature",
+              "regression_gate_refs_match_repair_queue"
+            ]
+          }
+        }
+      },
+      "x-repiInvariants": [
+        "worker_provider_repair_rollback_unification_gate",
+        "same_signature_failure_repair_rollback_regression",
+        "provider_worker_state_change_writes_rollback_policy",
+        "exhausted_failure_blocks_unpaused_rerun",
+        "provider_worker_refs_preserve_manifest_request_log_rollback",
+        "compound_provider_retry_window_closes_same_signature",
+        "regression_gate_refs_match_repair_queue"
+      ]
+    }
+  },
+  "$ref": "#/$defs/WorkerProviderRepairRollbackUnificationGateV1",
+  "x-repiStrictFixture": "fixtures/reverse-agent/worker-provider-repair-rollback-unification.fixture.json",
+  "x-repiInvariants": [
+    "worker_provider_repair_rollback_unification_gate",
+    "same_signature_failure_repair_rollback_regression",
+    "provider_worker_state_change_writes_rollback_policy",
+    "exhausted_failure_blocks_unpaused_rerun",
+    "provider_worker_refs_preserve_manifest_request_log_rollback",
+    "compound_provider_retry_window_closes_same_signature",
+    "regression_gate_refs_match_repair_queue"
+  ]
+}
