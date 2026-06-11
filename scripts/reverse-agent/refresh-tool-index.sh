@@ -5,9 +5,9 @@ PI_DIR="$ROOT/repi-profile"
 OUT="$PI_DIR/tools/tool-index.md"
 mkdir -p "$PI_DIR/tools"
 TOOLS=(
-  file sha256sum strings readelf objdump checksec gdb strace ltrace radare2 r2 rabin2 ghidra yara capa floss clamscan upx python3 curl rg jq pip node npm go rustc cargo java
-  jadx apktool adb frida frida-ps binwalk unblob unsquashfs ubireader_extract_files qemu-system-x86_64 qemu-aarch64 qemu-mips qemu-arm nmap masscan naabu httpx subfinder amass
-  nuclei ffuf gobuster sqlmap wfuzz tshark capinfos tcpdump editcap wireshark exiftool zsteg foremost volatility3 hashcat john hydra msfconsole ruby
+  file sha256sum unzip bash sh strings readelf objdump checksec gdb strace ltrace radare2 r2 rabin2 ghidra yara capa floss clamscan upx python3 python pwn sage z3 openssl curl rg jq pip node npm go rustc cargo java
+  jadx apktool adb frida frida-ps binwalk unblob unsquashfs ubireader_extract_files qemu-system-x86_64 qemu-aarch64 qemu-mips qemu-arm 7z nmap masscan naabu httpx subfinder amass
+  nuclei katana ffuf gobuster sqlmap wfuzz tshark zeek capinfos tcpdump editcap wireshark exiftool zsteg foremost volatility3 hashcat john hydra msfconsole ruby
   one_gadget ROPgadget ropper patchelf docker kubectl aws az gcloud impacket-secretsdump nxc crackmapexec bloodhound-python certipy
   burpsuite mitmproxy playwright
 )

@@ -62,6 +62,7 @@ REPI 在 `packages/coding-agent/src/core/recon-profile.ts`、`repi-profile/SYSTE
 | `.repi-harness/evidence/proof-loops/*.md` | `re_proof_loop plan|run` 生成的 proof_loop、verdict、gate_status、evidence_summary、specialist_queue、swarm_bridge、bridge_artifacts、executed_steps 与 next_proof_actions |
 | `.repi-harness/evidence/knowledge/*.md` | `re_knowledge_graph build|query` 生成的 knowledge_graph、case_signatures、similarity_index、worker_routing_hints、worker_scoreboard、adaptive_routing_hints、worker_promotion_queue、compact_resume_case_memory、compact_resume_routing_hints 与 command_strategy_hints |
 | `repi-profile/tools/tool-index.md` | 本机工具可用性索引，避免猜工具路径 |
+| `.repi-harness/evidence/toolchain/*.md` | `re_toolchain_domain` / `/re-toolchain` 生成的 `ToolchainDomainCapabilityV1`：`runtime:toolchain-doctor`、domain_toolchain_matrix、present/missing/fallback/proof-exit/next commands |
 | `docs/reverse-agent/model-provider-formats.md` | 主流模型/API/provider 格式模板：OpenAI-compatible、Anthropic-compatible、Gemini、OpenRouter、local runtime、Azure、Bedrock、Vertex、Cloudflare/Vercel 等 |
 | `docs/reverse-agent/autonomous-control-plane.md` | Autonomous control plane 工程说明：并行调度、长期上下文、失败自修复、自动分工验证的当前状态、硬化缺口和非测试路线 |
 | `docs/reverse-agent/hard-eval-control-plane.md` | Hard eval control plane：从已有 same-window/agent/hard-score 证据生成 claim ledger、failure ledger、repair queue，并拆分 orchestration/platform claim 分数 |
@@ -74,6 +75,7 @@ REPI 在 `packages/coding-agent/src/core/recon-profile.ts`、`repi-profile/SYSTE
 | `bench/recon-remote/frontier-gate/` | 更严格的 frontier tracker：专门衡量 B站 runtime WBI signer bundle trace、小红书 x-s 2xx signed replay、抖音 `a_bogus` structured API replay 和 agent 对这些缺口的自举规划，避免 proof-gate 通过后自嗨 |
 | `bench/recon-remote/hard-score.mjs` | 跨平台 hard-score 评测器：按 signature_rebuild、signed_replay、anti_bot_challenge、cdn_media_probe、runtime_capture_depth、exploit_chain、bundle_trace、regression_readiness 对最新公网证据打分 |
 | `scripts/reverse-agent/refresh-tool-index.sh` | 离线刷新工具索引脚本 |
+| `scripts/reverse-agent/toolchain-domain-capability-gate.mjs` | ToolchainDomainCapabilityV1 hard-eval：用 runtime `command -v` 发现真实工具，验证 web-api/rev-native/pwn/mobile/pcap-dfir/firmware-iot/crypto 等领域都有 fallback、playbook marker、command scaffold 和负例；对应 `npm run gate:toolchain-domain-capability` |
 | `scripts/reverse-agent/verify-profile.mjs` | 配置完整性验证脚本 |
 | `scripts/reverse-agent/compact-resume-chain-gate.mjs` | Compact/resume chain hard-eval：验证跨 session 精确恢复、ContextPackV2/ResumeContractV2 hash、artifact drift、append-only ledger、resume 状态机、telemetry proof-loop entry 和负例阻断；对应 `npm run gate:compact-resume-chain` |
 | `scripts/reverse-agent/compact-resume-ledger-v2-gate.mjs` | CompactResumeLedgerV2 hard-eval：真实调用 `re_context pack/resume` 与 `re_memory compact-resume`，验证 transition ledger hash、queued→running→done、idempotent replay、auto-resume budget 和 context pack embedding；对应 `npm run gate:compact-resume-ledger-v2` |
@@ -203,6 +205,7 @@ REPI 的 `re_kernel` 内置 `authorized_task_bias`、`public_target_no_auto_refu
   - `/re-native-runtime plan|show|run [target] [timeout-ms]`：生成/执行 ELF/SO GDB/Pwn 运行时捕获，输出 `native_runtime_artifact`、`binary_inventory`、`mitigation_matrix`、`loader_libc`、`symbol_map`、`gdb_trace`、`crash_plan`、`exploit_scaffold`，并闭合 `native_runtime_ready`。
   - `/re-chain plan|show|compose [target]`：把 map/runtime/authz/primitive/lab/verifier artifacts 编排成 `exploit_chain`、`chain_artifact`、`proof_path`、`exploit_path`、`evidence_gaps`、`replay_commands` 和 `operator_queue`，并闭合 `exploit_chain_ready`。
   - `/re-tools show|refresh`：查看或刷新工具索引。
+  - `/re-toolchain show|refresh [domain]`：查看 `ToolchainDomainCapabilityV1`，按领域输出 required/preferred/fallback、`fallback_available`、`critical_gap`、proof-exit 和下一条专项命令；用于防止逆向/渗透任务退化成泛化建议。
   - `/re-memory show|orchestrate|pre-task|pre-operator|post-tool|post-failure|post-success|pre-compact|post-compact|final|append|evolve|verify|repair-index|snapshot|eval|playbooks|prune-playbooks ...`：读取/追加长期记忆或进化日志；`verify` 写 `store-report.json`，`repair-index` 从事件链重建 `case-memory.jsonl`，`snapshot` 写 `store-snapshot.json`，`eval` 写 `usefulness-eval.json` 并输出 hit@k/MRR/forbiddenHitIds；`playbooks` 生成 `repi-profile/memory/playbooks/index.md`，`prune-playbooks` 按 `quality_score`、年龄和容量把低质/过旧链路归档到 `repi-profile/memory/playbooks/archive/`。
   - `/re-mission show|new|gate ...`：维护 mission blackboard、lanes、completion gates。
   - `/re-lane show|next|done|block|add|set|plan|run|run-auto ...`：把 lanes 当成可推进队列，完成后自动推进并更新 gates；`plan` 生成当前 lane 的最小命令包，并检索 `repi-profile/memory/playbooks/*.md` / `case-index.md` 合入相似历史命令，优先复用 `quality_score` 更高的链路；`run` 先生成 `execution_strategy`，按 tool-index 对缺失工具进行 `fallback_commands` 降级或跳过无法替代命令，再只执行没有占位符的具体目标命令，并自动写入 `.repi-harness/evidence/runs/*.md` 与 evidence ledger，同时解析地址/比较函数/路由/签名调用等高信号锚点、输出 `evidence_quality` critic、低分时生成 `self_heal_commands` 并挂回 `[auto:*]` 队列、挂载 follow-up commands、自动推进匹配的下一 lane；`run-auto` 受控连续执行下一 lane 上的 `[auto:*]` 命令，并在每步后解析 `adaptive_decision`，根据 `evidence_quality` / `self_heal_commands` 决定继续当前 lane、切换下一 lane、停止等待 bootstrap 或结束扩展；当同一自修复链路重复低效或 stop 分支触发时输出 `multi_lane_plan`，自动新增或重排 `tool-bootstrap`、`evidence-repair`、`map-refresh` 修复 lane；其中 `tool-bootstrap` 会在 `run-auto` 内输出 `tool_bootstrap_closure`，刷新 tool-index、报告 `missing_after_refresh` / `resumed_lane`，并在工具闭合后恢复原 blocked lane；summary 输出 `adaptive_decisions`，有效链路会沉淀到 `repi-profile/memory/playbooks/*.md`、field journal 和 evolution log，同时刷新/淘汰 playbook index，防止低质量历史噪声污染后续计划。
@@ -239,6 +242,7 @@ REPI 的 `re_kernel` 内置 `authorized_task_bias`、`public_target_no_auto_refu
   - `re_native_runtime`：模型可调用的 ELF/SO GDB/Pwn runtime 工具，绑定 binary inventory、mitigation matrix、loader/libc map、symbol/string map、GDB/crash/register anchors、pwntools scaffold 和 `native_runtime_artifact`。
   - `re_memory`：模型可读写的长期记忆工具；`events` / `search-events` / `verify` / `repair-index` / `snapshot` / `compact-resume` / `eval` / `feedback` / `quality` / `replay` / `strategy` / `active` / `scope` / `artifact-scope` / `consolidate` / `distill` / `sediment` 读取 Memory v5 结构化 ledger、事务 report/snapshot、蒸馏 pattern book、contamination quarantine、semantic-index、contradiction-ledger、mandatory injection packet、quality/replay/strategy 胶囊与 MemoryActiveKernelV14 主动注入包，`deposit` / `deposition-report` 读写 MemoryDepositionEngineV7 runtime step event bus，`orchestrate` / `pre-task` / `pre-operator` / `post-tool` / `post-failure` / `post-success` / `pre-compact` / `post-compact` / `final` 生成 `MemoryOrchestratorV6` 的 mandatory memory control loop 报告；`append` / `evolve` 同时写 Markdown 镜像与事务化 `events.jsonl`。
   - `re_tool_index`：模型可刷新/读取的工具索引。
+  - `re_toolchain_domain`：模型可读取 domain_toolchain_matrix；当工具缺失、路线不专业或 proof-exit 不清晰时，先生成 runtime:toolchain-doctor 报告，再决定 `re_bootstrap plan`、专项 runtime 工具或 fallback 命令。
   - `re_mission`：模型可维护任务黑板、gates 和下一步。
   - `re_lane`：模型可推进/阻塞/新增 mission lanes，并按 lane/target 生成或执行命令包；执行结果会成为 runtime evidence，且自动附带下一 lane/命令建议。
   - `re_map`：模型可运行被动 mapper，把目标/工作区快照固化为 evidence map artifact。
@@ -699,6 +703,20 @@ export REPI_PROVIDER_DOCTOR_API_KEY=...
 repi provider-doctor --base-url https://gateway.example/v1 --model provider/model-id --api auto
 npm run gate:provider-endpoint-doctor
 ```
+
+
+### ToolchainDomainCapabilityV1
+
+`re_toolchain_domain` / `/re-toolchain show|refresh [domain]` 是专业工具链能力层，不是文档口号。它把 Web/API、JS signing、native reverse、pwn、mobile、PCAP/DFIR、firmware、crypto、cloud/identity、exploit reliability 映射到真实工具、fallback、proof-exit 和下一步命令：
+
+```text
+runtime:toolchain-doctor
+re_toolchain_domain show pwn
+/re-toolchain refresh mobile
+npm run gate:toolchain-domain-capability
+```
+
+报告中的 `fallback_available=false` 或 `critical_gap=true` 才进入工具补齐/人工处理；否则 REPI 应按 nextRuntimeCommands 继续推进，不允许停在“工具不足所以只能泛泛建议”。
 
 `ProviderEndpointDoctorV1` 会探测 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 三类 endpoint，输出推荐 `api` / `baseUrl` 和可复制到 `~/.repi/agent/models.json` 的 env-ref-only template。若 `openai-responses` 的 `/v1/responses` 返回 `endpoint_not_found`，但 `/v1/chat/completions` 可用，会明确推荐 `openai-completions`，不会静默 fallback。gate 使用本地 mock 网关验证 live 诊断、template-only 模式、Responses 404 diagnostic、secret redaction、无 `.pi` 污染和无 update banner。
 

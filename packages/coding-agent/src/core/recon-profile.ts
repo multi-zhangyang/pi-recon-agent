@@ -15,6 +15,9 @@ const RECON_PROMPT_BASE = "<builtin:pi-recon/prompts>";
 const TOOL_INDEX_CANDIDATES = [
 	"file",
 	"sha256sum",
+	"unzip",
+	"bash",
+	"sh",
 	"strings",
 	"readelf",
 	"objdump",
@@ -27,6 +30,11 @@ const TOOL_INDEX_CANDIDATES = [
 	"rabin2",
 	"ghidra",
 	"python3",
+	"python",
+	"pwn",
+	"sage",
+	"z3",
+	"openssl",
 	"curl",
 	"rg",
 	"jq",
@@ -50,10 +58,12 @@ const TOOL_INDEX_CANDIDATES = [
 	"qemu-arm",
 	"qemu-system-x86_64",
 	"qemu-aarch64",
+	"7z",
 	"nmap",
 	"masscan",
 	"naabu",
 	"httpx",
+	"katana",
 	"subfinder",
 	"amass",
 	"nuclei",
@@ -62,6 +72,7 @@ const TOOL_INDEX_CANDIDATES = [
 	"sqlmap",
 	"wfuzz",
 	"tshark",
+	"zeek",
 	"capinfos",
 	"tcpdump",
 	"editcap",
@@ -112,6 +123,7 @@ const RECON_TOOL_NAMES = [
 	"re_native_runtime",
 	"re_memory",
 	"re_tool_index",
+	"re_toolchain_domain",
 	"re_mission",
 	"re_evidence",
 	"re_graph",
@@ -147,6 +159,7 @@ const RECON_COMMAND_NAMES = [
 	"re-mobile-runtime",
 	"re-native-runtime",
 	"re-tools",
+	"re-toolchain",
 	"re-memory",
 	"re-mission",
 	"re-evidence",
@@ -430,6 +443,20 @@ const TOOL_BOOTSTRAP_CATALOG = [
 		install: "sudo apt-get update && sudo apt-get install -y jq",
 		verify: "command -v jq && jq --version",
 	},
+
+	{ tool: "unzip", install: "sudo apt-get update && sudo apt-get install -y unzip", verify: "command -v unzip && unzip -v | head -1" },
+	{ tool: "python3", install: "sudo apt-get update && sudo apt-get install -y python3 python3-pip", verify: "command -v python3 && python3 --version" },
+	{ tool: "node", install: "sudo apt-get update && sudo apt-get install -y nodejs npm", verify: "command -v node && node --version" },
+	{ tool: "npm", install: "sudo apt-get update && sudo apt-get install -y npm", verify: "command -v npm && npm --version" },
+	{ tool: "httpx", install: "go install github.com/projectdiscovery/httpx/cmd/httpx@latest", verify: "command -v httpx && httpx -version | head -1" },
+	{ tool: "nuclei", install: "go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest", verify: "command -v nuclei && nuclei -version | head -1" },
+	{ tool: "katana", install: "go install github.com/projectdiscovery/katana/cmd/katana@latest", verify: "command -v katana && katana -version | head -1" },
+	{ tool: "openssl", install: "sudo apt-get update && sudo apt-get install -y openssl", verify: "command -v openssl && openssl version" },
+	{ tool: "z3", install: "python3 -m pip install --user z3-solver", verify: "python3 - <<'PYZ3'\nimport z3; print(z3.get_version_string())\nPYZ3" },
+	{ tool: "sage", install: "sudo apt-get update && sudo apt-get install -y sagemath", verify: "command -v sage && sage --version | head -1" },
+	{ tool: "7z", install: "sudo apt-get update && sudo apt-get install -y p7zip-full", verify: "command -v 7z && 7z | head -2" },
+	{ tool: "zeek", install: "sudo apt-get update && sudo apt-get install -y zeek", verify: "command -v zeek && zeek --version" },
+	{ tool: "pwn", install: "python3 -m pip install --user pwntools", verify: "command -v pwn && pwn version || python3 - <<'PYPWN'\nimport pwn; print(pwn.__version__)\nPYPWN" },
 	{
 		tool: "mitmproxy",
 		install: "python3 -m pip install --user mitmproxy",
@@ -5028,6 +5055,67 @@ type BootstrapPlan = {
 	known: boolean;
 };
 
+type ToolchainDomainStatus = "ready" | "degraded" | "blocked";
+
+type ToolchainDomainSpec = {
+	id: string;
+	label: string;
+	requiredAny: string[];
+	preferred: string[];
+	fallbacks: string[];
+	playbookMarkers: string[];
+	commandScaffolds: string[];
+	proofExit: string[];
+};
+
+type ToolchainDomainCapabilityRowV1 = {
+	domainId: string;
+	label: string;
+	status: ToolchainDomainStatus;
+	requiredAny: string[];
+	preferred: string[];
+	fallbacks: string[];
+	presentRequired: string[];
+	presentPreferred: string[];
+	presentFallbacks: string[];
+	missingRequired: string[];
+	missingPreferred: string[];
+	fallback_available: boolean;
+	critical_gap: boolean;
+	playbookMarkersFound: string[];
+	playbookMarkersMissing: string[];
+	commandScaffoldsFound: string[];
+	commandScaffoldsMissing: string[];
+	proofExit: string[];
+	recommendedInstallHints: string[];
+	nextRuntimeCommands: string[];
+};
+
+type ToolchainDomainCapabilityV1 = {
+	kind: "ToolchainDomainCapabilityV1";
+	schemaVersion: 1;
+	generatedAt: string;
+	runtime: "runtime:toolchain-doctor";
+	discoveryMode: "tool-index";
+	toolIndexPath: string;
+	domains: ToolchainDomainCapabilityRowV1[];
+	coverage: {
+		domainCount: number;
+		readyCount: number;
+		degradedCount: number;
+		blockedCount: number;
+		readyOrDegradedCount: number;
+		fallbackDomainCount: number;
+	};
+	toolchainClosure: {
+		allDomainsHaveFallback: boolean;
+		allDomainsHavePlaybookMarkers: boolean;
+		allDomainsHaveCommandScaffolds: boolean;
+		noCriticalGap: boolean;
+	};
+	nextActions: string[];
+};
+
 type LaneCommand = {
 	label: string;
 	command: string;
@@ -5857,6 +5945,10 @@ function evidenceToolCallsDir(): string {
 	return join(reconDir(), "evidence", "tool-calls");
 }
 
+function evidenceToolchainDir(): string {
+	return join(reconDir(), "evidence", "toolchain");
+}
+
 function toolCallTraceLedgerPath(): string {
 	return join(evidenceToolCallsDir(), "tool-call-trace.jsonl");
 }
@@ -5918,6 +6010,7 @@ function ensureReconStorage(): void {
 	mkdirSync(evidenceKnowledgeDir(), { recursive: true });
 	mkdirSync(evidenceHarnessDir(), { recursive: true });
 	mkdirSync(evidenceToolCallsDir(), { recursive: true });
+	mkdirSync(evidenceToolchainDir(), { recursive: true });
 	mkdirSync(reportDir(), { recursive: true });
 	mkdirSync(join(reconDir(), "tools"), { recursive: true });
 	mkdirSync(join(reconDir(), "builtin", "reverse-pentest-orchestrator"), { recursive: true });
@@ -27640,6 +27733,9 @@ function harnessCriticalMarkers(): string[] {
 		"re_proof_loop",
 		"re_autopilot",
 		"re_knowledge_graph",
+		"re_toolchain_domain",
+		"ToolchainDomainCapabilityV1",
+		"domain_toolchain_matrix",
 		"compact_resume_case_memory",
 		"compact_resume_repair_from_case_memory",
 		"compact_resume_success_skip_low_value_lane",
@@ -27669,6 +27765,10 @@ function harnessReverseCapabilityMarkers(): string[] {
 		"Cloud identity anchors",
 		"Identity/AD graph edge anchors",
 		"Frida/GDB trace",
+		"domain:web-api",
+		"domain:rev-native",
+		"domain:pwn",
+		"fallback_available",
 	];
 }
 
@@ -27738,6 +27838,7 @@ function buildHarnessArtifact(mode: HarnessMode = "quick"): HarnessArtifact {
 		`registered_commands=${Array.from(RECON_COMMAND_NAMES).join(",")}`,
 		"execution_chain=route/mission/kernel -> decision/map/lane/autopilot -> campaign/operation/delegate/swarm/supervisor/reflect -> context/operator -> verifier/compiler/replayer/autofix -> proof_loop/knowledge_graph/harness",
 		"runtime_domains=native,web_authz,live_browser,mobile,exploit_lab,pwn,pcap,firmware,agentsec,malware,cloud,identity,frida_gdb",
+		"domain_toolchain_matrix=ToolchainDomainCapabilityV1 runtime:toolchain-doctor domain:web-api domain:rev-native domain:pwn domain:mobile domain:pcap-dfir domain:firmware-iot fallback_available",
 		"compact_chain=pi-recon-compaction -> re_context resume -> re_operator dispatch -> re_proof_loop -> compact_resume_case_memory -> case_memory_lane_plan",
 	];
 	const installReadiness = [
@@ -28108,6 +28209,7 @@ function kernelToolCallPolicy(target?: string): string[] {
 		"scope-gap: authorization_context_missing/public_target_request never exits narrative-only; start with passive map, live-browser plan, auth_context_gap, and bounded operator plan",
 		"output-floor: do not emit narrative-only security answers; include operator_next_command, artifact path, tool call, or repro command",
 		"repair: use fallback_commands before bootstrap; bootstrap only current-lane missing tools",
+		"toolchain: call re_toolchain_domain show when domain tooling/proof exits are unclear; use fallback_available before declaring a critical_gap",
 		"orchestrate: after one proof, re_graph -> re_campaign -> re_operation -> re_delegate -> re_swarm -> re_supervisor",
 		"chain: before broad expansion or final exploitability claims run re_exploit_chain plan/compose to bind proof_path, exploit_path, gaps, replay commands and operator queue",
 		"web-authz: for Web/API authorization claims run re_web_authz_state plan/run before claiming IDOR/BOLA/state-machine impact",
@@ -28639,6 +28741,242 @@ function buildToolDigest(): string {
 	ensureReconStorage();
 	const text = readText(toolIndexPath()).trim();
 	return text ? truncateMiddle(text, 5000) : "工具索引为空；优先调用 re_tool_index refresh。";
+}
+
+const TOOLCHAIN_DOMAIN_CAPABILITY_MATRIX: ToolchainDomainSpec[] = [
+	{
+		id: "web-api",
+		label: "Web/API auth, route, IDOR/BOLA, XHR/WS",
+		requiredAny: ["curl", "python3", "node"],
+		preferred: ["httpx", "ffuf", "nuclei", "katana", "jq", "playwright", "mitmproxy"],
+		fallbacks: ["curl", "python3", "node", "rg"],
+		playbookMarkers: ["route", "auth/session", "IDOR/BOLA", "JS signing", "XHR/WS"],
+		commandScaffolds: ["re_live_browser", "re_web_authz_state", "re_map", "re_lane", "re_operator"],
+		proofExit: ["principal matrix", "object ownership", "state rollback", "signed replay divergence"],
+	},
+	{
+		id: "frontend-js",
+		label: "Frontend bundle, signer rebuild, anti-bot divergence",
+		requiredAny: ["node", "curl", "rg"],
+		preferred: ["playwright", "jq", "mitmproxy", "python3"],
+		fallbacks: ["node", "curl", "rg", "python3"],
+		playbookMarkers: ["fetch/XMLHttpRequest", "WebSocket", "crypto.subtle", "first-divergence", "signed replay"],
+		commandScaffolds: ["re_live_browser", "re_lane", "re_replayer", "re_proof_loop"],
+		proofExit: ["observed normalizer", "first divergence", "signed replay harness"],
+	},
+	{
+		id: "rev-native",
+		label: "Native reverse: headers/imports/strings/control-flow/runtime trace",
+		requiredAny: ["file", "strings", "readelf", "objdump"],
+		preferred: ["r2", "rabin2", "radare2", "ghidra", "angr", "strace", "ltrace"],
+		fallbacks: ["file", "strings", "readelf", "objdump", "python3"],
+		playbookMarkers: ["entrypoint", "imports", "strings", "control-flow", "patch"],
+		commandScaffolds: ["re_native_runtime", "re_lane", "re_knowledge_graph", "re_verifier"],
+		proofExit: ["symbol/import map", "comparison sink", "runtime trace", "patch/replay proof"],
+	},
+	{
+		id: "pwn",
+		label: "Pwn primitive: mitigations, crash, leak, ROP/libc verifier",
+		requiredAny: ["file", "readelf", "gdb", "python3"],
+		preferred: ["checksec", "pwn", "ROPgadget", "ropper", "one_gadget", "patchelf"],
+		fallbacks: ["readelf", "objdump", "gdb", "python3"],
+		playbookMarkers: ["mitigations", "cyclic", "leak", "primitive", "ROP/libc"],
+		commandScaffolds: ["re_native_runtime", "re_exploit_lab", "re_replayer", "re_proof_loop"],
+		proofExit: ["offset", "leak source", "controllable bytes", "local verifier"],
+	},
+	{
+		id: "mobile",
+		label: "Android/APK: manifest, jadx/apktool, ADB/Frida hooks",
+		requiredAny: ["unzip", "strings"],
+		preferred: ["jadx", "apktool", "adb", "frida", "frida-ps", "aapt", "r2"],
+		fallbacks: ["unzip", "strings", "readelf", "python3"],
+		playbookMarkers: ["APK", "manifest", "smali", "Frida", "Java crypto", "native compare"],
+		commandScaffolds: ["re_mobile_runtime", "re_lane", "re_verifier", "re_knowledge_graph"],
+		proofExit: ["manifest/package map", "Java/native hook", "anti-debug evidence", "runtime anchors"],
+	},
+	{
+		id: "pcap-dfir",
+		label: "PCAP/DFIR: flow rank, stream follow, objects, secret timeline",
+		requiredAny: ["file", "strings"],
+		preferred: ["tshark", "capinfos", "tcpdump", "zeek", "foremost", "exiftool"],
+		fallbacks: ["strings", "file", "python3", "binwalk", "foremost"],
+		playbookMarkers: ["tcp.stream", "HTTP object", "DNS/TLS", "credential timeline", "transform-chain"],
+		commandScaffolds: ["re_lane", "re_knowledge_graph", "re_verifier", "re_replayer"],
+		proofExit: ["flow conversation", "follow-stream", "carved object", "timeline evidence"],
+	},
+	{
+		id: "firmware-iot",
+		label: "Firmware/IoT: image fingerprint, rootfs, configs, service surface, emulation",
+		requiredAny: ["file", "strings"],
+		preferred: ["binwalk", "unblob", "unsquashfs", "7z", "qemu-system-x86_64", "qemu-arm", "qemu-mips"],
+		fallbacks: ["file", "strings", "binwalk", "python3"],
+		playbookMarkers: ["rootfs", "squashfs", "config secret", "service surface", "emulation"],
+		commandScaffolds: ["re_lane", "re_campaign", "re_operation", "re_knowledge_graph"],
+		proofExit: ["filesystem extraction", "service map", "credential/config proof", "emulation notes"],
+	},
+	{
+		id: "crypto",
+		label: "Crypto/stego: transform chain, oracle, solver, parameter recovery",
+		requiredAny: ["python3"],
+		preferred: ["sage", "z3", "openssl", "hashcat", "john", "zsteg"],
+		fallbacks: ["python3", "openssl", "jq"],
+		playbookMarkers: ["oracle", "params", "modulus", "lattice", "Z3/Sage", "transform chain"],
+		commandScaffolds: ["re_lane", "re_replayer", "re_verifier", "re_proof_loop"],
+		proofExit: ["parameter derivation", "solver script", "known-answer test", "transform replay"],
+	},
+	{
+		id: "cloud-identity",
+		label: "Cloud/K8s/AD identity: config, credential usability, graph edge proof",
+		requiredAny: ["python3", "curl", "jq"],
+		preferred: ["kubectl", "aws", "az", "gcloud", "ldapsearch", "nxc", "certipy", "bloodhound-python"],
+		fallbacks: ["python3", "curl", "jq", "rg"],
+		playbookMarkers: ["Cloud/K8s", "metadata", "privilege edge", "credential usability", "AD graph"],
+		commandScaffolds: ["re_lane", "re_campaign", "re_operation", "re_supervisor"],
+		proofExit: ["token source", "credential usability", "privilege edge", "graph/path evidence"],
+	},
+	{
+		id: "exploit-reliability",
+		label: "Exploit/PoC reliability: replay matrix, env pin, flake triage, bundle",
+		requiredAny: ["python3", "bash", "node"],
+		preferred: ["docker", "gdb", "jq", "curl", "patchelf"],
+		fallbacks: ["python3", "bash", "node", "sh"],
+		playbookMarkers: ["PoC inventory", "replay matrix", "environment pin", "flake triage", "artifact bundle"],
+		commandScaffolds: ["re_exploit_lab", "re_replayer", "re_autofix", "re_complete"],
+		proofExit: ["multi-run success rate", "stdout/stderr hash", "environment pin", "bundle manifest"],
+	},
+];
+
+function buildToolchainDomainCapability(domainFilter?: string): ToolchainDomainCapabilityV1 {
+	ensureReconStorage();
+	const index = parseToolIndex();
+	const sourceCorpus = [RECON_SYSTEM_PROMPT, RECON_APPEND_SYSTEM_PROMPT, JSON.stringify(TOOLCHAIN_DOMAIN_CAPABILITY_MATRIX), buildToolDigest()].join("\n");
+	const specs = domainFilter
+		? TOOLCHAIN_DOMAIN_CAPABILITY_MATRIX.filter((domain) => domain.id === domainFilter || domain.id.includes(domainFilter))
+		: TOOLCHAIN_DOMAIN_CAPABILITY_MATRIX;
+	const domains = specs.map<ToolchainDomainCapabilityRowV1>((domain) => {
+		const presentRequired = domain.requiredAny.filter((tool) => indexedToolPresent(index, tool) === true);
+		const presentPreferred = domain.preferred.filter((tool) => indexedToolPresent(index, tool) === true);
+		const presentFallbacks = domain.fallbacks.filter((tool) => indexedToolPresent(index, tool) === true);
+		const missingRequired = domain.requiredAny.filter((tool) => indexedToolPresent(index, tool) !== true);
+		const missingPreferred = domain.preferred.filter((tool) => indexedToolPresent(index, tool) !== true);
+		const status: ToolchainDomainStatus = presentRequired.length > 0 ? "ready" : presentFallbacks.length > 0 ? "degraded" : "blocked";
+		const playbookMarkersFound = domain.playbookMarkers.filter((marker) => sourceCorpus.includes(marker));
+		const commandScaffoldsFound = domain.commandScaffolds.filter((marker) => sourceCorpus.includes(marker));
+		const recommendedInstallHints = createBootstrapPlan(Array.from(new Set([...missingRequired, ...missingPreferred.slice(0, 5)]))).map((item) =>
+			item.known ? `re_bootstrap plan ${item.tool}` : `manual_tool_review ${item.tool}`,
+		);
+		return {
+			domainId: domain.id,
+			label: domain.label,
+			status,
+			requiredAny: domain.requiredAny,
+			preferred: domain.preferred,
+			fallbacks: domain.fallbacks,
+			presentRequired,
+			presentPreferred,
+			presentFallbacks,
+			missingRequired,
+			missingPreferred,
+			fallback_available: presentFallbacks.length > 0 || status === "ready",
+			critical_gap: status === "blocked",
+			playbookMarkersFound,
+			playbookMarkersMissing: domain.playbookMarkers.filter((marker) => !playbookMarkersFound.includes(marker)),
+			commandScaffoldsFound,
+			commandScaffoldsMissing: domain.commandScaffolds.filter((marker) => !commandScaffoldsFound.includes(marker)),
+			proofExit: domain.proofExit,
+			recommendedInstallHints,
+			nextRuntimeCommands: [
+				"re_tool_index refresh",
+				`re_toolchain_domain show ${domain.id}`,
+				`re_lane plan ${domain.id} <target>`,
+				...domain.commandScaffolds.map((scaffold) => `${scaffold} plan <target>`),
+			].slice(0, 10),
+		};
+	});
+	const readyCount = domains.filter((domain) => domain.status === "ready").length;
+	const degradedCount = domains.filter((domain) => domain.status === "degraded").length;
+	const blockedCount = domains.filter((domain) => domain.status === "blocked").length;
+	return {
+		kind: "ToolchainDomainCapabilityV1",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		runtime: "runtime:toolchain-doctor",
+		discoveryMode: "tool-index",
+		toolIndexPath: toolIndexPath(),
+		domains,
+		coverage: {
+			domainCount: domains.length,
+			readyCount,
+			degradedCount,
+			blockedCount,
+			readyOrDegradedCount: readyCount + degradedCount,
+			fallbackDomainCount: domains.filter((domain) => domain.fallback_available).length,
+		},
+		toolchainClosure: {
+			allDomainsHaveFallback: domains.every((domain) => domain.fallback_available || domain.status === "ready"),
+			allDomainsHavePlaybookMarkers: domains.every((domain) => domain.playbookMarkersMissing.length === 0),
+			allDomainsHaveCommandScaffolds: domains.every((domain) => domain.commandScaffoldsMissing.length === 0),
+			noCriticalGap: blockedCount === 0,
+		},
+		nextActions: [
+			"re_toolchain_domain refresh",
+			"re_tool_index refresh",
+			"re_bootstrap plan <missing-tool>",
+			"re_lane plan <domain> <target>",
+			"re_proof_loop run <target>",
+		],
+	};
+}
+
+function writeToolchainDomainCapabilityArtifact(report: ToolchainDomainCapabilityV1): string {
+	ensureReconStorage();
+	const path = join(evidenceToolchainDir(), `${report.generatedAt.replace(/[:.]/g, "-")}-toolchain-domain-capability.md`);
+	writeFileSync(path, `${formatToolchainDomainCapability(report)}\n\n## JSON\n\n\`\`\`json\n${JSON.stringify(report, null, 2)}\n\`\`\`\n`, "utf-8");
+	appendEvidence({
+		kind: "artifact",
+		title: "toolchain-domain-capability",
+		fact: `ToolchainDomainCapabilityV1 ready=${report.coverage.readyCount} degraded=${report.coverage.degradedCount} blocked=${report.coverage.blockedCount}`,
+		command: "re_toolchain_domain show",
+		path,
+		verify: `cat ${path}`,
+		confidence: "runtime:toolchain-doctor domain_toolchain_matrix fallback_available critical_gap",
+	});
+	return path;
+}
+
+function formatToolchainDomainCapability(report: ToolchainDomainCapabilityV1, path?: string): string {
+	return [
+		"toolchain_domain_capability:",
+		"ToolchainDomainCapabilityV1: true",
+		"runtime: runtime:toolchain-doctor",
+		path ? `artifact: ${path}` : undefined,
+		`tool_index: ${report.toolIndexPath}`,
+		`coverage: domains=${report.coverage.domainCount} ready=${report.coverage.readyCount} degraded=${report.coverage.degradedCount} blocked=${report.coverage.blockedCount}`,
+		`closure: fallback=${report.toolchainClosure.allDomainsHaveFallback} playbook=${report.toolchainClosure.allDomainsHavePlaybookMarkers} commands=${report.toolchainClosure.allDomainsHaveCommandScaffolds} noCriticalGap=${report.toolchainClosure.noCriticalGap}`,
+		"domains:",
+		...report.domains.flatMap((domain) => [
+			`- domain:${domain.domainId} status=${domain.status} fallback_available=${domain.fallback_available} critical_gap=${domain.critical_gap}`,
+			`  label: ${domain.label}`,
+			`  required_present: ${domain.presentRequired.join(", ") || "none"}`,
+			`  preferred_present: ${domain.presentPreferred.join(", ") || "none"}`,
+			`  fallback_present: ${domain.presentFallbacks.join(", ") || "none"}`,
+			`  missing_required: ${domain.missingRequired.join(", ") || "none"}`,
+			`  proof_exit: ${domain.proofExit.join("; ")}`,
+			`  command_scaffolds: ${domain.commandScaffoldsFound.join(", ") || "none"}`,
+			`  next: ${domain.nextRuntimeCommands.slice(0, 4).join(" | ")}`,
+		]),
+		"next_actions:",
+		...report.nextActions.map((item) => `- ${item}`),
+	]
+		.filter(Boolean)
+		.join("\n");
+}
+
+function buildToolchainDomainCapabilityOutput(action: "show" | "refresh" = "show", domainFilter?: string): string {
+	if (action === "refresh") return buildToolDigest();
+	const report = buildToolchainDomainCapability(domainFilter);
+	const path = writeToolchainDomainCapabilityArtifact(report);
+	return formatToolchainDomainCapability(report, path);
 }
 
 function bootstrapCatalogFor(tool: string): BootstrapCatalogEntry | undefined {
@@ -37031,6 +37369,19 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 			sendDisplayMessage(pi, "REPI Tool Index", truncateMiddle(text, 9000));
 		},
 	});
+	pi.registerCommand("re-toolchain", {
+		description: "Show REPI domain toolchain capability matrix: /re-toolchain [show|refresh] [domain]",
+		handler: async (args) => {
+			const parts = args.trim().split(/\s+/).filter(Boolean);
+			const first = parts[0];
+			const action = first === "refresh" ? (parts.shift() as "refresh") : "show";
+			if (first === "show") parts.shift();
+			if (action === "refresh") await refreshToolIndex(pi);
+			const text = buildToolchainDomainCapabilityOutput("show", parts.join(" ") || undefined);
+			updateMissionGate("tool_index_checked", "done", `/re-toolchain ${action}`);
+			sendDisplayMessage(pi, "REPI Toolchain Domain Capability", truncateMiddle(text, 16000));
+		},
+	});
 	pi.registerCommand("re-memory", {
 		description:
 			"Read, append, evolve, search, orchestrate, verify, repair, snapshot, compact-resume, eval, feedback, quality, replay, strategy, active-kernel, mature, retention, vector, distill, sediment, supervise, or maintain REPI memory: /re-memory [show|events|search|orchestrate|pre-task|pre-operator|post-tool|post-failure|post-success|pre-compact|post-compact|final|quality|replay|strategy|active|mature|retention|vector|append|evolve|verify|repair-index|snapshot|compact-resume|resume-ledger|eval|feedback|consolidate|distill|sediment|supervise|playbooks|prune-playbooks] ...",
@@ -39389,6 +39740,29 @@ function installReconTools(pi: ExtensionAPI): void {
 					},
 				],
 				details: { ...refreshedAudit, memoryEvent } as unknown as Record<string, unknown>,
+			};
+		},
+	});
+	pi.registerTool({
+		name: "re_toolchain_domain",
+		label: "RE Toolchain Domain Capability",
+		description: "Inspect REPI professional reverse/pentest domain capability matrix with runtime tool-index evidence, fallbacks, proof exits, and next commands.",
+		promptSnippet: "Use re_toolchain_domain to choose concrete domain tools and fallbacks before claiming a route is blocked.",
+		promptGuidelines: [
+			"Call re_toolchain_domain show when a reverse/pentest task feels under-tooled or too generic.",
+			"Use domain nextRuntimeCommands and recommendedInstallHints to drive re_lane/re_bootstrap rather than narrative-only advice.",
+		],
+		parameters: Type.Object({
+			action: Type.Union([Type.Literal("show"), Type.Literal("refresh")]),
+			domain: Type.Optional(Type.String()),
+		}),
+		async execute(_toolCallId, params) {
+			if (params.action === "refresh") await refreshToolIndex(pi);
+			const report = buildToolchainDomainCapability(params.domain);
+			const path = writeToolchainDomainCapabilityArtifact(report);
+			return {
+				content: [{ type: "text" as const, text: truncateMiddle(formatToolchainDomainCapability(report, path), 20000) }],
+				details: { action: params.action, domain: params.domain, path, coverage: report.coverage } as Record<string, unknown>,
 			};
 		},
 	});
