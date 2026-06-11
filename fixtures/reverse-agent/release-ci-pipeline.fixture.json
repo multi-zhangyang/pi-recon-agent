@@ -1,0 +1,93 @@
+{
+  "kind": "ReleaseCiPipelineGateV1",
+  "schemaVersion": 1,
+  "generatedAt": "2026-06-11T00:00:00.000Z",
+  "ReleaseCiPipelineGateV1": true,
+  "requiredGates": [
+    "ci_uses_repi_command_not_pi_takeover",
+    "ci_installs_with_ignore_scripts",
+    "product_boundary_before_capability_claim",
+    "closure_readiness_before_capability_release",
+    "capability_release_before_top_harness",
+    "top_harness_before_repository_check",
+    "no_generated_diff_after_checks",
+    "ci_no_live_provider_or_secret_dependency"
+  ],
+  "pipeline": {
+    "kind": "ReleaseCiPipelineV1",
+    "schemaVersion": 1,
+    "workflows": [
+      {
+        "path": ".github/workflows/repi-harness.yml",
+        "exists": true,
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "nodeVersion": "24",
+        "permissionsReadOnly": true,
+        "steps": [
+          { "name": "Install dependencies", "command": "npm ci --ignore-scripts", "order": 1, "required": true, "evidenceTier": "install" },
+          { "name": "REPI product boundary gate", "command": "npm run gate:repi-product", "order": 2, "required": true, "evidenceTier": "product_boundary" },
+          { "name": "REPI profile isolation gate", "command": "npm run gate:repi-isolation", "order": 3, "required": true, "evidenceTier": "product_boundary" },
+          { "name": "REPI product surface gate", "command": "npm run gate:repi-product-surface", "order": 4, "required": true, "evidenceTier": "product_boundary" },
+          { "name": "REPI closure readiness gate", "command": "npm run gate:autonomous-closure-readiness -- --no-write", "order": 5, "required": true, "evidenceTier": "closure_readiness" },
+          { "name": "REPI capability release bundle gate", "command": "npm run gate:capability-release-bundle -- --no-write", "order": 6, "required": true, "evidenceTier": "capability_release" },
+          { "name": "Top-level REPI independence harness", "command": "npm run gate:repi-harness", "order": 7, "required": true, "evidenceTier": "top_harness" },
+          { "name": "Full repository check", "command": "npm run check", "order": 8, "required": true, "evidenceTier": "repository_check" },
+          { "name": "No generated diff", "command": "git diff --check && git diff --exit-code", "order": 9, "required": true, "evidenceTier": "diff_guard" }
+        ],
+        "forbiddenPatternsAbsent": true
+      },
+      {
+        "path": "docs/reverse-agent/repi-harness.github-actions.yml",
+        "exists": true,
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "nodeVersion": "24",
+        "permissionsReadOnly": true,
+        "steps": [
+          { "name": "Install dependencies", "command": "npm ci --ignore-scripts", "order": 1, "required": true, "evidenceTier": "install" },
+          { "name": "REPI product boundary gate", "command": "npm run gate:repi-product", "order": 2, "required": true, "evidenceTier": "product_boundary" },
+          { "name": "REPI profile isolation gate", "command": "npm run gate:repi-isolation", "order": 3, "required": true, "evidenceTier": "product_boundary" },
+          { "name": "REPI product surface gate", "command": "npm run gate:repi-product-surface", "order": 4, "required": true, "evidenceTier": "product_boundary" },
+          { "name": "REPI closure readiness gate", "command": "npm run gate:autonomous-closure-readiness -- --no-write", "order": 5, "required": true, "evidenceTier": "closure_readiness" },
+          { "name": "REPI capability release bundle gate", "command": "npm run gate:capability-release-bundle -- --no-write", "order": 6, "required": true, "evidenceTier": "capability_release" },
+          { "name": "Top-level REPI independence harness", "command": "npm run gate:repi-harness", "order": 7, "required": true, "evidenceTier": "top_harness" },
+          { "name": "Full repository check", "command": "npm run check", "order": 8, "required": true, "evidenceTier": "repository_check" },
+          { "name": "No generated diff", "command": "git diff --check && git diff --exit-code", "order": 9, "required": true, "evidenceTier": "diff_guard" }
+        ],
+        "forbiddenPatternsAbsent": true
+      }
+    ],
+    "orderPolicy": {
+      "productBoundaryBeforeCapability": true,
+      "closureReadinessBeforeCapability": true,
+      "capabilityBeforeTopHarness": true,
+      "topHarnessBeforeCheck": true,
+      "diffGuardLast": true
+    },
+    "promotionPolicy": {
+      "mode": "release_ci_pipeline_readiness",
+      "noLiveProviderSecretDependency": true,
+      "repiCommandOnly": true,
+      "noPiTakeover": true,
+      "noNarrativeOnlyRelease": true
+    }
+  },
+  "negativeCases": [
+    { "id": "missing-product-boundary-gate", "mutates": ["remove gate:repi-product"], "expect": "fail", "mustReject": true },
+    { "id": "capability-before-closure-readiness", "mutates": ["swap capability and closure steps"], "expect": "fail", "mustReject": true },
+    { "id": "missing-capability-release-bundle", "mutates": ["remove gate:capability-release-bundle"], "expect": "fail", "mustReject": true },
+    { "id": "missing-no-diff-guard", "mutates": ["remove git diff --exit-code"], "expect": "fail", "mustReject": true },
+    { "id": "live-provider-secret-required", "mutates": ["add secrets.REPI_REMOTE_PROVIDER_API_KEY and REPI_REMOTE_PROVIDER_LIVE=1"], "expect": "fail", "mustReject": true },
+    { "id": "pi-command-takeover", "mutates": ["add npm run install:recon-pi or pi update"], "expect": "fail", "mustReject": true },
+    { "id": "repository-check-before-top-harness", "mutates": ["move npm run check before gate:repi-harness"], "expect": "fail", "mustReject": true }
+  ],
+  "invariants": [
+    "ci_uses_repi_command_not_pi_takeover",
+    "ci_installs_with_ignore_scripts",
+    "product_boundary_before_capability_claim",
+    "closure_readiness_before_capability_release",
+    "capability_release_before_top_harness",
+    "top_harness_before_repository_check",
+    "no_generated_diff_after_checks",
+    "ci_no_live_provider_or_secret_dependency"
+  ]
+}

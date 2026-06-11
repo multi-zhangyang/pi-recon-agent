@@ -28,6 +28,21 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
+      - name: REPI product boundary gate
+        run: npm run gate:repi-product
+
+      - name: REPI profile isolation gate
+        run: npm run gate:repi-isolation
+
+      - name: REPI product surface gate
+        run: npm run gate:repi-product-surface
+
+      - name: REPI closure readiness gate
+        run: npm run gate:autonomous-closure-readiness -- --no-write
+
+      - name: REPI capability release bundle gate
+        run: npm run gate:capability-release-bundle -- --no-write
+
       - name: Top-level REPI independence harness
         run: npm run gate:repi-harness
 
