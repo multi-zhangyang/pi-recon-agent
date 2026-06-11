@@ -648,7 +648,7 @@ runtime 分工验证还有专门 adapter/gate：
 npm run gate:runtime-claim-ledger
 ```
 
-它会发现最新 `agent-parallel-dogfood`、`re_swarm`、`compound-frontier` runtime claim ledger，把 runtime `ClaimLedgerEventV1` 适配成 `validate-claim-ledger.mjs` strict input，并同时跑 `--allow-platform-gaps` 与 `--strict-claims`。缺少 source 时，gate 默认执行 bounded agent-dogfood `--plan-only --write-plan-ledger` native ledger、bounded `reSwarmLiveProbe` 与 compound-frontier `--use-latest` native ledger，所以 `gate:runtime-claim-ledger --require-all-sources --require-promotion` 在干净工作树也能得到三类 source 覆盖；输出的 `runtimeLedgerQuality` 会保留 artifact sha256、event type count、tip hash、hash-chain 和 strict validator 摘要。已存在的 runtime ledger 必须通过 strict validator，缺失/失败仍会保留为 `missing_runtime_artifact` 或 promotion block。
+它会发现最新 `agent-parallel-dogfood`、`re_swarm`、`compound-frontier` runtime claim ledger，把 runtime `ClaimLedgerEventV1` 适配成 `validate-claim-ledger.mjs` strict input，并同时跑 `--allow-platform-gaps` 与 `--strict-claims`。缺少 source 时，gate 默认执行 bounded agent-dogfood `--plan-only --write-plan-ledger` native ledger、bounded `reSwarmLiveProbe` 与 compound-frontier `--use-latest` native ledger，所以 `gate:runtime-claim-ledger --require-all-sources --require-promotion` 在干净工作树也能得到三类 source 覆盖；输出的 `runtimeLedgerQuality` 会保留 artifact sha256、event type count、tip hash、hash-chain 和 strict validator 摘要。`npm run gate:runtime-ledger-quality` / `RuntimeLedgerQualityGateV1` 会复用最新 runtime-claim-ledger result，并用 schema/fixture 负例阻断缺 event type count、缺 artifact digest、bad tip hash、hash-chain false 或 strict validator failed 的伪通过。已存在的 runtime ledger 必须通过 strict validator，缺失/失败仍会保留为 `missing_runtime_artifact` 或 promotion block。
 
 Worker Runtime Pool hard-eval 用来把“并行 worker 是真的 runtime 组织”从叙述变成合同：
 

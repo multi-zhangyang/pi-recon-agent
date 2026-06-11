@@ -359,6 +359,9 @@ function staticContractChecks() {
 	checks.push(markerCheck("parallel:provider-worker-matrix-hard-eval", "scripts/reverse-agent/parallel-provider-worker-matrix-gate.mjs", ["repi-parallel-provider-worker-matrix-gate", "ParallelProviderWorkerMatrixV1", "runtime:parallel-provider-worker-concurrency", "runtime:parallel-provider-worker-timeout-cancel", "negative:parallel-worker-missing-claim-merge"], []));
 	checks.push(markerCheck("provider:remote-longrun-optional-live", "scripts/reverse-agent/remote-provider-longrun-gate.mjs", ["repi-remote-provider-longrun-gate", "RemoteProviderLongRunV1", "runtime:remote-provider-longrun-skipped", "runtime:remote-provider-longrun-attempts", "negative:remote-provider-live-missing-marker"], []));
 	checks.push(markerCheck("claims:runtime-claim-ledger-live-re-swarm", "scripts/reverse-agent/gate-runtime-claim-ledger.mjs", ["runAgentDogfoodLiveProbe", "--write-plan-ledger", "loadedNativeRuntimeProbe", "runReSwarmLiveProbe", "runtime:re-swarm-claim-ledger-live-probe-exit", "reSwarmLiveProbeProvidesDefaultCoverage", "runCompoundFrontierLiveProbe", "runtimeLedgerQuality", "--no-live-re-swarm"], []));
+	checks.push(markerCheck("claims:runtime-ledger-quality", "scripts/reverse-agent/runtime-ledger-quality-gate.mjs", ["RuntimeLedgerQualityGateV1", "validateSourceQuality", "runtimeLedgerQuality", "artifactDigests", "strictValidator", "negative:runtime-ledger-missing-event-type-count"], []));
+	checks.push(markerCheck("claims:runtime-ledger-quality-schema", "schemas/reverse-agent/runtime-ledger-quality.schema.json", ["RuntimeLedgerQualityGateV1", "requireArtifactSha256", "requireStrictValidator", "eventTypeCounts", "artifactDigests"], []));
+	checks.push(markerCheck("claims:runtime-ledger-quality-fixture", "fixtures/reverse-agent/runtime-ledger-quality.fixture.json", ["repi-runtime-ledger-quality-fixture", "negative:runtime-ledger-missing-event-type-count", "negative:runtime-ledger-strict-validator-failed"], []));
 	checks.push(markerCheck("claims:structured-claim-merge-hard-eval", "scripts/reverse-agent/structured-claim-merge-gate.mjs", ["repi-structured-claim-merge-gate", "runtime:structured-claim-live-wiring", "runtime:re-swarm-structured-merge-exit", "runtime_conflict_loser_downgrade_missing", "runtime_loser_promoted", "final_pass_requires_json_query", "unresolved_adversary_challenge", "missing_winning_evidence"], []));
 	checks.push(markerCheck("claims:structured-claim-merge-schema", "schemas/reverse-agent/structured-claim-merge.schema.json", ["StructuredClaimMergeV1", "strict_final_claim_promotion", "final_pass_requires_json_query", "unresolved_adversary_challenge_blocks_final"], []));
 	checks.push(markerCheck("claims:structured-claim-merge-fixture", "fixtures/reverse-agent/structured-claim-merge.fixture.json", ["repi-structured-claim-merge-fixture", "StructuredClaimMergeV1", "final_pass_requires_json_query"], []));
@@ -565,6 +568,8 @@ function childGateChecks() {
 		["gate:remote-provider-longrun", ["scripts/reverse-agent/remote-provider-longrun-gate.mjs", root, "--strict"]],
 		["gate:structured-claim-merge", ["scripts/reverse-agent/structured-claim-merge-gate.mjs", root, "--strict"]],
 		["gate:runtime-claim-ledger", ["scripts/reverse-agent/gate-runtime-claim-ledger.mjs", root, "--strict"]],
+		// child:gate:runtime-ledger-quality
+		["gate:runtime-ledger-quality", ["scripts/reverse-agent/runtime-ledger-quality-gate.mjs", root, "--strict"]],
 		["gate:autonomous-runtime", ["scripts/reverse-agent/autonomous-runtime-contracts.mjs", root, "--strict"]],
 		["gate:autonomy-control", ["scripts/reverse-agent/autonomy-control-plane.mjs", root, "--strict"]],
 	];

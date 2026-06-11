@@ -93,7 +93,8 @@
 		"gate:memory-ux": "node scripts/reverse-agent/memory-ux-gate.mjs . --strict",
 		"gate:repair-rollback-policy": "node scripts/reverse-agent/repair-rollback-policy-gate.mjs . --strict",
 		"gate:tool-call-trace-ledger": "node scripts/reverse-agent/tool-call-trace-ledger-gate.mjs . --strict",
-		"gate:worker-lease-scheduler": "node scripts/reverse-agent/worker-lease-scheduler-gate.mjs . --strict"
+		"gate:worker-lease-scheduler": "node scripts/reverse-agent/worker-lease-scheduler-gate.mjs . --strict",
+		"gate:runtime-ledger-quality": "node scripts/reverse-agent/runtime-ledger-quality-gate.mjs . --strict"
 	},
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "0.0.26",

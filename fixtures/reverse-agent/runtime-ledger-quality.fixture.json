@@ -1,0 +1,73 @@
+{
+  "kind": "repi-runtime-ledger-quality-fixture",
+  "schemaVersion": 1,
+  "contract": "RuntimeLedgerQualityGateV1",
+  "validScenario": {
+    "id": "runtime-ledger-quality-pass",
+    "source": "agent-dogfood",
+    "hashChainOk": true,
+    "runtimeClaimLedgerCaptured": true,
+    "eventCount": 5,
+    "tipHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "eventTypeCounts": {
+      "artifact_handoff": 1,
+      "claim": 1,
+      "validation": 1,
+      "challenge": 1,
+      "resolution": 1
+    },
+    "artifactDigests": [
+      {
+        "path": ".repi-harness/evidence/runtime/agent-dogfood-plan-only/example/result.json",
+        "exists": true,
+        "bytes": 128,
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    ],
+    "strictValidator": {
+      "allowPlatformGapsOk": true,
+      "strictClaimsOk": true,
+      "allowPlatformGapsStdoutSha256": "cccccccccccccccccccccccc",
+      "strictClaimsStdoutSha256": "dddddddddddddddddddddddd",
+      "requiredGaps": []
+    },
+    "status": "strict_pass"
+  },
+  "negativeCases": [
+    {
+      "id": "negative:runtime-ledger-missing-event-type-count",
+      "mutate": "deleteEventTypeCount",
+      "expectedErrors": [
+        "eventTypeCounts.resolution"
+      ]
+    },
+    {
+      "id": "negative:runtime-ledger-bad-tip-hash",
+      "mutate": "badTipHash",
+      "expectedErrors": [
+        "tipHash"
+      ]
+    },
+    {
+      "id": "negative:runtime-ledger-missing-artifact-sha",
+      "mutate": "missingArtifactSha",
+      "expectedErrors": [
+        "artifactDigests.sha256"
+      ]
+    },
+    {
+      "id": "negative:runtime-ledger-strict-validator-failed",
+      "mutate": "strictValidatorFailed",
+      "expectedErrors": [
+        "strictValidator.strictClaimsOk"
+      ]
+    },
+    {
+      "id": "negative:runtime-ledger-hash-chain-false",
+      "mutate": "hashChainFalse",
+      "expectedErrors": [
+        "hashChainOk"
+      ]
+    }
+  ]
+}

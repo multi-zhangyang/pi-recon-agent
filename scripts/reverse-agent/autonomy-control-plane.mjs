@@ -1446,10 +1446,28 @@ const REQUIREMENTS = [
 				markers: ["normalizeRuntimeClaimLedgerToStrictInput", "runtimeClaimLedgerCaptured", "missing_runtime_artifact", "artifact_handoff", "validation", "resolution", "eventTypeCounts", "artifactDigests", "tipHash"],
 			},
 			{
+				id: "runtime_ledger_quality_gate",
+				description: "RuntimeLedgerQualityGateV1 把 runtimeLedgerQuality 从报告字段升级为独立 hard gate，要求每个 source 都有 artifact sha256、event type count、tip hash、hash-chain 和 strict validator pass，并用负例阻断缺 event/digest/validator 的伪通过。",
+				files: ["scripts/reverse-agent/runtime-ledger-quality-gate.mjs"],
+				markers: ["RuntimeLedgerQualityGateV1", "validateSourceQuality", "runtimeLedgerQuality", "artifactDigests", "strictValidator", "negative:runtime-ledger-missing-event-type-count", "negative:runtime-ledger-strict-validator-failed"],
+			},
+			{
+				id: "runtime_ledger_quality_schema",
+				description: "RuntimeLedgerQualityGateV1 schema 固化 artifact sha256、event type count、tip hash、hash-chain 和 strict validator 必填字段。",
+				files: ["schemas/reverse-agent/runtime-ledger-quality.schema.json"],
+				markers: ["RuntimeLedgerQualityGateV1", "requireArtifactSha256", "requireStrictValidator", "eventTypeCounts", "artifactDigests"],
+			},
+			{
+				id: "runtime_ledger_quality_fixture",
+				description: "Runtime ledger quality fixture 覆盖缺 event type count、bad tip hash、缺 artifact digest、strict validator failed 和 hash-chain false 负例。",
+				files: ["fixtures/reverse-agent/runtime-ledger-quality.fixture.json"],
+				markers: ["repi-runtime-ledger-quality-fixture", "negative:runtime-ledger-missing-event-type-count", "negative:runtime-ledger-strict-validator-failed"],
+			},
+			{
 				id: "runtime_claim_ledger_npm_gate",
 				description: "package 暴露 runtime claim ledger strict gate。",
 				files: ["package.json"],
-				markers: ["gate:runtime-claim-ledger", "gate-runtime-claim-ledger.mjs", "--strict"],
+				markers: ["gate:runtime-claim-ledger", "gate-runtime-claim-ledger.mjs", "gate:runtime-ledger-quality", "runtime-ledger-quality-gate.mjs", "--strict"],
 			},
 			{
 				id: "runtime_claim_ledger_autonomous_contract_wiring",
@@ -1494,7 +1512,7 @@ const REQUIREMENTS = [
 			},
 		],
 		hardeningNeeded: [
-			"gate:runtime-claim-ledger 已补 agent-dogfood plan-only native ledger、bounded reSwarmLiveProbe、compound-frontier native/use-latest ledger 和 runtimeLedgerQuality；后续继续把 provider-backed agent-dogfood 多 worker 真执行作为 release 前 live gate 扩大覆盖。",
+			"gate:runtime-claim-ledger 已补 agent-dogfood plan-only native ledger、bounded reSwarmLiveProbe、compound-frontier native/use-latest ledger 和 runtimeLedgerQuality；RuntimeLedgerQualityGateV1 已把 artifact sha256/event type count/tip hash/hash-chain/strict validator 提升为独立质量门禁；后续继续把 provider-backed agent-dogfood 多 worker 真执行作为 release 前 live gate 扩大覆盖。",
 			"StructuredClaimMergeV1 已接入 bounded re_swarm live gate，collision_matrix 的 winner/loser arbitration 已进入 live conflictTable；后续继续扩大真实 multi-worker 冲突样本。",
 			"synthesizer 输出继续扩展 conflict table 到更多 live runtime：claimIds、冲突主题、胜出证据、降级原因和 loser downgrade。",
 		],
