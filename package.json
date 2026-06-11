@@ -106,7 +106,8 @@
 		"gate:worker-provider-repair-rollback-unification": "node scripts/reverse-agent/worker-provider-repair-rollback-unification-gate.mjs . --strict",
 		"gate:live-conflict-arbitration-matrix": "node scripts/reverse-agent/live-conflict-arbitration-matrix-gate.mjs . --strict",
 		"gate:cross-session-multi-compact-matrix": "node scripts/reverse-agent/cross-session-multi-compact-matrix-gate.mjs . --strict",
-		"gate:autonomous-closure-readiness": "node scripts/reverse-agent/autonomous-closure-readiness-gate.mjs . --strict"
+		"gate:autonomous-closure-readiness": "node scripts/reverse-agent/autonomous-closure-readiness-gate.mjs . --strict",
+		"gate:capability-release-bundle": "node scripts/reverse-agent/capability-release-bundle-gate.mjs . --strict"
 	},
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "0.0.26",

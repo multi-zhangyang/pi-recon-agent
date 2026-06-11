@@ -1,0 +1,237 @@
+{
+  "kind": "CapabilityClaimReleaseBundleGateV1",
+  "schemaVersion": 1,
+  "generatedAt": "2026-06-11T00:00:00.000Z",
+  "CapabilityClaimReleaseBundleGateV1": true,
+  "requiredGates": [
+    "release_claims_require_command_evidence",
+    "release_claims_require_source_hashes",
+    "independent_product_boundary_before_capability_claim",
+    "autonomy_control_plane_before_capability_claim",
+    "closure_readiness_before_capability_claim",
+    "top_autonomous_status_explicit",
+    "no_literal_secret_in_release_evidence",
+    "no_narrative_only_release_promotion"
+  ],
+  "releaseBundle": {
+    "kind": "CapabilityClaimReleaseBundleV1",
+    "schemaVersion": 1,
+    "releaseId": "repi-release-fixture",
+    "gitHead": "98bee84",
+    "sourceFiles": [
+      {
+        "path": "repi",
+        "exists": true,
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      {
+        "path": "package.json",
+        "exists": true,
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      {
+        "path": "scripts/reverse-agent/repi-top-harness.mjs",
+        "exists": true,
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      {
+        "path": "scripts/reverse-agent/autonomy-control-plane.mjs",
+        "exists": true,
+        "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      {
+        "path": "README.md",
+        "exists": true,
+        "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      },
+      {
+        "path": "scripts/reverse-agent/autonomous-closure-readiness-gate.mjs",
+        "exists": true,
+        "sha256": "abababababababababababababababababababababababababababababababab"
+      }
+    ],
+    "evidenceCommands": [
+      {
+        "id": "gate:repi-product",
+        "command": "node scripts/reverse-agent/assert-repi-product.mjs .",
+        "code": 0,
+        "stdoutSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "stderrSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "secretFree": true,
+        "evidenceTier": "product_boundary"
+      },
+      {
+        "id": "gate:repi-isolation",
+        "command": "node scripts/reverse-agent/assert-repi-isolated.mjs .",
+        "code": 0,
+        "stdoutSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "stderrSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+        "secretFree": true,
+        "evidenceTier": "product_boundary"
+      },
+      {
+        "id": "gate:autonomy-control",
+        "command": "node scripts/reverse-agent/autonomy-control-plane.mjs . --strict --json",
+        "code": 0,
+        "stdoutSha256": "5555555555555555555555555555555555555555555555555555555555555555",
+        "stderrSha256": "6666666666666666666666666666666666666666666666666666666666666666",
+        "secretFree": true,
+        "evidenceTier": "control_plane_json"
+      },
+      {
+        "id": "gate:autonomous-closure-readiness",
+        "command": "node scripts/reverse-agent/autonomous-closure-readiness-gate.mjs . --strict --no-write --json",
+        "code": 0,
+        "stdoutSha256": "7777777777777777777777777777777777777777777777777777777777777777",
+        "stderrSha256": "8888888888888888888888888888888888888888888888888888888888888888",
+        "secretFree": true,
+        "evidenceTier": "closure_gate"
+      }
+    ],
+    "releaseClaims": [
+      {
+        "claimId": "independent_product_boundary",
+        "statement": "repi is independent from upstream pi command/profile/update branding",
+        "status": "proven",
+        "evidenceCommandIds": [
+          "gate:repi-product",
+          "gate:repi-isolation"
+        ],
+        "sourceFileRefs": [
+          "repi",
+          "package.json"
+        ],
+        "narrativeOnly": false,
+        "promotionAllowed": true
+      },
+      {
+        "claimId": "professional_control_plane",
+        "statement": "REPI has a professional reverse/pentest organization control plane",
+        "status": "proven",
+        "evidenceCommandIds": [
+          "gate:autonomy-control"
+        ],
+        "sourceFileRefs": [
+          "scripts/reverse-agent/autonomy-control-plane.mjs"
+        ],
+        "narrativeOnly": false,
+        "promotionAllowed": true
+      },
+      {
+        "claimId": "closure_gate_readiness",
+        "statement": "hardening closure gates are executable and harnessed",
+        "status": "proven",
+        "evidenceCommandIds": [
+          "gate:autonomous-closure-readiness"
+        ],
+        "sourceFileRefs": [
+          "scripts/reverse-agent/autonomous-closure-readiness-gate.mjs"
+        ],
+        "narrativeOnly": false,
+        "promotionAllowed": true
+      },
+      {
+        "claimId": "not_top_autonomous_yet",
+        "statement": "top autonomous definition remains explicitly false while gaps are ready_for_live not closed",
+        "status": "explicit_gap",
+        "evidenceCommandIds": [
+          "gate:autonomy-control",
+          "gate:autonomous-closure-readiness"
+        ],
+        "sourceFileRefs": [
+          "scripts/reverse-agent/autonomy-control-plane.mjs"
+        ],
+        "narrativeOnly": false,
+        "promotionAllowed": false
+      }
+    ],
+    "autonomySummary": {
+      "normalUseGuarantee": true,
+      "topAutonomousDefinition": false,
+      "gapCount": 4,
+      "closureGateCount": 4
+    },
+    "closureReadinessSummary": {
+      "readyRows": 4,
+      "failedRows": 0,
+      "allClosureGatesExecutable": true,
+      "allClosureGatesHarnessed": true
+    },
+    "promotionPolicy": {
+      "mode": "release_capability_claim_gate",
+      "narrativeOnlyPromotionBlocked": true,
+      "topAutonomousClaimBlockedUntilClosed": true,
+      "requiresAllCommandsPass": true,
+      "requiresNoSecretLeak": true
+    },
+    "bundleSha256": "9999999999999999999999999999999999999999999999999999999999999999"
+  },
+  "negativeCases": [
+    {
+      "id": "claim-without-command-evidence",
+      "mutates": [
+        "releaseClaims[0].evidenceCommandIds=[]"
+      ],
+      "expect": "fail",
+      "mustReject": true
+    },
+    {
+      "id": "failed-command-promoted",
+      "mutates": [
+        "evidenceCommands[0].code=1"
+      ],
+      "expect": "fail",
+      "mustReject": true
+    },
+    {
+      "id": "secret-leak-in-evidence",
+      "mutates": [
+        "evidenceCommands[0].secretFree=false"
+      ],
+      "expect": "fail",
+      "mustReject": true
+    },
+    {
+      "id": "top-autonomous-true-with-ready-gaps",
+      "mutates": [
+        "autonomySummary.topAutonomousDefinition=true"
+      ],
+      "expect": "fail",
+      "mustReject": true
+    },
+    {
+      "id": "missing-source-hash",
+      "mutates": [
+        "sourceFiles[0].sha256=''"
+      ],
+      "expect": "fail",
+      "mustReject": true
+    },
+    {
+      "id": "narrative-only-promotion",
+      "mutates": [
+        "releaseClaims[1].narrativeOnly=true"
+      ],
+      "expect": "fail",
+      "mustReject": true
+    },
+    {
+      "id": "missing-bundle-sha",
+      "mutates": [
+        "bundleSha256=''"
+      ],
+      "expect": "fail",
+      "mustReject": true
+    }
+  ],
+  "invariants": [
+    "release_claims_require_command_evidence",
+    "release_claims_require_source_hashes",
+    "independent_product_boundary_before_capability_claim",
+    "autonomy_control_plane_before_capability_claim",
+    "closure_readiness_before_capability_claim",
+    "top_autonomous_status_explicit",
+    "no_literal_secret_in_release_evidence",
+    "no_narrative_only_release_promotion"
+  ]
+}

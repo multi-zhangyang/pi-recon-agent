@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repi.local/schemas/reverse-agent/capability-release-bundle.schema.json",
+  "title": "CapabilityClaimReleaseBundleGateV1",
+  "description": "capability_claim_release_bundle_gate: release-facing REPI capability claims must be backed by command evidence, source hashes, product-boundary checks, autonomy control-plane output, closure readiness, and explicit not-top-autonomous status.",
+  "type": "object",
+  "required": ["kind", "schemaVersion", "generatedAt", "CapabilityClaimReleaseBundleGateV1", "requiredGates", "releaseBundle", "negativeCases", "invariants"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "const": "CapabilityClaimReleaseBundleGateV1" },
+    "schemaVersion": { "const": 1 },
+    "generatedAt": { "type": "string" },
+    "CapabilityClaimReleaseBundleGateV1": { "const": true },
+    "requiredGates": {
+      "type": "array",
+      "minItems": 8,
+      "items": {
+        "enum": [
+          "release_claims_require_command_evidence",
+          "release_claims_require_source_hashes",
+          "independent_product_boundary_before_capability_claim",
+          "autonomy_control_plane_before_capability_claim",
+          "closure_readiness_before_capability_claim",
+          "top_autonomous_status_explicit",
+          "no_literal_secret_in_release_evidence",
+          "no_narrative_only_release_promotion"
+        ]
+      }
+    },
+    "releaseBundle": { "$ref": "#/$defs/CapabilityClaimReleaseBundleV1" },
+    "negativeCases": { "type": "array", "minItems": 7, "items": { "$ref": "#/$defs/CapabilityClaimReleaseBundleNegativeCaseV1" } },
+    "invariants": { "type": "array", "minItems": 8, "items": { "type": "string" } }
+  },
+  "$defs": {
+    "CapabilityClaimEvidenceCommandV1": {
+      "type": "object",
+      "required": ["id", "command", "code", "stdoutSha256", "stderrSha256", "secretFree", "evidenceTier"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "command": { "type": "string", "minLength": 1 },
+        "code": { "type": "integer", "minimum": 0 },
+        "stdoutSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "stderrSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "secretFree": { "const": true },
+        "evidenceTier": { "enum": ["runtime_command", "control_plane_json", "closure_gate", "product_boundary"] }
+      }
+    },
+    "CapabilityClaimSourceFileV1": {
+      "type": "object",
+      "required": ["path", "exists", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "exists": { "const": true },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "CapabilityClaimReleaseClaimV1": {
+      "type": "object",
+      "required": ["claimId", "statement", "status", "evidenceCommandIds", "sourceFileRefs", "narrativeOnly", "promotionAllowed"],
+      "additionalProperties": false,
+      "properties": {
+        "claimId": {
+          "enum": [
+            "independent_product_boundary",
+            "professional_control_plane",
+            "closure_gate_readiness",
+            "not_top_autonomous_yet"
+          ]
+        },
+        "statement": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["proven", "explicit_gap"] },
+        "evidenceCommandIds": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "sourceFileRefs": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "narrativeOnly": { "const": false },
+        "promotionAllowed": { "type": "boolean" }
+      }
+    },
+    "CapabilityClaimReleaseBundleV1": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "releaseId", "gitHead", "sourceFiles", "evidenceCommands", "releaseClaims", "autonomySummary", "closureReadinessSummary", "promotionPolicy", "bundleSha256"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "CapabilityClaimReleaseBundleV1" },
+        "schemaVersion": { "const": 1 },
+        "releaseId": { "type": "string", "minLength": 1 },
+        "gitHead": { "type": "string", "minLength": 7 },
+        "sourceFiles": { "type": "array", "minItems": 5, "items": { "$ref": "#/$defs/CapabilityClaimSourceFileV1" } },
+        "evidenceCommands": { "type": "array", "minItems": 4, "items": { "$ref": "#/$defs/CapabilityClaimEvidenceCommandV1" } },
+        "releaseClaims": { "type": "array", "minItems": 4, "items": { "$ref": "#/$defs/CapabilityClaimReleaseClaimV1" } },
+        "autonomySummary": {
+          "type": "object",
+          "required": ["normalUseGuarantee", "topAutonomousDefinition", "gapCount", "closureGateCount"],
+          "additionalProperties": false,
+          "properties": {
+            "normalUseGuarantee": { "const": true },
+            "topAutonomousDefinition": { "const": false },
+            "gapCount": { "type": "integer", "minimum": 1 },
+            "closureGateCount": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "closureReadinessSummary": {
+          "type": "object",
+          "required": ["readyRows", "failedRows", "allClosureGatesExecutable", "allClosureGatesHarnessed"],
+          "additionalProperties": false,
+          "properties": {
+            "readyRows": { "type": "integer", "minimum": 1 },
+            "failedRows": { "const": 0 },
+            "allClosureGatesExecutable": { "const": true },
+            "allClosureGatesHarnessed": { "const": true }
+          }
+        },
+        "promotionPolicy": {
+          "type": "object",
+          "required": ["mode", "narrativeOnlyPromotionBlocked", "topAutonomousClaimBlockedUntilClosed", "requiresAllCommandsPass", "requiresNoSecretLeak"],
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "const": "release_capability_claim_gate" },
+            "narrativeOnlyPromotionBlocked": { "const": true },
+            "topAutonomousClaimBlockedUntilClosed": { "const": true },
+            "requiresAllCommandsPass": { "const": true },
+            "requiresNoSecretLeak": { "const": true }
+          }
+        },
+        "bundleSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "CapabilityClaimReleaseBundleNegativeCaseV1": {
+      "type": "object",
+      "required": ["id", "mutates", "expect", "mustReject"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "enum": [
+            "claim-without-command-evidence",
+            "failed-command-promoted",
+            "secret-leak-in-evidence",
+            "top-autonomous-true-with-ready-gaps",
+            "missing-source-hash",
+            "narrative-only-promotion",
+            "missing-bundle-sha"
+          ]
+        },
+        "mutates": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "expect": { "const": "fail" },
+        "mustReject": { "const": true }
+      }
+    },
+    "CapabilityClaimReleaseBundleGateV1": {
+      "type": "object",
+      "required": ["kind", "schemaVersion", "generatedAt", "CapabilityClaimReleaseBundleGateV1", "requiredGates", "releaseBundle", "negativeCases", "invariants"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "CapabilityClaimReleaseBundleGateV1" },
+        "schemaVersion": { "const": 1 },
+        "generatedAt": { "type": "string" },
+        "CapabilityClaimReleaseBundleGateV1": { "const": true },
+        "requiredGates": { "type": "array", "minItems": 8, "items": { "type": "string" } },
+        "releaseBundle": { "$ref": "#/$defs/CapabilityClaimReleaseBundleV1" },
+        "negativeCases": { "type": "array", "minItems": 7, "items": { "$ref": "#/$defs/CapabilityClaimReleaseBundleNegativeCaseV1" } },
+        "invariants": { "type": "array", "minItems": 8, "items": { "type": "string" } }
+      }
+    }
+  },
+  "x-repiInvariants": [
+    "release_claims_require_command_evidence",
+    "release_claims_require_source_hashes",
+    "independent_product_boundary_before_capability_claim",
+    "autonomy_control_plane_before_capability_claim",
+    "closure_readiness_before_capability_claim",
+    "top_autonomous_status_explicit",
+    "no_literal_secret_in_release_evidence",
+    "no_narrative_only_release_promotion"
+  ]
+}
