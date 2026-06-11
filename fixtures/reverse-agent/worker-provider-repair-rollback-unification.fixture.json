@@ -13,7 +13,9 @@
     "provider_worker_live_state_change_repair_matrix",
     "multi_attempt_retry_window_completion_chain",
     "provider_worker_state_lineage_snapshot_matrix",
-    "compound_provider_long_horizon_repair_completion_chain"
+    "compound_provider_long_horizon_repair_completion_chain",
+    "remote_provider_state_changing_repair_matrix",
+    "deep_compound_provider_repair_completion_chain"
   ],
   "scenarios": [
     {
@@ -101,6 +103,44 @@
         "regressionProofSha256 per attempt",
         "compound_provider_long_horizon_repair_completion_chain"
       ]
+    },
+    {
+      "id": "provider-worker-token-state-repair",
+      "source": "provider-worker",
+      "mustBind": [
+        "RemoteProviderStateChangingRepairMatrixV1",
+        "remote_provider_state_changing_repair_matrix",
+        "requestLogFile",
+        "runtimeManifestFile",
+        "RepairRollbackPolicyV1",
+        "baselineTreeSha256",
+        "restoredTreeSha256",
+        "env-ref-only secrets"
+      ]
+    },
+    {
+      "id": "remote-provider-config-state-repair",
+      "source": "provider-worker",
+      "mustBind": [
+        "RemoteProviderStateChangingRepairMatrixV1",
+        "remote provider config repair",
+        "five attempts",
+        "sameSignatureRetryWindow",
+        "rollback policy",
+        "regression proof"
+      ]
+    },
+    {
+      "id": "compound-provider-deep-repair",
+      "source": "compound-frontier",
+      "mustBind": [
+        "DeepCompoundProviderRepairCompletionChainV1",
+        "seven attempts",
+        "sameSignatureRetryWindow",
+        "runtime refs per attempt",
+        "regressionProofSha256 per attempt",
+        "deep_compound_provider_repair_completion_chain"
+      ]
     }
   ],
   "negativeCases": [
@@ -175,6 +215,24 @@
       "mutates": "longHorizonRepairCompletionChain.attempts[1].signature",
       "expect": "reject",
       "mustNotPromote": true
+    },
+    {
+      "id": "remote-state-repair-matrix-too-narrow",
+      "mutates": "remoteProviderStateChangingRepairMatrix.rows truncated below six rows",
+      "expect": "reject",
+      "mustNotPromote": true
+    },
+    {
+      "id": "deep-compound-chain-too-short",
+      "mutates": "deepCompoundProviderRepairCompletionChain compound-provider-deep-repair chain truncated below five attempts",
+      "expect": "reject",
+      "mustNotPromote": true
+    },
+    {
+      "id": "remote-state-repair-secret-leak",
+      "mutates": "remoteProviderStateChangingRepairMatrix.rows[0].requestLogFile contains a literal token-like secret",
+      "expect": "reject",
+      "mustNotPromote": true
     }
   ],
   "promotionPolicy": {
@@ -186,7 +244,9 @@
     "requiresProviderWorkerLiveRepairMatrix": true,
     "requiresMultiAttemptRetryWindowCompletion": true,
     "requiresProviderWorkerStateLineageSnapshotMatrix": true,
-    "requiresCompoundProviderLongHorizonRepairCompletion": true
+    "requiresCompoundProviderLongHorizonRepairCompletion": true,
+    "requiresRemoteProviderStateChangingRepairMatrix": true,
+    "requiresDeepCompoundProviderRepairCompletion": true
   },
   "invariants": [
     "worker_provider_repair_rollback_unification_gate",
@@ -199,6 +259,8 @@
     "provider_worker_live_state_change_repair_matrix",
     "multi_attempt_retry_window_completion_chain",
     "provider_worker_state_lineage_snapshot_matrix",
-    "compound_provider_long_horizon_repair_completion_chain"
+    "compound_provider_long_horizon_repair_completion_chain",
+    "remote_provider_state_changing_repair_matrix",
+    "deep_compound_provider_repair_completion_chain"
   ]
 }

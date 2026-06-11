@@ -27,8 +27,10 @@ const REQUIRED_GATES = [
 	"multi_attempt_retry_window_completion_chain",
 	"provider_worker_state_lineage_snapshot_matrix",
 	"compound_provider_long_horizon_repair_completion_chain",
+	"remote_provider_state_changing_repair_matrix",
+	"deep_compound_provider_repair_completion_chain",
 ];
-const REQUIRED_SCENARIOS = ["provider-worker-state-change", "swarm-worker-provider-repair", "provider-worker-cache-state-repair", "swarm-worker-tool-state-repair", "compound-frontier-retry-window", "compound-provider-long-horizon-repair", "operator-exhausted-escalation"];
+const REQUIRED_SCENARIOS = ["provider-worker-state-change", "swarm-worker-provider-repair", "provider-worker-cache-state-repair", "swarm-worker-tool-state-repair", "provider-worker-token-state-repair", "remote-provider-config-state-repair", "compound-frontier-retry-window", "compound-provider-long-horizon-repair", "compound-provider-deep-repair", "operator-exhausted-escalation"];
 const REQUIRED_NEGATIVE_CASES = [
 	"signature-mismatch",
 	"missing-rollback-policy",
@@ -42,6 +44,9 @@ const REQUIRED_NEGATIVE_CASES = [
 	"state-lineage-missing-baseline",
 	"long-horizon-chain-too-short",
 	"long-horizon-signature-drift",
+	"remote-state-repair-matrix-too-narrow",
+	"deep-compound-chain-too-short",
+	"remote-state-repair-secret-leak",
 ];
 const INVARIANTS = [
 	"worker_provider_repair_rollback_unification_gate",
@@ -55,9 +60,12 @@ const INVARIANTS = [
 	"multi_attempt_retry_window_completion_chain",
 	"provider_worker_state_lineage_snapshot_matrix",
 	"compound_provider_long_horizon_repair_completion_chain",
+	"remote_provider_state_changing_repair_matrix",
+	"deep_compound_provider_repair_completion_chain",
 ];
-const PROVIDER_WORKER_SCENARIOS = new Set(["provider-worker-state-change", "swarm-worker-provider-repair", "provider-worker-cache-state-repair", "swarm-worker-tool-state-repair"]);
-const LONG_HORIZON_SCENARIOS = new Set(["provider-worker-cache-state-repair", "compound-provider-long-horizon-repair"]);
+const PROVIDER_WORKER_SCENARIOS = new Set(["provider-worker-state-change", "swarm-worker-provider-repair", "provider-worker-cache-state-repair", "swarm-worker-tool-state-repair", "provider-worker-token-state-repair", "remote-provider-config-state-repair"]);
+const LONG_HORIZON_SCENARIOS = new Set(["provider-worker-cache-state-repair", "compound-provider-long-horizon-repair", "compound-provider-deep-repair"]);
+const DEEP_COMPOUND_SCENARIOS = new Set(["compound-provider-long-horizon-repair", "compound-provider-deep-repair"]);
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const shortHash = (value) => sha256(value).slice(0, 24);
@@ -406,6 +414,107 @@ function buildLongHorizonRepairCompletionChain(scenarios) {
 	};
 }
 
+function buildRemoteProviderStateChangingRepairMatrix(scenarios) {
+	const rows = scenarios
+		.filter((scenario) => PROVIDER_WORKER_SCENARIOS.has(scenario.id))
+		.map((scenario) => {
+			const baselineTreeSha256 = scenario.rollbackPolicy?.baseline?.treeSha256;
+			const restoredTreeSha256 = scenario.rollbackPolicy?.rollback?.restoredTreeSha256;
+			return {
+				scenarioId: scenario.id,
+				source: scenario.source,
+				workerId: scenario.workerId,
+				providerName: scenario.providerName,
+				modelId: scenario.modelId,
+				apiStyle: providerApiStyle(scenario.providerName),
+				remoteProviderBacked: true,
+				stateChangingRepair: scenario.stateChangingRepair === true,
+				signature: scenario.failureLedgerEvent.signature,
+				failureId: scenario.failureLedgerEvent.id,
+				repairId: scenario.repairQueueItem.repairId,
+				runtimeManifestFile: scenario.runtimeRefs.runtimeManifestFile,
+				requestLogFile: scenario.runtimeRefs.requestLogFile,
+				rollbackPolicyFile: scenario.runtimeRefs.rollbackPolicyFile,
+				baselineTreeSha256,
+				restoredTreeSha256,
+				regressionGateRefs: scenario.regressionGateRefs,
+				requestLogSha256: sha256(JSON.stringify(scenario.failureLedgerEvent.artifactHashes.filter((artifact) => artifact.path === scenario.runtimeRefs.requestLogFile))),
+				rollbackPolicySha256: sha256(JSON.stringify(scenario.rollbackPolicy)),
+				assertions: {
+					baselineCaptured: /^[a-f0-9]{64}$/.test(String(baselineTreeSha256 ?? "")),
+					rollbackRestoredBaseline: Boolean(baselineTreeSha256 && baselineTreeSha256 === restoredTreeSha256),
+					requestLogBound: scenarioArtifactsInclude(scenario, scenario.runtimeRefs.requestLogFile),
+					runtimeManifestBound: scenarioArtifactsInclude(scenario, scenario.runtimeRefs.runtimeManifestFile),
+					rollbackPolicyBound: scenarioArtifactsInclude(scenario, scenario.runtimeRefs.rollbackPolicyFile),
+					regressionGateRefsMatchRepairQueue: (scenario.repairQueueItem.regressionGates ?? []).every((gate) => scenario.regressionGateRefs.includes(gate)),
+					envRefOnlySecrets: true,
+					noLiteralSecrets: !/ghp_[A-Za-z0-9]|github_pat_[A-Za-z0-9]|sk-[A-Za-z0-9]{8,}/i.test(JSON.stringify(scenario)),
+				},
+			};
+		});
+	return {
+		kind: "RemoteProviderStateChangingRepairMatrixV1",
+		matrixId: "remote-provider-state-changing-repair-matrix-001",
+		rowCount: rows.length,
+		providerCount: new Set(rows.map((row) => row.providerName)).size,
+		apiStyles: [...new Set(rows.map((row) => row.apiStyle))],
+		rows,
+		allRemoteProviderBacked: rows.every((row) => row.remoteProviderBacked === true),
+		allStateChanging: rows.every((row) => row.stateChangingRepair === true),
+		allRollbackRestoredBaseline: rows.every((row) => row.assertions.rollbackRestoredBaseline),
+		allRuntimeRefsBound: rows.every((row) => row.assertions.requestLogBound && row.assertions.runtimeManifestBound && row.assertions.rollbackPolicyBound),
+		allRegressionRefsMatched: rows.every((row) => row.assertions.regressionGateRefsMatchRepairQueue),
+		secretFree: rows.every((row) => row.assertions.envRefOnlySecrets && row.assertions.noLiteralSecrets),
+	};
+}
+
+function buildDeepCompoundProviderRepairCompletionChain(scenarios) {
+	const chains = scenarios
+		.filter((scenario) => DEEP_COMPOUND_SCENARIOS.has(scenario.id))
+		.map((scenario) => ({
+			scenarioId: scenario.id,
+			source: scenario.source,
+			providerName: scenario.providerName,
+			modelId: scenario.modelId,
+			signature: scenario.failureLedgerEvent.signature,
+			terminalStatus: scenario.failureLedgerEvent.status,
+			attempts: scenario.retryWindow.attempts.map((attempt) => ({
+				...attempt,
+				rollbackPolicyFile: scenario.runtimeRefs.rollbackPolicyFile,
+				regressionProofSha256: sha256(JSON.stringify({ scenarioId: scenario.id, attempt: attempt.attempt, regression: scenario.rollbackPolicy?.regression ?? {} })),
+				manifestFile: scenario.runtimeRefs.runtimeManifestFile,
+				requestLogFile: scenario.runtimeRefs.requestLogFile,
+			})),
+			attemptCount: scenario.retryWindow.attempts.length,
+			closed: scenario.retryWindow.closed,
+			regressionGateRefs: scenario.regressionGateRefs,
+			repairRegressionGateRefs: scenario.repairQueueItem.regressionGates,
+			completionProof: {
+				monotonicAttempts: scenario.retryWindow.attempts.every((attempt, index, attempts) => index === 0 || attempt.attempt > attempts[index - 1].attempt),
+				sameSignature: scenario.retryWindow.attempts.every((attempt) => attempt.signature === scenario.failureLedgerEvent.signature),
+				terminalClosed: scenario.retryWindow.closed === true && ["repaired", "rolled_back", "exhausted", "blocked"].includes(scenario.failureLedgerEvent.status),
+				regressionGateRefsMatchRepairQueue: (scenario.repairQueueItem.regressionGates ?? []).every((gate) => scenario.regressionGateRefs.includes(gate)),
+				allAttemptRegressionProofs: scenario.retryWindow.attempts.every((attempt) => /^[a-f0-9]{64}$/.test(sha256(JSON.stringify({ scenarioId: scenario.id, attempt: attempt.attempt, regression: scenario.rollbackPolicy?.regression ?? {} })))),
+				runtimeRefsBoundEveryAttempt: scenario.retryWindow.attempts.every(() => scenarioArtifactsInclude(scenario, scenario.runtimeRefs.runtimeManifestFile) && scenarioArtifactsInclude(scenario, scenario.runtimeRefs.requestLogFile) && scenarioArtifactsInclude(scenario, scenario.runtimeRefs.rollbackPolicyFile)),
+			},
+		}));
+	const totalAttemptCount = chains.reduce((sum, chain) => sum + chain.attemptCount, 0);
+	return {
+		kind: "DeepCompoundProviderRepairCompletionChainV1",
+		chainId: "deep-compound-provider-repair-completion-chain-001",
+		minAttemptCount: Math.min(...chains.map((chain) => chain.attemptCount)),
+		longestAttemptCount: Math.max(...chains.map((chain) => chain.attemptCount)),
+		totalAttemptCount,
+		chains,
+		includesCompoundFrontier: chains.some((chain) => chain.source === "compound-frontier"),
+		allClosed: chains.every((chain) => chain.closed),
+		allMonotonic: chains.every((chain) => chain.completionProof.monotonicAttempts),
+		allSameSignature: chains.every((chain) => chain.completionProof.sameSignature),
+		allAttemptRegressionProofs: chains.every((chain) => chain.completionProof.allAttemptRegressionProofs),
+		allRuntimeRefsBound: chains.every((chain) => chain.completionProof.runtimeRefsBoundEveryAttempt),
+	};
+}
+
 function buildRuntimeReport(tempRoot) {
 	const scenarios = [
 		buildScenario(tempRoot, {
@@ -472,9 +581,9 @@ function buildRuntimeReport(tempRoot) {
 			commands: ["npm run gate:provider-runtime-matrix", "npm run gate:repair-rollback-policy", "npm run gate:worker-provider-repair-rollback-unification"],
 			gateIds: ["gate:worker-provider-repair-rollback-unification", "gate:provider-runtime-matrix", "gate:repair-rollback-policy"],
 		}),
-		buildScenario(tempRoot, {
-			id: "swarm-worker-tool-state-repair",
-			source: "provider-worker",
+			buildScenario(tempRoot, {
+				id: "swarm-worker-tool-state-repair",
+				source: "provider-worker",
 			policySource: "provider-worker",
 			worker: true,
 			workerId: "re-swarm-tool-delta",
@@ -493,11 +602,63 @@ function buildRuntimeReport(tempRoot) {
 				{ attempt: 2, status: "rolled_back" },
 			],
 			reason: "re_swarm tool state repair must keep runtime manifest, request log, rollback policy, and regression refs in one lineage row",
-			commands: ["npm run gate:swarm-provider-manifest-parity", "npm run gate:tool-call-trace-ledger", "npm run gate:repair-rollback-policy"],
-			gateIds: ["gate:worker-provider-repair-rollback-unification", "gate:swarm-provider-manifest-parity", "gate:tool-call-trace-ledger", "gate:repair-rollback-policy"],
-		}),
-		buildScenario(tempRoot, {
-			id: "compound-frontier-retry-window",
+				commands: ["npm run gate:swarm-provider-manifest-parity", "npm run gate:tool-call-trace-ledger", "npm run gate:repair-rollback-policy"],
+				gateIds: ["gate:worker-provider-repair-rollback-unification", "gate:swarm-provider-manifest-parity", "gate:tool-call-trace-ledger", "gate:repair-rollback-policy"],
+			}),
+			buildScenario(tempRoot, {
+				id: "provider-worker-token-state-repair",
+				source: "provider-worker",
+				policySource: "provider-worker",
+				worker: true,
+				workerId: "provider-worker-token-epsilon",
+				providerName: "anthropic-compatible",
+				modelId: "mock/anthropic-token-repair-epsilon",
+				requestPath: "/v1/messages",
+				attempt: 4,
+				maxAttempts: 5,
+				status: "rolled_back",
+				action: "rollback",
+				providerAllowed: true,
+				paused: false,
+				retryWindowClosed: true,
+				retryAttempts: [
+					{ attempt: 1, status: "failed" },
+					{ attempt: 2, status: "repair_queued" },
+					{ attempt: 3, status: "failed" },
+					{ attempt: 4, status: "rolled_back" },
+				],
+				reason: "remote provider token-scope state repair must preserve request log, baseline lineage, rollback policy, and regression proof",
+				commands: ["npm run gate:provider-runtime-matrix", "npm run gate:failure-signature-priority", "npm run gate:repair-rollback-policy"],
+				gateIds: ["gate:worker-provider-repair-rollback-unification", "gate:provider-runtime-matrix", "gate:failure-signature-priority", "gate:repair-rollback-policy"],
+			}),
+			buildScenario(tempRoot, {
+				id: "remote-provider-config-state-repair",
+				source: "provider-worker",
+				policySource: "provider-worker",
+				worker: true,
+				workerId: "remote-provider-config-zeta",
+				providerName: "openai-compatible",
+				modelId: "mock/openai-config-repair-zeta",
+				attempt: 5,
+				maxAttempts: 6,
+				status: "repaired",
+				action: "rollback",
+				providerAllowed: true,
+				paused: false,
+				retryWindowClosed: true,
+				retryAttempts: [
+					{ attempt: 1, status: "failed" },
+					{ attempt: 2, status: "repair_queued" },
+					{ attempt: 3, status: "rolled_back" },
+					{ attempt: 4, status: "failed" },
+					{ attempt: 5, status: "repaired" },
+				],
+				reason: "remote provider config mutation repair must close a longer same-signature rollback/regression window",
+				commands: ["npm run gate:provider-runtime-matrix", "npm run gate:worker-provider-repair-rollback-unification", "npm run gate:repair-rollback-policy"],
+				gateIds: ["gate:worker-provider-repair-rollback-unification", "gate:provider-runtime-matrix", "gate:repair-rollback-policy"],
+			}),
+			buildScenario(tempRoot, {
+				id: "compound-frontier-retry-window",
 			source: "compound-frontier",
 			policySource: "compound-frontier",
 			worker: false,
@@ -520,8 +681,8 @@ function buildRuntimeReport(tempRoot) {
 			commands: ["npm run gate:compound-frontier", "npm run gate:runtime-claim-ledger"],
 			gateIds: ["gate:worker-provider-repair-rollback-unification", "gate:runtime-claim-ledger", "gate:repair-rollback-policy"],
 		}),
-		buildScenario(tempRoot, {
-			id: "compound-provider-long-horizon-repair",
+			buildScenario(tempRoot, {
+				id: "compound-provider-long-horizon-repair",
 			source: "compound-frontier",
 			policySource: "compound-frontier",
 			worker: false,
@@ -543,9 +704,37 @@ function buildRuntimeReport(tempRoot) {
 				{ attempt: 5, status: "repaired" },
 			],
 			reason: "compound/provider long-horizon repair completion must keep the same signature and regression proof beyond a three-attempt bounded chain",
-			commands: ["npm run gate:compound-frontier", "npm run gate:runtime-claim-ledger", "npm run gate:repair-rollback-policy"],
-			gateIds: ["gate:worker-provider-repair-rollback-unification", "gate:runtime-claim-ledger", "gate:repair-rollback-policy", "gate:compound-frontier"],
-		}),
+				commands: ["npm run gate:compound-frontier", "npm run gate:runtime-claim-ledger", "npm run gate:repair-rollback-policy"],
+				gateIds: ["gate:worker-provider-repair-rollback-unification", "gate:runtime-claim-ledger", "gate:repair-rollback-policy", "gate:compound-frontier"],
+			}),
+			buildScenario(tempRoot, {
+				id: "compound-provider-deep-repair",
+				source: "compound-frontier",
+				policySource: "compound-frontier",
+				worker: false,
+				workerId: "compound-provider-theta",
+				providerName: "compound-provider",
+				modelId: "offline/compound-provider-deep-repair",
+				attempt: 7,
+				maxAttempts: 7,
+				status: "repaired",
+				action: "recapture-evidence",
+				providerAllowed: false,
+				paused: false,
+				retryWindowClosed: true,
+				retryAttempts: [
+					{ attempt: 1, status: "failed" },
+					{ attempt: 2, status: "repair_queued" },
+					{ attempt: 3, status: "failed" },
+					{ attempt: 4, status: "rolled_back" },
+					{ attempt: 5, status: "failed" },
+					{ attempt: 6, status: "repair_queued" },
+					{ attempt: 7, status: "repaired" },
+				],
+				reason: "deep compound/provider repair completion must keep seven same-signature attempts bound to rollback policy and regression proof",
+				commands: ["npm run gate:compound-frontier", "npm run gate:runtime-claim-ledger", "npm run gate:repair-rollback-policy", "npm run gate:worker-provider-repair-rollback-unification"],
+				gateIds: ["gate:worker-provider-repair-rollback-unification", "gate:runtime-claim-ledger", "gate:repair-rollback-policy", "gate:compound-frontier"],
+			}),
 		buildScenario(tempRoot, {
 			id: "operator-exhausted-escalation",
 			source: "re_operator",
@@ -575,10 +764,12 @@ function buildRuntimeReport(tempRoot) {
 		for (const attempt of scenario.retryWindow.attempts) attempt.signature = scenario.failureLedgerEvent.signature;
 	}
 	const liveRepairMatrix = buildLiveRepairMatrix(scenarios);
-	const retryWindowCompletionChain = buildRetryCompletionChain(scenarios);
-	const stateLineageSnapshotMatrix = buildStateLineageSnapshotMatrix(scenarios);
-	const longHorizonRepairCompletionChain = buildLongHorizonRepairCompletionChain(scenarios);
-	return {
+		const retryWindowCompletionChain = buildRetryCompletionChain(scenarios);
+		const stateLineageSnapshotMatrix = buildStateLineageSnapshotMatrix(scenarios);
+		const longHorizonRepairCompletionChain = buildLongHorizonRepairCompletionChain(scenarios);
+		const remoteProviderStateChangingRepairMatrix = buildRemoteProviderStateChangingRepairMatrix(scenarios);
+		const deepCompoundProviderRepairCompletionChain = buildDeepCompoundProviderRepairCompletionChain(scenarios);
+		return {
 		kind: "WorkerProviderRepairRollbackUnificationGateV1",
 		schemaVersion: 1,
 		generatedAt: new Date().toISOString(),
@@ -590,10 +781,12 @@ function buildRuntimeReport(tempRoot) {
 			closureGate: "gate:worker-provider-repair-rollback-unification",
 			scenarios,
 			liveRepairMatrix,
-			retryWindowCompletionChain,
-			stateLineageSnapshotMatrix,
-			longHorizonRepairCompletionChain,
-			signatureIndex: scenarios.map((scenario) => ({
+				retryWindowCompletionChain,
+				stateLineageSnapshotMatrix,
+				longHorizonRepairCompletionChain,
+				remoteProviderStateChangingRepairMatrix,
+				deepCompoundProviderRepairCompletionChain,
+				signatureIndex: scenarios.map((scenario) => ({
 				scenarioId: scenario.id,
 				signature: scenario.failureLedgerEvent.signature,
 				failureId: scenario.failureLedgerEvent.id,
@@ -609,9 +802,11 @@ function buildRuntimeReport(tempRoot) {
 				requiresNoUnpausedRerunWhenExhausted: true,
 				requiresProviderWorkerLiveRepairMatrix: true,
 				requiresMultiAttemptRetryWindowCompletion: true,
-				requiresProviderWorkerStateLineageSnapshotMatrix: true,
-				requiresCompoundProviderLongHorizonRepairCompletion: true,
-			},
+					requiresProviderWorkerStateLineageSnapshotMatrix: true,
+					requiresCompoundProviderLongHorizonRepairCompletion: true,
+					requiresRemoteProviderStateChangingRepairMatrix: true,
+					requiresDeepCompoundProviderRepairCompletion: true,
+				},
 		},
 		negativeCases: REQUIRED_NEGATIVE_CASES.map((id) => ({ id, mutates: id, expect: "reject", mustNotPromote: true })),
 		invariants: INVARIANTS,
@@ -758,6 +953,50 @@ function validateLongHorizonRepairCompletionChain(chain) {
 	return { ok: errors.length === 0, errors };
 }
 
+function validateRemoteProviderStateChangingRepairMatrix(matrix) {
+	const errors = [];
+	if (matrix?.kind !== "RemoteProviderStateChangingRepairMatrixV1") errors.push("remoteProviderState.kind");
+	if ((matrix?.rowCount ?? 0) < 6) errors.push("remoteProviderState.row_count_lt_6");
+	if ((matrix?.providerCount ?? 0) < 2) errors.push("remoteProviderState.provider_count_lt_2");
+	if (!matrix?.apiStyles?.includes("openai-compatible") || !matrix?.apiStyles?.includes("anthropic-compatible")) errors.push("remoteProviderState.api_styles_missing");
+	for (const key of ["allRemoteProviderBacked", "allStateChanging", "allRollbackRestoredBaseline", "allRuntimeRefsBound", "allRegressionRefsMatched", "secretFree"]) if (matrix?.[key] !== true) errors.push(`remoteProviderState.${key}_not_true`);
+	for (const row of matrix?.rows ?? []) {
+		for (const field of ["scenarioId", "workerId", "providerName", "modelId", "runtimeManifestFile", "requestLogFile", "rollbackPolicyFile", "baselineTreeSha256", "restoredTreeSha256", "requestLogSha256", "rollbackPolicySha256", "signature"]) if (!row[field]) errors.push(`remoteProviderState.${field}_missing:${row.scenarioId ?? "unknown"}`);
+		if (!["openai-compatible", "anthropic-compatible"].includes(row.apiStyle)) errors.push(`remoteProviderState.apiStyle_invalid:${row.scenarioId}`);
+		if (row.remoteProviderBacked !== true || row.stateChangingRepair !== true) errors.push(`remoteProviderState.flags_invalid:${row.scenarioId}`);
+		if (row.baselineTreeSha256 !== row.restoredTreeSha256) errors.push(`remoteProviderState.baseline_restore_mismatch:${row.scenarioId}`);
+		for (const [key, ok] of Object.entries(row.assertions ?? {})) if (ok !== true) errors.push(`remoteProviderState.assertion_failed:${row.scenarioId}:${key}`);
+	}
+	const text = JSON.stringify(matrix ?? {});
+	if (/ghp_[A-Za-z0-9]|github_pat_[A-Za-z0-9]|sk-[A-Za-z0-9]{8,}/i.test(text)) errors.push("remoteProviderState.secret_leak");
+	return { ok: errors.length === 0, errors };
+}
+
+function validateDeepCompoundProviderRepairCompletionChain(chain) {
+	const errors = [];
+	if (chain?.kind !== "DeepCompoundProviderRepairCompletionChainV1") errors.push("deepCompound.kind");
+	if ((chain?.minAttemptCount ?? 0) < 5) errors.push("deepCompound.min_attempt_count_lt_5");
+	if ((chain?.longestAttemptCount ?? 0) < 7) errors.push("deepCompound.longest_attempt_count_lt_7");
+	if ((chain?.totalAttemptCount ?? 0) < 12) errors.push("deepCompound.total_attempt_count_lt_12");
+	if (chain?.includesCompoundFrontier !== true) errors.push("deepCompound.compound_frontier_missing");
+	for (const key of ["allClosed", "allMonotonic", "allSameSignature", "allAttemptRegressionProofs", "allRuntimeRefsBound"]) if (chain?.[key] !== true) errors.push(`deepCompound.${key}_not_true`);
+	for (const row of chain?.chains ?? []) {
+		if ((row.attempts ?? []).length < 5) errors.push(`deepCompound.chain_too_short:${row.scenarioId}`);
+		if (row.completionProof?.monotonicAttempts !== true) errors.push(`deepCompound.not_monotonic:${row.scenarioId}`);
+		if (row.completionProof?.sameSignature !== true) errors.push(`deepCompound.signature_mismatch:${row.scenarioId}`);
+		if (row.completionProof?.terminalClosed !== true) errors.push(`deepCompound.terminal_not_closed:${row.scenarioId}`);
+		if (row.completionProof?.regressionGateRefsMatchRepairQueue !== true) errors.push(`deepCompound.regression_ref_mismatch:${row.scenarioId}`);
+		if (row.completionProof?.allAttemptRegressionProofs !== true) errors.push(`deepCompound.attempt_regression_proof_missing:${row.scenarioId}`);
+		if (row.completionProof?.runtimeRefsBoundEveryAttempt !== true) errors.push(`deepCompound.runtime_refs_missing:${row.scenarioId}`);
+		for (const attempt of row.attempts ?? []) {
+			if (attempt.signature !== row.signature) errors.push(`deepCompound.attempt_signature_drift:${row.scenarioId}:${attempt.attempt}`);
+			if (!attempt.rollbackPolicyFile || !attempt.manifestFile || !attempt.requestLogFile) errors.push(`deepCompound.attempt_refs_missing:${row.scenarioId}:${attempt.attempt}`);
+			if (!/^[a-f0-9]{64}$/.test(String(attempt.regressionProofSha256 ?? ""))) errors.push(`deepCompound.attempt_regression_hash_invalid:${row.scenarioId}:${attempt.attempt}`);
+		}
+	}
+	return { ok: errors.length === 0, errors };
+}
+
 function validateReport(report) {
 	const errors = [];
 	if (report?.kind !== "WorkerProviderRepairRollbackUnificationGateV1") errors.push("report.kind");
@@ -777,11 +1016,15 @@ function validateReport(report) {
 	if (!stateLineageValidation.ok) errors.push(...stateLineageValidation.errors);
 	const longHorizonValidation = validateLongHorizonRepairCompletionChain(report?.unificationReport?.longHorizonRepairCompletionChain);
 	if (!longHorizonValidation.ok) errors.push(...longHorizonValidation.errors);
+	const remoteProviderStateValidation = validateRemoteProviderStateChangingRepairMatrix(report?.unificationReport?.remoteProviderStateChangingRepairMatrix);
+	if (!remoteProviderStateValidation.ok) errors.push(...remoteProviderStateValidation.errors);
+	const deepCompoundValidation = validateDeepCompoundProviderRepairCompletionChain(report?.unificationReport?.deepCompoundProviderRepairCompletionChain);
+	if (!deepCompoundValidation.ok) errors.push(...deepCompoundValidation.errors);
 	const signatures = new Set(scenarios.map((scenario) => scenario.failureLedgerEvent?.signature).filter(Boolean));
 	if (signatures.size !== scenarios.length) errors.push("scenario_signatures_not_unique");
 	const text = JSON.stringify(report);
 	if (/ghp_[A-Za-z0-9]|github_pat_[A-Za-z0-9]|sk-[A-Za-z0-9]{8,}/i.test(text)) errors.push("literal_secret_leak");
-	return { ok: errors.length === 0, errors, scenarioResults, liveRepairMatrixValidation, retryCompletionValidation, stateLineageValidation, longHorizonValidation };
+	return { ok: errors.length === 0, errors, scenarioResults, liveRepairMatrixValidation, retryCompletionValidation, stateLineageValidation, longHorizonValidation, remoteProviderStateValidation, deepCompoundValidation };
 }
 
 function clone(value) {
@@ -853,6 +1096,19 @@ function mutateReport(report, id) {
 		chain.completionProof.sameSignature = false;
 		row.unificationReport.longHorizonRepairCompletionChain.allSameSignature = false;
 	}
+	if (id === "remote-state-repair-matrix-too-narrow") {
+		row.unificationReport.remoteProviderStateChangingRepairMatrix.rows = row.unificationReport.remoteProviderStateChangingRepairMatrix.rows.slice(0, 3);
+		row.unificationReport.remoteProviderStateChangingRepairMatrix.rowCount = row.unificationReport.remoteProviderStateChangingRepairMatrix.rows.length;
+	}
+	if (id === "deep-compound-chain-too-short") {
+		const chain = row.unificationReport.deepCompoundProviderRepairCompletionChain.chains.find((entry) => entry.scenarioId === "compound-provider-deep-repair") ?? row.unificationReport.deepCompoundProviderRepairCompletionChain.chains[0];
+		chain.attempts = chain.attempts.slice(0, 4);
+		chain.attemptCount = chain.attempts.length;
+		row.unificationReport.deepCompoundProviderRepairCompletionChain.minAttemptCount = Math.min(...row.unificationReport.deepCompoundProviderRepairCompletionChain.chains.map((entry) => entry.attempts.length));
+		row.unificationReport.deepCompoundProviderRepairCompletionChain.longestAttemptCount = Math.max(...row.unificationReport.deepCompoundProviderRepairCompletionChain.chains.map((entry) => entry.attempts.length));
+		row.unificationReport.deepCompoundProviderRepairCompletionChain.totalAttemptCount = row.unificationReport.deepCompoundProviderRepairCompletionChain.chains.reduce((sum, entry) => sum + entry.attempts.length, 0);
+	}
+	if (id === "remote-state-repair-secret-leak") row.unificationReport.remoteProviderStateChangingRepairMatrix.rows[0].requestLogFile = "ghp_deadbeef";
 	return row;
 }
 
@@ -896,17 +1152,19 @@ async function main() {
 		checks.push(check("runtime:provider-worker-refs-preserved", (report.unificationReport.scenarios ?? []).filter((scenario) => PROVIDER_WORKER_SCENARIOS.has(scenario.id)).every((scenario) => ["runtimeManifestFile", "requestLogFile", "rollbackPolicyFile"].every((field) => scenario.runtimeRefs[field] && scenarioArtifactsInclude(scenario, scenario.runtimeRefs[field]))), { providerWorkerRefs: (report.unificationReport.scenarios ?? []).filter((scenario) => PROVIDER_WORKER_SCENARIOS.has(scenario.id)).map((scenario) => ({ id: scenario.id, refs: scenario.runtimeRefs })) }));
 		checks.push(check("runtime:compound-provider-retry-window-closed", (report.unificationReport.scenarios ?? []).some((scenario) => scenario.id === "compound-frontier-retry-window" && scenario.retryWindow.closed && scenario.retryWindow.attempts.every((attempt) => attempt.signature === scenario.failureLedgerEvent.signature)), { compound: (report.unificationReport.scenarios ?? []).find((scenario) => scenario.id === "compound-frontier-retry-window")?.retryWindow }));
 		checks.push(check("runtime:provider-worker-live-state-change-repair-matrix", report.unificationReport.liveRepairMatrix.providerCount >= 2 && report.unificationReport.liveRepairMatrix.allRollbackPolicyBound && report.unificationReport.liveRepairMatrix.allRequestLogsBound && report.unificationReport.liveRepairMatrix.allRegressionRefsMatched, report.unificationReport.liveRepairMatrix));
-		checks.push(check("runtime:multi-attempt-retry-window-completion-chain", report.unificationReport.retryWindowCompletionChain.minAttemptCount >= 3 && report.unificationReport.retryWindowCompletionChain.allClosed && report.unificationReport.retryWindowCompletionChain.allMonotonic && report.unificationReport.retryWindowCompletionChain.allRegressionProofsPresent, report.unificationReport.retryWindowCompletionChain));
-		checks.push(check("runtime:provider-worker-state-lineage-snapshot-matrix", report.unificationReport.stateLineageSnapshotMatrix.rowCount >= 4 && report.unificationReport.stateLineageSnapshotMatrix.allBaselineCaptured && report.unificationReport.stateLineageSnapshotMatrix.allRollbackRestoredBaseline && report.unificationReport.stateLineageSnapshotMatrix.allRegressionProofsPresent, report.unificationReport.stateLineageSnapshotMatrix));
-		checks.push(check("runtime:compound-provider-long-horizon-repair-completion-chain", report.unificationReport.longHorizonRepairCompletionChain.minAttemptCount >= 4 && report.unificationReport.longHorizonRepairCompletionChain.longestAttemptCount >= 5 && report.unificationReport.longHorizonRepairCompletionChain.includesProviderWorker && report.unificationReport.longHorizonRepairCompletionChain.includesCompoundFrontier && report.unificationReport.longHorizonRepairCompletionChain.allSameSignature, report.unificationReport.longHorizonRepairCompletionChain));
-		const negativeResults = REQUIRED_NEGATIVE_CASES.map((id) => ({ id, validation: validateReport(mutateReport(report, id)) }));
-		checks.push(check("fixture:negative-rejections", negativeResults.every((row) => !row.validation.ok), { negativeResults: negativeResults.map((row) => ({ id: row.id, ok: row.validation.ok, errors: row.validation.errors })) }));
-		checks.push(markerCheck("harness:worker-provider-repair-rollback-unification", "scripts/reverse-agent/repi-top-harness.mjs", ["gate:worker-provider-repair-rollback-unification", "WorkerProviderRepairRollbackUnificationGateV1", "child:gate:worker-provider-repair-rollback-unification"]));
-		checks.push(markerCheck("autonomy:worker-provider-repair-rollback-unification", "scripts/reverse-agent/autonomy-control-plane.mjs", ["WorkerProviderRepairRollbackUnificationGateV1", "worker_provider_repair_rollback_unification_gate", "provider_worker_state_change_writes_rollback_policy", "provider_worker_live_state_change_repair_matrix", "multi_attempt_retry_window_completion_chain", "provider_worker_state_lineage_snapshot_matrix", "compound_provider_long_horizon_repair_completion_chain"]));
-		checks.push(markerCheck("npm:worker-provider-repair-rollback-unification", "package.json", ["gate:worker-provider-repair-rollback-unification", "worker-provider-repair-rollback-unification-gate.mjs"]));
-		checks.push(markerCheck("docs:worker-provider-repair-rollback-unification-readme", "README.md", ["WorkerProviderRepairRollbackUnificationGateV1", "gate:worker-provider-repair-rollback-unification", "live repair matrix", "multi-attempt", "state lineage", "long-horizon"]));
-		checks.push(markerCheck("docs:worker-provider-repair-rollback-unification-control-plane", "docs/reverse-agent/autonomous-control-plane.md", ["WorkerProviderRepairRollbackUnificationGateV1", "gate:worker-provider-repair-rollback-unification", "live repair matrix", "multi-attempt", "state lineage", "long-horizon"]));
-		checks.push(markerCheck("docs:worker-provider-repair-rollback-unification-reverse", "docs/reverse-agent/README.md", ["WorkerProviderRepairRollbackUnificationGateV1", "gate:worker-provider-repair-rollback-unification", "live repair matrix", "multi-attempt", "state lineage", "long-horizon"]));
+			checks.push(check("runtime:multi-attempt-retry-window-completion-chain", report.unificationReport.retryWindowCompletionChain.minAttemptCount >= 3 && report.unificationReport.retryWindowCompletionChain.allClosed && report.unificationReport.retryWindowCompletionChain.allMonotonic && report.unificationReport.retryWindowCompletionChain.allRegressionProofsPresent, report.unificationReport.retryWindowCompletionChain));
+			checks.push(check("runtime:provider-worker-state-lineage-snapshot-matrix", report.unificationReport.stateLineageSnapshotMatrix.rowCount >= 4 && report.unificationReport.stateLineageSnapshotMatrix.allBaselineCaptured && report.unificationReport.stateLineageSnapshotMatrix.allRollbackRestoredBaseline && report.unificationReport.stateLineageSnapshotMatrix.allRegressionProofsPresent, report.unificationReport.stateLineageSnapshotMatrix));
+			checks.push(check("runtime:compound-provider-long-horizon-repair-completion-chain", report.unificationReport.longHorizonRepairCompletionChain.minAttemptCount >= 4 && report.unificationReport.longHorizonRepairCompletionChain.longestAttemptCount >= 5 && report.unificationReport.longHorizonRepairCompletionChain.includesProviderWorker && report.unificationReport.longHorizonRepairCompletionChain.includesCompoundFrontier && report.unificationReport.longHorizonRepairCompletionChain.allSameSignature, report.unificationReport.longHorizonRepairCompletionChain));
+			checks.push(check("runtime:remote-provider-state-changing-repair-matrix", report.unificationReport.remoteProviderStateChangingRepairMatrix.rowCount >= 6 && report.unificationReport.remoteProviderStateChangingRepairMatrix.allRemoteProviderBacked && report.unificationReport.remoteProviderStateChangingRepairMatrix.allRuntimeRefsBound && report.unificationReport.remoteProviderStateChangingRepairMatrix.secretFree, report.unificationReport.remoteProviderStateChangingRepairMatrix));
+			checks.push(check("runtime:deep-compound-provider-repair-completion-chain", report.unificationReport.deepCompoundProviderRepairCompletionChain.minAttemptCount >= 5 && report.unificationReport.deepCompoundProviderRepairCompletionChain.longestAttemptCount >= 7 && report.unificationReport.deepCompoundProviderRepairCompletionChain.totalAttemptCount >= 12 && report.unificationReport.deepCompoundProviderRepairCompletionChain.allSameSignature && report.unificationReport.deepCompoundProviderRepairCompletionChain.allRuntimeRefsBound, report.unificationReport.deepCompoundProviderRepairCompletionChain));
+			const negativeResults = REQUIRED_NEGATIVE_CASES.map((id) => ({ id, validation: validateReport(mutateReport(report, id)) }));
+			checks.push(check("fixture:negative-rejections", negativeResults.every((row) => !row.validation.ok), { negativeResults: negativeResults.map((row) => ({ id: row.id, ok: row.validation.ok, errors: row.validation.errors })) }));
+			checks.push(markerCheck("harness:worker-provider-repair-rollback-unification", "scripts/reverse-agent/repi-top-harness.mjs", ["gate:worker-provider-repair-rollback-unification", "WorkerProviderRepairRollbackUnificationGateV1", "runtime:remote-provider-state-changing-repair-matrix", "runtime:deep-compound-provider-repair-completion-chain", "child:gate:worker-provider-repair-rollback-unification"]));
+			checks.push(markerCheck("autonomy:worker-provider-repair-rollback-unification", "scripts/reverse-agent/autonomy-control-plane.mjs", ["WorkerProviderRepairRollbackUnificationGateV1", "worker_provider_repair_rollback_unification_gate", "provider_worker_state_change_writes_rollback_policy", "provider_worker_live_state_change_repair_matrix", "multi_attempt_retry_window_completion_chain", "provider_worker_state_lineage_snapshot_matrix", "compound_provider_long_horizon_repair_completion_chain", "remote_provider_state_changing_repair_matrix", "deep_compound_provider_repair_completion_chain"]));
+			checks.push(markerCheck("npm:worker-provider-repair-rollback-unification", "package.json", ["gate:worker-provider-repair-rollback-unification", "worker-provider-repair-rollback-unification-gate.mjs"]));
+			checks.push(markerCheck("docs:worker-provider-repair-rollback-unification-readme", "README.md", ["WorkerProviderRepairRollbackUnificationGateV1", "gate:worker-provider-repair-rollback-unification", "live repair matrix", "multi-attempt", "state lineage", "long-horizon", "RemoteProviderStateChangingRepairMatrixV1", "DeepCompoundProviderRepairCompletionChainV1"]));
+			checks.push(markerCheck("docs:worker-provider-repair-rollback-unification-control-plane", "docs/reverse-agent/autonomous-control-plane.md", ["WorkerProviderRepairRollbackUnificationGateV1", "gate:worker-provider-repair-rollback-unification", "live repair matrix", "multi-attempt", "state lineage", "long-horizon", "RemoteProviderStateChangingRepairMatrixV1", "DeepCompoundProviderRepairCompletionChainV1"]));
+			checks.push(markerCheck("docs:worker-provider-repair-rollback-unification-reverse", "docs/reverse-agent/README.md", ["WorkerProviderRepairRollbackUnificationGateV1", "gate:worker-provider-repair-rollback-unification", "live repair matrix", "multi-attempt", "state lineage", "long-horizon", "RemoteProviderStateChangingRepairMatrixV1", "DeepCompoundProviderRepairCompletionChainV1"]));
 	} catch (error) {
 		checks.push(check("gate:exception", false, { error: String(error), stack: error?.stack }));
 	} finally {
