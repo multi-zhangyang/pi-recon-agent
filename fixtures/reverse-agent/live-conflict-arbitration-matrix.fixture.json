@@ -12,7 +12,9 @@
     "synthesizer_summary_parsed_to_structured_rows",
     "claim_ledger_refs_hash_chain_quality",
     "provider_backed_same_window_multi_worker_conflict_table",
-    "long_run_synthesizer_topic_parse_matrix"
+    "long_run_synthesizer_topic_parse_matrix",
+    "provider_backed_long_window_conflict_matrix",
+    "synthesizer_extended_topic_parse_matrix"
   ],
   "requiredSources": [
     "agent-dogfood",
@@ -26,7 +28,11 @@
     "provider timeout cancellation and repair boundary",
     "API abuse-window rate-limit proof",
     "provider-backed same-window multi-worker conflict table",
-    "long-run synthesizer topic parse matrix"
+    "long-run synthesizer topic parse matrix",
+    "provider-backed long-window conflict matrix",
+    "extended synthesizer topic parse matrix",
+    "session token scope proof",
+    "API idempotency duplicate replay proof"
   ],
   "positiveRequirements": [
     "every conflict row has at least two claimIds and a resolved winnerClaimId",
@@ -35,8 +41,11 @@
     "orchestrationStatus=pass does not imply platformClaimStatus=proven",
     "every source manifest carries runtimeManifestPath, structuredClaimMergePath, claimLedgerPath and hash-chain quality",
     "provider-backed same-window conflict table must include at least two provider worker ids and provider-worker source claims",
-    "long-run synthesizer topic parse matrix must cover authz, JS replay, provider timeout, and API rate-limit topics",
-    "narrative-only synthesizer rows must remain blocked and must not promote final claims"
+    "long-run synthesizer topic parse matrix must cover authz, JS replay, provider timeout, API rate-limit, session token scope, and API idempotency replay topics",
+    "narrative-only synthesizer rows must remain blocked and must not promote final claims",
+    "provider-backed long-window conflict matrix must cover at least two windows, at least two provider workers per window, at least five provider-backed claims, request log refs, runtime manifest refs and env-ref-only secret handling",
+    "extended synthesizer topic parse matrix must cover authz, JS replay, provider timeout, API rate-limit, session token scope and API idempotency replay topics",
+    "provider-backed long-window rows must reject literal secrets and must keep loser claims blocked across windows"
   ],
   "negativeCases": [
     {
@@ -104,6 +113,24 @@
       "mutates": "provider-backed same-window conflict drops provider-worker source/claims",
       "expect": "reject",
       "mustNotPromote": true
+    },
+    {
+      "id": "long-window-conflict-too-short",
+      "mutates": "providerBackedLongWindowConflictMatrix.windows keeps only one window",
+      "expect": "reject",
+      "mustNotPromote": true
+    },
+    {
+      "id": "extended-topic-parse-missing",
+      "mutates": "extendedSynthesizerTopicParseMatrix.topicRows removes api:idempotency:replay",
+      "expect": "reject",
+      "mustNotPromote": true
+    },
+    {
+      "id": "provider-window-secret-leak",
+      "mutates": "providerBackedLongWindowConflictMatrix.windows requestLogRefs contains literal token-like secret",
+      "expect": "reject",
+      "mustNotPromote": true
     }
   ],
   "promotionPolicy": {
@@ -114,7 +141,9 @@
     "requiresOrchestrationPlatformSplit": true,
     "requiresClaimLedgerHashChainQuality": true,
     "requiresProviderBackedSameWindowMultiWorkerConflictTable": true,
-    "requiresLongRunSynthesizerTopicParseMatrix": true
+    "requiresLongRunSynthesizerTopicParseMatrix": true,
+    "requiresProviderBackedLongWindowConflictMatrix": true,
+    "requiresExtendedSynthesizerTopicParseMatrix": true
   },
   "invariants": [
     "live_conflict_arbitration_matrix_gate",
@@ -126,6 +155,8 @@
     "synthesizer_summary_parsed_to_structured_rows",
     "claim_ledger_refs_hash_chain_quality",
     "provider_backed_same_window_multi_worker_conflict_table",
-    "long_run_synthesizer_topic_parse_matrix"
+    "long_run_synthesizer_topic_parse_matrix",
+    "provider_backed_long_window_conflict_matrix",
+    "synthesizer_extended_topic_parse_matrix"
   ]
 }

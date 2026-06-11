@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://repi.local/schemas/reverse-agent/live-conflict-arbitration-matrix.schema.json",
   "title": "LiveConflictArbitrationMatrixGateV1",
-  "description": "LiveConflictArbitrationMatrixGateV1 schema with provider-backed same-window multi-worker conflict tables and long-run synthesizer topic parsing.",
+  "description": "LiveConflictArbitrationMatrixGateV1 schema with provider-backed same-window and long-window multi-worker conflict matrices plus extended synthesizer topic parsing.",
   "$defs": {
     "LiveConflictSourceManifestV1": {
       "type": "object",
@@ -474,7 +474,9 @@
               "final_pass_requires_verifier",
               "winner_evidence_json_query_verifier",
               "loser_downgrade_blocks_promotion",
-              "orchestration_success_separate_from_platform_claim"
+              "orchestration_success_separate_from_platform_claim",
+              "provider_backed_long_window_conflict_matrix",
+              "synthesizer_extended_topic_parse_matrix"
             ]
           }
         }
@@ -524,7 +526,9 @@
         "promotionGate",
         "synthesizerRows",
         "providerBackedConflictTable",
-        "synthesizerTopicParseMatrix"
+        "synthesizerTopicParseMatrix",
+        "providerBackedLongWindowConflictMatrix",
+        "extendedSynthesizerTopicParseMatrix"
       ],
       "additionalProperties": false,
       "properties": {
@@ -546,14 +550,14 @@
         },
         "claimRows": {
           "type": "array",
-          "minItems": 10,
+          "minItems": 16,
           "items": {
             "$ref": "#/$defs/LiveConflictClaimRowV1"
           }
         },
         "conflictRows": {
           "type": "array",
-          "minItems": 4,
+          "minItems": 6,
           "items": {
             "$ref": "#/$defs/LiveConflictArbitrationConflictRowV1"
           }
@@ -577,6 +581,12 @@
         },
         "synthesizerTopicParseMatrix": {
           "$ref": "#/$defs/LongRunSynthesizerTopicParseMatrixV1"
+        },
+        "providerBackedLongWindowConflictMatrix": {
+          "$ref": "#/$defs/ProviderBackedLongWindowConflictMatrixV1"
+        },
+        "extendedSynthesizerTopicParseMatrix": {
+          "$ref": "#/$defs/ExtendedSynthesizerTopicParseMatrixV1"
         }
       }
     },
@@ -608,7 +618,7 @@
         },
         "requiredGates": {
           "type": "array",
-          "minItems": 10,
+          "minItems": 12,
           "items": {
             "enum": [
               "LiveConflictArbitrationMatrixGateV1",
@@ -620,7 +630,9 @@
               "synthesizer_summary_parsed_to_structured_rows",
               "claim_ledger_refs_hash_chain_quality",
               "provider_backed_same_window_multi_worker_conflict_table",
-              "long_run_synthesizer_topic_parse_matrix"
+              "long_run_synthesizer_topic_parse_matrix",
+              "provider_backed_long_window_conflict_matrix",
+              "synthesizer_extended_topic_parse_matrix"
             ]
           }
         },
@@ -629,7 +641,7 @@
         },
         "negativeCases": {
           "type": "array",
-          "minItems": 11,
+          "minItems": 14,
           "items": {
             "type": "object",
             "required": [
@@ -652,7 +664,10 @@
                   "final-without-json-query",
                   "provider-backed-conflict-single-worker",
                   "synthesizer-topic-parse-missing",
-                  "same-window-conflict-without-provider-worker"
+                  "same-window-conflict-without-provider-worker",
+                  "long-window-conflict-too-short",
+                  "extended-topic-parse-missing",
+                  "provider-window-secret-leak"
                 ]
               },
               "mutates": {
@@ -669,7 +684,7 @@
         },
         "invariants": {
           "type": "array",
-          "minItems": 10,
+          "minItems": 12,
           "items": {
             "enum": [
               "live_conflict_arbitration_matrix_gate",
@@ -681,7 +696,9 @@
               "synthesizer_summary_parsed_to_structured_rows",
               "claim_ledger_refs_hash_chain_quality",
               "provider_backed_same_window_multi_worker_conflict_table",
-              "long_run_synthesizer_topic_parse_matrix"
+              "long_run_synthesizer_topic_parse_matrix",
+              "provider_backed_long_window_conflict_matrix",
+              "synthesizer_extended_topic_parse_matrix"
             ]
           }
         }
@@ -696,7 +713,9 @@
         "synthesizer_summary_parsed_to_structured_rows",
         "claim_ledger_refs_hash_chain_quality",
         "provider_backed_same_window_multi_worker_conflict_table",
-        "long_run_synthesizer_topic_parse_matrix"
+        "long_run_synthesizer_topic_parse_matrix",
+        "provider_backed_long_window_conflict_matrix",
+        "synthesizer_extended_topic_parse_matrix"
       ]
     },
     "ProviderBackedSameWindowConflictTableV1": {
@@ -947,7 +966,7 @@
         },
         "longRunWindowIds": {
           "type": "array",
-          "minItems": 3,
+          "minItems": 5,
           "items": {
             "type": "string",
             "minLength": 1
@@ -955,7 +974,7 @@
         },
         "topicRows": {
           "type": "array",
-          "minItems": 4,
+          "minItems": 6,
           "items": {
             "$ref": "#/$defs/LongRunSynthesizerTopicRowV1"
           }
@@ -966,6 +985,281 @@
           "items": {
             "$ref": "#/$defs/LongRunSynthesizerNarrativeBlockedRowV1"
           }
+        }
+      }
+    },
+    "ProviderBackedLongWindowRowV1": {
+      "type": "object",
+      "required": [
+        "windowId",
+        "sequence",
+        "topic",
+        "conflictIds",
+        "providerWorkerIds",
+        "providerBackedClaimIds",
+        "claimIds",
+        "winnerClaimId",
+        "winningEvidenceRefs",
+        "loserClaimIds",
+        "loserDowngradeBlocked",
+        "jsonQueryVerifierPass",
+        "providerRuntimeManifestRefs",
+        "requestLogRefs",
+        "envRefOnlySecrets",
+        "literalSecretsPresent"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "windowId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "topic": {
+          "type": "string",
+          "minLength": 1
+        },
+        "conflictIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "providerWorkerIds": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "providerBackedClaimIds": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "claimIds": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "winnerClaimId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "winningEvidenceRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "loserClaimIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "loserDowngradeBlocked": {
+          "const": true
+        },
+        "jsonQueryVerifierPass": {
+          "const": true
+        },
+        "providerRuntimeManifestRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "requestLogRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "envRefOnlySecrets": {
+          "const": true
+        },
+        "literalSecretsPresent": {
+          "const": false
+        }
+      }
+    },
+    "ProviderBackedLongWindowSecretHandlingV1": {
+      "type": "object",
+      "required": [
+        "envRefOnly",
+        "literalSecretsPresent",
+        "forbiddenPatterns"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "envRefOnly": {
+          "const": true
+        },
+        "literalSecretsPresent": {
+          "const": false
+        },
+        "forbiddenPatterns": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "ProviderBackedLongWindowConflictMatrixV1": {
+      "type": "object",
+      "required": [
+        "kind",
+        "matrixId",
+        "windowCount",
+        "minProviderWorkersPerWindow",
+        "providerBackedClaimCount",
+        "secretHandling",
+        "windows"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "ProviderBackedLongWindowConflictMatrixV1"
+        },
+        "matrixId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "windowCount": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "minProviderWorkersPerWindow": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "providerBackedClaimCount": {
+          "type": "integer",
+          "minimum": 5
+        },
+        "secretHandling": {
+          "$ref": "#/$defs/ProviderBackedLongWindowSecretHandlingV1"
+        },
+        "windows": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/$defs/ProviderBackedLongWindowRowV1"
+          }
+        }
+      }
+    },
+    "ExtendedSynthesizerParserCoverageV1": {
+      "type": "object",
+      "required": [
+        "requiredTopics",
+        "parsedToStructuredRows",
+        "narrativeOnlyPromotionBlocked"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "requiredTopics": {
+          "type": "array",
+          "minItems": 6,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "parsedToStructuredRows": {
+          "const": true
+        },
+        "narrativeOnlyPromotionBlocked": {
+          "const": true
+        }
+      }
+    },
+    "ExtendedSynthesizerTopicParseMatrixV1": {
+      "type": "object",
+      "required": [
+        "kind",
+        "parseId",
+        "baseParseId",
+        "minTopicRows",
+        "longRunWindowIds",
+        "topicRows",
+        "narrativeOnlyBlockedRows",
+        "conflictsCovered",
+        "parserCoverage"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "ExtendedSynthesizerTopicParseMatrixV1"
+        },
+        "parseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "baseParseId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "minTopicRows": {
+          "type": "integer",
+          "minimum": 6
+        },
+        "longRunWindowIds": {
+          "type": "array",
+          "minItems": 5,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "topicRows": {
+          "type": "array",
+          "minItems": 6,
+          "items": {
+            "$ref": "#/$defs/LongRunSynthesizerTopicRowV1"
+          }
+        },
+        "narrativeOnlyBlockedRows": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/LongRunSynthesizerNarrativeBlockedRowV1"
+          }
+        },
+        "conflictsCovered": {
+          "type": "array",
+          "minItems": 6,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "parserCoverage": {
+          "$ref": "#/$defs/ExtendedSynthesizerParserCoverageV1"
         }
       }
     }
@@ -982,6 +1276,8 @@
     "synthesizer_summary_parsed_to_structured_rows",
     "claim_ledger_refs_hash_chain_quality",
     "provider_backed_same_window_multi_worker_conflict_table",
-    "long_run_synthesizer_topic_parse_matrix"
+    "long_run_synthesizer_topic_parse_matrix",
+    "provider_backed_long_window_conflict_matrix",
+    "synthesizer_extended_topic_parse_matrix"
   ]
 }
