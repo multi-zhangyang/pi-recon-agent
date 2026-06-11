@@ -2,37 +2,84 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://repi.local/schemas/reverse-agent/worker-provider-repair-rollback-unification.schema.json",
   "title": "WorkerProviderRepairRollbackUnificationGateV1",
-  "description": "worker_provider_repair_rollback_unification_gate: provider, worker, compound-frontier, and operator repairs must share FailureLedgerEventV1/RepairQueueItemV1 signatures, RepairRollbackPolicyV1 rollback proof, retry-window closure, and regression gate refs.",
+  "description": "worker_provider_repair_rollback_unification_gate: provider, worker, compound-frontier, and operator repairs must share FailureLedgerEventV1/RepairQueueItemV1 signatures, RepairRollbackPolicyV1 rollback proof, retry-window closure, regression gate refs, provider-worker live repair matrix, and multi-attempt completion chain.",
   "$defs": {
     "RuntimeRefsV1": {
       "type": "object",
-      "required": ["runtimeManifestFile", "requestLogFile", "rollbackPolicyFile", "regressionResultFile"],
+      "required": [
+        "runtimeManifestFile",
+        "requestLogFile",
+        "rollbackPolicyFile",
+        "regressionResultFile"
+      ],
       "additionalProperties": false,
       "properties": {
-        "runtimeManifestFile": { "type": "string", "minLength": 1 },
-        "requestLogFile": { "type": "string", "minLength": 1 },
-        "rollbackPolicyFile": { "type": "string", "minLength": 1 },
-        "regressionResultFile": { "type": "string", "minLength": 1 }
+        "runtimeManifestFile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requestLogFile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rollbackPolicyFile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "regressionResultFile": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "RetryWindowV1": {
       "type": "object",
-      "required": ["signature", "closed", "attempts"],
+      "required": [
+        "signature",
+        "closed",
+        "attempts"
+      ],
       "additionalProperties": false,
       "properties": {
-        "signature": { "type": "string", "pattern": "^[a-f0-9]{8,64}$" },
-        "closed": { "type": "boolean" },
+        "signature": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{8,64}$"
+        },
+        "closed": {
+          "type": "boolean"
+        },
         "attempts": {
           "type": "array",
           "minItems": 1,
           "items": {
             "type": "object",
-            "required": ["attempt", "status", "signature"],
+            "required": [
+              "attempt",
+              "status",
+              "signature"
+            ],
             "additionalProperties": false,
             "properties": {
-              "attempt": { "type": "integer", "minimum": 0 },
-              "status": { "enum": ["failed", "retrying", "repair_queued", "repaired", "exhausted", "rolled_back", "escalated", "blocked"] },
-              "signature": { "type": "string", "pattern": "^[a-f0-9]{8,64}$" }
+              "attempt": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "status": {
+                "enum": [
+                  "failed",
+                  "retrying",
+                  "repair_queued",
+                  "repaired",
+                  "exhausted",
+                  "rolled_back",
+                  "escalated",
+                  "blocked"
+                ]
+              },
+              "signature": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{8,64}$"
+              }
             }
           }
         }
@@ -65,72 +112,191 @@
             "operator-exhausted-escalation"
           ]
         },
-        "source": { "enum": ["provider-worker", "compound-frontier", "re_operator"] },
-        "workerId": { "type": "string", "minLength": 1 },
-        "providerName": { "type": "string", "minLength": 1 },
-        "modelId": { "type": "string", "minLength": 1 },
-        "stateChangingRepair": { "const": true },
-        "runtimeRefs": { "$ref": "#/$defs/RuntimeRefsV1" },
-        "failureLedgerEvent": { "type": "object" },
-        "repairQueueItem": { "type": "object" },
-        "rollbackPolicy": { "type": "object" },
-        "retryWindow": { "$ref": "#/$defs/RetryWindowV1" },
-        "regressionGateRefs": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "source": {
+          "enum": [
+            "provider-worker",
+            "compound-frontier",
+            "re_operator"
+          ]
+        },
+        "workerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "modelId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "stateChangingRepair": {
+          "const": true
+        },
+        "runtimeRefs": {
+          "$ref": "#/$defs/RuntimeRefsV1"
+        },
+        "failureLedgerEvent": {
+          "type": "object"
+        },
+        "repairQueueItem": {
+          "type": "object"
+        },
+        "rollbackPolicy": {
+          "type": "object"
+        },
+        "retryWindow": {
+          "$ref": "#/$defs/RetryWindowV1"
+        },
+        "regressionGateRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
         "assertions": {
           "type": "object",
-          "required": ["sameSignatureFailureRepairRollback", "rollbackPolicyWritten", "retryWindowClosed", "exhaustedDoesNotUnpausedRerun"],
+          "required": [
+            "sameSignatureFailureRepairRollback",
+            "rollbackPolicyWritten",
+            "retryWindowClosed",
+            "exhaustedDoesNotUnpausedRerun"
+          ],
           "additionalProperties": true,
           "properties": {
-            "sameSignatureFailureRepairRollback": { "const": true },
-            "rollbackPolicyWritten": { "const": true },
-            "providerWorkerRefsPreserved": { "type": "boolean" },
-            "retryWindowClosed": { "const": true },
-            "exhaustedDoesNotUnpausedRerun": { "const": true }
+            "sameSignatureFailureRepairRollback": {
+              "const": true
+            },
+            "rollbackPolicyWritten": {
+              "const": true
+            },
+            "providerWorkerRefsPreserved": {
+              "type": "boolean"
+            },
+            "retryWindowClosed": {
+              "const": true
+            },
+            "exhaustedDoesNotUnpausedRerun": {
+              "const": true
+            }
           }
         }
       }
     },
     "WorkerProviderRepairRollbackUnificationReportV1": {
       "type": "object",
-      "required": ["kind", "schemaVersion", "closureGate", "scenarios", "signatureIndex", "promotionPolicy"],
+      "required": [
+        "kind",
+        "schemaVersion",
+        "closureGate",
+        "scenarios",
+        "liveRepairMatrix",
+        "retryWindowCompletionChain",
+        "signatureIndex",
+        "promotionPolicy"
+      ],
       "additionalProperties": false,
       "properties": {
-        "kind": { "const": "WorkerProviderRepairRollbackUnificationReportV1" },
-        "schemaVersion": { "const": 1 },
-        "closureGate": { "const": "gate:worker-provider-repair-rollback-unification" },
+        "kind": {
+          "const": "WorkerProviderRepairRollbackUnificationReportV1"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "closureGate": {
+          "const": "gate:worker-provider-repair-rollback-unification"
+        },
         "scenarios": {
           "type": "array",
           "minItems": 4,
-          "items": { "$ref": "#/$defs/WorkerProviderRepairRollbackUnificationScenarioV1" }
+          "items": {
+            "$ref": "#/$defs/WorkerProviderRepairRollbackUnificationScenarioV1"
+          }
         },
         "signatureIndex": {
           "type": "array",
           "minItems": 4,
           "items": {
             "type": "object",
-            "required": ["scenarioId", "signature", "failureId", "repairId", "rollbackPolicyFile", "regressionGateRefs"],
+            "required": [
+              "scenarioId",
+              "signature",
+              "failureId",
+              "repairId",
+              "rollbackPolicyFile",
+              "regressionGateRefs"
+            ],
             "additionalProperties": false,
             "properties": {
-              "scenarioId": { "type": "string" },
-              "signature": { "type": "string", "pattern": "^[a-f0-9]{8,64}$" },
-              "failureId": { "type": "string" },
-              "repairId": { "type": "string" },
-              "rollbackPolicyFile": { "type": "string" },
-              "regressionGateRefs": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+              "scenarioId": {
+                "type": "string"
+              },
+              "signature": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{8,64}$"
+              },
+              "failureId": {
+                "type": "string"
+              },
+              "repairId": {
+                "type": "string"
+              },
+              "rollbackPolicyFile": {
+                "type": "string"
+              },
+              "regressionGateRefs": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string"
+                }
+              }
             }
           }
         },
         "promotionPolicy": {
           "type": "object",
-          "required": ["mode", "requiresFailureRepairBatch", "requiresRollbackPolicyForStateChange", "requiresProviderWorkerRuntimeRefs", "requiresNoUnpausedRerunWhenExhausted"],
+          "required": [
+            "mode",
+            "requiresFailureRepairBatch",
+            "requiresRollbackPolicyForStateChange",
+            "requiresProviderWorkerRuntimeRefs",
+            "requiresNoUnpausedRerunWhenExhausted",
+            "requiresProviderWorkerLiveRepairMatrix",
+            "requiresMultiAttemptRetryWindowCompletion"
+          ],
           "additionalProperties": false,
           "properties": {
-            "mode": { "const": "block-until-signature-policy-regression-pass" },
-            "requiresFailureRepairBatch": { "const": true },
-            "requiresRollbackPolicyForStateChange": { "const": true },
-            "requiresProviderWorkerRuntimeRefs": { "const": true },
-            "requiresNoUnpausedRerunWhenExhausted": { "const": true }
+            "mode": {
+              "const": "block-until-signature-policy-regression-pass"
+            },
+            "requiresFailureRepairBatch": {
+              "const": true
+            },
+            "requiresRollbackPolicyForStateChange": {
+              "const": true
+            },
+            "requiresProviderWorkerRuntimeRefs": {
+              "const": true
+            },
+            "requiresNoUnpausedRerunWhenExhausted": {
+              "const": true
+            },
+            "requiresProviderWorkerLiveRepairMatrix": {
+              "const": true
+            },
+            "requiresMultiAttemptRetryWindowCompletion": {
+              "const": true
+            }
           }
+        },
+        "liveRepairMatrix": {
+          "$ref": "#/$defs/ProviderWorkerLiveRepairMatrixV1"
+        },
+        "retryWindowCompletionChain": {
+          "$ref": "#/$defs/MultiAttemptRetryWindowCompletionChainV1"
         }
       }
     },
@@ -148,13 +314,21 @@
       ],
       "additionalProperties": false,
       "properties": {
-        "kind": { "const": "WorkerProviderRepairRollbackUnificationGateV1" },
-        "schemaVersion": { "const": 1 },
-        "generatedAt": { "type": "string" },
-        "WorkerProviderRepairRollbackUnificationGateV1": { "const": true },
+        "kind": {
+          "const": "WorkerProviderRepairRollbackUnificationGateV1"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "generatedAt": {
+          "type": "string"
+        },
+        "WorkerProviderRepairRollbackUnificationGateV1": {
+          "const": true
+        },
         "requiredGates": {
           "type": "array",
-          "minItems": 7,
+          "minItems": 9,
           "items": {
             "enum": [
               "WorkerProviderRepairRollbackUnificationGateV1",
@@ -163,17 +337,26 @@
               "exhausted_failure_blocks_unpaused_rerun",
               "provider_worker_refs_preserve_manifest_request_log_rollback",
               "compound_provider_retry_window_closes_same_signature",
-              "regression_gate_refs_match_repair_queue"
+              "regression_gate_refs_match_repair_queue",
+              "provider_worker_live_state_change_repair_matrix",
+              "multi_attempt_retry_window_completion_chain"
             ]
           }
         },
-        "unificationReport": { "$ref": "#/$defs/WorkerProviderRepairRollbackUnificationReportV1" },
+        "unificationReport": {
+          "$ref": "#/$defs/WorkerProviderRepairRollbackUnificationReportV1"
+        },
         "negativeCases": {
           "type": "array",
-          "minItems": 6,
+          "minItems": 9,
           "items": {
             "type": "object",
-            "required": ["id", "mutates", "expect", "mustNotPromote"],
+            "required": [
+              "id",
+              "mutates",
+              "expect",
+              "mustNotPromote"
+            ],
             "additionalProperties": false,
             "properties": {
               "id": {
@@ -183,18 +366,27 @@
                   "exhausted-unpaused-rerun",
                   "missing-provider-request-log-ref",
                   "regression-gate-mismatch",
-                  "policy-failure-repair-unlinked"
+                  "policy-failure-repair-unlinked",
+                  "live-repair-matrix-missing-provider",
+                  "retry-window-not-monotonic",
+                  "completion-without-regression-proof"
                 ]
               },
-              "mutates": { "type": "string" },
-              "expect": { "const": "reject" },
-              "mustNotPromote": { "const": true }
+              "mutates": {
+                "type": "string"
+              },
+              "expect": {
+                "const": "reject"
+              },
+              "mustNotPromote": {
+                "const": true
+              }
             }
           }
         },
         "invariants": {
           "type": "array",
-          "minItems": 7,
+          "minItems": 9,
           "items": {
             "enum": [
               "worker_provider_repair_rollback_unification_gate",
@@ -203,7 +395,9 @@
               "exhausted_failure_blocks_unpaused_rerun",
               "provider_worker_refs_preserve_manifest_request_log_rollback",
               "compound_provider_retry_window_closes_same_signature",
-              "regression_gate_refs_match_repair_queue"
+              "regression_gate_refs_match_repair_queue",
+              "provider_worker_live_state_change_repair_matrix",
+              "multi_attempt_retry_window_completion_chain"
             ]
           }
         }
@@ -215,8 +409,346 @@
         "exhausted_failure_blocks_unpaused_rerun",
         "provider_worker_refs_preserve_manifest_request_log_rollback",
         "compound_provider_retry_window_closes_same_signature",
-        "regression_gate_refs_match_repair_queue"
+        "regression_gate_refs_match_repair_queue",
+        "provider_worker_live_state_change_repair_matrix",
+        "multi_attempt_retry_window_completion_chain"
       ]
+    },
+    "ProviderWorkerLiveRepairMatrixRowV1": {
+      "type": "object",
+      "required": [
+        "scenarioId",
+        "workerId",
+        "providerName",
+        "modelId",
+        "apiStyle",
+        "stateChangingRepair",
+        "runtimeManifestFile",
+        "requestLogFile",
+        "rollbackPolicyFile",
+        "regressionGateRefs",
+        "failureId",
+        "repairId",
+        "signature",
+        "rollbackPolicySha256",
+        "assertions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "scenarioId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "modelId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "apiStyle": {
+          "enum": [
+            "openai-compatible",
+            "anthropic-compatible"
+          ]
+        },
+        "stateChangingRepair": {
+          "const": true
+        },
+        "runtimeManifestFile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requestLogFile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rollbackPolicyFile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "regressionGateRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "failureId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repairId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{8,64}$"
+        },
+        "rollbackPolicySha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "assertions": {
+          "type": "object",
+          "required": [
+            "requestLogPreserved",
+            "rollbackPolicyBound",
+            "runtimeManifestBound",
+            "regressionGateRefsMatchRepairQueue",
+            "noLiteralSecrets"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "requestLogPreserved": {
+              "const": true
+            },
+            "rollbackPolicyBound": {
+              "const": true
+            },
+            "runtimeManifestBound": {
+              "const": true
+            },
+            "regressionGateRefsMatchRepairQueue": {
+              "const": true
+            },
+            "noLiteralSecrets": {
+              "const": true
+            }
+          }
+        }
+      }
+    },
+    "ProviderWorkerLiveRepairMatrixV1": {
+      "type": "object",
+      "required": [
+        "kind",
+        "providerCount",
+        "apiStyles",
+        "stateChangingRepairCount",
+        "rows",
+        "allRollbackPolicyBound",
+        "allRequestLogsBound",
+        "allRegressionRefsMatched",
+        "secretFree"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "ProviderWorkerLiveRepairMatrixV1"
+        },
+        "providerCount": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "apiStyles": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "enum": [
+              "openai-compatible",
+              "anthropic-compatible"
+            ]
+          }
+        },
+        "stateChangingRepairCount": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "rows": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/$defs/ProviderWorkerLiveRepairMatrixRowV1"
+          }
+        },
+        "allRollbackPolicyBound": {
+          "const": true
+        },
+        "allRequestLogsBound": {
+          "const": true
+        },
+        "allRegressionRefsMatched": {
+          "const": true
+        },
+        "secretFree": {
+          "const": true
+        }
+      }
+    },
+    "MultiAttemptRetryWindowCompletionChainRowV1": {
+      "type": "object",
+      "required": [
+        "scenarioId",
+        "signature",
+        "terminalStatus",
+        "attempts",
+        "attemptCount",
+        "closed",
+        "regressionGateRefs",
+        "repairRegressionGateRefs",
+        "rollbackPolicyFile",
+        "regressionProofSha256",
+        "completionProof"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "scenarioId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{8,64}$"
+        },
+        "terminalStatus": {
+          "enum": [
+            "repaired",
+            "rolled_back",
+            "exhausted",
+            "blocked"
+          ]
+        },
+        "attempts": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "object",
+            "required": [
+              "attempt",
+              "status",
+              "signature"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "attempt": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "status": {
+                "enum": [
+                  "failed",
+                  "retrying",
+                  "repair_queued",
+                  "repaired",
+                  "exhausted",
+                  "rolled_back",
+                  "escalated",
+                  "blocked"
+                ]
+              },
+              "signature": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{8,64}$"
+              }
+            }
+          }
+        },
+        "attemptCount": {
+          "type": "integer",
+          "minimum": 3
+        },
+        "closed": {
+          "const": true
+        },
+        "regressionGateRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "repairRegressionGateRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "rollbackPolicyFile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "regressionProofSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "completionProof": {
+          "type": "object",
+          "required": [
+            "monotonicAttempts",
+            "sameSignature",
+            "terminalClosed",
+            "regressionGateRefsMatchRepairQueue",
+            "noUnpausedRerun"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "monotonicAttempts": {
+              "const": true
+            },
+            "sameSignature": {
+              "const": true
+            },
+            "terminalClosed": {
+              "const": true
+            },
+            "regressionGateRefsMatchRepairQueue": {
+              "const": true
+            },
+            "noUnpausedRerun": {
+              "const": true
+            }
+          }
+        }
+      }
+    },
+    "MultiAttemptRetryWindowCompletionChainV1": {
+      "type": "object",
+      "required": [
+        "kind",
+        "minAttemptCount",
+        "chains",
+        "allClosed",
+        "allMonotonic",
+        "allSameSignature",
+        "allRegressionProofsPresent"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "MultiAttemptRetryWindowCompletionChainV1"
+        },
+        "minAttemptCount": {
+          "type": "integer",
+          "minimum": 3
+        },
+        "chains": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/$defs/MultiAttemptRetryWindowCompletionChainRowV1"
+          }
+        },
+        "allClosed": {
+          "const": true
+        },
+        "allMonotonic": {
+          "const": true
+        },
+        "allSameSignature": {
+          "const": true
+        },
+        "allRegressionProofsPresent": {
+          "const": true
+        }
+      }
     }
   },
   "$ref": "#/$defs/WorkerProviderRepairRollbackUnificationGateV1",
@@ -228,6 +760,8 @@
     "exhausted_failure_blocks_unpaused_rerun",
     "provider_worker_refs_preserve_manifest_request_log_rollback",
     "compound_provider_retry_window_closes_same_signature",
-    "regression_gate_refs_match_repair_queue"
+    "regression_gate_refs_match_repair_queue",
+    "provider_worker_live_state_change_repair_matrix",
+    "multi_attempt_retry_window_completion_chain"
   ]
 }

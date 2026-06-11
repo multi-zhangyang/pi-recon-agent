@@ -9,44 +9,125 @@
     "exhausted_failure_blocks_unpaused_rerun",
     "provider_worker_refs_preserve_manifest_request_log_rollback",
     "compound_provider_retry_window_closes_same_signature",
-    "regression_gate_refs_match_repair_queue"
+    "regression_gate_refs_match_repair_queue",
+    "provider_worker_live_state_change_repair_matrix",
+    "multi_attempt_retry_window_completion_chain"
   ],
   "scenarios": [
     {
       "id": "provider-worker-state-change",
       "source": "provider-worker",
-      "mustBind": ["FailureLedgerEventV1", "RepairQueueItemV1", "RepairRollbackPolicyV1", "runtimeManifestFile", "requestLogFile", "regressionGateRefs"]
+      "mustBind": [
+        "FailureLedgerEventV1",
+        "RepairQueueItemV1",
+        "RepairRollbackPolicyV1",
+        "runtimeManifestFile",
+        "requestLogFile",
+        "regressionGateRefs",
+        "ProviderWorkerLiveRepairMatrixV1",
+        "provider_worker_live_state_change_repair_matrix"
+      ]
     },
     {
       "id": "swarm-worker-provider-repair",
       "source": "provider-worker",
-      "mustBind": ["SubagentRuntimeManifestV1", "WorkerChildSessionRuntimeBatchV1", "RepairRollbackPolicyV1", "requestLogFile"]
+      "mustBind": [
+        "SubagentRuntimeManifestV1",
+        "WorkerChildSessionRuntimeBatchV1",
+        "RepairRollbackPolicyV1",
+        "requestLogFile",
+        "ProviderWorkerLiveRepairMatrixV1",
+        "provider_worker_live_state_change_repair_matrix"
+      ]
     },
     {
       "id": "compound-frontier-retry-window",
       "source": "compound-frontier",
-      "mustBind": ["sameSignatureRetryWindow", "closedCompletion", "regressionGateRefs"]
+      "mustBind": [
+        "sameSignatureRetryWindow",
+        "closedCompletion",
+        "regressionGateRefs",
+        "MultiAttemptRetryWindowCompletionChainV1",
+        "multi_attempt_retry_window_completion_chain"
+      ]
     },
     {
       "id": "operator-exhausted-escalation",
       "source": "re_operator",
-      "mustBind": ["status=exhausted", "remainingAttempts=0", "paused=true", "action=escalate"]
+      "mustBind": [
+        "status=exhausted",
+        "remainingAttempts=0",
+        "paused=true",
+        "action=escalate",
+        "MultiAttemptRetryWindowCompletionChainV1",
+        "multi_attempt_retry_window_completion_chain"
+      ]
     }
   ],
   "negativeCases": [
-    { "id": "signature-mismatch", "mutates": "repairQueueItem.signature", "expect": "reject", "mustNotPromote": true },
-    { "id": "missing-rollback-policy", "mutates": "scenario.rollbackPolicy", "expect": "reject", "mustNotPromote": true },
-    { "id": "exhausted-unpaused-rerun", "mutates": "exhausted repair paused=false action=rerun", "expect": "reject", "mustNotPromote": true },
-    { "id": "missing-provider-request-log-ref", "mutates": "runtimeRefs.requestLogFile", "expect": "reject", "mustNotPromote": true },
-    { "id": "regression-gate-mismatch", "mutates": "repairQueueItem.regressionGates", "expect": "reject", "mustNotPromote": true },
-    { "id": "policy-failure-repair-unlinked", "mutates": "rollbackPolicy.repairQueue", "expect": "reject", "mustNotPromote": true }
+    {
+      "id": "signature-mismatch",
+      "mutates": "repairQueueItem.signature",
+      "expect": "reject",
+      "mustNotPromote": true
+    },
+    {
+      "id": "missing-rollback-policy",
+      "mutates": "scenario.rollbackPolicy",
+      "expect": "reject",
+      "mustNotPromote": true
+    },
+    {
+      "id": "exhausted-unpaused-rerun",
+      "mutates": "exhausted repair paused=false action=rerun",
+      "expect": "reject",
+      "mustNotPromote": true
+    },
+    {
+      "id": "missing-provider-request-log-ref",
+      "mutates": "runtimeRefs.requestLogFile",
+      "expect": "reject",
+      "mustNotPromote": true
+    },
+    {
+      "id": "regression-gate-mismatch",
+      "mutates": "repairQueueItem.regressionGates",
+      "expect": "reject",
+      "mustNotPromote": true
+    },
+    {
+      "id": "policy-failure-repair-unlinked",
+      "mutates": "rollbackPolicy.repairQueue",
+      "expect": "reject",
+      "mustNotPromote": true
+    },
+    {
+      "id": "live-repair-matrix-missing-provider",
+      "mutates": "liveRepairMatrix removes anthropic-compatible provider row",
+      "expect": "reject",
+      "mustNotPromote": true
+    },
+    {
+      "id": "retry-window-not-monotonic",
+      "mutates": "retryWindowCompletionChain attempts are not strictly increasing",
+      "expect": "reject",
+      "mustNotPromote": true
+    },
+    {
+      "id": "completion-without-regression-proof",
+      "mutates": "retryWindowCompletionChain regressionProofSha256 and gate refs removed",
+      "expect": "reject",
+      "mustNotPromote": true
+    }
   ],
   "promotionPolicy": {
     "mode": "block-until-signature-policy-regression-pass",
     "requiresFailureRepairBatch": true,
     "requiresRollbackPolicyForStateChange": true,
     "requiresProviderWorkerRuntimeRefs": true,
-    "requiresNoUnpausedRerunWhenExhausted": true
+    "requiresNoUnpausedRerunWhenExhausted": true,
+    "requiresProviderWorkerLiveRepairMatrix": true,
+    "requiresMultiAttemptRetryWindowCompletion": true
   },
   "invariants": [
     "worker_provider_repair_rollback_unification_gate",
@@ -55,6 +136,8 @@
     "exhausted_failure_blocks_unpaused_rerun",
     "provider_worker_refs_preserve_manifest_request_log_rollback",
     "compound_provider_retry_window_closes_same_signature",
-    "regression_gate_refs_match_repair_queue"
+    "regression_gate_refs_match_repair_queue",
+    "provider_worker_live_state_change_repair_matrix",
+    "multi_attempt_retry_window_completion_chain"
   ]
 }
