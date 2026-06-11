@@ -99,7 +99,8 @@
 		"gate:runtime-ledger-quality": "node scripts/reverse-agent/runtime-ledger-quality-gate.mjs . --strict",
 		"gate:provider-backed-dogfood": "node scripts/reverse-agent/provider-backed-dogfood-gate.mjs . --strict",
 		"gate:failure-signature-priority": "node scripts/reverse-agent/failure-signature-priority-gate.mjs . --strict",
-		"gate:agent-dogfood-failure-signature-binding": "node scripts/reverse-agent/agent-dogfood-failure-signature-binding-gate.mjs . --strict"
+		"gate:agent-dogfood-failure-signature-binding": "node scripts/reverse-agent/agent-dogfood-failure-signature-binding-gate.mjs . --strict",
+		"gate:agent-dogfood-structured-claims": "node scripts/reverse-agent/agent-dogfood-structured-claims-gate.mjs . --strict"
 	},
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "0.0.26",

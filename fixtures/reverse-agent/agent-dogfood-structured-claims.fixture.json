@@ -1,0 +1,179 @@
+{
+  "kind": "repi-agent-dogfood-structured-claims-fixture",
+  "schemaVersion": 1,
+  "AgentDogfoodStructuredClaimMergeGateV1": true,
+  "requiredGates": [
+    "AgentDogfoodStructuredClaimMergeGateV1",
+    "agent_dogfood_structured_claim_merge",
+    "narrative_only_observation_never_promotes",
+    "final_pass_requires_json_query",
+    "final_pass_requires_verifier",
+    "unresolved_challenge_blocks_final",
+    "claim_ledger_events_reference_structured_claims",
+    "runtime_manifest_artifact_ref_required"
+  ],
+  "invariants": [
+    "agent_dogfood_structured_claim_merge_gate",
+    "agent_dogfood_structured_claim_merge",
+    "narrative_only_observation_never_promotes",
+    "final_pass_requires_json_query",
+    "final_pass_requires_verifier",
+    "unresolved_challenge_blocks_final",
+    "claim_ledger_events_reference_structured_claims",
+    "runtime_manifest_artifact_ref_required",
+    "fixture:positive-structured-claims",
+    "fixture:negative-structured-claims"
+  ],
+  "structuredClaimMerge": {
+    "kind": "StructuredClaimMergeV1",
+    "schemaVersion": 1,
+    "mergeId": "agent-dogfood:fixture",
+    "sourcePoolId": "agent-dogfood-fixture",
+    "target": "REPI agent dogfood fixture",
+    "roleContractPath": ".repi-harness/evidence/remote/agent-parallel-dogfood/fixture/role-contract.json",
+    "claimLedgerPath": ".repi-harness/evidence/remote/agent-parallel-dogfood/fixture/claim-ledger.jsonl",
+    "subagentRuntimeManifestIndex": ".repi-harness/evidence/remote/agent-parallel-dogfood/fixture/subagent-runtime-manifests.json",
+    "claimRows": [
+      {
+        "claimId": "agent-dogfood.verifier.strict_run",
+        "workerId": "verifier",
+        "roleId": "verifier",
+        "mergeKey": "hard-score",
+        "mergeKeys": ["hard-score"],
+        "status": "proven",
+        "statement": "verifier satisfied strict runtime gates with manifest-backed evidence.",
+        "artifactRefs": [
+          {
+            "artifactId": "runtime-manifest:verifier",
+            "path": ".repi-harness/evidence/remote/agent-parallel-dogfood/fixture/verifier.runtime-manifest.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "jsonQuery": "$.roleId",
+            "op": "==",
+            "expected": "verifier",
+            "verifierPass": true
+          }
+        ],
+        "challenges": [],
+        "checks": { "exitOk": true, "modelCalled": true, "toolUsed": true },
+        "observationRefs": ["verifier.stdout.txt", "verifier.stderr.txt"],
+        "promotionBoundary": "promotable_only_for_agent_dogfood_orchestration_claim"
+      },
+      {
+        "claimId": "agent-dogfood.mapper.strict_run",
+        "workerId": "mapper",
+        "roleId": "mapper",
+        "mergeKey": "hard-score",
+        "mergeKeys": ["hard-score"],
+        "status": "gap",
+        "statement": "mapper remains non-promotable: toolUsed.",
+        "artifactRefs": [
+          {
+            "artifactId": "runtime-manifest:mapper",
+            "path": ".repi-harness/evidence/remote/agent-parallel-dogfood/fixture/mapper.runtime-manifest.json",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "jsonQuery": "$.roleId",
+            "op": "==",
+            "expected": "mapper",
+            "verifierPass": false
+          }
+        ],
+        "challenges": [
+          {
+            "challengeId": "agent-dogfood.mapper.strict_run.unresolved_gate_gap",
+            "status": "open",
+            "resolution": "blocked until toolUsed passes and regression gate reruns"
+          }
+        ],
+        "checks": { "exitOk": true, "modelCalled": true, "toolUsed": false },
+        "observationRefs": ["mapper.stdout.txt", "mapper.stderr.txt"],
+        "promotionBoundary": "observation_only_until_verifier_manifest_and_gate_pass"
+      }
+    ],
+    "conflictTable": [
+      {
+        "conflictId": "agent-dogfood.conflict.hard-score",
+        "claimIds": ["agent-dogfood.verifier.strict_run", "agent-dogfood.mapper.strict_run"],
+        "topic": "mergeKey=hard-score",
+        "status": "resolved",
+        "winnerClaimId": "agent-dogfood.verifier.strict_run",
+        "winningEvidenceRefs": [".repi-harness/evidence/remote/agent-parallel-dogfood/fixture/verifier.runtime-manifest.json"],
+        "downgradeLosers": ["agent-dogfood.mapper.strict_run"],
+        "resolutionReason": "winner selected by verifier-backed runtime manifest"
+      }
+    ],
+    "promotionGate": {
+      "mode": "strict_final_claim_promotion",
+      "requiredStatuses": ["proven"],
+      "finalClaims": [
+        {
+          "claimId": "agent-dogfood.verifier.strict_run",
+          "promotion": "final_pass",
+          "reportSection": "agent-dogfood/verifier",
+          "verifierPass": true,
+          "artifactRefs": [
+            {
+              "artifactId": "runtime-manifest:verifier",
+              "path": ".repi-harness/evidence/remote/agent-parallel-dogfood/fixture/verifier.runtime-manifest.json",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "jsonQuery": "$.roleId",
+              "op": "==",
+              "expected": "verifier",
+              "verifierPass": true
+            }
+          ]
+        }
+      ],
+      "blockedClaims": [
+        {
+          "claimId": "agent-dogfood.mapper.strict_run",
+          "reason": "blocked until toolUsed passes and regression gate reruns"
+        }
+      ],
+      "policies": [
+        "final_pass_requires_json_query",
+        "final_pass_requires_verifier",
+        "unresolved_adversary_challenge_blocks_final",
+        "narrative_only_observation_never_promotes",
+        "agent_dogfood_structured_claim_merge"
+      ]
+    }
+  },
+  "claimLedgerEvent": {
+    "type": "claim",
+    "claimId": "agent-dogfood.verifier.strict_run",
+    "structuredClaimRef": "agent-dogfood.verifier.strict_run",
+    "structuredClaimMergePath": ".repi-harness/evidence/remote/agent-parallel-dogfood/fixture/structured-claim-merge.json"
+  },
+  "negativeCases": [
+    {
+      "id": "narrative-only-final-pass",
+      "mutates": ["delete finalClaims[0].artifactRefs"],
+      "expect": "fail",
+      "mustNotPromote": ["narrative_only_observation_never_promotes"]
+    },
+    {
+      "id": "missing-json-query",
+      "mutates": ["delete finalClaims[0].artifactRefs[0].jsonQuery"],
+      "expect": "fail",
+      "mustNotPromote": ["final_pass_requires_json_query"]
+    },
+    {
+      "id": "verifier-false-final-pass",
+      "mutates": ["finalClaims[0].verifierPass=false"],
+      "expect": "fail",
+      "mustNotPromote": ["final_pass_requires_verifier"]
+    },
+    {
+      "id": "unresolved-challenge-final-pass",
+      "mutates": ["promote mapper gap claim with open challenge"],
+      "expect": "fail",
+      "mustNotPromote": ["unresolved_challenge_blocks_final"]
+    },
+    {
+      "id": "missing-runtime-manifest-artifact-ref",
+      "mutates": ["claimRows[0].artifactRefs=[]"],
+      "expect": "fail",
+      "mustNotPromote": ["runtime_manifest_artifact_ref_required"]
+    }
+  ]
+}

@@ -1249,6 +1249,7 @@ const subagentRuntimeManifests = allRuns.map((role) => ({
   captured: subagentRuntimeManifestCaptured(role),
 }));
 const subagentRuntimeManifestIndexPath = rel(join(outDir, 'subagent-runtime-manifests.json'));
+const structuredClaimMergePath = rel(join(outDir, 'structured-claim-merge.json'));
 function failureSignatureManifestBindingsCaptured() {
   if (failureSignatureManifestBindings.length !== roleFailureRepairRows.length) return false;
   const byRole = new Map(allRuns.map((role) => [role.id, role]));
@@ -1275,6 +1276,142 @@ function failureSignatureManifestBindingsCaptured() {
       && manifest.failureSignatureBinding?.signature === binding.signature
       && manifest.failureSignatureBinding?.dedupeWindow?.retryKey === binding.signature;
   });
+}
+function artifactRefForJsonPath({ artifactId, path, jsonQuery, expected, verifierPass }) {
+  const full = path && (path.startsWith('/') ? path : join(repoRoot, path));
+  if (!path || !existsSync(full)) return null;
+  const content = readFileSync(full);
+  return {
+    artifactId,
+    path: rel(full),
+    sha256: sha256(content),
+    jsonQuery,
+    op: '==',
+    expected,
+    verifierPass: Boolean(verifierPass),
+  };
+}
+function roleStructuredClaimRow(role) {
+  const passed = strictRunPassed(role);
+  const failedGates = roleFailedGateNames(role);
+  const manifestRef = artifactRefForJsonPath({
+    artifactId: `runtime-manifest:${role.id}`,
+    path: role.runtimeManifestFile,
+    jsonQuery: '$.roleId',
+    expected: role.id,
+    verifierPass: passed,
+  });
+  const claimId = `agent-dogfood.${role.id}.strict_run`;
+  return {
+    claimId,
+    workerId: role.id,
+    roleId: role.id,
+    mergeKey: (role.planWorker?.mergeKeys || [role.id])[0] || role.id,
+    mergeKeys: role.planWorker?.mergeKeys || [role.id],
+    status: passed ? 'proven' : (role.retryExhausted ? 'blocked' : 'gap'),
+    statement: passed
+      ? `${role.id} satisfied agent-dogfood strict runtime gates with manifest-backed evidence.`
+      : `${role.id} remains non-promotable: ${failedGates.join(',') || 'strictRunPassed=false'}.`,
+    artifactRefs: manifestRef ? [manifestRef] : [],
+    challenges: passed
+      ? []
+      : [{
+          challengeId: `${claimId}.unresolved_gate_gap`,
+          status: 'open',
+          resolution: `blocked until ${failedGates.join(',') || 'strictRunPassed=false'} passes and regression gate reruns`,
+        }],
+    checks: role.checks || {},
+    failureSignatureBinding: failureBindingByRole.get(role.id) || null,
+    observationRefs: [role.stdoutFile, role.stderrFile, role.runtimeManifestFile].filter(Boolean),
+    promotionBoundary: passed
+      ? 'promotable_only_for_agent_dogfood_orchestration_claim'
+      : 'observation_only_until_verifier_manifest_and_gate_pass',
+  };
+}
+function structuredClaimScore(row) {
+  const statusScore = row.status === 'proven' ? 100 : row.status === 'gap' ? 40 : row.status === 'pending' ? 20 : 0;
+  const artifactScore = (row.artifactRefs || []).filter((ref) => ref.sha256 && ref.jsonQuery && ref.verifierPass).length * 20;
+  const challengePenalty = (row.challenges || []).filter((challenge) => challenge.status !== 'resolved').length * 30;
+  return statusScore + artifactScore - challengePenalty;
+}
+function buildAgentDogfoodStructuredClaimConflicts(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    for (const key of row.mergeKeys?.length ? row.mergeKeys : [row.mergeKey]) {
+      const list = groups.get(key) || [];
+      list.push(row);
+      groups.set(key, list);
+    }
+  }
+  const conflicts = [];
+  for (const [mergeKey, rowsForKey] of groups) {
+    if (rowsForKey.length < 2) continue;
+    const statuses = new Set(rowsForKey.map((row) => row.status));
+    if (statuses.size < 2) continue;
+    const sorted = [...rowsForKey].sort((left, right) => structuredClaimScore(right) - structuredClaimScore(left));
+    const winner = sorted[0];
+    const losers = sorted.slice(1).map((row) => row.claimId);
+    conflicts.push({
+      conflictId: `agent-dogfood.conflict.${String(mergeKey).replace(/[^a-z0-9_-]+/gi, '_')}`,
+      claimIds: rowsForKey.map((row) => row.claimId),
+      topic: `mergeKey=${mergeKey}`,
+      status: winner.status === 'proven' ? 'resolved' : 'unresolved',
+      winnerClaimId: winner.status === 'proven' ? winner.claimId : '',
+      winningEvidenceRefs: winner.artifactRefs?.map((ref) => ref.path) || [],
+      downgradeLosers: losers,
+      resolutionReason: winner.status === 'proven'
+        ? `winner selected by strict gate score=${structuredClaimScore(winner)} and verifier-backed runtime manifest`
+        : 'no proven claim available; final promotion remains blocked',
+    });
+  }
+  return conflicts;
+}
+const structuredClaimRows = allRuns.map(roleStructuredClaimRow);
+const structuredClaimConflicts = buildAgentDogfoodStructuredClaimConflicts(structuredClaimRows);
+const agentDogfoodStructuredClaimMerge = {
+  kind: 'StructuredClaimMergeV1',
+  schemaVersion: 1,
+  mergeId: `agent-dogfood:${startedAt}`,
+  sourcePoolId: loadedParallelPlan?.planId || 'builtin-agent-dogfood',
+  target: 'REPI multi-agent parallel dogfood against hardest real-platform evidence',
+  roleContractPath: `${rel(outDir)}/role-contract.json`,
+  claimLedgerPath: rel(join(outDir, 'claim-ledger.jsonl')),
+  subagentRuntimeManifestIndex: subagentRuntimeManifestIndexPath,
+  claimRows: structuredClaimRows,
+  conflictTable: structuredClaimConflicts,
+  promotionGate: {
+    mode: 'strict_final_claim_promotion',
+    requiredStatuses: ['proven'],
+    finalClaims: structuredClaimRows
+      .filter((row) => row.status === 'proven' && row.artifactRefs.length && row.artifactRefs.every((ref) => ref.verifierPass && ref.sha256 && ref.jsonQuery))
+      .map((row) => ({
+        claimId: row.claimId,
+        promotion: 'final_pass',
+        reportSection: `agent-dogfood/${row.workerId}`,
+        verifierPass: true,
+        artifactRefs: row.artifactRefs,
+      })),
+    blockedClaims: structuredClaimRows
+      .filter((row) => row.status !== 'proven' || !row.artifactRefs.length || row.challenges.some((challenge) => challenge.status !== 'resolved'))
+      .map((row) => ({
+        claimId: row.claimId,
+        reason: row.challenges.find((challenge) => challenge.status !== 'resolved')?.resolution || `status=${row.status} artifactRefs=${row.artifactRefs.length}`,
+      })),
+    policies: [
+      'final_pass_requires_json_query',
+      'final_pass_requires_verifier',
+      'unresolved_adversary_challenge_blocks_final',
+      'narrative_only_observation_never_promotes',
+      'agent_dogfood_structured_claim_merge',
+    ],
+  },
+};
+function structuredClaimMergeCaptured() {
+  return agentDogfoodStructuredClaimMerge.kind === 'StructuredClaimMergeV1'
+    && agentDogfoodStructuredClaimMerge.claimRows.length === allRuns.length
+    && agentDogfoodStructuredClaimMerge.claimRows.every((row) => row.claimId && row.workerId && row.mergeKey && Array.isArray(row.artifactRefs) && Array.isArray(row.challenges))
+    && agentDogfoodStructuredClaimMerge.promotionGate.finalClaims.every((claim) => claim.verifierPass === true && claim.artifactRefs?.length && claim.artifactRefs.every((ref) => ref.sha256 && ref.jsonQuery && ref.verifierPass === true))
+    && agentDogfoodStructuredClaimMerge.promotionGate.blockedClaims.every((claim) => claim.claimId && claim.reason);
 }
 function appendClaimLedgerEvent(events, event) {
   const prevHash = events.at(-1)?.eventHash || '0'.repeat(64);
@@ -1307,6 +1444,7 @@ function buildRuntimeClaimLedgerEvents() {
       sessionDir: role.runtimeManifest?.sessionDir || '',
       toolResultCount: role.runtimeManifest?.toolResultCount ?? role.session?.toolResults ?? 0,
       modelProvider: role.runtimeManifest?.modelProvider || { requestedProvider: provider, requestedModel: model },
+      structuredClaimMergePath,
     });
   }
   for (const role of allRuns) {
@@ -1323,6 +1461,8 @@ function buildRuntimeClaimLedgerEvents() {
         ? `${role.id} satisfied its bounded role contract with model/tool/runtime evidence.`
         : `${role.id} has unresolved role gate gaps: ${failedGates.join(',') || 'strictRunPassed=false'}.`,
       failureSignatureBinding: failureBindingByRole.get(role.id) || null,
+      structuredClaimRef: `agent-dogfood.${role.id}.strict_run`,
+      structuredClaimMergePath,
       evidenceRefs: [
         role.runtimeManifestFile,
         role.stdoutFile,
@@ -1338,6 +1478,8 @@ function buildRuntimeClaimLedgerEvents() {
       result: passed ? 'pass' : 'fail',
       checks: role.checks || {},
       failureSignatureBinding: failureBindingByRole.get(role.id) || null,
+      structuredClaimRef: `agent-dogfood.${role.id}.strict_run`,
+      structuredClaimMergePath,
       evidenceRefs: [role.runtimeManifestFile, role.stdoutFile, role.stderrFile].filter(Boolean),
     });
     if (!passed) {
@@ -1348,6 +1490,8 @@ function buildRuntimeClaimLedgerEvents() {
         scope: `agent-dogfood:${role.id}`,
         challenge: `role gate failed: ${failedGates.join(',') || 'strictRunPassed=false'}`,
         failureSignatureBinding: failureBindingByRole.get(role.id) || null,
+        structuredClaimRef: `agent-dogfood.${role.id}.strict_run`,
+        structuredClaimMergePath,
         evidenceRefs: [role.runtimeManifestFile, role.stdoutFile, role.stderrFile].filter(Boolean),
       });
       appendClaimLedgerEvent(events, {
@@ -1357,6 +1501,8 @@ function buildRuntimeClaimLedgerEvents() {
         result: 'downgraded',
         resolution: 'role claim remains gap until repair queue and regression gates pass',
         failureSignatureBinding: failureBindingByRole.get(role.id) || null,
+        structuredClaimRef: `agent-dogfood.${role.id}.strict_run`,
+        structuredClaimMergePath,
         evidenceRefs: [role.runtimeManifestFile, 'failure-ledger.jsonl', 'repair-queue.jsonl'].filter(Boolean),
       });
     }
@@ -1440,6 +1586,7 @@ const gates = {
   sessionDigestsCaptured: allRuns.every((role) => (role.session.fileDigests || []).length > 0 && (role.session.fileDigests || []).every((item) => item.sha256 && item.bytes > 0)),
   subagentRuntimeManifestsCaptured: allRuns.every(subagentRuntimeManifestCaptured),
   failureSignatureManifestBindingsCaptured: failureSignatureManifestBindingsCaptured(),
+  structuredClaimMergeCaptured: structuredClaimMergeCaptured(),
   runtimeClaimLedgerCaptured: claimLedgerHashChainOk(claimLedgerEvents)
     && ['artifact_handoff', 'claim', 'validation', 'challenge', 'resolution'].every((type) => claimLedgerEvents.some((event) => event.type === type)),
   nonMockRuntimeExpected: audit.nonMockRuntimeExpected,
@@ -1527,6 +1674,8 @@ const result = {
   claimLedgerEventCount: claimLedgerEvents.length,
   claimLedgerTipHash: claimLedgerEvents.at(-1)?.eventHash || '',
   claimLedgerEvents,
+  structuredClaimMergePath,
+  structuredClaimMerge: agentDogfoodStructuredClaimMerge,
   failureLedgerEvents,
   repairQueue,
   failureSignatureManifestBindings,
@@ -1564,6 +1713,7 @@ await writeFile(join(outDir, 'subagent-runtime-manifests.json'), `${JSON.stringi
   failureSignatureManifestBindings,
   manifests: subagentRuntimeManifests,
 }, null, 2)}\n`);
+await writeFile(join(outDir, 'structured-claim-merge.json'), `${JSON.stringify(agentDogfoodStructuredClaimMerge, null, 2)}\n`);
 await writeFile(join(outDir, 'claim-ledger.jsonl'), `${claimLedgerEvents.map((event) => JSON.stringify(event)).join('\n')}${claimLedgerEvents.length ? '\n' : ''}`);
 await writeFile(join(outDir, 'result.json'), `${JSON.stringify(result, null, 2)}\n`);
 await writeFile(join(outDir, 'failure-ledger.jsonl'), `${failureLedgerEvents.map((event) => JSON.stringify(event)).join('\n')}${failureLedgerEvents.length ? '\n' : ''}`);
@@ -1589,6 +1739,7 @@ const md = [
   `- parallel_plan source=${planPreview.source} plan_id=${planPreview.planId || 'builtin'} workers=${planPreview.workerCount} merge=${planPreview.merge?.strategy || 'none'} validation=${planPreview.validation?.valid}`,
   `- subagent_runtime_manifest_index=${subagentRuntimeManifestIndexPath} captured=${gates.subagentRuntimeManifestsCaptured}`,
   `- failure_signature_manifest_bindings=${failureSignatureManifestBindings.length} captured=${gates.failureSignatureManifestBindingsCaptured}`,
+  `- structured_claim_merge=${structuredClaimMergePath} captured=${gates.structuredClaimMergeCaptured} final_claims=${agentDogfoodStructuredClaimMerge.promotionGate.finalClaims.length} blocked_claims=${agentDogfoodStructuredClaimMerge.promotionGate.blockedClaims.length}`,
   `- runtime_claim_ledger=${claimLedgerPath} events=${claimLedgerEvents.length} hash_chain=${gates.runtimeClaimLedgerCaptured}`,
   `- same_window_live=${evidencePaths.bestSameWindowLive || evidencePaths.latestSameWindowLive || 'none'}`,
   `- best_bilibili=${evidencePaths.bestBilibili || 'none'}`,
@@ -1624,6 +1775,10 @@ console.log(JSON.stringify({
   subagentRuntimeManifestFiles: subagentRuntimeManifests.map((row) => row.file),
   failureSignatureManifestBindingCount: failureSignatureManifestBindings.length,
   failureSignatureManifestBindings,
+  structuredClaimMergePath,
+  structuredClaimRowCount: agentDogfoodStructuredClaimMerge.claimRows.length,
+  structuredFinalClaimCount: agentDogfoodStructuredClaimMerge.promotionGate.finalClaims.length,
+  structuredBlockedClaimCount: agentDogfoodStructuredClaimMerge.promotionGate.blockedClaims.length,
   claimLedgerPath,
   claimLedgerEventCount: claimLedgerEvents.length,
   claimLedgerTipHash: claimLedgerEvents.at(-1)?.eventHash || '',
