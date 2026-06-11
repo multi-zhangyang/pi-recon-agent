@@ -10,7 +10,9 @@
     "failure_repair_refs_preserved_across_provider_worker",
     "provider_env_refs_only",
     "runtime_artifacts_have_hashes",
-    "narrative_only_provider_worker_not_promoted"
+    "narrative_only_provider_worker_not_promoted",
+    "multi_provider_workers_share_claim_failure_merge_ledger",
+    "provider_worker_retry_repair_rows_bound_to_worker_manifest"
   ],
   "invariants": [
     "swarm_provider_manifest_parity_gate",
@@ -22,7 +24,9 @@
     "runtime_artifacts_have_hashes",
     "narrative_only_provider_worker_not_promoted",
     "fixture:positive-parity",
-    "fixture:negative-parity"
+    "fixture:negative-parity",
+    "multi_provider_workers_share_claim_failure_merge_ledger",
+    "provider_worker_retry_repair_rows_bound_to_worker_manifest"
   ],
   "parityReport": {
     "kind": "SwarmProviderManifestParityReportV1",
@@ -37,7 +41,9 @@
         "sessionDir": "~/.repi/agent/recon/evidence/swarms/demo/worker-alpha",
         "providerName": "parallel-openai-compatible",
         "modelId": "parallel/openai-alpha",
-        "claimRefs": ["claim-parallel-alpha-provider-runtime"],
+        "claimRefs": [
+          "claim-parallel-alpha-provider-runtime"
+        ],
         "mergeKey": "claim:provider-runtime-ready",
         "hashes": {
           "stdoutSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -50,7 +56,62 @@
           "claimRefsPreserved": true,
           "hashesPresent": true,
           "providerEnvRefsOnly": true,
-          "failureRepairLinked": true
+          "failureRepairLinked": true,
+          "multiProviderSharedLedger": true,
+          "retryRepairManifestBound": true
+        },
+        "promotionAllowed": true,
+        "runtimeManifestSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "retryBudget": {
+          "signature": "re_swarm:worker-alpha",
+          "attempt": 1,
+          "maxAttempts": 3,
+          "remaining": 2,
+          "exhausted": false
+        },
+        "ledgerPaths": {
+          "claimLedgerPath": "~/.repi/agent/recon/evidence/swarms/demo/claim-ledger.jsonl",
+          "failureLedgerPath": ".repi-harness/evidence/failures/ledger.jsonl",
+          "repairQueuePath": ".repi-harness/evidence/repairs/queue.jsonl"
+        }
+      },
+      {
+        "workerId": "worker-beta-anthropic-pass",
+        "runtimeManifestFile": "~/.repi/agent/recon/evidence/swarms/demo/worker-beta/runtime-manifest.json",
+        "sessionDir": "~/.repi/agent/recon/evidence/swarms/demo/worker-beta",
+        "providerName": "parallel-anthropic-compatible",
+        "modelId": "parallel/anthropic-beta",
+        "claimRefs": [
+          "claim-parallel-beta-provider-runtime"
+        ],
+        "mergeKey": "claim:provider-runtime-ready",
+        "runtimeManifestSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "retryBudget": {
+          "signature": "re_swarm:worker-beta",
+          "attempt": 1,
+          "maxAttempts": 3,
+          "remaining": 2,
+          "exhausted": false
+        },
+        "ledgerPaths": {
+          "claimLedgerPath": "~/.repi/agent/recon/evidence/swarms/demo/claim-ledger.jsonl",
+          "failureLedgerPath": ".repi-harness/evidence/failures/ledger.jsonl",
+          "repairQueuePath": ".repi-harness/evidence/repairs/queue.jsonl"
+        },
+        "hashes": {
+          "stdoutSha256": "1212121212121212121212121212121212121212121212121212121212121212",
+          "stderrSha256": "2323232323232323232323232323232323232323232323232323232323232323",
+          "transcriptSha256": "3434343434343434343434343434343434343434343434343434343434343434"
+        },
+        "failureRepairRefs": [],
+        "parityChecks": {
+          "workerIdMatch": true,
+          "claimRefsPreserved": true,
+          "hashesPresent": true,
+          "providerEnvRefsOnly": true,
+          "failureRepairLinked": true,
+          "multiProviderSharedLedger": true,
+          "retryRepairManifestBound": true
         },
         "promotionAllowed": true
       },
@@ -60,22 +121,83 @@
         "sessionDir": "~/.repi/agent/recon/evidence/swarms/demo/worker-gamma",
         "providerName": "parallel-openai-compatible",
         "modelId": "parallel/openai-gamma-500",
-        "claimRefs": ["claim-parallel-gamma-failure-repair"],
+        "claimRefs": [
+          "claim-parallel-gamma-failure-repair"
+        ],
         "mergeKey": "claim:provider-failure-repair",
         "hashes": {
           "stdoutSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
           "stderrSha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "transcriptSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
         },
-        "failureRepairRefs": ["fail:parallel_provider_worker_matrix:gamma", "repair:parallel_provider_worker_matrix:gamma"],
+        "failureRepairRefs": [
+          "fail:parallel_provider_worker_matrix:gamma",
+          "repair:parallel_provider_worker_matrix:gamma"
+        ],
         "parityChecks": {
           "workerIdMatch": true,
           "claimRefsPreserved": true,
           "hashesPresent": true,
           "providerEnvRefsOnly": true,
-          "failureRepairLinked": true
+          "failureRepairLinked": true,
+          "multiProviderSharedLedger": true,
+          "retryRepairManifestBound": true
         },
-        "promotionAllowed": false
+        "promotionAllowed": false,
+        "runtimeManifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "retryBudget": {
+          "signature": "re_swarm:worker-gamma",
+          "attempt": 2,
+          "maxAttempts": 3,
+          "remaining": 1,
+          "exhausted": false
+        },
+        "ledgerPaths": {
+          "claimLedgerPath": "~/.repi/agent/recon/evidence/swarms/demo/claim-ledger.jsonl",
+          "failureLedgerPath": ".repi-harness/evidence/failures/ledger.jsonl",
+          "repairQueuePath": ".repi-harness/evidence/repairs/queue.jsonl"
+        }
+      }
+    ],
+    "sharedMergeLedger": {
+      "kind": "SwarmProviderSharedMergeLedgerV1",
+      "claimLedgerPath": "~/.repi/agent/recon/evidence/swarms/demo/claim-ledger.jsonl",
+      "failureLedgerPath": ".repi-harness/evidence/failures/ledger.jsonl",
+      "repairQueuePath": ".repi-harness/evidence/repairs/queue.jsonl",
+      "workerIds": [
+        "worker-alpha-openai-pass",
+        "worker-beta-anthropic-pass",
+        "worker-gamma-openai-failure-repair"
+      ],
+      "providerNames": [
+        "parallel-anthropic-compatible",
+        "parallel-openai-compatible"
+      ],
+      "claimRefs": [
+        "claim-parallel-alpha-provider-runtime",
+        "claim-parallel-beta-provider-runtime",
+        "claim-parallel-gamma-failure-repair"
+      ],
+      "failureRepairRefs": [
+        "fail:parallel_provider_worker_matrix:gamma",
+        "repair:parallel_provider_worker_matrix:gamma"
+      ],
+      "ledgerTipSha256": "4545454545454545454545454545454545454545454545454545454545454545",
+      "hashChain": true,
+      "promotionPolicy": "multi-provider provider-worker rows must share one claim/failure/repair merge ledger before any final claim is promotable"
+    },
+    "retryRepairBindings": [
+      {
+        "workerId": "worker-gamma-openai-failure-repair",
+        "runtimeManifestFile": "~/.repi/agent/recon/evidence/swarms/demo/worker-gamma/runtime-manifest.json",
+        "runtimeManifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "providerName": "parallel-openai-compatible",
+        "modelId": "parallel/openai-gamma-500",
+        "retrySignature": "re_swarm:worker-gamma",
+        "failureRef": "fail:parallel_provider_worker_matrix:gamma",
+        "repairRef": "repair:parallel_provider_worker_matrix:gamma",
+        "rollbackPolicyRef": "rollback:parallel_provider_worker_matrix:gamma",
+        "regressionGate": "gate:parallel-provider-worker-matrix"
       }
     ]
   },
@@ -89,20 +211,117 @@
     "claimLedgerPath": "~/.repi/agent/recon/evidence/swarms/demo/claim-ledger.jsonl",
     "failureLedgerPath": ".repi-harness/evidence/failures/ledger.jsonl",
     "repairQueuePath": ".repi-harness/evidence/repairs/queue.jsonl",
-    "retryBudget": { "signature": "re_swarm:worker-alpha", "attempt": 1, "maxAttempts": 3, "remaining": 2, "exhausted": false },
-    "mergeKeys": ["claim:provider-runtime-ready"]
+    "retryBudget": {
+      "signature": "re_swarm:worker-alpha",
+      "attempt": 1,
+      "maxAttempts": 3,
+      "remaining": 2,
+      "exhausted": false
+    },
+    "mergeKeys": [
+      "claim:provider-runtime-ready"
+    ],
+    "runtimeManifestSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "sharedClaimLedgerPath": "~/.repi/agent/recon/evidence/swarms/demo/claim-ledger.jsonl",
+    "sharedFailureLedgerPath": ".repi-harness/evidence/failures/ledger.jsonl",
+    "sharedRepairQueuePath": ".repi-harness/evidence/repairs/queue.jsonl"
   },
   "childSession": {
     "kind": "WorkerChildSessionRuntimeBatchV1",
-    "poolBridge": { "childSessionRuntimeCaptured": true, "claimAwareMerge": true, "workerIds": ["worker-alpha-openai-pass", "worker-gamma-openai-failure-repair"] },
+    "poolBridge": {
+      "childSessionRuntimeCaptured": true,
+      "claimAwareMerge": true,
+      "workerIds": [
+        "worker-alpha-openai-pass",
+        "worker-gamma-openai-failure-repair"
+      ],
+      "claimRefs": [
+        "claim-parallel-alpha-provider-runtime",
+        "claim-parallel-beta-provider-runtime",
+        "claim-parallel-gamma-failure-repair"
+      ],
+      "sharedClaimLedgerPath": "~/.repi/agent/recon/evidence/swarms/demo/claim-ledger.jsonl",
+      "sharedFailureLedgerPath": ".repi-harness/evidence/failures/ledger.jsonl",
+      "sharedRepairQueuePath": ".repi-harness/evidence/repairs/queue.jsonl"
+    },
     "sessions": [
       {
         "workerId": "worker-alpha-openai-pass",
-        "provider": { "name": "re_swarm-command-session", "modelId": "parallel/openai-alpha", "apiKeyRef": "$LOCAL_OPENAI_API_KEY", "baseUrlRef": "$LOCAL_OPENAI_BASE_URL" },
-        "runtime": { "sessionDir": "~/.repi/agent/recon/evidence/swarms/demo/worker-alpha", "transcriptPath": "~/.repi/agent/recon/evidence/swarms/demo/worker-alpha/transcript.jsonl" },
-        "hashes": { "stdoutSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "stderrSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "transcriptSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" },
-        "poolBridge": { "mergeKey": "claim:provider-runtime-ready", "claimRefs": ["claim-parallel-alpha-provider-runtime"] },
+        "provider": {
+          "name": "re_swarm-command-session",
+          "modelId": "parallel/openai-alpha",
+          "apiKeyRef": "$LOCAL_OPENAI_API_KEY",
+          "baseUrlRef": "$LOCAL_OPENAI_BASE_URL"
+        },
+        "runtime": {
+          "sessionDir": "~/.repi/agent/recon/evidence/swarms/demo/worker-alpha",
+          "transcriptPath": "~/.repi/agent/recon/evidence/swarms/demo/worker-alpha/transcript.jsonl"
+        },
+        "hashes": {
+          "stdoutSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "stderrSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "transcriptSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "poolBridge": {
+          "mergeKey": "claim:provider-runtime-ready",
+          "claimRefs": [
+            "claim-parallel-alpha-provider-runtime"
+          ]
+        },
         "failureRepairRefs": []
+      },
+      {
+        "workerId": "worker-beta-anthropic-pass",
+        "provider": {
+          "name": "re_swarm-command-session",
+          "modelId": "parallel/anthropic-beta",
+          "apiKeyRef": "$LOCAL_ANTHROPIC_API_KEY",
+          "baseUrlRef": "$LOCAL_ANTHROPIC_BASE_URL"
+        },
+        "runtime": {
+          "sessionDir": "~/.repi/agent/recon/evidence/swarms/demo/beta",
+          "transcriptPath": "~/.repi/agent/recon/evidence/swarms/demo/beta/transcript.jsonl"
+        },
+        "hashes": {
+          "stdoutSha256": "1212121212121212121212121212121212121212121212121212121212121212",
+          "stderrSha256": "2323232323232323232323232323232323232323232323232323232323232323",
+          "transcriptSha256": "3434343434343434343434343434343434343434343434343434343434343434"
+        },
+        "poolBridge": {
+          "mergeKey": "claim:provider-runtime-ready",
+          "claimRefs": [
+            "claim-parallel-beta-provider-runtime"
+          ]
+        },
+        "failureRepairRefs": []
+      },
+      {
+        "workerId": "worker-gamma-openai-failure-repair",
+        "provider": {
+          "name": "re_swarm-command-session",
+          "modelId": "parallel/openai-gamma-500",
+          "apiKeyRef": "$LOCAL_OPENAI_API_KEY",
+          "baseUrlRef": "$LOCAL_OPENAI_BASE_URL"
+        },
+        "runtime": {
+          "sessionDir": "~/.repi/agent/recon/evidence/swarms/demo/gamma",
+          "transcriptPath": "~/.repi/agent/recon/evidence/swarms/demo/gamma/transcript.jsonl"
+        },
+        "hashes": {
+          "stdoutSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "stderrSha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "transcriptSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        "poolBridge": {
+          "mergeKey": "claim:provider-failure-repair",
+          "claimRefs": [
+            "claim-parallel-gamma-failure-repair"
+          ]
+        },
+        "failureRepairRefs": [
+          "fail:parallel_provider_worker_matrix:gamma",
+          "repair:parallel_provider_worker_matrix:gamma"
+        ]
       }
     ]
   },
@@ -113,17 +332,101 @@
     "modelId": "parallel/openai-alpha",
     "status": "pass",
     "mergeKey": "claim:provider-runtime-ready",
-    "claimRefs": ["claim-parallel-alpha-provider-runtime"],
+    "claimRefs": [
+      "claim-parallel-alpha-provider-runtime"
+    ],
     "stdoutSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "stderrSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "transcriptSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "assertions": { "apiKeyEnvRefOnly": true, "authorizationFromEnv": true, "noLiteralSecrets": true, "providerWorkerFailureRepairLinked": true }
+    "assertions": {
+      "apiKeyEnvRefOnly": true,
+      "authorizationFromEnv": true,
+      "noLiteralSecrets": true,
+      "providerWorkerFailureRepairLinked": true
+    },
+    "runtimeManifestSha256": "1111111111111111111111111111111111111111111111111111111111111111"
   },
   "negativeCases": [
-    { "id": "worker-id-mismatch", "mutates": ["providerWorker.workerId=other"], "expect": "fail", "mustNotPromote": ["swarm_subagent_manifest_fields_match_provider_worker"] },
-    { "id": "claim-ref-dropped", "mutates": ["providerWorker.claimRefs=[]"], "expect": "fail", "mustNotPromote": ["claim_refs_preserved_across_manifest_provider_merge"] },
-    { "id": "missing-runtime-hash", "mutates": ["providerWorker.stdoutSha256=''"], "expect": "fail", "mustNotPromote": ["runtime_artifacts_have_hashes"] },
-    { "id": "literal-provider-secret", "mutates": ["childSession.sessions[0].provider.apiKeyRef=sk-live-secret"], "expect": "fail", "mustNotPromote": ["provider_env_refs_only"] },
-    { "id": "failure-repair-unlinked", "mutates": ["parityRows[1].parityChecks.failureRepairLinked=false"], "expect": "fail", "mustNotPromote": ["failure_repair_refs_preserved_across_provider_worker"] }
+    {
+      "id": "worker-id-mismatch",
+      "mutates": [
+        "providerWorker.workerId=other"
+      ],
+      "expect": "fail",
+      "mustNotPromote": [
+        "swarm_subagent_manifest_fields_match_provider_worker"
+      ]
+    },
+    {
+      "id": "claim-ref-dropped",
+      "mutates": [
+        "providerWorker.claimRefs=[]"
+      ],
+      "expect": "fail",
+      "mustNotPromote": [
+        "claim_refs_preserved_across_manifest_provider_merge"
+      ]
+    },
+    {
+      "id": "missing-runtime-hash",
+      "mutates": [
+        "providerWorker.stdoutSha256=''"
+      ],
+      "expect": "fail",
+      "mustNotPromote": [
+        "runtime_artifacts_have_hashes"
+      ]
+    },
+    {
+      "id": "literal-provider-secret",
+      "mutates": [
+        "childSession.sessions[0].provider.apiKeyRef=sk-live-secret"
+      ],
+      "expect": "fail",
+      "mustNotPromote": [
+        "provider_env_refs_only"
+      ]
+    },
+    {
+      "id": "failure-repair-unlinked",
+      "mutates": [
+        "parityRows[1].parityChecks.failureRepairLinked=false"
+      ],
+      "expect": "fail",
+      "mustNotPromote": [
+        "failure_repair_refs_preserved_across_provider_worker"
+      ]
+    },
+    {
+      "id": "single-provider-matrix",
+      "mutates": [
+        "parityRows[*].providerName=parallel-openai-compatible",
+        "sharedMergeLedger.providerNames=[parallel-openai-compatible]"
+      ],
+      "expect": "fail",
+      "mustNotPromote": [
+        "multi_provider_workers_share_claim_failure_merge_ledger"
+      ]
+    },
+    {
+      "id": "shared-ledger-worker-missing",
+      "mutates": [
+        "sharedMergeLedger.workerIds drops worker-beta-anthropic-pass"
+      ],
+      "expect": "fail",
+      "mustNotPromote": [
+        "multi_provider_workers_share_claim_failure_merge_ledger"
+      ]
+    },
+    {
+      "id": "retry-repair-manifest-unbound",
+      "mutates": [
+        "retryRepairBindings[0].retrySignature=re_swarm:other"
+      ],
+      "expect": "fail",
+      "mustNotPromote": [
+        "provider_worker_retry_repair_rows_bound_to_worker_manifest"
+      ]
+    }
   ]
 }

@@ -1004,9 +1004,9 @@ const REQUIREMENTS = [
 			},
 			{
 				id: "swarm_provider_manifest_parity_gate",
-				description: "SwarmProviderManifestParityGateV1 将 re_swarm SubagentRuntimeManifestV1、WorkerChildSessionRuntimeBatchV1 与 ParallelProviderWorkerMatrixV1 的 workerId/claimRefs/hash/env-ref/failure-repair refs 做同源校验。",
+				description: "SwarmProviderManifestParityGateV1 将 re_swarm SubagentRuntimeManifestV1、WorkerChildSessionRuntimeBatchV1 与 ParallelProviderWorkerMatrixV1 的 workerId/claimRefs/hash/env-ref/failure-repair refs 做同源校验，并覆盖 multi-provider shared merge ledger 与 retry/repair manifest binding。",
 				files: ["scripts/reverse-agent/swarm-provider-manifest-parity-gate.mjs", "fixtures/reverse-agent/swarm-provider-manifest-parity.fixture.json"],
-				markers: ["SwarmProviderManifestParityGateV1", "fixture:positive-parity", "fixture:negative-parity", "worker-id-mismatch", "literal-provider-secret", "failure-repair-unlinked"],
+				markers: ["SwarmProviderManifestParityGateV1", "fixture:positive-parity", "fixture:negative-parity", "worker-id-mismatch", "literal-provider-secret", "failure-repair-unlinked", "multi_provider_workers_share_claim_failure_merge_ledger", "provider_worker_retry_repair_rows_bound_to_worker_manifest", "single-provider-matrix", "retry-repair-manifest-unbound"],
 			},
 			{
 				id: "swarm_provider_manifest_parity_npm_gate",
@@ -2280,8 +2280,8 @@ const HARDENING_GAP_CATALOG = [
 		status: "ready_for_live",
 		priority: 1,
 		ownerRuntime: "re_swarm + WorkerChildSessionRuntimeBatchV1 + ParallelProviderWorkerMatrixV1 + SwarmProviderManifestParityGateV1",
-		currentEvidence: ["gate:swarm-provider-manifest-parity", "gate:worker-child-session", "gate:parallel-provider-worker-matrix", "gate:worker-lease-scheduler"],
-		missingRuntimeProof: ["multi-provider re_swarm child workers share a single claim/failure merge ledger", "provider worker retry/repair rows are bound to worker manifests"],
+		currentEvidence: ["gate:swarm-provider-manifest-parity", "gate:worker-child-session", "gate:parallel-provider-worker-matrix", "gate:worker-lease-scheduler", "SwarmProviderSharedMergeLedgerV1", "SwarmProviderRetryRepairBindingV1"],
+		missingRuntimeProof: ["broader live provider-backed multi-provider shared merge ledger beyond bounded parity fixture", "longer provider worker retry/repair manifest binding across real retry windows"],
 		closureGate: "gate:swarm-provider-manifest-parity",
 		regressionCommands: ["npm run gate:swarm-provider-manifest-parity", "npm run gate:worker-child-session", "npm run gate:parallel-provider-worker-matrix", "npm run gate:runtime-claim-ledger"],
 		nextCommand: "node scripts/reverse-agent/swarm-provider-manifest-parity-gate.mjs . --strict",

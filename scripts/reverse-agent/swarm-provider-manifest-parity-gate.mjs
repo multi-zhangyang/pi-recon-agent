@@ -17,11 +17,22 @@ const REQUIRED_GATES = [
   "child_session_runtime_bridge_matches_provider_worker",
   "claim_refs_preserved_across_manifest_provider_merge",
   "failure_repair_refs_preserved_across_provider_worker",
+  "multi_provider_workers_share_claim_failure_merge_ledger",
+  "provider_worker_retry_repair_rows_bound_to_worker_manifest",
   "provider_env_refs_only",
   "runtime_artifacts_have_hashes",
   "narrative_only_provider_worker_not_promoted",
 ];
-const REQUIRED_NEGATIVE_CASES = ["worker-id-mismatch", "claim-ref-dropped", "missing-runtime-hash", "literal-provider-secret", "failure-repair-unlinked"];
+const REQUIRED_NEGATIVE_CASES = [
+  "worker-id-mismatch",
+  "claim-ref-dropped",
+  "missing-runtime-hash",
+  "literal-provider-secret",
+  "failure-repair-unlinked",
+  "single-provider-matrix",
+  "shared-ledger-worker-missing",
+  "retry-repair-manifest-unbound",
+];
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const check = (id, ok, evidence = {}) => ({ id, status: ok ? "pass" : "fail", evidence });
 const readText = (path) => readFileSync(join(root, path), "utf8");
@@ -50,24 +61,69 @@ function validateParityPackage(pkg) {
   const manifest = pkg.swarmManifest;
   const childSession = pkg.childSession?.sessions?.[0];
   const provider = pkg.providerWorker;
+  const sharedLedger = report?.sharedMergeLedger;
+  const retryRepairBindings = report?.retryRepairBindings || [];
   if (report?.kind !== "SwarmProviderManifestParityReportV1") errors.push("parityReport.kind");
   if (report?.closureGate !== "gate:swarm-provider-manifest-parity") errors.push("parityReport.closureGate");
   const rows = report?.parityRows || [];
   if (rows.length < 2) errors.push("parityRows.minItems");
+  const providerNames = new Set();
+  const rowWorkerIds = new Set();
+  const rowClaimRefs = new Set();
+  const rowFailureRepairRefs = new Set();
+  const rowByWorkerId = new Map();
   for (const row of rows) {
     if (!row.workerId) errors.push("row.workerId_missing");
+    else {
+      rowWorkerIds.add(row.workerId);
+      rowByWorkerId.set(row.workerId, row);
+    }
     if (!row.runtimeManifestFile) errors.push(`${row.workerId}.runtimeManifestFile_missing`);
+    if (!hasHash(row.runtimeManifestSha256)) errors.push(`${row.workerId}.runtimeManifestSha256_missing`);
     if (!row.sessionDir) errors.push(`${row.workerId}.sessionDir_missing`);
     if (!row.providerName || !row.modelId) errors.push(`${row.workerId}.provider_missing`);
+    if (row.providerName) providerNames.add(row.providerName);
     if (!row.claimRefs?.length) errors.push(`${row.workerId}.claimRefs_missing`);
+    for (const claimRef of row.claimRefs || []) rowClaimRefs.add(claimRef);
+    for (const failureRepairRef of row.failureRepairRefs || []) rowFailureRepairRefs.add(failureRepairRef);
     if (!hasHash(row.hashes?.stdoutSha256) || !hasHash(row.hashes?.stderrSha256) || !hasHash(row.hashes?.transcriptSha256)) errors.push(`${row.workerId}.hashes_missing`);
+    if (!row.retryBudget?.signature || row.retryBudget?.exhausted === true || (row.retryBudget?.remaining ?? -1) < 0) errors.push(`${row.workerId}.retryBudget_invalid`);
+    if (!row.ledgerPaths?.claimLedgerPath || !row.ledgerPaths?.failureLedgerPath || !row.ledgerPaths?.repairQueuePath) errors.push(`${row.workerId}.ledgerPaths_missing`);
     for (const [key, ok] of Object.entries(row.parityChecks || {})) if (ok !== true) errors.push(`${row.workerId}.parityCheck_failed:${key}`);
     if (row.promotionAllowed && !row.parityChecks?.providerEnvRefsOnly) errors.push(`${row.workerId}.promotion_without_env_ref`);
     if (row.promotionAllowed && row.failureRepairRefs?.length) errors.push(`${row.workerId}.failure_worker_promoted`);
   }
+  if (providerNames.size < 2) errors.push("multi_provider_workers_share_claim_failure_merge_ledger.provider_count_lt_2");
+  if (sharedLedger?.kind !== "SwarmProviderSharedMergeLedgerV1") errors.push("sharedMergeLedger.kind");
+  if (!sharedLedger?.claimLedgerPath || !sharedLedger?.failureLedgerPath || !sharedLedger?.repairQueuePath) errors.push("sharedMergeLedger.paths_missing");
+  if (!hasHash(sharedLedger?.ledgerTipSha256) || sharedLedger?.hashChain !== true) errors.push("sharedMergeLedger.hash_chain_invalid");
+  for (const providerName of providerNames) if (!sharedLedger?.providerNames?.includes(providerName)) errors.push(`sharedMergeLedger.provider_missing:${providerName}`);
+  for (const workerId of rowWorkerIds) if (!sharedLedger?.workerIds?.includes(workerId)) errors.push(`sharedMergeLedger.worker_missing:${workerId}`);
+  for (const claimRef of rowClaimRefs) if (!sharedLedger?.claimRefs?.includes(claimRef)) errors.push(`sharedMergeLedger.claim_missing:${claimRef}`);
+  for (const failureRepairRef of rowFailureRepairRefs) if (!sharedLedger?.failureRepairRefs?.includes(failureRepairRef)) errors.push(`sharedMergeLedger.failure_repair_missing:${failureRepairRef}`);
+
+  const failureRows = rows.filter((row) => row.failureRepairRefs?.length);
+  if (failureRows.length < 1) errors.push("provider_worker_retry_repair_rows_bound_to_worker_manifest.no_failure_rows");
+  for (const row of failureRows) {
+    const failureRefs = new Set(row.failureRepairRefs || []);
+    const bindings = retryRepairBindings.filter((binding) => binding.workerId === row.workerId);
+    if (bindings.length < 1) {
+      errors.push(`${row.workerId}.retryRepairBinding_missing`);
+      continue;
+    }
+    for (const binding of bindings) {
+      if (binding.runtimeManifestFile !== row.runtimeManifestFile) errors.push(`${row.workerId}.retryRepairBinding.runtimeManifestFile_mismatch`);
+      if (binding.runtimeManifestSha256 !== row.runtimeManifestSha256 || !hasHash(binding.runtimeManifestSha256)) errors.push(`${row.workerId}.retryRepairBinding.runtimeManifestSha256_mismatch`);
+      if (binding.providerName !== row.providerName || binding.modelId !== row.modelId) errors.push(`${row.workerId}.retryRepairBinding.provider_mismatch`);
+      if (binding.retrySignature !== row.retryBudget?.signature) errors.push(`${row.workerId}.retryRepairBinding.retrySignature_mismatch`);
+      if (!failureRefs.has(binding.failureRef) || !failureRefs.has(binding.repairRef)) errors.push(`${row.workerId}.retryRepairBinding.failureRepairRef_mismatch`);
+      if (!binding.rollbackPolicyRef || !binding.regressionGate) errors.push(`${row.workerId}.retryRepairBinding.rollback_or_regression_missing`);
+    }
+  }
   if (manifest && provider) {
     if (manifest.workerId !== provider.workerId) errors.push("manifest_provider.workerId_mismatch");
     if (manifest.stdoutSha256 !== provider.stdoutSha256 || manifest.stderrSha256 !== provider.stderrSha256) errors.push("manifest_provider.hash_mismatch");
+    if (manifest.runtimeManifestSha256 !== provider.runtimeManifestSha256 || !hasHash(provider.runtimeManifestSha256)) errors.push("manifest_provider.runtimeManifestSha256_mismatch");
     if (!provider.claimRefs?.some((claim) => manifest.mergeKeys?.includes(provider.mergeKey) || childSession?.poolBridge?.claimRefs?.includes(claim))) errors.push("manifest_provider.claimRefs_not_preserved");
   }
   if (childSession && provider) {
@@ -90,6 +146,12 @@ function mutatePackage(pkg, id) {
   if (id === "missing-runtime-hash") row.providerWorker.stdoutSha256 = "";
   if (id === "literal-provider-secret") row.childSession.sessions[0].provider.apiKeyRef = "sk-live-secret";
   if (id === "failure-repair-unlinked") row.parityReport.parityRows[1].parityChecks.failureRepairLinked = false;
+  if (id === "single-provider-matrix") {
+    for (const parityRow of row.parityReport.parityRows) parityRow.providerName = "parallel-openai-compatible";
+    row.parityReport.sharedMergeLedger.providerNames = ["parallel-openai-compatible"];
+  }
+  if (id === "shared-ledger-worker-missing") row.parityReport.sharedMergeLedger.workerIds = row.parityReport.sharedMergeLedger.workerIds.filter((workerId) => workerId !== "worker-beta-anthropic-pass");
+  if (id === "retry-repair-manifest-unbound") row.parityReport.retryRepairBindings[0].retrySignature = "re_swarm:other-worker";
   return row;
 }
 
@@ -130,10 +192,10 @@ function main() {
     checks.push(markerCheck("runtime:swarm-provider-manifest-parity-worker-child", "scripts/reverse-agent/worker-child-session-gate.mjs", ["runtime:worker-child-session-batch", "runtime:worker-provider-child-process-smoke", "WorkerProviderChildProcessProbeV1", "provider runtime"]));
     checks.push(markerCheck("runtime:swarm-provider-manifest-parity-provider-worker", "scripts/reverse-agent/parallel-provider-worker-matrix-gate.mjs", ["ParallelProviderWorkerMatrixV1", "runtime:parallel-provider-worker-claim-merge", "runtime:parallel-provider-worker-failure-repair", "claimAwareProviderWorkerMerge"]));
     checks.push(markerCheck("harness:swarm-provider-manifest-parity", "scripts/reverse-agent/repi-top-harness.mjs", ["gate:swarm-provider-manifest-parity", "SwarmProviderManifestParityGateV1", "child:gate:swarm-provider-manifest-parity"]));
-    checks.push(markerCheck("autonomy:swarm-provider-manifest-parity", "scripts/reverse-agent/autonomy-control-plane.mjs", ["swarm_provider_manifest_parity_gate", "SwarmProviderManifestParityGateV1", "gate:swarm-provider-manifest-parity"]));
+    checks.push(markerCheck("autonomy:swarm-provider-manifest-parity", "scripts/reverse-agent/autonomy-control-plane.mjs", ["swarm_provider_manifest_parity_gate", "SwarmProviderManifestParityGateV1", "gate:swarm-provider-manifest-parity", "SwarmProviderSharedMergeLedgerV1", "SwarmProviderRetryRepairBindingV1"]));
     checks.push(markerCheck("npm:swarm-provider-manifest-parity", "package.json", ["gate:swarm-provider-manifest-parity", "swarm-provider-manifest-parity-gate.mjs"]));
-    checks.push(markerCheck("docs:swarm-provider-manifest-parity-readme", "README.md", ["SwarmProviderManifestParityGateV1", "gate:swarm-provider-manifest-parity"]));
-    checks.push(markerCheck("docs:swarm-provider-manifest-parity-control-plane", "docs/reverse-agent/autonomous-control-plane.md", ["SwarmProviderManifestParityGateV1", "gate:swarm-provider-manifest-parity"]));
+    checks.push(markerCheck("docs:swarm-provider-manifest-parity-readme", "README.md", ["SwarmProviderManifestParityGateV1", "gate:swarm-provider-manifest-parity", "multi-provider", "retry/repair"]));
+    checks.push(markerCheck("docs:swarm-provider-manifest-parity-control-plane", "docs/reverse-agent/autonomous-control-plane.md", ["SwarmProviderManifestParityGateV1", "gate:swarm-provider-manifest-parity", "multi-provider", "retry/repair"]));
   } catch (error) {
     checks.push(check("gate:exception", false, { error: String(error), stack: error?.stack }));
   }

@@ -13,40 +13,90 @@
     "invariants"
   ],
   "properties": {
-    "kind": { "const": "repi-swarm-provider-manifest-parity-fixture" },
-    "schemaVersion": { "const": 1 },
-    "SwarmProviderManifestParityGateV1": { "const": true },
+    "kind": {
+      "const": "repi-swarm-provider-manifest-parity-fixture"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "SwarmProviderManifestParityGateV1": {
+      "const": true
+    },
     "requiredGates": {
       "type": "array",
-      "items": { "$ref": "#/$defs/SwarmProviderManifestParityRequiredGateV1" },
-      "minItems": 8,
+      "items": {
+        "$ref": "#/$defs/SwarmProviderManifestParityRequiredGateV1"
+      },
+      "minItems": 10,
       "uniqueItems": true
     },
-    "parityReport": { "$ref": "#/$defs/SwarmProviderManifestParityReportV1" },
+    "parityReport": {
+      "$ref": "#/$defs/SwarmProviderManifestParityReportV1"
+    },
     "negativeCases": {
       "type": "array",
-      "items": { "$ref": "#/$defs/SwarmProviderManifestParityNegativeCaseV1" },
-      "minItems": 5
+      "items": {
+        "$ref": "#/$defs/SwarmProviderManifestParityNegativeCaseV1"
+      },
+      "minItems": 8
     },
     "invariants": {
       "type": "array",
-      "items": { "type": "string" },
-      "minItems": 8,
+      "items": {
+        "type": "string"
+      },
+      "minItems": 10,
       "uniqueItems": true
     }
   },
   "$defs": {
     "SwarmProviderManifestParityGateV1": {
       "type": "object",
-      "required": ["kind", "schemaVersion", "SwarmProviderManifestParityGateV1", "requiredGates", "parityReport", "negativeCases", "invariants"],
+      "required": [
+        "kind",
+        "schemaVersion",
+        "SwarmProviderManifestParityGateV1",
+        "requiredGates",
+        "parityReport",
+        "negativeCases",
+        "invariants"
+      ],
       "properties": {
-        "kind": { "const": "repi-swarm-provider-manifest-parity-fixture" },
-        "schemaVersion": { "const": 1 },
-        "SwarmProviderManifestParityGateV1": { "const": true },
-        "requiredGates": { "type": "array", "items": { "$ref": "#/$defs/SwarmProviderManifestParityRequiredGateV1" }, "minItems": 8, "uniqueItems": true },
-        "parityReport": { "$ref": "#/$defs/SwarmProviderManifestParityReportV1" },
-        "negativeCases": { "type": "array", "items": { "$ref": "#/$defs/SwarmProviderManifestParityNegativeCaseV1" }, "minItems": 5 },
-        "invariants": { "type": "array", "items": { "type": "string" }, "minItems": 8, "uniqueItems": true }
+        "kind": {
+          "const": "repi-swarm-provider-manifest-parity-fixture"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "SwarmProviderManifestParityGateV1": {
+          "const": true
+        },
+        "requiredGates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SwarmProviderManifestParityRequiredGateV1"
+          },
+          "minItems": 10,
+          "uniqueItems": true
+        },
+        "parityReport": {
+          "$ref": "#/$defs/SwarmProviderManifestParityReportV1"
+        },
+        "negativeCases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SwarmProviderManifestParityNegativeCaseV1"
+          },
+          "minItems": 8
+        },
+        "invariants": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 10,
+          "uniqueItems": true
+        }
       },
       "x-repiInvariants": [
         "swarm_provider_manifest_parity_gate",
@@ -56,6 +106,8 @@
         "failure_repair_refs_preserved_across_provider_worker",
         "provider_env_refs_only",
         "runtime_artifacts_have_hashes",
+        "multi_provider_workers_share_claim_failure_merge_ledger",
+        "provider_worker_retry_repair_rows_bound_to_worker_manifest",
         "narrative_only_provider_worker_not_promoted"
       ]
     },
@@ -66,6 +118,8 @@
         "child_session_runtime_bridge_matches_provider_worker",
         "claim_refs_preserved_across_manifest_provider_merge",
         "failure_repair_refs_preserved_across_provider_worker",
+        "multi_provider_workers_share_claim_failure_merge_ledger",
+        "provider_worker_retry_repair_rows_bound_to_worker_manifest",
         "provider_env_refs_only",
         "runtime_artifacts_have_hashes",
         "narrative_only_provider_worker_not_promoted"
@@ -73,11 +127,24 @@
     },
     "HashTripletV1": {
       "type": "object",
-      "required": ["stdoutSha256", "stderrSha256", "transcriptSha256"],
+      "required": [
+        "stdoutSha256",
+        "stderrSha256",
+        "transcriptSha256"
+      ],
       "properties": {
-        "stdoutSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "stderrSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "transcriptSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        "stdoutSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "stderrSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "transcriptSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
       }
     },
     "SwarmProviderParityRowV1": {
@@ -90,50 +157,161 @@
         "modelId",
         "claimRefs",
         "mergeKey",
+        "runtimeManifestSha256",
+        "retryBudget",
+        "ledgerPaths",
         "hashes",
         "failureRepairRefs",
         "parityChecks",
         "promotionAllowed"
       ],
       "properties": {
-        "workerId": { "type": "string", "minLength": 1 },
-        "runtimeManifestFile": { "type": "string", "minLength": 1 },
-        "sessionDir": { "type": "string", "minLength": 1 },
-        "providerName": { "type": "string", "minLength": 1 },
-        "modelId": { "type": "string", "minLength": 1 },
-        "claimRefs": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
-        "mergeKey": { "type": "string", "minLength": 1 },
-        "hashes": { "$ref": "#/$defs/HashTripletV1" },
-        "failureRepairRefs": { "type": "array", "items": { "type": "string" } },
-        "parityChecks": {
-          "type": "object",
-          "required": ["workerIdMatch", "claimRefsPreserved", "hashesPresent", "providerEnvRefsOnly", "failureRepairLinked"],
-          "properties": {
-            "workerIdMatch": { "const": true },
-            "claimRefsPreserved": { "const": true },
-            "hashesPresent": { "const": true },
-            "providerEnvRefsOnly": { "const": true },
-            "failureRepairLinked": { "const": true }
+        "workerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtimeManifestFile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sessionDir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "modelId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "claimRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "mergeKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hashes": {
+          "$ref": "#/$defs/HashTripletV1"
+        },
+        "failureRepairRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
           }
         },
-        "promotionAllowed": { "type": "boolean" }
+        "parityChecks": {
+          "type": "object",
+          "required": [
+            "workerIdMatch",
+            "claimRefsPreserved",
+            "hashesPresent",
+            "providerEnvRefsOnly",
+            "failureRepairLinked",
+            "multiProviderSharedLedger",
+            "retryRepairManifestBound"
+          ],
+          "properties": {
+            "workerIdMatch": {
+              "const": true
+            },
+            "claimRefsPreserved": {
+              "const": true
+            },
+            "hashesPresent": {
+              "const": true
+            },
+            "providerEnvRefsOnly": {
+              "const": true
+            },
+            "failureRepairLinked": {
+              "const": true
+            },
+            "multiProviderSharedLedger": {
+              "const": true
+            },
+            "retryRepairManifestBound": {
+              "const": true
+            }
+          }
+        },
+        "promotionAllowed": {
+          "type": "boolean"
+        },
+        "runtimeManifestSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "retryBudget": {
+          "$ref": "#/$defs/RetryBudgetV1"
+        },
+        "ledgerPaths": {
+          "$ref": "#/$defs/LedgerPathsV1"
+        }
       }
     },
     "SwarmProviderManifestParityReportV1": {
       "type": "object",
-      "required": ["kind", "schemaVersion", "source", "parityRows", "promotionPolicy", "closureGate"],
+      "required": [
+        "kind",
+        "schemaVersion",
+        "source",
+        "parityRows",
+        "promotionPolicy",
+        "closureGate",
+        "sharedMergeLedger",
+        "retryRepairBindings"
+      ],
       "properties": {
-        "kind": { "const": "SwarmProviderManifestParityReportV1" },
-        "schemaVersion": { "const": 1 },
-        "source": { "const": "swarm-provider-manifest-parity" },
-        "parityRows": { "type": "array", "items": { "$ref": "#/$defs/SwarmProviderParityRowV1" }, "minItems": 2 },
-        "promotionPolicy": { "type": "string", "minLength": 1 },
-        "closureGate": { "const": "gate:swarm-provider-manifest-parity" }
+        "kind": {
+          "const": "SwarmProviderManifestParityReportV1"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "source": {
+          "const": "swarm-provider-manifest-parity"
+        },
+        "parityRows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SwarmProviderParityRowV1"
+          },
+          "minItems": 3
+        },
+        "promotionPolicy": {
+          "type": "string",
+          "minLength": 1
+        },
+        "closureGate": {
+          "const": "gate:swarm-provider-manifest-parity"
+        },
+        "sharedMergeLedger": {
+          "$ref": "#/$defs/SwarmProviderSharedMergeLedgerV1"
+        },
+        "retryRepairBindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SwarmProviderRetryRepairBindingV1"
+          },
+          "minItems": 1
+        }
       }
     },
     "SwarmProviderManifestParityNegativeCaseV1": {
       "type": "object",
-      "required": ["id", "mutates", "expect", "mustNotPromote"],
+      "required": [
+        "id",
+        "mutates",
+        "expect",
+        "mustNotPromote"
+      ],
       "properties": {
         "id": {
           "enum": [
@@ -141,12 +319,213 @@
             "claim-ref-dropped",
             "missing-runtime-hash",
             "literal-provider-secret",
-            "failure-repair-unlinked"
+            "failure-repair-unlinked",
+            "single-provider-matrix",
+            "shared-ledger-worker-missing",
+            "retry-repair-manifest-unbound"
           ]
         },
-        "mutates": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
-        "expect": { "const": "fail" },
-        "mustNotPromote": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+        "mutates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "expect": {
+          "const": "fail"
+        },
+        "mustNotPromote": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      }
+    },
+    "RetryBudgetV1": {
+      "type": "object",
+      "required": [
+        "signature",
+        "attempt",
+        "maxAttempts",
+        "remaining",
+        "exhausted"
+      ],
+      "properties": {
+        "signature": {
+          "type": "string",
+          "minLength": 1
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxAttempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "remaining": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "exhausted": {
+          "const": false
+        }
+      }
+    },
+    "LedgerPathsV1": {
+      "type": "object",
+      "required": [
+        "claimLedgerPath",
+        "failureLedgerPath",
+        "repairQueuePath"
+      ],
+      "properties": {
+        "claimLedgerPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "failureLedgerPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repairQueuePath": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "SwarmProviderSharedMergeLedgerV1": {
+      "type": "object",
+      "required": [
+        "kind",
+        "claimLedgerPath",
+        "failureLedgerPath",
+        "repairQueuePath",
+        "workerIds",
+        "providerNames",
+        "claimRefs",
+        "failureRepairRefs",
+        "ledgerTipSha256",
+        "hashChain",
+        "promotionPolicy"
+      ],
+      "properties": {
+        "kind": {
+          "const": "SwarmProviderSharedMergeLedgerV1"
+        },
+        "claimLedgerPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "failureLedgerPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repairQueuePath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workerIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 2,
+          "uniqueItems": true
+        },
+        "providerNames": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 2,
+          "uniqueItems": true
+        },
+        "claimRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 2
+        },
+        "failureRepairRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 2
+        },
+        "ledgerTipSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "hashChain": {
+          "const": true
+        },
+        "promotionPolicy": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "SwarmProviderRetryRepairBindingV1": {
+      "type": "object",
+      "required": [
+        "workerId",
+        "runtimeManifestFile",
+        "runtimeManifestSha256",
+        "providerName",
+        "modelId",
+        "retrySignature",
+        "failureRef",
+        "repairRef",
+        "rollbackPolicyRef",
+        "regressionGate"
+      ],
+      "properties": {
+        "workerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtimeManifestFile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtimeManifestSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "providerName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "modelId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retrySignature": {
+          "type": "string",
+          "minLength": 1
+        },
+        "failureRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repairRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rollbackPolicyRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "regressionGate": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     }
   },
@@ -158,6 +537,8 @@
     "failure_repair_refs_preserved_across_provider_worker",
     "provider_env_refs_only",
     "runtime_artifacts_have_hashes",
+    "multi_provider_workers_share_claim_failure_merge_ledger",
+    "provider_worker_retry_repair_rows_bound_to_worker_manifest",
     "narrative_only_provider_worker_not_promoted"
   ]
 }
