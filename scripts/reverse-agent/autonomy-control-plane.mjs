@@ -33,6 +33,9 @@ const SELF_CHECK = {
 		"currentLevel",
 		"notYetTopAutonomousDefinition",
 		"hardeningNeeded",
+		"hardeningGapLedger",
+		"AutonomousHardeningGapLedgerV1",
+		"closureGate",
 		"CONTROL_CONTRACTS",
 		"controlPlaneContractAudit",
 		"validateControlContractDefinitions",
@@ -1896,6 +1899,105 @@ const REQUIREMENTS = [
 	},
 ];
 
+const HARDENING_GAP_CATALOG = [
+	{
+		gapId: "parallel.re_swarm_live_provider_manifest_parity",
+		pillar: "parallel_scheduling",
+		title: "re_swarm/provider worker manifest parity",
+		targetCapability: "re_swarm/provider workers carry the same manifest, claim, repair, child session, and provider runtime proof as agent-dogfood.",
+		status: "partially_wired",
+		priority: 1,
+		ownerRuntime: "re_swarm + WorkerChildSessionRuntimeBatchV1 + ParallelProviderWorkerMatrixV1",
+		currentEvidence: ["gate:worker-child-session", "gate:parallel-provider-worker-matrix", "gate:worker-lease-scheduler"],
+		missingRuntimeProof: ["multi-provider re_swarm child workers share a single claim/failure merge ledger", "provider worker retry/repair rows are bound to worker manifests"],
+		closureGate: "gate:swarm-provider-manifest-parity",
+		regressionCommands: ["npm run gate:worker-child-session", "npm run gate:parallel-provider-worker-matrix", "npm run gate:runtime-claim-ledger"],
+		nextCommand: "node scripts/reverse-agent/swarm-provider-manifest-parity-gate.mjs . --strict",
+		artifacts: [
+			"~/.repi/agent/recon/evidence/swarms/*-subagent-runtime-manifests.json",
+			"~/.repi/agent/recon/evidence/swarms/*-worker-child-session-runtime.json",
+			"~/.repi/agent/recon/evidence/swarms/*-claim-ledger.jsonl",
+		],
+		acceptanceCriteria: [
+			"all provider child workers have stdout/stderr/session/tool/model digests",
+			"failure/repair rows reference the same worker manifest and retryBudget",
+			"claim-aware merge blocks narrative-only worker promotion",
+		],
+	},
+	{
+		gapId: "context.cross_session_multi_compact_live_matrix",
+		pillar: "long_context_compaction",
+		title: "cross-session multi-compact live matrix",
+		targetCapability: "multiple compaction/resume cycles across sessions keep exact contextPath/hash priority and close operator/proof-loop ledgers.",
+		status: "partially_wired",
+		priority: 2,
+		ownerRuntime: "re_context + CompactResumeLedgerV2 + CrossSessionResumeLiveV1",
+		currentEvidence: ["gate:multi-compact-pressure", "gate:cross-session-resume-live", "gate:context-runtime-schema"],
+		missingRuntimeProof: ["same run proves cross-session + multi-compact + provider continuation together", "budget exhausted rows are replayed through operator/proof-loop closure"],
+		closureGate: "gate:cross-session-multi-compact-matrix",
+		regressionCommands: ["npm run gate:multi-compact-pressure", "npm run gate:cross-session-resume-live", "npm run gate:compact-resume-ledger-v2"],
+		nextCommand: "node scripts/reverse-agent/cross-session-multi-compact-matrix-gate.mjs . --strict",
+		artifacts: [
+			"~/.repi/agent/recon/evidence/contexts/*.md",
+			"~/.repi/agent/recon/memory/compaction-resume-transitions.jsonl",
+			"~/.repi/agent/recon/memory/compaction-resume-ledger-v2-report.json",
+		],
+		acceptanceCriteria: [
+			"old contextPath wins over latest fallback after multiple compactions",
+			"cross-session resume validates contextSha256 and artifact hashes",
+			"operator/proof-loop closure transitions to done|blocked|exhausted without reopening terminal rows",
+		],
+	},
+	{
+		gapId: "repair.provider_worker_rollback_unification",
+		pillar: "failure_self_repair",
+		title: "provider/worker repair rollback unification",
+		targetCapability: "provider, operator, compound-frontier, and worker repairs share FailureLedgerEventV1/RepairQueueItemV1 signatures, rollback policy, and regression gates.",
+		status: "partially_wired",
+		priority: 1,
+		ownerRuntime: "provider failure injection + repair rollback + agent-dogfood failure binding",
+		currentEvidence: ["gate:provider-failure-injection", "gate:repair-rollback-policy", "gate:agent-dogfood-failure-signature-binding"],
+		missingRuntimeProof: ["state-changing provider/worker repairs write RepairRollbackPolicyV1", "compound/provider repair completion closes the same signature across retry windows"],
+		closureGate: "gate:worker-provider-repair-rollback-unification",
+		regressionCommands: ["npm run gate:provider-failure-injection", "npm run gate:repair-rollback-policy", "npm run gate:agent-dogfood-failure-signature-binding"],
+		nextCommand: "node scripts/reverse-agent/worker-provider-repair-rollback-unification-gate.mjs . --strict",
+		artifacts: [
+			".repi-harness/evidence/failures/ledger.jsonl",
+			".repi-harness/evidence/repairs/queue.jsonl",
+			"~/.repi/agent/recon/evidence/autofix/*-repair-rollback-policy.json",
+		],
+		acceptanceCriteria: [
+			"same signature maps failure -> repair -> rollback -> regression gate",
+			"exhausted status cannot enqueue unpaused rerun",
+			"provider/worker failures preserve manifest, request-log, and rollback evidence refs",
+		],
+	},
+	{
+		gapId: "claim.live_conflict_arbitration_matrix",
+		pillar: "automatic_division_validation",
+		title: "live conflict arbitration matrix",
+		targetCapability: "agent-dogfood, re_swarm, compound-frontier, and provider workers all emit structured conflict tables with winner evidence and loser downgrade.",
+		status: "partially_wired",
+		priority: 1,
+		ownerRuntime: "StructuredClaimMergeV1 + AgentDogfoodStructuredClaimMergeGateV1 + runtime claim ledger",
+		currentEvidence: ["gate:structured-claim-merge", "gate:agent-dogfood-structured-claims", "gate:runtime-ledger-quality"],
+		missingRuntimeProof: ["same-window multi-worker live conflict table covers multiple claimIds/topics", "synthesizer output is parsed into machine-checkable claim/conflict rows"],
+		closureGate: "gate:live-conflict-arbitration-matrix",
+		regressionCommands: ["npm run gate:structured-claim-merge", "npm run gate:agent-dogfood-structured-claims", "npm run gate:runtime-ledger-quality"],
+		nextCommand: "node scripts/reverse-agent/live-conflict-arbitration-matrix-gate.mjs . --strict",
+		artifacts: [
+			"~/.repi/agent/recon/evidence/swarms/*-structured-claim-merge.json",
+			".repi-harness/evidence/remote/agent-parallel-dogfood/*/structured-claim-merge.json",
+			".repi-harness/evidence/remote/compound-frontier/*/claim-ledger.jsonl",
+		],
+		acceptanceCriteria: [
+			"every finalClaim has artifact sha256, JSON query, verifierPass, and no unresolved challenge",
+			"conflicts name claimIds, topic, winner evidence, loser downgrade, and resolution reason",
+			"orchestration success remains separate from platform claim success",
+		],
+	},
+];
+
 function sha256(text) {
 	return createHash("sha256").update(text).digest("hex");
 }
@@ -2052,10 +2154,67 @@ function evaluatePillar(root, requirement) {
 	};
 }
 
+function hardeningGapEvidenceState(pillars, gap) {
+	const pillar = pillars.find((row) => row.id === gap.pillar);
+	const availableChecks = new Set(pillar?.checks.filter((check) => check.status === "pass").map((check) => check.id) ?? []);
+	const failedChecks = new Set(pillar?.checks.filter((check) => check.status !== "pass").map((check) => check.id) ?? []);
+	return {
+		pillarStatus: pillar?.status ?? "missing",
+		normalUse: Boolean(pillar?.normalUse),
+		availableChecks: [...availableChecks].filter((id) => gap.currentEvidence.some((item) => id.includes(item.replace(/^gate:/, "").replace(/-/g, "_")) || item.includes(id))),
+		failedChecks: [...failedChecks],
+	};
+}
+
+function buildHardeningGapLedger(pillars) {
+	const generatedAt = new Date().toISOString();
+	const gaps = HARDENING_GAP_CATALOG.map((gap, index) => {
+		const evidenceState = hardeningGapEvidenceState(pillars, gap);
+		const closureReady = gap.regressionCommands.length > 0 && Boolean(gap.closureGate) && gap.acceptanceCriteria.length >= 3 && gap.missingRuntimeProof.length > 0;
+		return {
+			kind: "AutonomousHardeningGapV1",
+			schemaVersion: 1,
+			seq: index + 1,
+			gapId: gap.gapId,
+			pillar: gap.pillar,
+			title: gap.title,
+			targetCapability: gap.targetCapability,
+			status: gap.status,
+			priority: gap.priority,
+			ownerRuntime: gap.ownerRuntime,
+			currentEvidence: gap.currentEvidence,
+			evidenceState,
+			missingRuntimeProof: gap.missingRuntimeProof,
+			closureGate: gap.closureGate,
+			regressionCommands: gap.regressionCommands,
+			nextCommand: gap.nextCommand,
+			artifacts: gap.artifacts,
+			acceptanceCriteria: gap.acceptanceCriteria,
+			promotionPolicy: "do_not_mark_top_autonomous_until_closureGate_passes_and_acceptanceCriteria_are_artifact_backed",
+			readyForImplementation: closureReady,
+		};
+	});
+	const closureGateCount = new Set(gaps.map((gap) => gap.closureGate)).size;
+	const gapHash = sha256(JSON.stringify(gaps.map(({ seq, gapId, pillar, closureGate, regressionCommands, acceptanceCriteria }) => ({ seq, gapId, pillar, closureGate, regressionCommands, acceptanceCriteria }))));
+	return {
+		kind: "AutonomousHardeningGapLedgerV1",
+		schemaVersion: 1,
+		generatedAt,
+		appendOnlyTarget: ".repi-harness/evidence/autonomy-control-plane/*/hardening-gap-ledger.json",
+		promotionPolicy: "topAutonomousDefinition remains false while any gap status is not closed",
+		gapCount: gaps.length,
+		closureGateCount,
+		highestPriorityOpen: Math.min(...gaps.filter((gap) => gap.status !== "closed").map((gap) => gap.priority)),
+		gapHash,
+		gaps,
+	};
+}
+
 function buildManifest(root) {
 	const auditSelf = evaluateCheck(root, SELF_CHECK);
 	const controlPlaneContractAudit = validateControlContractDefinitions(root);
 	const pillars = REQUIREMENTS.map((requirement) => evaluatePillar(root, requirement));
+	const hardeningGapLedger = buildHardeningGapLedger(pillars);
 	const normalUseGuarantee =
 		auditSelf.status === "pass" && controlPlaneContractAudit.status === "pass" && pillars.every((pillar) => pillar.normalUse);
 	const hardeningItems = pillars.flatMap((pillar) => pillar.hardeningNeeded.map((item) => `${pillar.id}: ${item}`));
@@ -2073,6 +2232,13 @@ function buildManifest(root) {
 		topAutonomousDefinitionReason: "核心组织链路、MemoryOrchestratorV6 mandatory memory control loop、MemoryDepositionEngineV7 runtime step event bus、MemoryExperienceEngineV8 经验化沉淀、MemorySkillCapsuleV9 技能胶囊资产化、MemoryDistillPromotionV10 provider 蒸馏提升门、MemoryQualityLedgerV11 质量反馈学习闭环、MemoryReplayEvaluatorV12 A/B replay 因果归因、MemoryStrategyCapsuleV13 可执行战术胶囊、MemoryActiveKernelV14 主动记忆决策内核、MemoryMaturationRuntimeV15 记忆成熟/保鲜闭环、agent-dogfood subagent runtime manifest、AutonomousRuntimeBatchV1 strict fixture/gate、re_swarm → WorkerChildSessionRuntimeBatchV1 → WorkerRuntimePoolV1 live bounded bridge，以及 agent-dogfood structured claim merge / re_swarm / compound runtime claim ledger、ContextPackV2 exact resume marker/negative fixtures/closure gate、CrossSessionResumeLiveV1 跨 session resume/provider continuation gate、CompactResumeLedgerV2 状态机/runtime gate、strict failure/repair fixture、RepairRollbackPolicyV1 baseline/allowlist/regression/rollback gate、ToolCallTraceLedgerV1 append-only tool trace、runtime failure/repair ledger hooks、compound/role retry failure-repair 输出、strict claim release marker、ParallelProviderWorkerMatrixV1 多 worker provider 并发回归、RemoteProviderLongRunV1 可选远程长跑 gate 和 supervisor/compiler/complete final gate 已可用；MultiCompactPressureGateV1 多轮 compact 压力、old contextPath、幂等 replay、scope/artifact drift 负例和 operator/proof-loop writeback 已接入；FailureSignaturePriorityGateV1 已把 exhausted/repeated runtime failure signature 优先送入 proof-loop/knowledge graph 并验证 target scope；更深 runtime ledger wiring 仍可继续硬化。",
 		pillars,
 		notYetTopAutonomousDefinition: hardeningItems,
+		hardeningGapLedger,
+		hardeningGapLedgerSummary: {
+			gapCount: hardeningGapLedger.gapCount,
+			closureGateCount: hardeningGapLedger.closureGateCount,
+			highestPriorityOpen: hardeningGapLedger.highestPriorityOpen,
+			gapHash: hardeningGapLedger.gapHash,
+		},
 		recommendedNonTestWorkOrder: [
 			"保持 ReconParallelPlanV1、releaseGateMetadata、claimGatePolicy、strict claim marker 在 re_swarm / re_supervisor / re_compiler / re_complete 间同源流转。",
 			"保持 AutonomousRuntimeBatchV1 strict gate 覆盖 subagent manifest / shard state / compact resume / repair budget / runtime claim promotion，并继续把 role contract + claim ledger + conflict table 扩展到 live 独立子会话执行态。",
@@ -2125,6 +2291,19 @@ function formatMarkdown(manifest) {
 				`- ${row.id}: ${row.status} ${row.schemaPath}${row.exists ? ` bytes=${row.bytes} sha256=${row.sha256.slice(0, 16)}` : " missing"}`,
 		),
 		"",
+		"## AutonomousHardeningGapLedgerV1",
+		"",
+		`gap_count: ${manifest.hardeningGapLedger.gapCount}`,
+		`closure_gate_count: ${manifest.hardeningGapLedger.closureGateCount}`,
+		`highest_priority_open: ${manifest.hardeningGapLedger.highestPriorityOpen}`,
+		`gap_hash: ${manifest.hardeningGapLedger.gapHash}`,
+		"",
+		"gaps:",
+		...manifest.hardeningGapLedger.gaps.map(
+			(gap) =>
+				`- ${gap.gapId}: status=${gap.status} priority=${gap.priority} pillar=${gap.pillar} closure=${gap.closureGate} next=${gap.nextCommand}`,
+		),
+		"",
 		"## Pillars",
 		"",
 	];
@@ -2159,6 +2338,7 @@ function writeManifest(root, manifest) {
 	const dir = join(root, ".repi-harness", "evidence", "autonomy-control-plane", stamp);
 	mkdirSync(dir, { recursive: true });
 	writeFileSync(join(dir, "result.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+	writeFileSync(join(dir, "hardening-gap-ledger.json"), `${JSON.stringify(manifest.hardeningGapLedger, null, 2)}\n`);
 	writeFileSync(join(dir, "report.md"), formatMarkdown(manifest));
 	return dir;
 }

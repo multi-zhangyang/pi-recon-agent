@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repi.local/schemas/autonomous-hardening-gap-ledger.schema.json",
+  "title": "AutonomousHardeningGapLedgerV1",
+  "type": "object",
+  "required": [
+    "kind",
+    "schemaVersion",
+    "generatedAt",
+    "appendOnlyTarget",
+    "promotionPolicy",
+    "gapCount",
+    "closureGateCount",
+    "highestPriorityOpen",
+    "gapHash",
+    "gaps"
+  ],
+  "properties": {
+    "kind": { "const": "AutonomousHardeningGapLedgerV1" },
+    "schemaVersion": { "const": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "appendOnlyTarget": { "type": "string", "minLength": 1 },
+    "promotionPolicy": { "type": "string", "minLength": 1 },
+    "gapCount": { "type": "integer", "minimum": 1 },
+    "closureGateCount": { "type": "integer", "minimum": 1 },
+    "highestPriorityOpen": { "type": "integer", "minimum": 1 },
+    "gapHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "gaps": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/AutonomousHardeningGapV1" },
+      "minItems": 4
+    }
+  },
+  "$defs": {
+    "AutonomousHardeningGapLedgerV1": {
+      "type": "object",
+      "required": [
+        "kind",
+        "schemaVersion",
+        "generatedAt",
+        "appendOnlyTarget",
+        "promotionPolicy",
+        "gapCount",
+        "closureGateCount",
+        "highestPriorityOpen",
+        "gapHash",
+        "gaps"
+      ],
+      "properties": {
+        "kind": { "const": "AutonomousHardeningGapLedgerV1" },
+        "schemaVersion": { "const": 1 },
+        "generatedAt": { "type": "string", "format": "date-time" },
+        "appendOnlyTarget": { "type": "string", "minLength": 1 },
+        "promotionPolicy": { "type": "string", "minLength": 1 },
+        "gapCount": { "type": "integer", "minimum": 1 },
+        "closureGateCount": { "type": "integer", "minimum": 1 },
+        "highestPriorityOpen": { "type": "integer", "minimum": 1 },
+        "gapHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "gaps": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/AutonomousHardeningGapV1" },
+          "minItems": 4
+        }
+      },
+      "x-repiInvariants": [
+        "hardening_gap_ledger_is_machine_actionable",
+        "every_gap_has_closure_gate",
+        "every_gap_has_regression_commands",
+        "every_gap_has_acceptance_criteria",
+        "top_autonomous_false_until_gap_closed"
+      ]
+    },
+    "AutonomousHardeningGapV1": {
+      "type": "object",
+      "required": [
+        "kind",
+        "schemaVersion",
+        "seq",
+        "gapId",
+        "pillar",
+        "title",
+        "targetCapability",
+        "status",
+        "priority",
+        "ownerRuntime",
+        "currentEvidence",
+        "missingRuntimeProof",
+        "closureGate",
+        "regressionCommands",
+        "nextCommand",
+        "artifacts",
+        "acceptanceCriteria",
+        "promotionPolicy",
+        "readyForImplementation"
+      ],
+      "properties": {
+        "kind": { "const": "AutonomousHardeningGapV1" },
+        "schemaVersion": { "const": 1 },
+        "seq": { "type": "integer", "minimum": 1 },
+        "gapId": { "type": "string", "minLength": 1 },
+        "pillar": {
+          "enum": [
+            "parallel_scheduling",
+            "long_context_compaction",
+            "failure_self_repair",
+            "automatic_division_validation"
+          ]
+        },
+        "title": { "type": "string", "minLength": 1 },
+        "targetCapability": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["open", "partially_wired", "ready_for_live", "blocked", "closed"] },
+        "priority": { "type": "integer", "minimum": 1 },
+        "ownerRuntime": { "type": "string", "minLength": 1 },
+        "currentEvidence": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "missingRuntimeProof": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "closureGate": { "type": "string", "pattern": "^gate:[a-z0-9-]+$" },
+        "regressionCommands": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "nextCommand": { "type": "string", "minLength": 1 },
+        "artifacts": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "acceptanceCriteria": { "type": "array", "items": { "type": "string" }, "minItems": 3 },
+        "promotionPolicy": { "type": "string", "minLength": 1 },
+        "readyForImplementation": { "type": "boolean" }
+      }
+    }
+  },
+  "x-repiInvariants": [
+    "hardening_gap_ledger_is_machine_actionable",
+    "every_gap_has_closure_gate",
+    "every_gap_has_regression_commands",
+    "every_gap_has_acceptance_criteria",
+    "top_autonomous_false_until_gap_closed"
+  ]
+}
