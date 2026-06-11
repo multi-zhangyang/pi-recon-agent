@@ -2,27 +2,57 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://repi.local/schemas/reverse-agent/cross-session-multi-compact-matrix.schema.json",
   "title": "CrossSessionMultiCompactMatrixGateV1",
-  "description": "cross_session_multi_compact_matrix_gate: one bounded matrix must prove cross-session exact contextPath resume after multiple compactions, old contextPath over latest fallback, artifact/context hash verification, provider continuation, operator/proof-loop budget closure, and CompactResumeLedgerV2 terminal-row integrity.",
+  "description": "cross_session_multi_compact_matrix_gate: one bounded matrix must prove cross-session exact contextPath resume after at least three compactions, old contextPath over latest fallback, artifact/context hash verification, multi-provider provider continuation after exact resume, operator/proof-loop budget closure, and CompactResumeLedgerV2 terminal-row integrity.",
   "$defs": {
     "CrossSessionMatrixSessionV1": {
       "type": "object",
-      "required": ["sessionId", "role", "profileHome", "isolated"],
+      "required": [
+        "sessionId",
+        "role",
+        "profileHome",
+        "isolated"
+      ],
       "additionalProperties": false,
       "properties": {
-        "sessionId": { "type": "string", "minLength": 1 },
-        "role": { "enum": ["source-pack", "cross-session-resume", "latest-fallback-decoy"] },
-        "profileHome": { "const": "~/.repi/agent" },
-        "isolated": { "const": true }
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "enum": [
+            "source-pack",
+            "cross-session-resume",
+            "latest-fallback-decoy"
+          ]
+        },
+        "profileHome": {
+          "const": "~/.repi/agent"
+        },
+        "isolated": {
+          "const": true
+        }
       }
     },
     "CrossSessionArtifactHashV1": {
       "type": "object",
-      "required": ["path", "sha256", "required"],
+      "required": [
+        "path",
+        "sha256",
+        "required"
+      ],
       "additionalProperties": true,
       "properties": {
-        "path": { "type": "string", "minLength": 1 },
-        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "required": { "type": "boolean" }
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "required": {
+          "type": "boolean"
+        }
       }
     },
     "CrossSessionMultiCompactCycleV1": {
@@ -46,40 +76,110 @@
       ],
       "additionalProperties": false,
       "properties": {
-        "cycleId": { "type": "string", "minLength": 1 },
-        "sourceSessionId": { "type": "string", "minLength": 1 },
-        "resumeSessionId": { "type": "string", "minLength": 1 },
-        "packTarget": { "type": "string", "minLength": 1 },
-        "resumeTarget": { "type": "string", "minLength": 1 },
-        "contextPath": { "type": "string", "minLength": 1 },
-        "contextSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "artifactHashes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/CrossSessionArtifactHashV1" } },
-        "latestFallbackCandidate": { "type": "string", "minLength": 1 },
-        "loadedBy": { "const": "contextPath" },
-        "explicitContextPathUsed": { "const": true },
-        "oldContextPathBeatsLatestFallback": { "const": true },
+        "cycleId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceSessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resumeSessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "packTarget": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resumeTarget": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contextPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contextSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "artifactHashes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/CrossSessionArtifactHashV1"
+          }
+        },
+        "latestFallbackCandidate": {
+          "type": "string",
+          "minLength": 1
+        },
+        "loadedBy": {
+          "const": "contextPath"
+        },
+        "explicitContextPathUsed": {
+          "const": true
+        },
+        "oldContextPathBeatsLatestFallback": {
+          "const": true
+        },
         "exactResumeVerification": {
           "type": "object",
-          "required": ["contextSha256Match", "artifactHashesOk", "scopeOk", "loadedBy"],
+          "required": [
+            "contextSha256Match",
+            "artifactHashesOk",
+            "scopeOk",
+            "loadedBy"
+          ],
           "additionalProperties": false,
           "properties": {
-            "contextSha256Match": { "const": true },
-            "artifactHashesOk": { "const": true },
-            "scopeOk": { "const": true },
-            "loadedBy": { "const": "contextPath" }
+            "contextSha256Match": {
+              "const": true
+            },
+            "artifactHashesOk": {
+              "const": true
+            },
+            "scopeOk": {
+              "const": true
+            },
+            "loadedBy": {
+              "const": "contextPath"
+            }
           }
         },
         "resumeClosure": {
           "type": "object",
-          "required": ["status", "closedAt", "verifiedBy"],
+          "required": [
+            "status",
+            "closedAt",
+            "verifiedBy"
+          ],
           "additionalProperties": false,
           "properties": {
-            "status": { "enum": ["done", "blocked", "exhausted"] },
-            "closedAt": { "type": "string" },
-            "verifiedBy": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+            "status": {
+              "enum": [
+                "done",
+                "blocked",
+                "exhausted"
+              ]
+            },
+            "closedAt": {
+              "type": "string"
+            },
+            "verifiedBy": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              }
+            }
           }
         },
-        "providerContinuationId": { "type": "string", "minLength": 1 }
+        "providerContinuationId": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "CrossSessionProviderContinuationV1": {
@@ -89,7 +189,9 @@
         "resumeSessionId",
         "providerName",
         "modelId",
+        "apiStyle",
         "apiKeyEnvRefOnly",
+        "continuationAfterExactResume",
         "requestLogPath",
         "stdoutPath",
         "stderrPath",
@@ -103,77 +205,251 @@
       ],
       "additionalProperties": false,
       "properties": {
-        "cycleId": { "type": "string", "minLength": 1 },
-        "resumeSessionId": { "type": "string", "minLength": 1 },
-        "providerName": { "type": "string", "minLength": 1 },
-        "modelId": { "type": "string", "minLength": 1 },
-        "apiKeyEnvRefOnly": { "const": true },
-        "requestLogPath": { "type": "string", "minLength": 1 },
-        "stdoutPath": { "type": "string", "minLength": 1 },
-        "stderrPath": { "type": "string", "minLength": 1 },
-        "requestLogSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "stdoutSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "stderrSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "continuationStatus": { "const": "pass" },
-        "noPiHomeImport": { "const": true },
-        "noUpdateBanner": { "const": true },
-        "noLiteralSecrets": { "const": true }
+        "cycleId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resumeSessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "modelId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "apiKeyEnvRefOnly": {
+          "const": true
+        },
+        "requestLogPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "stdoutPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "stderrPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requestLogSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "stdoutSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "stderrSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "continuationStatus": {
+          "const": "pass"
+        },
+        "noPiHomeImport": {
+          "const": true
+        },
+        "noUpdateBanner": {
+          "const": true
+        },
+        "noLiteralSecrets": {
+          "const": true
+        },
+        "apiStyle": {
+          "enum": [
+            "openai-compatible",
+            "anthropic-compatible"
+          ]
+        },
+        "continuationAfterExactResume": {
+          "const": true
+        }
       }
     },
     "CrossSessionOperatorProofClosureV1": {
       "type": "object",
-      "required": ["cycleId", "operatorStatus", "proofLoopStatus", "budget", "proofLoopEntered", "terminal", "terminalReopened", "closureReason", "verifiedBy"],
+      "required": [
+        "cycleId",
+        "operatorStatus",
+        "proofLoopStatus",
+        "budget",
+        "proofLoopEntered",
+        "terminal",
+        "terminalReopened",
+        "closureReason",
+        "verifiedBy"
+      ],
       "additionalProperties": false,
       "properties": {
-        "cycleId": { "type": "string", "minLength": 1 },
-        "operatorStatus": { "enum": ["done", "blocked", "exhausted"] },
-        "proofLoopStatus": { "enum": ["done", "blocked", "exhausted"] },
+        "cycleId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operatorStatus": {
+          "enum": [
+            "done",
+            "blocked",
+            "exhausted"
+          ]
+        },
+        "proofLoopStatus": {
+          "enum": [
+            "done",
+            "blocked",
+            "exhausted"
+          ]
+        },
         "budget": {
           "type": "object",
-          "required": ["maxOperatorDispatch", "maxProofLoops", "remaining"],
+          "required": [
+            "maxOperatorDispatch",
+            "maxProofLoops",
+            "remaining"
+          ],
           "additionalProperties": false,
           "properties": {
-            "maxOperatorDispatch": { "type": "integer", "minimum": 0 },
-            "maxProofLoops": { "type": "integer", "minimum": 0 },
-            "remaining": { "type": "integer", "minimum": 0 }
+            "maxOperatorDispatch": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxProofLoops": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "remaining": {
+              "type": "integer",
+              "minimum": 0
+            }
           }
         },
-        "proofLoopEntered": { "const": true },
-        "terminal": { "const": true },
-        "terminalReopened": { "const": false },
-        "closureReason": { "type": "string", "minLength": 1 },
-        "verifiedBy": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+        "proofLoopEntered": {
+          "const": true
+        },
+        "terminal": {
+          "const": true
+        },
+        "terminalReopened": {
+          "const": false
+        },
+        "closureReason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verifiedBy": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
     "CompactResumeLedgerTransitionV2": {
       "type": "object",
-      "required": ["kind", "seq", "prevHash", "cycleId", "sessionId", "state", "contextPath", "contextSha256", "idempotencyKey", "entryHash"],
+      "required": [
+        "kind",
+        "seq",
+        "prevHash",
+        "cycleId",
+        "sessionId",
+        "state",
+        "contextPath",
+        "contextSha256",
+        "idempotencyKey",
+        "entryHash"
+      ],
       "additionalProperties": true,
       "properties": {
-        "kind": { "const": "CompactResumeLedgerTransitionV2" },
-        "seq": { "type": "integer", "minimum": 1 },
-        "prevHash": { "type": "string" },
-        "cycleId": { "type": "string", "minLength": 1 },
-        "sessionId": { "type": "string", "minLength": 1 },
-        "state": { "enum": ["queued", "running", "done", "blocked", "exhausted"] },
-        "contextPath": { "type": "string", "minLength": 1 },
-        "contextSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "idempotencyKey": { "type": "string", "minLength": 1 },
-        "entryHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        "kind": {
+          "const": "CompactResumeLedgerTransitionV2"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "prevHash": {
+          "type": "string"
+        },
+        "cycleId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state": {
+          "enum": [
+            "queued",
+            "running",
+            "done",
+            "blocked",
+            "exhausted"
+          ]
+        },
+        "contextPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contextSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "entryHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
       }
     },
     "CrossSessionCompactResumeLedgerV2Ref": {
       "type": "object",
-      "required": ["kind", "transitionPath", "transitionSha256", "appendOnly", "hashChainOk", "terminalRowsNotReopened", "transitions"],
+      "required": [
+        "kind",
+        "transitionPath",
+        "transitionSha256",
+        "appendOnly",
+        "hashChainOk",
+        "terminalRowsNotReopened",
+        "transitions"
+      ],
       "additionalProperties": false,
       "properties": {
-        "kind": { "const": "CompactResumeLedgerV2" },
-        "transitionPath": { "type": "string", "minLength": 1 },
-        "transitionSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "appendOnly": { "const": true },
-        "hashChainOk": { "const": true },
-        "terminalRowsNotReopened": { "const": true },
-        "transitions": { "type": "array", "minItems": 6, "items": { "$ref": "#/$defs/CompactResumeLedgerTransitionV2" } }
+        "kind": {
+          "const": "CompactResumeLedgerV2"
+        },
+        "transitionPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "transitionSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "appendOnly": {
+          "const": true
+        },
+        "hashChainOk": {
+          "const": true
+        },
+        "terminalRowsNotReopened": {
+          "const": true
+        },
+        "transitions": {
+          "type": "array",
+          "minItems": 9,
+          "items": {
+            "$ref": "#/$defs/CompactResumeLedgerTransitionV2"
+          }
+        }
       }
     },
     "CrossSessionMultiCompactMatrixV1": {
@@ -186,6 +462,7 @@
         "sessions",
         "compactCycles",
         "providerContinuations",
+        "providerContinuationMatrix",
         "operatorProofClosures",
         "compactResumeLedger",
         "providerContinuationPolicy",
@@ -193,53 +470,152 @@
       ],
       "additionalProperties": false,
       "properties": {
-        "kind": { "const": "CrossSessionMultiCompactMatrixV1" },
-        "schemaVersion": { "const": 1 },
-        "closureGate": { "const": "gate:cross-session-multi-compact-matrix" },
-        "missionId": { "type": "string", "minLength": 1 },
-        "sessions": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/CrossSessionMatrixSessionV1" } },
-        "compactCycles": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/CrossSessionMultiCompactCycleV1" } },
-        "providerContinuations": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/CrossSessionProviderContinuationV1" } },
-        "operatorProofClosures": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/CrossSessionOperatorProofClosureV1" } },
-        "compactResumeLedger": { "$ref": "#/$defs/CrossSessionCompactResumeLedgerV2Ref" },
+        "kind": {
+          "const": "CrossSessionMultiCompactMatrixV1"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "closureGate": {
+          "const": "gate:cross-session-multi-compact-matrix"
+        },
+        "missionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sessions": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/$defs/CrossSessionMatrixSessionV1"
+          }
+        },
+        "compactCycles": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "$ref": "#/$defs/CrossSessionMultiCompactCycleV1"
+          }
+        },
+        "providerContinuations": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "$ref": "#/$defs/CrossSessionProviderContinuationV1"
+          }
+        },
+        "operatorProofClosures": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "$ref": "#/$defs/CrossSessionOperatorProofClosureV1"
+          }
+        },
+        "compactResumeLedger": {
+          "$ref": "#/$defs/CrossSessionCompactResumeLedgerV2Ref"
+        },
         "providerContinuationPolicy": {
           "type": "object",
-          "required": ["requiresAfterExactResume", "requiresEnvRefOnly", "requiresRequestLogHash", "requiresNoPiPollution"],
+          "required": [
+            "requiresAfterExactResume",
+            "requiresMultiProviderMatrix",
+            "requiresEnvRefOnly",
+            "requiresRequestLogHash",
+            "requiresNoPiPollution"
+          ],
           "additionalProperties": false,
           "properties": {
-            "requiresAfterExactResume": { "const": true },
-            "requiresEnvRefOnly": { "const": true },
-            "requiresRequestLogHash": { "const": true },
-            "requiresNoPiPollution": { "const": true }
+            "requiresAfterExactResume": {
+              "const": true
+            },
+            "requiresEnvRefOnly": {
+              "const": true
+            },
+            "requiresRequestLogHash": {
+              "const": true
+            },
+            "requiresNoPiPollution": {
+              "const": true
+            },
+            "requiresMultiProviderMatrix": {
+              "const": true
+            }
           }
         },
         "promotionPolicy": {
           "type": "object",
-          "required": ["mode", "requiresCrossSession", "requiresMultipleCompacts", "requiresExplicitContextPath", "requiresProviderContinuation", "requiresOperatorProofClosure"],
+          "required": [
+            "mode",
+            "requiresCrossSession",
+            "requiresMultipleCompacts",
+            "requiresExplicitContextPath",
+            "requiresProviderContinuation",
+            "requiresProviderContinuationMatrix",
+            "requiresLongerCompactionChain",
+            "requiresOperatorProofClosure"
+          ],
           "additionalProperties": false,
           "properties": {
-            "mode": { "const": "block-until-cross-session-multi-compact-provider-proof" },
-            "requiresCrossSession": { "const": true },
-            "requiresMultipleCompacts": { "const": true },
-            "requiresExplicitContextPath": { "const": true },
-            "requiresProviderContinuation": { "const": true },
-            "requiresOperatorProofClosure": { "const": true }
+            "mode": {
+              "const": "block-until-cross-session-multi-compact-provider-proof"
+            },
+            "requiresCrossSession": {
+              "const": true
+            },
+            "requiresMultipleCompacts": {
+              "const": true
+            },
+            "requiresExplicitContextPath": {
+              "const": true
+            },
+            "requiresProviderContinuation": {
+              "const": true
+            },
+            "requiresOperatorProofClosure": {
+              "const": true
+            },
+            "requiresProviderContinuationMatrix": {
+              "const": true
+            },
+            "requiresLongerCompactionChain": {
+              "const": true
+            }
           }
+        },
+        "providerContinuationMatrix": {
+          "$ref": "#/$defs/ProviderContinuationMatrixV1"
         }
       }
     },
     "CrossSessionMultiCompactMatrixGateV1": {
       "type": "object",
-      "required": ["kind", "schemaVersion", "generatedAt", "CrossSessionMultiCompactMatrixGateV1", "requiredGates", "matrix", "negativeCases", "invariants"],
+      "required": [
+        "kind",
+        "schemaVersion",
+        "generatedAt",
+        "CrossSessionMultiCompactMatrixGateV1",
+        "requiredGates",
+        "matrix",
+        "negativeCases",
+        "invariants"
+      ],
       "additionalProperties": false,
       "properties": {
-        "kind": { "const": "CrossSessionMultiCompactMatrixGateV1" },
-        "schemaVersion": { "const": 1 },
-        "generatedAt": { "type": "string" },
-        "CrossSessionMultiCompactMatrixGateV1": { "const": true },
+        "kind": {
+          "const": "CrossSessionMultiCompactMatrixGateV1"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "generatedAt": {
+          "type": "string"
+        },
+        "CrossSessionMultiCompactMatrixGateV1": {
+          "const": true
+        },
         "requiredGates": {
           "type": "array",
-          "minItems": 8,
+          "minItems": 10,
           "items": {
             "enum": [
               "CrossSessionMultiCompactMatrixGateV1",
@@ -247,19 +623,28 @@
               "old_context_path_over_latest_after_multiple_compacts",
               "context_sha_artifact_hashes_verified_across_sessions",
               "provider_continuation_after_exact_resume",
+              "provider_continuation_matrix_multi_provider",
+              "longer_cross_session_compaction_chain",
               "operator_proof_loop_budget_closure",
               "terminal_resume_rows_not_reopened",
               "compact_resume_ledger_v2_hash_chain_quality"
             ]
           }
         },
-        "matrix": { "$ref": "#/$defs/CrossSessionMultiCompactMatrixV1" },
+        "matrix": {
+          "$ref": "#/$defs/CrossSessionMultiCompactMatrixV1"
+        },
         "negativeCases": {
           "type": "array",
-          "minItems": 8,
+          "minItems": 11,
           "items": {
             "type": "object",
-            "required": ["id", "mutates", "expect", "mustNotPromote"],
+            "required": [
+              "id",
+              "mutates",
+              "expect",
+              "mustNotPromote"
+            ],
             "additionalProperties": false,
             "properties": {
               "id": {
@@ -271,18 +656,27 @@
                   "budget-exhausted-open",
                   "terminal-row-reopened",
                   "same-session-only",
-                  "ledger-hash-chain-drift"
+                  "ledger-hash-chain-drift",
+                  "provider-continuation-single-provider",
+                  "compact-chain-too-short",
+                  "provider-continuation-before-exact-resume"
                 ]
               },
-              "mutates": { "type": "string" },
-              "expect": { "const": "reject" },
-              "mustNotPromote": { "const": true }
+              "mutates": {
+                "type": "string"
+              },
+              "expect": {
+                "const": "reject"
+              },
+              "mustNotPromote": {
+                "const": true
+              }
             }
           }
         },
         "invariants": {
           "type": "array",
-          "minItems": 8,
+          "minItems": 10,
           "items": {
             "enum": [
               "cross_session_multi_compact_matrix_gate",
@@ -307,6 +701,82 @@
         "terminal_resume_rows_not_reopened",
         "compact_resume_ledger_v2_hash_chain_quality"
       ]
+    },
+    "ProviderContinuationMatrixV1": {
+      "type": "object",
+      "required": [
+        "kind",
+        "providerCount",
+        "apiStyles",
+        "modelIds",
+        "cycleIds",
+        "continuationIds",
+        "allAfterExactResume",
+        "envRefOnly",
+        "requestLogHashes",
+        "noPiPollution"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "ProviderContinuationMatrixV1"
+        },
+        "providerCount": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "apiStyles": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "enum": [
+              "openai-compatible",
+              "anthropic-compatible"
+            ]
+          }
+        },
+        "modelIds": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "cycleIds": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "continuationIds": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "allAfterExactResume": {
+          "const": true
+        },
+        "envRefOnly": {
+          "const": true
+        },
+        "requestLogHashes": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "noPiPollution": {
+          "const": true
+        }
+      }
     }
   },
   "$ref": "#/$defs/CrossSessionMultiCompactMatrixGateV1",
@@ -317,6 +787,8 @@
     "old_context_path_over_latest_after_multiple_compacts",
     "context_sha_artifact_hashes_verified_across_sessions",
     "provider_continuation_after_exact_resume",
+    "provider_continuation_matrix_multi_provider",
+    "longer_cross_session_compaction_chain",
     "operator_proof_loop_budget_closure",
     "terminal_resume_rows_not_reopened",
     "compact_resume_ledger_v2_hash_chain_quality"
