@@ -104,7 +104,8 @@
 		"gate:autonomous-hardening-gap-ledger": "node scripts/reverse-agent/autonomous-hardening-gap-ledger-gate.mjs . --strict",
 		"gate:swarm-provider-manifest-parity": "node scripts/reverse-agent/swarm-provider-manifest-parity-gate.mjs . --strict",
 		"gate:worker-provider-repair-rollback-unification": "node scripts/reverse-agent/worker-provider-repair-rollback-unification-gate.mjs . --strict",
-		"gate:live-conflict-arbitration-matrix": "node scripts/reverse-agent/live-conflict-arbitration-matrix-gate.mjs . --strict"
+		"gate:live-conflict-arbitration-matrix": "node scripts/reverse-agent/live-conflict-arbitration-matrix-gate.mjs . --strict",
+		"gate:cross-session-multi-compact-matrix": "node scripts/reverse-agent/cross-session-multi-compact-matrix-gate.mjs . --strict"
 	},
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "0.0.26",

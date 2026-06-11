@@ -1,0 +1,52 @@
+{
+  "kind": "repi-cross-session-multi-compact-matrix-fixture",
+  "schemaVersion": 1,
+  "description": "CrossSessionMultiCompactMatrixGateV1 fixture coverage for cross-session exact resume + multi-compact + provider continuation + operator/proof-loop closure.",
+  "requiredGates": [
+    "CrossSessionMultiCompactMatrixGateV1",
+    "cross_session_multi_compact_same_run",
+    "old_context_path_over_latest_after_multiple_compacts",
+    "context_sha_artifact_hashes_verified_across_sessions",
+    "provider_continuation_after_exact_resume",
+    "operator_proof_loop_budget_closure",
+    "terminal_resume_rows_not_reopened",
+    "compact_resume_ledger_v2_hash_chain_quality"
+  ],
+  "positiveRequirements": [
+    "at least two compact cycles in one matrix run",
+    "sourceSessionId and resumeSessionId must differ for every cycle",
+    "loadedBy=contextPath and explicitContextPathUsed=true beats latest fallback decoy",
+    "contextSha256 and required artifact hashes are verified across sessions",
+    "provider continuation runs after exact resume with env-ref-only request log and stdout/stderr hashes",
+    "operator/proof-loop closure reaches done|blocked|exhausted and exhausted has remaining budget zero",
+    "CompactResumeLedgerV2 transition hash chain is append-only and terminal rows are not reopened"
+  ],
+  "negativeCases": [
+    { "id": "latest-fallback-without-explicit-context", "mutates": "compactCycles[0].loadedBy=latest", "expect": "reject", "mustNotPromote": true },
+    { "id": "context-sha-drift", "mutates": "compactCycles[0].contextSha256", "expect": "reject", "mustNotPromote": true },
+    { "id": "artifact-hash-drift", "mutates": "compactCycles[0].artifactHashes[0].sha256", "expect": "reject", "mustNotPromote": true },
+    { "id": "provider-continuation-missing", "mutates": "providerContinuations remove cycle", "expect": "reject", "mustNotPromote": true },
+    { "id": "budget-exhausted-open", "mutates": "operatorProofClosures exhausted budget remaining > 0", "expect": "reject", "mustNotPromote": true },
+    { "id": "terminal-row-reopened", "mutates": "CompactResumeLedgerV2 terminal row reopened", "expect": "reject", "mustNotPromote": true },
+    { "id": "same-session-only", "mutates": "resumeSessionId equals sourceSessionId", "expect": "reject", "mustNotPromote": true },
+    { "id": "ledger-hash-chain-drift", "mutates": "CompactResumeLedgerV2 prevHash drift", "expect": "reject", "mustNotPromote": true }
+  ],
+  "promotionPolicy": {
+    "mode": "block-until-cross-session-multi-compact-provider-proof",
+    "requiresCrossSession": true,
+    "requiresMultipleCompacts": true,
+    "requiresExplicitContextPath": true,
+    "requiresProviderContinuation": true,
+    "requiresOperatorProofClosure": true
+  },
+  "invariants": [
+    "cross_session_multi_compact_matrix_gate",
+    "cross_session_multi_compact_same_run",
+    "old_context_path_over_latest_after_multiple_compacts",
+    "context_sha_artifact_hashes_verified_across_sessions",
+    "provider_continuation_after_exact_resume",
+    "operator_proof_loop_budget_closure",
+    "terminal_resume_rows_not_reopened",
+    "compact_resume_ledger_v2_hash_chain_quality"
+  ]
+}
