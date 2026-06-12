@@ -164,11 +164,13 @@ repi --offline --list-models
 npm run gate:repi-product
 ```
 
-默认隔离参数：
+默认启动参数：
 
 ```text
---recon --no-extensions --no-skills --no-prompt-templates --no-approve --no-context-files
+--recon
 ```
+
+项目信任由 `~/.repi/agent/trust.json` 管理：第一次进入包含 `AGENTS.md`、`CLAUDE.md` 或 `.repi/` 的目录时会提示 `/trust`；保存后同一路径及子目录会继承，不需要每个新任务重复确认。
 
 如需把已有普通 `pi` 的登录态一次性复制到 `repi`，显式执行：
 
@@ -176,7 +178,7 @@ npm run gate:repi-product
 repi --import-pi-auth --offline --list-models
 ```
 
-这是单向复制到 `~/.repi/agent`，不会修改 `~/.pi/agent`。需要加载项目 AGENTS/CLAUDE 和项目 `.repi/settings.json` 时使用：
+这是单向复制到 `~/.repi/agent`，不会修改 `~/.pi/agent`。`--project-context` 与 `--with-project-resources` 作为兼容参数保留；正常情况下直接使用 `/trust` 保存项目信任即可加载项目 AGENTS/CLAUDE、`.repi/settings.json` 和项目资源：
 
 ```bash
 repi --project-context
@@ -186,6 +188,12 @@ repi --project-context
 
 ```bash
 repi --with-project-resources
+```
+
+如果某次任务需要完全忽略项目上下文和项目资源，可以显式使用：
+
+```bash
+repi --clean-room
 ```
 
 

@@ -128,8 +128,20 @@ export class ProjectTrustStore {
 	get(cwd: string): ProjectTrustDecision {
 		return withTrustFileLock(this.trustPath, () => {
 			const data = readTrustFile(this.trustPath);
-			const value = data[normalizeCwd(cwd)];
-			return value === true || value === false ? value : null;
+			let current = normalizeCwd(cwd);
+
+			while (true) {
+				const value = data[current];
+				if (value === true || value === false) {
+					return value;
+				}
+
+				const parent = dirname(current);
+				if (parent === current) {
+					return null;
+				}
+				current = parent;
+			}
 		});
 	}
 

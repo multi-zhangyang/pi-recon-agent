@@ -11,13 +11,13 @@ Edit directly or use `/settings` for common options.
 
 ## Project Trust
 
-On interactive startup, repi asks before trusting a project folder that contains project-local inputs and has no saved decision in `~/.repi/agent/trust.json`. Trusting a project allows repi to read project instructions (`AGENTS.md`/`CLAUDE.md`), load `.repi/settings.json` and `.repi` resources, install missing project packages, and execute project extensions.
+On interactive startup, repi asks before trusting a project folder that contains project-local inputs and has no saved decision in `~/.repi/agent/trust.json`. Trust decisions inherit from parent directories, so trusting a repository root covers sessions started in its subdirectories unless a child path has its own decision. Trusting a project allows repi to read project instructions (`AGENTS.md`/`CLAUDE.md`), load `.repi/settings.json` and `.repi` resources, install missing project packages, and execute project extensions.
 
 Non-interactive modes (`-p`, `--mode json`, and `--mode rpc`) do not show a trust prompt. Without a saved trust decision, they ignore project-local inputs unless `--approve`/`-a` is passed. Use `--no-approve`/`-na` to ignore project-local inputs for one run even when the project is trusted.
 
 `repi config` assumes project trust for that command so you can view and change project resource settings before starting a session. It does not save a trust decision; starting a session in that folder still prompts. Pass `--no-approve` to hide project-local inputs in `repi config`.
 
-Use `/trust` in interactive mode to save a project trust decision for future sessions. It writes `~/.repi/agent/trust.json` only; the current session is not reloaded, so restart repi for changes to take effect.
+Use `/trust` in interactive mode to save a project trust decision. The current session reloads resources after the decision is saved, and future sessions inherit the saved decision for that path and its subdirectories.
 
 ## All Settings
 

@@ -33,6 +33,24 @@ describe("ProjectTrustStore", () => {
 		expect(store.get(cwd)).toBeNull();
 	});
 
+	it("inherits trust decisions from parent directories with child overrides", () => {
+		const store = new ProjectTrustStore(agentDir);
+		const child = join(cwd, "nested", "case");
+		mkdirSync(child, { recursive: true });
+
+		store.set(cwd, true);
+		expect(store.get(child)).toBe(true);
+
+		store.set(child, false);
+		expect(store.get(child)).toBe(false);
+
+		store.set(child, null);
+		expect(store.get(child)).toBe(true);
+
+		store.set(cwd, false);
+		expect(store.get(child)).toBe(false);
+	});
+
 	it("fails loudly without overwriting malformed trust stores", () => {
 		const trustPath = join(agentDir, "trust.json");
 		writeFileSync(trustPath, "{not json", "utf-8");

@@ -665,7 +665,7 @@ export class InteractiveMode {
 			);
 			const onboarding = theme.fg(
 				"dim",
-				`Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`,
+				`REPI can explain its reverse/pentest workflow, model configuration, tools, memory, compact/resume, and extension system.`,
 			);
 			this.builtInHeader = new ExpandableText(
 				() => `${logo}\n${compactInstructions}\n${compactOnboarding}\n\n${onboarding}`,
@@ -3265,7 +3265,7 @@ export class InteractiveMode {
 			new Text(
 				theme.fg(
 					"warning",
-					`This project is not trusted. Project instructions (AGENTS.md/CLAUDE.md), ${CONFIG_DIR_NAME} resources, and project packages are ignored. Use /trust to save a trust decision, then restart ${APP_NAME}.`,
+					`This project is not trusted. Project instructions (AGENTS.md/CLAUDE.md), ${CONFIG_DIR_NAME} resources, and project packages are ignored. Use /trust to save a decision and reload project resources.`,
 				),
 				1,
 				0,
@@ -4186,9 +4186,12 @@ export class InteractiveMode {
 				onSelect: (trusted) => {
 					trustStore.set(cwd, trusted);
 					done();
-					this.showStatus(
-						`Saved trust decision: ${trusted ? "trusted" : "untrusted"}. Restart ${APP_NAME} for this to take effect.`,
-					);
+					this.settingsManager.setProjectTrusted(trusted);
+					void this.handleReloadCommand().then(() => {
+						this.showStatus(
+							`Saved trust decision: ${trusted ? "trusted" : "untrusted"}. Project resources reloaded.`,
+						);
+					});
 				},
 				onCancel: () => {
 					done();

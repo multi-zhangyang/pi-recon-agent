@@ -129,7 +129,7 @@ export function initializeRepiProfile(options: { repoRoot?: string; verbose?: bo
 		...((settings.retry as Record<string, unknown> | undefined) ?? {}),
 	};
 
-	// REPI uses the built-in --recon kernel and defaults to clean-room startup.
+	// REPI uses the built-in --recon kernel and an isolated ~/.repi profile.
 	// Remove stale file-profile resources that old takeover installers placed in settings.
 	for (const key of ["extensions", "skills", "prompts", "enabledModels"]) {
 		const value = settings[key];

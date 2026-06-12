@@ -297,6 +297,9 @@ ${chalk.bold("Options:")}
   --verbose                      Force verbose startup (overrides quietStartup setting)
   --approve, -a                  Trust project-local files for this run
   --no-approve, -na              Ignore project-local files for this run
+  --clean-room                   REPI wrapper flag: ignore project context/resources for this run
+  --project-context              REPI compatibility flag: project trust store controls context loading
+  --with-project-resources       REPI compatibility flag: project trust store controls resource loading
   --offline                      Disable startup network operations (same as REPI_OFFLINE=1)
   --help, -h                     Show this help
   --version, -v                  Show version number

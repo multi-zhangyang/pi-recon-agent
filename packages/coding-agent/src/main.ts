@@ -702,8 +702,10 @@ export async function main(args: string[], options?: MainOptions) {
 		sessionManager,
 		sessionStartEvent,
 	}) => {
+		const runtimeCwd = resolvePath(cwd);
+		const runtimeSessionCwd = resolvePath(sessionManager.getCwd());
 		const projectTrusted =
-			cwd === sessionManager.getCwd()
+			runtimeCwd === runtimeSessionCwd
 				? projectTrustedForSession
 				: (parsed.projectTrustOverride ?? (!hasProjectTrustInputs(cwd) || trustStore.get(cwd) === true));
 		const runtimeSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });

@@ -1,6 +1,6 @@
 # REPI Kernel Profile
 
-REPI includes a built-in reverse-engineering and pentest-oriented kernel profile. In this repository the recommended clean-room launcher is `repi`, which enables the profile and stores state under `~/.repi/agent` so it can coexist with normal upstream `pi`:
+REPI includes a built-in reverse-engineering and pentest-oriented kernel profile. The `repi` launcher enables the profile and stores state under `~/.repi/agent`:
 
 ```bash
 repi
@@ -253,7 +253,7 @@ Examples:
 
 ## Project profile coexistence
 
-A project or global `.repi/extensions/reverse-pentest-core.ts` profile can still exist. `repi` avoids those collisions by default with `--no-extensions --no-skills --no-prompt-templates --no-approve --no-context-files`; raw `repi --recon` also keeps the built-in inline kernel profile and suppresses conflicts from the legacy file-based REPI extension where possible.
+A project or global `.repi/extensions/reverse-pentest-core.ts` profile can still exist. `repi` starts with the built-in inline kernel profile and uses the saved project-trust decision to decide whether project-local instructions/settings/resources are loaded. Use `repi --clean-room` for a one-run fully isolated startup equivalent to `--no-extensions --no-skills --no-prompt-templates --no-approve --no-context-files`.
 
 ## Examples
 

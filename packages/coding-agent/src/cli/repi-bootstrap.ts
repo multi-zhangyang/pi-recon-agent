@@ -10,7 +10,7 @@ const PACKAGE_COMMANDS = new Set([
 	"provider-doctor",
 	"doctor-provider",
 ]);
-const DEFAULT_CLEAN_ROOM_FLAGS = [
+const CLEAN_ROOM_FLAGS = [
 	"--no-extensions",
 	"--no-skills",
 	"--no-prompt-templates",
@@ -61,10 +61,12 @@ function stripRepiWrapperFlags(args: readonly string[]): {
 	args: string[];
 	projectContext: boolean;
 	projectResources: boolean;
+	cleanRoom: boolean;
 } {
 	const normalized: string[] = [];
 	let projectContext = false;
 	let projectResources = false;
+	let cleanRoom = false;
 	for (const arg of args) {
 		if (arg === "--import-pi-auth" || arg === "--import-pi-profile") {
 			process.env.REPI_IMPORT_PI_PROFILE = "1";
@@ -78,9 +80,13 @@ function stripRepiWrapperFlags(args: readonly string[]): {
 			projectResources = true;
 			continue;
 		}
+		if (arg === "--clean-room") {
+			cleanRoom = true;
+			continue;
+		}
 		normalized.push(arg);
 	}
-	return { args: normalized, projectContext, projectResources };
+	return { args: normalized, projectContext, projectResources, cleanRoom };
 }
 
 export function bootstrapRepiCli(args: readonly string[]): string[] {
@@ -114,8 +120,8 @@ export function bootstrapRepiCli(args: readonly string[]): string[] {
 		prefix.push("--recon");
 	}
 
-	if (!stripped.projectContext && !stripped.projectResources) {
-		for (const flag of DEFAULT_CLEAN_ROOM_FLAGS) {
+	if (stripped.cleanRoom) {
+		for (const flag of CLEAN_ROOM_FLAGS) {
 			if (!hasFlag(stripped.args, flag)) prefix.push(flag);
 		}
 	}

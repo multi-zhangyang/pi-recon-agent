@@ -201,9 +201,10 @@ function staticContractChecks() {
 		markerCheck("code:repi-bootstrap-defaults", "packages/coding-agent/src/cli/repi-bootstrap.ts", [
 			"bootstrapRepiCli",
 			"initializeRepiProfile",
-			"DEFAULT_CLEAN_ROOM_FLAGS",
+			"CLEAN_ROOM_FLAGS",
 			'"--recon"',
 			'"--import-pi-auth"',
+			'"--clean-room"',
 			'"--project-context"',
 			'"--with-project-resources"',
 			"PACKAGE_COMMANDS",
