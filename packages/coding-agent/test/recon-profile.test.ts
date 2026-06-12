@@ -51,6 +51,9 @@ describe("REPI kernel profile", () => {
 		expect(route.workflow).toContain("headers/imports");
 		expect(routeReconTask("LLM agent prompt injection MCP tool call 边界验证").domain).toBe("Agent / LLM security");
 		expect(routeReconTask("autopwn exploit reliability poc replay matrix").domain).toBe("Exploit reliability");
+		expect(routeReconTask("nuclei ffuf web 漏洞扫描和目录扫描").domain).toBe("Web vulnerability scanning");
+		expect(routeReconTask("iOS IPA Keychain TLS pinning Frida 逆向").domain).toBe("Mobile / iOS");
+		expect(routeReconTask("volatility vmem memory dump 内存取证").domain).toBe("Memory forensics");
 	});
 
 	it("injects built-in skills and prompts without project .repi files", () => {
@@ -107,6 +110,8 @@ describe("REPI kernel profile", () => {
 			["re_native_runtime", {}],
 			["re_memory", {}],
 			["re_tool_index", {}],
+			["re_toolchain_domain", {}],
+			["re_domain_proof_exit", {}],
 			["re_mission", {}],
 			["re_evidence", {}],
 			["re_graph", {}],
@@ -142,6 +147,8 @@ describe("REPI kernel profile", () => {
 			["re-mobile-runtime", {}],
 			["re-native-runtime", {}],
 			["re-tools", {}],
+			["re-toolchain", {}],
+			["re-domain-proof-exit", {}],
 			["re-memory", {}],
 			["re-mission", {}],
 			["re-evidence", {}],
@@ -2681,6 +2688,15 @@ describe("REPI kernel profile", () => {
 		expect(webPlan).toContain("web-api-state-source-scaffold");
 		expect(webPlan).toContain("/tmp/pi-recon-browser-artifact.json");
 
+		const webScanPlan = await planFor("nuclei ffuf katana web 漏洞扫描", "scope", "https://target.local");
+		expect(webScanPlan).toContain("route: Web vulnerability scanning");
+		expect(webScanPlan).toContain("specialist_runtime_planner: web vulnerability scanner/triage");
+		expect(webScanPlan).toContain("web-scan-scope-baseline");
+		expect(webScanPlan).toContain("web-scan-crawl-corpus-scaffold");
+		expect(webScanPlan).toContain("web-scan-content-discovery-scaffold");
+		expect(webScanPlan).toContain("web-scan-template-scan-scaffold");
+		expect(webScanPlan).toContain("web-scan-manual-replay-verifier");
+
 		const jsPlan = await planFor("JS 签名 sign 参数 crypto.subtle fetch", "observe", "https://target.local/app.js");
 		expect(jsPlan).toContain("route: Frontend JS reverse");
 		expect(jsPlan).toContain("JS signing rebuild");
@@ -2732,6 +2748,14 @@ describe("REPI kernel profile", () => {
 		expect(pcapPlan).toContain("export-objects http");
 		expect(pcapPlan).toContain("pcap-flow-transform-chain");
 
+		const memoryPlan = await planFor("volatility vmem memory dump 内存取证", "image-info", "mem.vmem");
+		expect(memoryPlan).toContain("route: Memory forensics");
+		expect(memoryPlan).toContain("specialist_runtime_planner: memory forensics");
+		expect(memoryPlan).toContain("memory-forensics-image-info-scaffold");
+		expect(memoryPlan).toContain("memory-forensics-process-network-scaffold");
+		expect(memoryPlan).toContain("memory-forensics-credential-artifact-scaffold");
+		expect(memoryPlan).toContain("memory-forensics-timeline-carve-scaffold");
+
 		const firmwarePlan = await planFor("OpenWrt firmware binwalk squashfs rootfs mips", "inventory", "router.bin");
 		expect(firmwarePlan).toContain("route: Firmware / IoT");
 		expect(firmwarePlan).toContain("specialist_runtime_planner: Firmware/IoT rootfs");
@@ -2772,6 +2796,14 @@ describe("REPI kernel profile", () => {
 		expect(adPlan).toContain("identity-ad-principal-enum-scaffold");
 		expect(adPlan).toContain("identity-ad-credential-usability-scaffold");
 		expect(adPlan).toContain("identity-ad-graph-scaffold");
+
+		const iosPlan = await planFor("iOS IPA Keychain NSURLSession TLS pinning Frida", "ipa-inventory", "app.ipa");
+		expect(iosPlan).toContain("route: Mobile / iOS");
+		expect(iosPlan).toContain("specialist_runtime_planner: iOS IPA/mobile runtime");
+		expect(iosPlan).toContain("ios-ipa-inventory-scaffold");
+		expect(iosPlan).toContain("ios-macho-class-map-scaffold");
+		expect(iosPlan).toContain("ios-frida-objection-hook-scaffold");
+		expect(iosPlan).toContain("ios-network-replay-scaffold");
 
 		const fridaPlan = await planFor("Android APK frida bypass", "runtime-proof", "./app.apk");
 		expect(fridaPlan).toContain("Frida/GDB trace");

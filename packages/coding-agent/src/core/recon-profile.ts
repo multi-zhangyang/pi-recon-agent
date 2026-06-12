@@ -50,6 +50,13 @@ const TOOL_INDEX_CANDIDATES = [
 	"adb",
 	"frida",
 	"frida-ps",
+	"objection",
+	"ios-deploy",
+	"class-dump",
+	"otool",
+	"nm",
+	"codesign",
+	"plutil",
 	"binwalk",
 	"unblob",
 	"unsquashfs",
@@ -71,6 +78,10 @@ const TOOL_INDEX_CANDIDATES = [
 	"gobuster",
 	"sqlmap",
 	"wfuzz",
+	"feroxbuster",
+	"nikto",
+	"dalfox",
+	"arjun",
 	"tshark",
 	"zeek",
 	"capinfos",
@@ -124,6 +135,7 @@ const RECON_TOOL_NAMES = [
 	"re_memory",
 	"re_tool_index",
 	"re_toolchain_domain",
+	"re_domain_proof_exit",
 	"re_mission",
 	"re_evidence",
 	"re_graph",
@@ -160,6 +172,7 @@ const RECON_COMMAND_NAMES = [
 	"re-native-runtime",
 	"re-tools",
 	"re-toolchain",
+	"re-domain-proof-exit",
 	"re-memory",
 	"re-mission",
 	"re-evidence",
@@ -451,6 +464,18 @@ const TOOL_BOOTSTRAP_CATALOG = [
 	{ tool: "httpx", install: "go install github.com/projectdiscovery/httpx/cmd/httpx@latest", verify: "command -v httpx && httpx -version | head -1" },
 	{ tool: "nuclei", install: "go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest", verify: "command -v nuclei && nuclei -version | head -1" },
 	{ tool: "katana", install: "go install github.com/projectdiscovery/katana/cmd/katana@latest", verify: "command -v katana && katana -version | head -1" },
+	{ tool: "feroxbuster", install: "sudo apt-get update && sudo apt-get install -y feroxbuster", verify: "command -v feroxbuster && feroxbuster --version | head -1" },
+	{ tool: "nikto", install: "sudo apt-get update && sudo apt-get install -y nikto", verify: "command -v nikto && nikto -Version 2>&1 | head -1" },
+	{ tool: "dalfox", install: "go install github.com/hahwul/dalfox/v2@latest", verify: "command -v dalfox && dalfox version | head -1" },
+	{ tool: "arjun", install: "python3 -m pip install --user arjun", verify: "command -v arjun && arjun --version | head -1" },
+	{ tool: "volatility3", install: "python3 -m pip install --user volatility3", verify: "command -v volatility3 && volatility3 -h | head -1" },
+	{ tool: "objection", install: "python3 -m pip install --user objection", verify: "command -v objection && objection version | head -1" },
+	{ tool: "ios-deploy", install: "npm install -g ios-deploy", verify: "command -v ios-deploy && ios-deploy --version" },
+	{ tool: "class-dump", install: "manual_tool_review class-dump/class-dump-swift per host OS", verify: "command -v class-dump || command -v class-dump-swift" },
+	{ tool: "otool", install: "manual_tool_review install Xcode Command Line Tools on macOS", verify: "command -v otool && otool -h 2>&1 | head -1" },
+	{ tool: "nm", install: "sudo apt-get update && sudo apt-get install -y binutils", verify: "command -v nm && nm --version | head -1" },
+	{ tool: "codesign", install: "manual_tool_review install Xcode Command Line Tools on macOS", verify: "command -v codesign && codesign -h 2>&1 | head -1" },
+	{ tool: "plutil", install: "sudo apt-get update && sudo apt-get install -y libplist-utils || manual_tool_review macOS plutil", verify: "command -v plutil && plutil -help 2>&1 | head -1" },
 	{ tool: "openssl", install: "sudo apt-get update && sudo apt-get install -y openssl", verify: "command -v openssl && openssl version" },
 	{ tool: "z3", install: "python3 -m pip install --user z3-solver", verify: "python3 - <<'PYZ3'\nimport z3; print(z3.get_version_string())\nPYZ3" },
 	{ tool: "sage", install: "sudo apt-get update && sudo apt-get install -y sagemath", verify: "command -v sage && sage --version | head -1" },
@@ -474,9 +499,9 @@ const SECURITY_PATTERNS = [
 	/ida|radare2|\br2\b|ghidra|binary|二进制|逆向|反编译|反汇编|elf|pe\b|dll|so\b|wasm|vmprotect|upx/i,
 	/\bctf\b|\bpwn\b|\brop\b|ret2libc|\bheap\b|tcache|fastbin|one_gadget|pwntools|漏洞利用|\bexploit\b/i,
 	/js\s*逆向|签名|加密参数|风控|webpack|sourcemap|hook|xhr|fetch|websocket/i,
-	/web\s*渗透|api\s*安全|graphql|jwt|oauth|ssrf|idor|bola|xss|sqli|ssti|csrf|rce|waf|burp/i,
+	/web\s*渗透|api\s*安全|graphql|jwt|oauth|ssrf|idor|bola|xss|sqli|ssti|csrf|rce|waf|burp|漏洞扫描|目录扫描|nuclei|ffuf|gobuster|sqlmap|dalfox/i,
 	/firmware|固件|iot|binwalk|squashfs|uboot|uart|jtag|mips|arm/i,
-	/pcap|流量|取证|dfir|forensic|stego|隐写|wireshark|tshark/i,
+	/pcap|流量|取证|dfir|forensic|stego|隐写|wireshark|tshark|memory dump|memdump|vmem|volatility|内存取证|内存镜像/i,
 	/cloud|aws|azure|gcp|metadata|k8s|kubernetes|docker|container|容器|云/i,
 	/ad\b|active directory|kerberos|ntlm|ldap|windows|lsass|mimikatz|bloodhound|certipy|域控|内网|横向|提权|凭据/i,
 	/malware|恶意|样本|yara|sigma|ioc|c2|沙箱|反调试|反沙箱/i,
@@ -5116,6 +5141,43 @@ type ToolchainDomainCapabilityV1 = {
 	nextActions: string[];
 };
 
+type DomainProofExitClosureStatus = "passed" | "partial" | "blocked";
+
+type DomainProofExitRowV1 = {
+	proofExit: string;
+	status: "matched" | "missing";
+	matchedArtifacts: string[];
+	matchedLines: string[];
+	expectedEvidence: string[];
+	nextCommands: string[];
+};
+
+type DomainProofExitClosureV1 = {
+	kind: "DomainProofExitClosureV1";
+	schemaVersion: 1;
+	generatedAt: string;
+	missionId?: string;
+	routeDomain?: string;
+	domainId?: string;
+	status: DomainProofExitClosureStatus;
+	toolchainStatus?: ToolchainDomainStatus;
+	artifactCorpusHash: string;
+	artifactSources: string[];
+	rows: DomainProofExitRowV1[];
+	matchedProofExits: string[];
+	missingProofExits: string[];
+	blockers: string[];
+	nextRuntimeCommands: string[];
+};
+
+type CompletionAudit = {
+	ready: boolean;
+	blockers: string[];
+	warnings: string[];
+	mission?: MissionState;
+	domainProofExitClosure?: DomainProofExitClosureV1;
+};
+
 type LaneCommand = {
 	label: string;
 	command: string;
@@ -7177,6 +7239,15 @@ export function routeReconTask(text: string): RoutePlan {
 			"verify clean replay",
 		]);
 	}
+	if (/ios|ipa|objective-c|objc|swift|mach-o|mach_o|class-dump|otool|codesign|keychain|jailbreak|越狱/.test(lower)) {
+		return plan(
+			"Mobile / iOS",
+			"reverse IPA/iOS logic, entitlement/keychain/network signing, or runtime checks",
+			"ipa/unzip/plist/otool/nm/class-dump + Frida/objection",
+			"mobile-ios-reverse",
+			["IPA inventory", "Info.plist/entitlements", "Mach-O/class map", "Frida/objection hooks", "network/keychain replay"],
+		);
+	}
 	if (/apk|android|jadx|apktool|smali|frida|objection/.test(lower)) {
 		return plan(
 			"Mobile / Android",
@@ -7193,6 +7264,28 @@ export function routeReconTask(text: string): RoutePlan {
 			"browser/CDP/hook + Node rebuild",
 			"js-reverse",
 			["observe requests", "capture initiator", "hook args/returns", "local rebuild", "first-divergence patch"],
+		);
+	}
+	if (
+		/(?:\bcrypto\b|cryptography|rsa|aes|cbc|ecb|gcm|nonce|iv\b|padding oracle|oracle|lattice|sage|z3|hashcat|john|xor|base64|base32|hex|modulus|exponent|elliptic|ecdsa|stego|隐写|密码题|格|同余|椭圆曲线)/.test(
+			lower,
+		)
+	) {
+		return plan(
+			"Crypto / stego",
+			"recover parameters, transform chain, oracle behavior, or solver path",
+			"python/openssl/Z3/Sage/hashcat + known-answer replay",
+			"crypto-stego",
+			["artifact/parameter inventory", "transform chain", "oracle/constraint model", "solver script", "known-answer replay"],
+		);
+	}
+	if (/漏洞扫描|目录扫描|指纹|资产发现|vuln(?:erability)? scan|web scan|nuclei|ffuf|gobuster|feroxbuster|nikto|dalfox|sqlmap|waf|crawl|爬虫/.test(lower)) {
+		return plan(
+			"Web vulnerability scanning",
+			"turn broad web exposure into a bounded finding queue with manual replay proof",
+			"httpx/katana/ffuf/nuclei/nikto/dalfox/sqlmap + curl verifier",
+			"web-vuln-scan",
+			["scope baseline", "crawl/route corpus", "template scan", "manual replay verifier", "finding queue/report"],
 		);
 	}
 	if (/api|graphql|jwt|oauth|ssrf|idor|bola|xss|sqli|ssti|csrf|rce|web|burp|waf|渗透/.test(lower)) {
@@ -7243,6 +7336,15 @@ export function routeReconTask(text: string): RoutePlan {
 			"file/checksec/strings/imports + r2/Ghidra/trace",
 			"reverse-engineering",
 			["headers/imports", "strings and xrefs", "entry/control flow", "dynamic trace", "scripted decode"],
+		);
+	}
+	if (/memory dump|memdump|mem\.raw|\.vmem|hiberfil|pagefile|volatility|内存取证|内存镜像|内存转储|lsass dump|crash dump/.test(lower)) {
+		return plan(
+			"Memory forensics",
+			"recover process, network, credential, malware, and timeline evidence from memory images",
+			"volatility3/file/strings/yara + timeline/carving",
+			"memory-forensics",
+			["image profile", "process/network map", "credential/artifact hunt", "timeline/carve", "verification/report"],
 		);
 	}
 	if (/pcap|取证|dfir|forensic|stego|隐写|wireshark|tshark|内存转储/.test(lower)) {
@@ -7326,6 +7428,35 @@ function missionLanesForRoute(route: RoutePlan): MissionLane[] {
 			{ name: "report", objective: "整理影响、证据和修复/下一步", next: ["证据块", "验证步骤", "memory 回写"] },
 		];
 	}
+	if (route.domain === "Web vulnerability scanning") {
+		return [
+			{
+				name: "scope",
+				objective: "确认目标 URL、主机、协议、指纹、robots/sitemap/OpenAPI/GraphQL 和扫描边界",
+				next: ["curl/httpx baseline", "robots/sitemap", "WAF/header/tech fingerprint"],
+			},
+			{
+				name: "crawl",
+				objective: "构建 bounded route corpus、参数字典、静态资源和登录/未登录差异",
+				next: ["katana/wayback fallback", "ffuf/gobuster small wordlist", "parameter candidates"],
+			},
+			{
+				name: "template-scan",
+				objective: "用 nuclei/nikto/dalfox/sqlmap 等工具产出候选发现队列，而不是直接声称漏洞成立",
+				next: ["nuclei low-rate", "scanner JSONL", "triage severity/source"],
+			},
+			{
+				name: "verify",
+				objective: "对每个候选发现做 curl/HTTP replay、状态码/body hash/前后对照和误报裁剪",
+				next: ["manual replay", "before/after hash", "false-positive notes"],
+			},
+			{
+				name: "report",
+				objective: "输出 finding queue、复现命令、证据 artifact 和后续深挖 lane",
+				next: ["finding table", "replay verifier", "operator queue"],
+			},
+		];
+	}
 	if (route.domain === "Frontend JS reverse") {
 		return [
 			{
@@ -7344,6 +7475,31 @@ function missionLanesForRoute(route: RoutePlan): MissionLane[] {
 				next: ["replay", "对比字段", "记录时间戳/nonce 依赖"],
 			},
 			{ name: "report", objective: "写出复现脚本和关键断点", next: ["脚本", "证据块", "field journal"] },
+		];
+	}
+	if (route.domain === "Crypto / stego") {
+		return [
+			{
+				name: "inventory",
+				objective: "盘点密文/文件/参数/编码/大整数/metadata 与可能的 oracle 面",
+				next: ["hash/format", "hex/base64/int/PEM 参数", "IV/nonce/key/signature 字段"],
+			},
+			{
+				name: "transform",
+				objective: "复原编码、压缩、异或、分组模式、隐写提取等 transform chain",
+				next: ["base64/hex/gzip/zlib", "exiftool/zsteg/binwalk", "candidate plaintext scoring"],
+			},
+			{
+				name: "solver",
+				objective: "建立约束/数学/密码攻击 solver，并输出可复用脚本",
+				next: ["Z3/Sage/PyCryptodome", "parameter derivation", "solve.py"],
+			},
+			{
+				name: "verify",
+				objective: "用 known-answer 或 replay 验证结果，不把猜测当结论",
+				next: ["known-answer assert", "transform replay", "artifact hash"],
+			},
+			{ name: "report", objective: "沉淀参数、脚本、验证命令和失败分支", next: ["solver script", "proof-exit", "field journal"] },
 		];
 	}
 	if (route.domain === "Malware analysis") {
@@ -7475,6 +7631,89 @@ function missionLanesForRoute(route: RoutePlan): MissionLane[] {
 				name: "report",
 				objective: "沉淀 agent 安全边界图、可复现注入链和工具调用证据",
 				next: ["boundary graph", "replay command", "evidence block"],
+			},
+		];
+	}
+	if (route.domain === "Memory forensics") {
+		return [
+			{
+				name: "image-info",
+				objective: "确认内存镜像格式、hash、OS/profile 候选和 volatility 可用插件",
+				next: ["file/sha256", "volatility3 windows.info/linux.banners/mac.banners", "profile fallback"],
+			},
+			{
+				name: "process-network",
+				objective: "枚举进程树、命令行、DLL/module、句柄、连接和可疑注入/隐藏进程",
+				next: ["pslist/pstree/cmdline", "netscan/sockets", "malfind/dlllist/handles"],
+			},
+			{
+				name: "credential-artifacts",
+				objective: "定位凭据、token、浏览器/LSASS/registry/artifact 与可验证来源",
+				next: ["hashdump/lsadump fallback", "strings/yara", "registry/browser artifacts"],
+			},
+			{
+				name: "timeline-carve",
+				objective: "建立事件时间线、filescan/dumpfiles/carving 和 IOC 证据链",
+				next: ["timeliner/mftscan", "filescan/dumpfiles", "IOC/YARA"],
+			},
+			{
+				name: "report",
+				objective: "沉淀 profile、插件输出、artifact hash、IOC/timeline 和复现命令",
+				next: ["evidence table", "timeline", "memory proof-exit"],
+			},
+		];
+	}
+	if (route.domain === "DFIR / PCAP / stego") {
+		return [
+			{
+				name: "artifact-inventory",
+				objective: "确认取证文件类型、hash、pcap/image/stego 候选和解析工具",
+				next: ["file/sha256", "capinfos/exiftool", "strings/binwalk"],
+			},
+			{
+				name: "timeline-flow",
+				objective: "建立流量会话、DNS/TLS/HTTP、时间线和可疑凭据/对象索引",
+				next: ["tshark conversations", "stream ranking", "secret timeline"],
+			},
+			{
+				name: "extract-decode",
+				objective: "提取 HTTP object/carve 文件并还原编码、压缩、隐写 transform chain",
+				next: ["export objects", "foremost/binwalk", "base64/hex/gzip/zlib/zsteg"],
+			},
+			{
+				name: "verify",
+				objective: "验证恢复 artifact 的 hash、可读内容、flag/IOC 来源和复现命令",
+				next: ["artifact hash", "decode script", "source packet/frame"],
+			},
+			{ name: "report", objective: "整理 timeline、artifact、transform 和证据块", next: ["flow table", "decode chain", "field journal"] },
+		];
+	}
+	if (route.domain === "Mobile / iOS") {
+		return [
+			{
+				name: "ipa-inventory",
+				objective: "确认 IPA/Payload/App、Info.plist、Entitlements、Mach-O、Frameworks 和 URL schemes",
+				next: ["unzip/list", "plist decode", "codesign/entitlements"],
+			},
+			{
+				name: "static-class-map",
+				objective: "定位 Objective-C/Swift 类、selector、Keychain、Crypto、NSURLSession 和 jailbreak/root 检测",
+				next: ["otool/nm/strings", "class-dump fallback", "selector grep"],
+			},
+			{
+				name: "runtime-hooks",
+				objective: "生成 Frida/objection hook，捕获 keychain、CommonCrypto/CryptoKit、NSURLSession、签名函数和反调试",
+				next: ["frida-ps/objection", "ObjC hooks", "native Interceptor"],
+			},
+			{
+				name: "network-replay",
+				objective: "复现移动端签名/请求链和证书绑定/代理/会话差异",
+				next: ["request fields", "signature diff", "TLS pinning evidence"],
+			},
+			{
+				name: "report",
+				objective: "沉淀 IPA 结构、hook 点、请求重放、bypass 证据和复现命令",
+				next: ["hook script", "replay verifier", "field journal"],
 			},
 		];
 	}
@@ -8699,6 +8938,8 @@ function appendSpecialistRuntimeCommands(
 	const urlPython = pythonString(targetIsUrl ? target! : "<URL>");
 	const targetLooksPcap = Boolean(target && /\.(?:pcap|pcapng|cap)$/i.test(target));
 	const targetLooksFirmware = Boolean(target && /\.(?:bin|img|trx|chk|ubi|ubifs|squashfs|sqsh)$/i.test(target));
+	const targetLooksMemoryImage = Boolean(target && /\.(?:raw|vmem|mem|dmp|lime|core|crash|hiberfil|pagefile)(?:\..*)?$/i.test(target));
+	const targetLooksIpa = Boolean(target && /\.(?:ipa)$/i.test(target));
 	const specialists: string[] = [];
 	const add = (label: string, command: string, evidence: string) => {
 		if (commands.some((existing) => existing.label === label && existing.command === command)) return;
@@ -8710,6 +8951,12 @@ function appendSpecialistRuntimeCommands(
 			context,
 		) &&
 		/surface|map|state|poc|runtime|proof|verify|observe|prove/.test(laneName);
+	const wantsWebScanner =
+		(domain === "Web vulnerability scanning" ||
+			/漏洞扫描|目录扫描|指纹|资产发现|vuln(?:erability)? scan|web scan|nuclei|ffuf|gobuster|feroxbuster|nikto|dalfox|sqlmap|katana|crawler|crawl|waf|httpx/.test(
+				context,
+			)) &&
+		/scope|crawl|template|scan|verify|report|surface|map|poc|prove/.test(laneName);
 	const wantsJsSigning =
 		/frontend|javascript|\bjs\b|签名|sign|signature|crypto|subtle|webpack|sourcemap|xhr|fetch|websocket|nonce|timestamp|encrypt|decrypt|风控/.test(
 			context,
@@ -8736,6 +8983,21 @@ function appendSpecialistRuntimeCommands(
 		/inventory|extract|filesystem|service|emulate|triage|map|config|secret|surface|prove|runtime|report|verify/.test(
 			laneName,
 		);
+	const wantsMemoryForensics =
+		targetLooksMemoryImage ||
+		(domain === "Memory forensics" ||
+			/memory forensics|memory dump|memdump|vmem|volatility|内存取证|内存镜像|内存转储|lsass|hiberfil|pagefile|crash dump|raw image/.test(
+				context,
+			)) &&
+			/image|process|network|credential|artifact|timeline|carve|report|verify|map|prove/.test(laneName);
+	const wantsCryptoStego =
+		(domain === "Crypto / stego" ||
+			/\bcrypto\b|cryptography|rsa|aes|cbc|ecb|gcm|nonce|iv\b|padding oracle|oracle|lattice|sage|z3|hashcat|john|xor|base64|base32|hex|modulus|exponent|elliptic|ecdsa|stego|隐写|密码题|格|同余|椭圆曲线|transform chain/.test(
+				context,
+			)) &&
+		/inventory|parameter|transform|oracle|constraint|solver|known|answer|decode|stego|map|prove|runtime|report|verify/.test(
+			laneName,
+		);
 	const wantsAgentSecurity =
 		(domain === "Agent / LLM security" ||
 			/prompt injection|system prompt|developer message|tool injection|tool-call|tool call|function call|mcp|model context protocol|agent\s*安全|llm\s*安全|rag|retrieval|memory poisoning|记忆投毒|工具滥用|越狱|jailbreak|indirect prompt|untrusted content/.test(
@@ -8754,12 +9016,19 @@ function appendSpecialistRuntimeCommands(
 		/identity|windows|active directory|ad\b|kerberos|ntlm|ldap|smb|spn|sid|ticket|hash|bloodhound|certipy|nxc|crackmapexec|域控|内网|横向|凭据|提权/.test(
 			context,
 		) && /principal|credential|graph|pivot|proof|map|prove|verify|poc/.test(laneName);
+	const wantsIosMobile =
+		(domain === "Mobile / iOS" ||
+			targetLooksIpa ||
+			/(?:\bios\b|\bipa\b|objective-c|objc|swift|mach-o|class-dump|otool|codesign|keychain|jailbreak|越狱|frida|objection)/.test(
+				context,
+			)) &&
+		/(?:\bipa\b|inventory|static|class|map|runtime|hook|network|replay|proof|verify|report|triage)/.test(laneName);
 	const wantsFridaTrace =
 		/mobile|android|ios|apk|ipa|frida|jadx|apktool|adb|smali|native|binary|elf|mach-o|pe32|reverse|逆向|二进制/.test(
 			context,
 		) && /runtime|proof|control|flow|observe|verify|primitive|state|poc/.test(laneName);
 	const nativeDeepAllowedDomain =
-		/Native reverse|Pwn \/ exploit|Mobile \/ Android|CTF \/ sandbox/.test(domain) ||
+		/Native reverse|Pwn \/ exploit|Mobile \/ Android|Mobile \/ iOS|CTF \/ sandbox/.test(domain) ||
 		/native|reverse|binary|elf|pe32|mach-o|wasm|pwn|rop|heap|crackme|license|serial|keygen|patch|symbolic|fuzz|二进制|逆向|反编译|反汇编/.test(
 			mission.task.toLowerCase(),
 		);
@@ -8769,6 +9038,114 @@ function appendSpecialistRuntimeCommands(
 			context,
 		) &&
 		/headers|triage|map|control|flow|primitive|runtime|proof|poc|verify|patch|fuzz|report/.test(laneName);
+
+	if (wantsWebScanner) {
+		specialists.push("web vulnerability scanner/triage");
+		if (!target) {
+			add(
+				"web-scan-target-discovery",
+				"rg -n \"https?://|baseURL|apiUrl|NEXT_PUBLIC|VITE_|openapi|swagger|graphql|sitemap|robots\" . 2>/dev/null | head -220",
+				"discover concrete web/API URLs and route corpus candidates before scanning",
+			);
+		}
+		add(
+			"web-scan-scope-baseline",
+			targetIsUrl
+				? `cat > /tmp/pi-recon-web-scope.sh <<'SH'\nset +e\nURL=\"$1\"\nprintf '[web-scan-scope] url=%s\\n' \"$URL\"\nprintf '[web-scan-scope] host=%s\\n' \"$(printf '%s' \"$URL\" | sed -E 's#^https?://([^/]+).*#\\1#')\"\ncurl -k -sS -I --max-time 12 \"$URL\" | sed 's/^/[web-scan-header] /' | head -80\ncurl -k -sS --max-time 12 \"$URL/robots.txt\" | sed 's/^/[web-scan-robots] /' | head -80\ncurl -k -sS --max-time 12 \"$URL/sitemap.xml\" | sed 's/^/[web-scan-sitemap] /' | head -80\ncommand -v httpx >/dev/null 2>&1 && printf '%s\\n' \"$URL\" | httpx -silent -title -tech-detect -status-code -content-length -follow-host-redirects 2>/dev/null | sed 's/^/[web-scan-httpx] /'\nSH\nchmod +x /tmp/pi-recon-web-scope.sh\n/tmp/pi-recon-web-scope.sh ${urlArg}`
+				: "printf '[web-scan-scope] target_url_missing=<URL>\\n'; rg -n \"https?://|openapi|swagger|graphql|router|route|endpoint\" . 2>/dev/null | head -220",
+			"bounded web scan baseline: headers, robots/sitemap, httpx tech/status fingerprint",
+		);
+		add(
+			"web-scan-crawl-corpus-scaffold",
+			targetIsUrl
+				? `cat > /tmp/pi-recon-web-crawl.sh <<'SH'\nset +e\nURL=\"$1\"; OUT=\"/tmp/pi-recon-web-corpus.txt\"; : > \"$OUT\"\nprintf '[web-scan-crawl] url=%s out=%s\\n' \"$URL\" \"$OUT\"\nif command -v katana >/dev/null 2>&1; then katana -silent -u \"$URL\" -d 2 -jc -kf all -fx 2>/dev/null | tee -a \"$OUT\" | sed 's/^/[web-scan-crawl] /' | head -220; fi\nfor path in /robots.txt /sitemap.xml /.well-known/security.txt /openapi.json /swagger.json /graphql; do\n  printf '%s%s\\n' \"$URL\" \"$path\" >> \"$OUT\"\ndone\nsort -u \"$OUT\" -o \"$OUT\"\nprintf '[web-scan-corpus] count=%s out=%s\\n' \"$(wc -l < \"$OUT\" 2>/dev/null || echo 0)\" \"$OUT\"\nsed -n '1,180p' \"$OUT\" | sed 's/^/[web-scan-corpus] /'\nSH\nchmod +x /tmp/pi-recon-web-crawl.sh\n/tmp/pi-recon-web-crawl.sh ${urlArg}`
+				: "printf '[web-scan-crawl] target_url_missing=<URL>\\n'; rg -n \"app\\.(get|post|put|delete)|router\\.|Route\\(|@Request|graphql|openapi|swagger\" . 2>/dev/null | head -260",
+			"crawl/route corpus scaffold with katana plus robots/sitemap/OpenAPI fallbacks",
+		);
+		add(
+			"web-scan-content-discovery-scaffold",
+			targetIsUrl
+				? `cat > /tmp/pi-recon-web-content.sh <<'SH'\nset +e\nURL=\"$1\"; WORDS=\"/tmp/pi-recon-web-words.txt\"\ncat > \"$WORDS\" <<'EOF'\nadmin\napi\napi/v1\nlogin\nlogout\ndashboard\nconfig\nbackup\nuploads\nstatic\nassets\nswagger.json\nopenapi.json\ngraphql\nrobots.txt\nsitemap.xml\nEOF\nprintf '[web-scan-content] url=%s wordlist=%s\\n' \"$URL\" \"$WORDS\"\nif command -v ffuf >/dev/null 2>&1; then ffuf -u \"$URL/FUZZ\" -w \"$WORDS\" -mc all -fs 0 -t 12 -of json -o /tmp/pi-recon-ffuf.json 2>/dev/null | sed 's/^/[web-scan-ffuf] /' | head -140; fi\nif command -v feroxbuster >/dev/null 2>&1; then feroxbuster -u \"$URL\" -w \"$WORDS\" -t 8 -n -k --json -o /tmp/pi-recon-ferox.json 2>/dev/null | head -80 | sed 's/^/[web-scan-ferox] /'; fi\nif command -v gobuster >/dev/null 2>&1; then gobuster dir -u \"$URL\" -w \"$WORDS\" -q -k -t 8 2>/dev/null | sed 's/^/[web-scan-gobuster] /' | head -140; fi\npython3 - <<'PY'\nimport json, pathlib\nfor raw in ['/tmp/pi-recon-ffuf.json','/tmp/pi-recon-ferox.json']:\n    p=pathlib.Path(raw)\n    print('[web-finding-queue]', 'artifact=' + raw, 'exists=' + str(p.exists()))\nPY\nSH\nchmod +x /tmp/pi-recon-web-content.sh\n/tmp/pi-recon-web-content.sh ${urlArg}`
+				: "printf '[web-scan-content] target_url_missing=<URL>\\n'",
+			"small bounded content discovery with ffuf/feroxbuster/gobuster and artifact queue",
+		);
+		add(
+			"web-scan-template-scan-scaffold",
+			targetIsUrl
+				? `cat > /tmp/pi-recon-web-template-scan.sh <<'SH'\nset +e\nURL=\"$1\"\nprintf '[web-scan-template] url=%s\\n' \"$URL\"\nif command -v nuclei >/dev/null 2>&1; then nuclei -u \"$URL\" -silent -rl 8 -c 4 -severity critical,high,medium -jsonl -o /tmp/pi-recon-nuclei.jsonl 2>/dev/null | sed 's/^/[web-scan-nuclei] /' | head -180; fi\nif command -v nikto >/dev/null 2>&1; then nikto -nointeractive -Tuning x -host \"$URL\" 2>/dev/null | sed 's/^/[web-scan-nikto] /' | head -180; fi\nif command -v dalfox >/dev/null 2>&1; then dalfox url \"$URL\" --silence --skip-bav 2>/dev/null | sed 's/^/[web-scan-dalfox] /' | head -120; fi\nprintf '[web-finding-queue] nuclei_jsonl=/tmp/pi-recon-nuclei.jsonl exists=%s\\n' \"$([ -s /tmp/pi-recon-nuclei.jsonl ] && echo true || echo false)\"\nSH\nchmod +x /tmp/pi-recon-web-template-scan.sh\n/tmp/pi-recon-web-template-scan.sh ${urlArg}`
+				: "printf '[web-scan-template] target_url_missing=<URL>\\n'",
+			"bounded vulnerability template scan producing a candidate finding queue for manual replay",
+		);
+		add(
+			"web-scan-manual-replay-verifier",
+			targetIsUrl
+				? `cat > /tmp/pi-recon-web-verify.py <<'PY'\n#!/usr/bin/env python3\nimport hashlib, json, pathlib, subprocess, sys\nurl=sys.argv[1]\nprint('[web-scan-verifier]', 'base=' + url)\npaths=[]\nfor raw in ['/tmp/pi-recon-web-corpus.txt']:\n    p=pathlib.Path(raw)\n    if p.exists(): paths += [x.strip() for x in p.read_text(errors='ignore').splitlines() if x.strip()][:30]\nif not paths: paths=[url]\nfor item in dict.fromkeys(paths):\n    try:\n        r=subprocess.run(['curl','-k','-sS','-L','--max-time','10','-o','-','-w','\\n%{http_code} %{url_effective}',item], text=False, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=14)\n        body, _, meta=r.stdout.rpartition(b'\\n')\n        print('[web-scan-verifier]', 'url=' + item, 'status_meta=' + meta.decode('utf-8','ignore'), 'body_sha256=' + hashlib.sha256(body).hexdigest(), 'bytes=' + str(len(body)))\n    except Exception as exc:\n        print('[web-scan-verifier]', 'url=' + item, 'error=' + type(exc).__name__ + ':' + str(exc)[:120])\nPY\nchmod +x /tmp/pi-recon-web-verify.py\npython3 /tmp/pi-recon-web-verify.py ${urlArg}`
+				: "printf '[web-scan-verifier] target_url_missing=<URL>\\n'",
+			"manual replay verifier for scanner/crawl findings with status, effective URL, body hash, and bytes",
+		);
+	}
+
+	if (wantsMemoryForensics) {
+		specialists.push("memory forensics");
+		if (!target) {
+			add(
+				"memory-forensics-target-discovery",
+				"find . -maxdepth 6 -type f \\( -iname '*.raw' -o -iname '*.vmem' -o -iname '*.mem' -o -iname '*.dmp' -o -iname '*.lime' -o -iname 'hiberfil.sys' -o -iname 'pagefile.sys' -o -iname '*.core' \\) -exec sh -c 'printf \"[mem-image-candidate] path=%s \" \"$1\"; file \"$1\"' _ {} \\; | head -120",
+				"discover memory image candidates before volatility triage",
+			);
+		}
+		add(
+			"memory-forensics-image-info-scaffold",
+			`cat > /tmp/pi-recon-memory-info.sh <<'SH'\nset +e\nIMG=\"$1\"\nprintf '[mem-image] target=%s\\n' \"$IMG\"\n[ -f \"$IMG\" ] || { printf '[mem-image] target_missing=%s\\n' \"$IMG\"; exit 0; }\nfile \"$IMG\" 2>/dev/null | sed 's/^/[mem-image] file=/'\nsha256sum \"$IMG\" 2>/dev/null | awk '{print \"[mem-image] sha256=\"$1\" path=\"$2}'\npython3 - <<'PY' \"$IMG\"\nimport hashlib, pathlib, sys\np=pathlib.Path(sys.argv[1]); data=p.read_bytes()[:1048576]\nprint('[mem-image]', 'sample_sha256=' + hashlib.sha256(data).hexdigest(), 'sample_bytes=' + str(len(data)))\nPY\nif command -v volatility3 >/dev/null 2>&1; then\n  for plug in windows.info linux.banners mac.banners; do timeout 45s volatility3 -f \"$IMG\" $plug 2>&1 | sed \"s/^/[mem-vol-info] $plug /\" | head -100; done\nelse\n  printf '[mem-vol-info] volatility3=missing bootstrap_hint=re_bootstrap plan volatility3\\n'\nfi\nSH\nchmod +x /tmp/pi-recon-memory-info.sh\n/tmp/pi-recon-memory-info.sh ${targetArg}`,
+			"memory image hash/profile/banner inventory with volatility3 OS plugin fallbacks",
+		);
+		add(
+			"memory-forensics-process-network-scaffold",
+			`cat > /tmp/pi-recon-memory-process.sh <<'SH'\nset +e\nIMG=\"$1\"; [ -f \"$IMG\" ] || { printf '[mem-process] target_missing=%s\\n' \"$IMG\"; exit 0; }\nprintf '[mem-process] target=%s\\n' \"$IMG\"\nif command -v volatility3 >/dev/null 2>&1; then\n  for plug in windows.pslist windows.pstree windows.cmdline windows.dlllist windows.handles windows.netscan linux.pslist linux.pstree linux.sockstat mac.pslist mac.netstat; do\n    timeout 60s volatility3 -f \"$IMG\" $plug 2>&1 | sed \"s/^/[mem-vol] $plug /\" | head -140\n  done\nelse\n  strings -a -n 8 \"$IMG\" | grep -Eai 'cmd\\.exe|powershell|/bin/sh|bash|python|curl|wget|http|https|socket|connect|token|password' | head -260 | sed 's/^/[mem-strings] /'\nfi\nSH\nchmod +x /tmp/pi-recon-memory-process.sh\n/tmp/pi-recon-memory-process.sh ${targetArg}`,
+			"memory process tree, command line, DLL/handle, and network/socket scaffold",
+		);
+		add(
+			"memory-forensics-credential-artifact-scaffold",
+			`cat > /tmp/pi-recon-memory-creds.sh <<'SH'\nset +e\nIMG=\"$1\"; [ -f \"$IMG\" ] || { printf '[mem-credential] target_missing=%s\\n' \"$IMG\"; exit 0; }\nprintf '[mem-credential] target=%s\\n' \"$IMG\"\nif command -v volatility3 >/dev/null 2>&1; then\n  for plug in windows.hashdump windows.lsadump windows.cachedump windows.registry.hivelist windows.registry.printkey windows.filescan; do\n    timeout 60s volatility3 -f \"$IMG\" $plug 2>&1 | sed \"s/^/[mem-vol-credential] $plug /\" | head -160\n  done\nfi\nstrings -a -n 6 \"$IMG\" | grep -Eai 'password|passwd|token|secret|Authorization:|Cookie:|AWS_ACCESS_KEY|BEGIN (RSA|OPENSSH)|NTLM|krbtgt|Mimikatz|lsass|Chrome|Firefox|keychain' | head -320 | sed 's/^/[mem-credential] /'\nSH\nchmod +x /tmp/pi-recon-memory-creds.sh\n/tmp/pi-recon-memory-creds.sh ${targetArg}`,
+			"credential/token/registry/browser/LSASS artifact hunt with volatility and strings fallback",
+		);
+		add(
+			"memory-forensics-timeline-carve-scaffold",
+			`cat > /tmp/pi-recon-memory-timeline.sh <<'SH'\nset +e\nIMG=\"$1\"; OUT=\"/tmp/pi-recon-memory-artifacts\"; mkdir -p \"$OUT\"\n[ -f \"$IMG\" ] || { printf '[mem-timeline] target_missing=%s\\n' \"$IMG\"; exit 0; }\nprintf '[mem-timeline] target=%s out=%s\\n' \"$IMG\" \"$OUT\"\nif command -v volatility3 >/dev/null 2>&1; then\n  for plug in timeliner windows.malfind windows.filescan windows.dumpfiles linux.malfind; do\n    timeout 90s volatility3 -f \"$IMG\" $plug --dump-dir \"$OUT\" 2>&1 | sed \"s/^/[mem-vol-timeline] $plug /\" | head -200\n  done\nfi\nfind \"$OUT\" -maxdepth 2 -type f -print -exec file {} \\; 2>/dev/null | head -200 | sed 's/^/[mem-carve] /'\nSH\nchmod +x /tmp/pi-recon-memory-timeline.sh\n/tmp/pi-recon-memory-timeline.sh ${targetArg}`,
+			"memory timeline, malfind, filescan/dumpfiles and carved artifact scaffold",
+		);
+	}
+
+	if (wantsIosMobile) {
+		specialists.push("iOS IPA/mobile runtime");
+		if (!target) {
+			add(
+				"ios-ipa-target-discovery",
+				"find . -maxdepth 6 -type f \\( -iname '*.ipa' -o -iname 'Info.plist' -o -iname '*.mobileprovision' \\) -o -type d -iname '*.app' 2>/dev/null | head -160 | sed 's/^/[ios-candidate] /'",
+				"discover IPA/App bundle candidates before iOS reverse commands",
+			);
+		}
+		add(
+			"ios-ipa-inventory-scaffold",
+			`cat > /tmp/pi-recon-ios-inventory.sh <<'SH'\nset +e\nTARGET=\"$1\"; OUT=\"/tmp/pi-recon-ios-ipa\"; rm -rf \"$OUT\"; mkdir -p \"$OUT\"\nprintf '[ios-ipa] target=%s out=%s\\n' \"$TARGET\" \"$OUT\"\n[ -e \"$TARGET\" ] || { printf '[ios-ipa] target_missing=%s\\n' \"$TARGET\"; exit 0; }\nfile \"$TARGET\" 2>/dev/null | sed 's/^/[ios-ipa] file=/'\nsha256sum \"$TARGET\" 2>/dev/null | awk '{print \"[ios-ipa] sha256=\"$1\" path=\"$2}'\nif [ -f \"$TARGET\" ] && printf '%s' \"$TARGET\" | grep -Eiq '\\.ipa$'; then unzip -q \"$TARGET\" -d \"$OUT\" 2>/dev/null || true; fi\nAPP=$(find \"$OUT\" \"$TARGET\" -maxdepth 4 -type d -name '*.app' 2>/dev/null | head -1)\nprintf '[ios-ipa] app=%s\\n' \"\${APP:-<none>}\"\nINFO=\"$APP/Info.plist\"\nif [ -f \"$INFO\" ]; then\n  plutil -p \"$INFO\" 2>/dev/null | sed 's/^/[ios-plist] /' | head -160 || python3 - <<'PY' \"$INFO\"\nimport plistlib, sys\nobj=plistlib.load(open(sys.argv[1], 'rb'))\nfor k in ['CFBundleIdentifier','CFBundleExecutable','CFBundleURLTypes','NSAppTransportSecurity','UIBackgroundModes']:\n    print('[ios-plist]', k, '=', obj.get(k))\nPY\nfi\nfind \"$APP\" -maxdepth 3 -type f \\( -name '*.dylib' -o -name '*.framework' -o -perm -111 \\) 2>/dev/null | head -160 | sed 's/^/[ios-binary] /'\nSH\nchmod +x /tmp/pi-recon-ios-inventory.sh\n/tmp/pi-recon-ios-inventory.sh ${targetArg}`,
+			"IPA/App inventory: zip extraction, Info.plist, bundle id, executable/framework map",
+		);
+		add(
+			"ios-macho-class-map-scaffold",
+			`cat > /tmp/pi-recon-ios-macho.sh <<'SH'\nset +e\nROOT=\"/tmp/pi-recon-ios-ipa\"\nAPP=$(find \"$ROOT\" \"$1\" -maxdepth 5 -type d -name '*.app' 2>/dev/null | head -1)\nBIN=\"\"\nif [ -n \"$APP\" ] && [ -f \"$APP/Info.plist\" ]; then\n  EXE=$(python3 - <<'PY' \"$APP/Info.plist\" 2>/dev/null\nimport plistlib, sys\nprint(plistlib.load(open(sys.argv[1], 'rb')).get('CFBundleExecutable',''))\nPY\n); [ -n \"$EXE\" ] && BIN=\"$APP/$EXE\"\nfi\n[ -n \"$BIN\" ] || BIN=$(find \"$APP\" \"$1\" -maxdepth 3 -type f -perm -111 2>/dev/null | head -1)\nprintf '[ios-macho] app=%s bin=%s\\n' \"\${APP:-<none>}\" \"\${BIN:-<none>}\"\n[ -f \"$BIN\" ] || exit 0\nfile \"$BIN\" | sed 's/^/[ios-macho] file=/'\notool -L \"$BIN\" 2>/dev/null | sed 's/^/[ios-otool] /' | head -120 || true\nnm -m \"$BIN\" 2>/dev/null | grep -Ei 'SecItem|Keychain|NSURLSession|CryptoKit|CommonCrypto|CCCrypt|jail|debug|ptrace|signature|sign|encrypt|decrypt|token|password' | head -220 | sed 's/^/[ios-symbol] /' || true\nclass-dump \"$BIN\" 2>/dev/null | grep -Ei '@interface|SecItem|Keychain|NSURLSession|Crypto|Jail|Debug|Login|Auth|Token|Sign' | head -220 | sed 's/^/[ios-class] /' || true\nstrings -a -n 5 \"$BIN\" | grep -Ei 'https?://|api/|graphql|token|secret|password|signature|nonce|timestamp|keychain|jailbreak|frida|ptrace|SSL|pinning|SecTrust|CCCrypt|CryptoKit' | head -260 | sed 's/^/[ios-string] /'\nSH\nchmod +x /tmp/pi-recon-ios-macho.sh\n/tmp/pi-recon-ios-macho.sh ${targetArg}`,
+			"Mach-O/class/selector/string map for iOS auth, crypto, keychain, URLSession, jailbreak and TLS pinning sinks",
+		);
+		add(
+			"ios-frida-objection-hook-scaffold",
+			`cat > /tmp/pi-recon-ios-frida-hooks.js <<'JS'\nif (ObjC.available) {\n  console.log('[ios-frida] ObjC runtime ready');\n  const hookObjC = (cls, sel) => {\n    try {\n      const impl = ObjC.classes[cls][sel].implementation;\n      Interceptor.attach(impl, { onEnter(args) { console.log('[ios-hook]', cls, sel, 'self=' + args[0]); } });\n    } catch (e) {}\n  };\n  ['NSURLSession','NSMutableURLRequest','SecItem','LAContext','NSData','NSString'].forEach(c => console.log('[ios-class-check]', c, !!ObjC.classes[c]));\n  hookObjC('NSMutableURLRequest', '- setValue:forHTTPHeaderField:');\n  hookObjC('NSMutableURLRequest', '- setHTTPBody:');\n  hookObjC('LAContext', '- evaluatePolicy:localizedReason:reply:');\n}\nfor (const name of ['SecItemCopyMatching','SecItemAdd','SecItemUpdate','CCCrypt','SecTrustEvaluate','SecTrustEvaluateWithError','ptrace']) {\n  const p = Module.findExportByName(null, name);\n  if (p) Interceptor.attach(p, { onEnter(args) { console.log('[ios-native-hook]', name, args[0], args[1], args[2]); } });\n}\nJS\nprintf '[ios-frida-hook-template] /tmp/pi-recon-ios-frida-hooks.js hooks=NSURLSession,NSMutableURLRequest,SecItem,CCCrypt,SecTrust,ptrace\\n'\nsed -n '1,260p' /tmp/pi-recon-ios-frida-hooks.js\nfrida-ps -Uai 2>/dev/null | head -120 | sed 's/^/[ios-frida-process] /' || true\nobjection --help 2>/dev/null | head -20 | sed 's/^/[ios-objection] /' || true`,
+			"iOS Frida/objection hook template for request signing, keychain, crypto, TLS trust and anti-debug sinks",
+		);
+		add(
+			"ios-network-replay-scaffold",
+			`python3 - <<'PY'\nimport pathlib, re\nroots=[pathlib.Path('/tmp/pi-recon-ios-ipa'), pathlib.Path(${targetPython})]\nseen=set()\nfor root in roots:\n    if not root.exists(): continue\n    files=[root] if root.is_file() else [p for p in root.rglob('*') if p.is_file()]\n    for p in files[:400]:\n        try: data=p.read_bytes()[:2_000_000]\n        except Exception: continue\n        text=data.decode('utf-8','ignore')\n        for url in re.findall(r'https?://[^\\s\"\\'<>]+', text):\n            if url not in seen:\n                seen.add(url); print('[ios-network-replay]', 'url=' + url[:240], 'source=' + str(p))\n        if re.search(r'signature|nonce|timestamp|token|Authorization|SecTrust|pinning|CCCrypt|CryptoKit', text, re.I):\n            print('[ios-network-anchor]', 'source=' + str(p), 'keywords=signature/nonce/token/pinning/crypto')\nprint('[ios-network-replay]', 'next=set captured headers/body from ios-frida hooks and replay with curl/node verifier')\nPY`,
+			"iOS network/signing/TLS-pinning replay seed from IPA strings and runtime hook anchors",
+		);
+	}
 
 	if (wantsNativeDeep) {
 		specialists.push("native deep reverse/pwn");
@@ -9300,6 +9677,138 @@ SH
 chmod +x /tmp/pi-recon-firmware-emulation.sh
 /tmp/pi-recon-firmware-emulation.sh`,
 			"QEMU/chroot emulation scaffold with arch and service smoke-test anchors",
+		);
+	}
+
+	if (wantsCryptoStego) {
+		specialists.push("crypto/stego solver");
+		if (!target) {
+			add(
+				"crypto-stego-target-discovery",
+				"find . -maxdepth 5 -type f \\( -iname '*.txt' -o -iname '*.enc' -o -iname '*.bin' -o -iname '*.png' -o -iname '*.jpg' -o -iname '*.wav' -o -iname '*.pcap' -o -iname '*cipher*' -o -iname '*crypto*' -o -iname '*stego*' \\) -print | head -160",
+				"discover crypto/stego candidate artifacts",
+			);
+		}
+		add(
+			"crypto-stego-parameter-inventory-scaffold",
+			`cat > /tmp/pi-recon-crypto-inventory.py <<'PY'
+#!/usr/bin/env python3
+import base64, binascii, hashlib, json, math, pathlib, re, sys
+target = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ${targetPython})
+blob = b''
+if target.exists() and target.is_file():
+    blob = target.read_bytes()[:8_000_000]
+else:
+    blob = str(target).encode()
+text = blob.decode('utf-8', 'ignore')
+wide = blob.decode('utf-16le', 'ignore')
+corpus = text + '\\n' + wide
+print('[crypto-param]', 'target=' + str(target), 'bytes=' + str(len(blob)), 'sha256=' + hashlib.sha256(blob).hexdigest() if blob else 'sha256=none')
+patterns = {
+  'hex': r'\\b[0-9a-fA-F]{16,}\\b',
+  'base64': r'\\b[A-Za-z0-9+/]{24,}={0,2}\\b',
+  'int': r'\\b\\d{8,}\\b',
+  'pem': r'-----BEGIN [A-Z ]+-----[\\s\\S]{0,2000}?-----END [A-Z ]+-----',
+  'url_param': r'\\b(?:iv|nonce|salt|key|sig|signature|token|ct|cipher|modulus|n|e|p|q)=([^\\s&]+)',
+}
+for name, pat in patterns.items():
+    vals = []
+    for m in re.findall(pat, corpus, re.I):
+        value = m if isinstance(m, str) else m[0]
+        if value not in vals: vals.append(value)
+        if len(vals) >= 24: break
+    print('[crypto-param]', 'type=' + name, 'count=' + str(len(vals)), 'samples=' + '|'.join(v[:80] for v in vals[:6]))
+ints = [int(x) for x in re.findall(r'\\b\\d{8,}\\b', corpus)[:40]]
+for i, n in enumerate(ints[:12]):
+    bits = n.bit_length()
+    if bits >= 64:
+        print('[crypto-param]', 'integer_index=' + str(i), 'bits=' + str(bits), 'mod8=' + str(n % 8), 'hex_head=' + hex(n)[:40])
+print('[crypto-param]', 'next=build transform replay, oracle model, and known-answer test')
+PY
+chmod +x /tmp/pi-recon-crypto-inventory.py
+python3 /tmp/pi-recon-crypto-inventory.py ${targetArg}`,
+			"crypto parameter derivation inventory: hashes, encodings, large integers, PEM, IV/nonce/key/signature fields",
+		);
+		add(
+			"crypto-stego-transform-replay-scaffold",
+			`cat > /tmp/pi-recon-crypto-transform.py <<'PY'
+#!/usr/bin/env python3
+import base64, binascii, gzip, hashlib, pathlib, re, sys, zlib
+target = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ${targetPython})
+data = target.read_bytes()[:4_000_000] if target.exists() and target.is_file() else str(target).encode()
+text = data.decode('utf-8', 'ignore')
+print('[crypto-transform]', 'target=' + str(target), 'bytes=' + str(len(data)), 'sha256=' + hashlib.sha256(data).hexdigest())
+candidates = []
+for label, raw in [('file', data), *[(f'b64:{i}', m.encode()) for i,m in enumerate(re.findall(r'[A-Za-z0-9+/]{24,}={0,2}', text)[:12])], *[(f'hex:{i}', m.encode()) for i,m in enumerate(re.findall(r'\\b[0-9a-fA-F]{16,}\\b', text)[:12])]]:
+    queue = [(label, raw)]
+    seen = set()
+    for depth in range(3):
+        nextq = []
+        for name, blob in queue:
+            key = (name, hashlib.sha256(blob[:4096]).hexdigest())
+            if key in seen: continue
+            seen.add(key)
+            sample = blob[:120].decode('utf-8', 'ignore').replace('\\n',' ')
+            printable = sum(32 <= b < 127 for b in blob[:200])
+            print('[crypto-transform]', 'chain=' + name, 'len=' + str(len(blob)), 'printable=' + str(printable), 'sample=' + sample[:120])
+            transforms = []
+            try: transforms.append(('base64', base64.b64decode(blob + b'=' * (-len(blob) % 4), validate=False)))
+            except Exception: pass
+            try: transforms.append(('hex', binascii.unhexlify(re.sub(rb'[^0-9a-fA-F]', b'', blob))))
+            except Exception: pass
+            try: transforms.append(('gzip', gzip.decompress(blob)))
+            except Exception: pass
+            try: transforms.append(('zlib', zlib.decompress(blob)))
+            except Exception: pass
+            for tname, out in transforms:
+                if out and len(out) != len(blob):
+                    nextq.append((name + '->' + tname, out[:4_000_000]))
+        queue = nextq[:20]
+PY
+chmod +x /tmp/pi-recon-crypto-transform.py
+python3 /tmp/pi-recon-crypto-transform.py ${targetArg}`,
+			"transform replay scaffold for base64/hex/gzip/zlib chains with reproducible samples and hashes",
+		);
+		add(
+			"crypto-stego-solver-known-answer-scaffold",
+			`cat > /tmp/pi-recon-crypto-solver.py <<'PY'
+#!/usr/bin/env python3
+import hashlib, json, os, pathlib, re, subprocess, sys
+target = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ${targetPython})
+print('[crypto-solver]', 'target=' + str(target))
+try:
+    import z3  # type: ignore
+    x = z3.BitVec('x', 32)
+    s = z3.Solver(); s.add(((x ^ 0x1337) + 0x42) & 0xffffffff == 0x41424344)
+    print('[crypto-solver]', 'z3=present', 'toy_check=' + str(s.check()))
+except Exception as exc:
+    print('[crypto-solver]', 'z3=missing_or_failed', type(exc).__name__ + ':' + str(exc)[:120])
+try:
+    import Crypto.Cipher.AES  # type: ignore
+    print('[crypto-solver]', 'pycryptodome=present')
+except Exception as exc:
+    print('[crypto-solver]', 'pycryptodome=missing_or_failed', type(exc).__name__)
+known = os.getenv('REPI_KNOWN_ANSWER')
+candidate = os.getenv('REPI_CANDIDATE')
+if known is not None and candidate is not None:
+    ok = known == candidate or hashlib.sha256(candidate.encode()).hexdigest() == known
+    print('[crypto-known-answer]', 'verification=' + ('pass' if ok else 'fail'), 'known_len=' + str(len(known)), 'candidate_sha256=' + hashlib.sha256(candidate.encode()).hexdigest())
+else:
+    print('[crypto-known-answer]', 'mode=scaffold', 'set=REPI_KNOWN_ANSWER and REPI_CANDIDATE after solver step')
+print('[crypto-solver]', 'next=write solve.py with parameter derivation and assert known-answer test')
+PY
+chmod +x /tmp/pi-recon-crypto-solver.py
+python3 /tmp/pi-recon-crypto-solver.py ${targetArg}`,
+			"solver script and known-answer test scaffold with Z3/PyCryptodome detection and verification marker",
+		);
+		add(
+			"crypto-stego-extraction-scaffold",
+			`file ${targetArg} 2>/dev/null || true
+exiftool ${targetArg} 2>/dev/null | head -120 || true
+zsteg ${targetArg} 2>/dev/null | head -160 || true
+binwalk ${targetArg} 2>/dev/null | head -120 || true
+strings -a -n 4 ${targetArg} 2>/dev/null | grep -Ei 'flag|ctf|key|iv|nonce|salt|cipher|base64|BEGIN|RSA|AES|xor|password|secret' | head -220`,
+			"stego/file metadata extraction scaffold with exiftool/zsteg/binwalk/strings fallbacks",
 		);
 	}
 
@@ -10175,6 +10684,267 @@ function analyzeJsSigningEvidence(pack: LaneCommandPack, combined: string): Spec
 				: hookLines.length > 0 || cryptoOps.length > 0 || normalizedLines.length > 0
 					? "rebuild/verify"
 					: undefined,
+	};
+}
+
+function analyzeCryptoStegoEvidence(
+	pack: LaneCommandPack,
+	combined: string,
+	targetArg: string,
+): SpecialistEvidenceAnalysis {
+	const enabled =
+		/crypto|stego/i.test(pack.route) ||
+		packHasSpecialistSignal(pack, /crypto-stego|crypto\/stego|solver|known-answer/i) ||
+		/\[crypto-(?:param|transform|solver|known-answer)\]|\bzsteg\b|\bexiftool\b/i.test(combined);
+	if (!enabled) return { findings: [], followups: [] };
+	const findings: string[] = [];
+	const followups: LaneCommand[] = [];
+	const paramLines = interestingLines(combined, /\[crypto-param\]|modulus|exponent|nonce|iv=|salt|PEM|integer_index/i, 22);
+	if (paramLines.length > 0) {
+		findings.push(`crypto parameter derivation anchors: ${paramLines.map((line) => truncateMiddle(line, 200)).join(" | ")}`);
+	}
+	const transformLines = interestingLines(
+		combined,
+		/\[crypto-transform\]|chain=.*->|base64|hex|gzip|zlib|decoded=|transform replay/i,
+		24,
+	);
+	if (transformLines.length > 0) {
+		findings.push(`crypto transform replay anchors: ${transformLines.map((line) => truncateMiddle(line, 200)).join(" | ")}`);
+	}
+	const solverLines = interestingLines(combined, /\[crypto-solver\]|z3=|sage|pycryptodome|solve\.py|oracle|lattice/i, 18);
+	if (solverLines.length > 0) {
+		findings.push(`crypto solver script anchors: ${solverLines.map((line) => truncateMiddle(line, 200)).join(" | ")}`);
+	}
+	const knownAnswerLines = interestingLines(combined, /\[crypto-known-answer\]|known-answer|verification=pass|KAT|assert/i, 14);
+	if (knownAnswerLines.length > 0) {
+		findings.push(`crypto known-answer test anchors: ${knownAnswerLines.map((line) => truncateMiddle(line, 200)).join(" | ")}`);
+	}
+	const stegoLines = interestingLines(combined, /zsteg|exiftool|binwalk|steghide|strings.*flag|embedded|metadata/i, 16);
+	if (stegoLines.length > 0) {
+		findings.push(`stego extraction anchors: ${stegoLines.map((line) => truncateMiddle(line, 200)).join(" | ")}`);
+	}
+	if (paramLines.length > 0 || transformLines.length > 0 || solverLines.length > 0 || stegoLines.length > 0) {
+		followups.push({
+			label: "crypto-parameter-inventory-rerun",
+			command: `[ -f /tmp/pi-recon-crypto-inventory.py ] && python3 /tmp/pi-recon-crypto-inventory.py ${targetArg} || printf '%s\n' 'rerun crypto-stego-parameter-inventory-scaffold via re_lane plan/run'`,
+			evidence: "refresh parameter inventory before solver changes",
+		});
+		followups.push({
+			label: "crypto-transform-replay-rerun",
+			command: `[ -f /tmp/pi-recon-crypto-transform.py ] && python3 /tmp/pi-recon-crypto-transform.py ${targetArg} || printf '%s\n' 'rerun crypto-stego-transform-replay-scaffold via re_lane plan/run'`,
+			evidence: "rerun deterministic transform replay chain with latest artifact",
+		});
+		followups.push({
+			label: "crypto-solver-known-answer-rerun",
+			command: `[ -f /tmp/pi-recon-crypto-solver.py ] && REPI_KNOWN_ANSWER="\${REPI_KNOWN_ANSWER:-}" REPI_CANDIDATE="\${REPI_CANDIDATE:-}" python3 /tmp/pi-recon-crypto-solver.py ${targetArg} || printf '%s\n' 'rerun crypto-stego-solver-known-answer-scaffold and set REPI_KNOWN_ANSWER/REPI_CANDIDATE'`,
+			evidence: "verify solver result through known-answer or candidate hash",
+		});
+		followups.push({
+			label: "crypto-solver-script-scaffold",
+			command: `cat > /tmp/pi-recon-solve.py <<'PY'\n#!/usr/bin/env python3\n# REPI crypto solver skeleton: fill parameters from [crypto-param] and verify with known-answer.\nimport hashlib, os\nKNOWN=os.getenv('REPI_KNOWN_ANSWER','')\nCANDIDATE=os.getenv('REPI_CANDIDATE','')\nprint('[crypto-solver-script]', 'known_set=' + str(bool(KNOWN)), 'candidate_sha256=' + hashlib.sha256(CANDIDATE.encode()).hexdigest() if CANDIDATE else 'candidate_sha256=none')\nif KNOWN and CANDIDATE:\n    assert CANDIDATE == KNOWN or hashlib.sha256(CANDIDATE.encode()).hexdigest() == KNOWN\n    print('[crypto-known-answer]', 'verification=pass')\nelse:\n    print('[crypto-known-answer]', 'mode=scaffold set REPI_KNOWN_ANSWER and REPI_CANDIDATE')\nPY\nchmod +x /tmp/pi-recon-solve.py\nsed -n '1,220p' /tmp/pi-recon-solve.py`,
+			evidence: "materialize solve.py with explicit known-answer assertion",
+		});
+	}
+	return {
+		findings,
+		followups,
+		nextLane:
+			knownAnswerLines.length > 0
+				? "report"
+				: solverLines.length > 0 || transformLines.length > 0
+					? "verify"
+					: paramLines.length > 0 || stegoLines.length > 0
+						? "solver"
+						: undefined,
+	};
+}
+
+function analyzeWebScannerEvidence(
+	pack: LaneCommandPack,
+	combined: string,
+	targetArg: string,
+): SpecialistEvidenceAnalysis {
+	const enabled =
+		/web vulnerability|web scan|scanner/i.test(pack.route) ||
+		packHasSpecialistSignal(pack, /web-scan-|web vulnerability scanner/i) ||
+		/\[web-scan-|\[web-finding-queue\]/i.test(combined);
+	if (!enabled) return { findings: [], followups: [] };
+	const findings: string[] = [];
+	const followups: LaneCommand[] = [];
+	const scopeLines = interestingLines(combined, /\[web-scan-scope\]|\[web-scan-header\]|\[web-scan-httpx\]/i, 18);
+	if (scopeLines.length > 0)
+		findings.push(`web scanner scope anchors: ${scopeLines.map((line) => truncateMiddle(line, 180)).join(" | ")}`);
+	const crawlLines = interestingLines(combined, /\[web-scan-crawl\]|\[web-scan-corpus\]|\[web-scan-robots\]|\[web-scan-sitemap\]/i, 20);
+	if (crawlLines.length > 0)
+		findings.push(`web scanner crawl corpus anchors: ${crawlLines.map((line) => truncateMiddle(line, 180)).join(" | ")}`);
+	const contentLines = interestingLines(combined, /\[web-scan-ffuf\]|\[web-scan-ferox\]|\[web-scan-gobuster\]|\[web-scan-content\]/i, 16);
+	if (contentLines.length > 0)
+		findings.push(`web scanner content discovery anchors: ${contentLines.map((line) => truncateMiddle(line, 180)).join(" | ")}`);
+	const templateLines = interestingLines(combined, /\[web-scan-nuclei\]|\[web-scan-nikto\]|\[web-scan-dalfox\]|\[web-scan-template\]/i, 18);
+	if (templateLines.length > 0)
+		findings.push(`web scanner template finding anchors: ${templateLines.map((line) => truncateMiddle(line, 180)).join(" | ")}`);
+	const verifierLines = interestingLines(combined, /\[web-scan-verifier\]|body_sha256|status_meta=|\[web-finding-queue\]/i, 20);
+	if (verifierLines.length > 0)
+		findings.push(`web scanner manual replay anchors: ${verifierLines.map((line) => truncateMiddle(line, 180)).join(" | ")}`);
+	if (scopeLines.length || crawlLines.length || contentLines.length || templateLines.length || verifierLines.length) {
+		followups.push({
+			label: "web-scan-scope-rerun",
+			command: `[ -x /tmp/pi-recon-web-scope.sh ] && /tmp/pi-recon-web-scope.sh ${targetArg} || printf '%s\n' 'rerun web-scan-scope-baseline via re_lane plan/run'`,
+			evidence: "refresh web scope baseline before expanding scanner output",
+		});
+		followups.push({
+			label: "web-scan-corpus-rerun",
+			command: `[ -x /tmp/pi-recon-web-crawl.sh ] && /tmp/pi-recon-web-crawl.sh ${targetArg} || printf '%s\n' 'rerun web-scan-crawl-corpus-scaffold'`,
+			evidence: "refresh crawl/route corpus for content discovery and replay verifier",
+		});
+		followups.push({
+			label: "web-scan-template-rerun",
+			command: `[ -x /tmp/pi-recon-web-template-scan.sh ] && /tmp/pi-recon-web-template-scan.sh ${targetArg} || printf '%s\n' 'rerun bounded template scan and keep JSONL artifact'`,
+			evidence: "rerun bounded nuclei/nikto/dalfox candidate finding queue",
+		});
+		followups.push({
+			label: "web-scan-manual-replay-rerun",
+			command: `[ -x /tmp/pi-recon-web-verify.py ] && python3 /tmp/pi-recon-web-verify.py ${targetArg} || printf '%s\n' 'rerun manual replay verifier after corpus/finding queue exists'`,
+			evidence: "replay scanner candidates with status/body hash before claiming vulnerability",
+		});
+	}
+	return {
+		findings,
+		followups,
+		nextLane:
+			verifierLines.length > 0
+				? "report"
+				: templateLines.length > 0 || contentLines.length > 0
+					? "verify"
+					: crawlLines.length > 0
+						? "template-scan"
+						: scopeLines.length > 0
+							? "crawl"
+							: undefined,
+	};
+}
+
+function analyzeMemoryForensicsEvidence(
+	pack: LaneCommandPack,
+	combined: string,
+	targetArg: string,
+): SpecialistEvidenceAnalysis {
+	const enabled =
+		/memory forensics/i.test(pack.route) ||
+		packHasSpecialistSignal(pack, /memory-forensics|mem-image|mem-vol|mem-credential/i) ||
+		/\[mem-(?:image|vol|process|credential|timeline|carve)/i.test(combined);
+	if (!enabled) return { findings: [], followups: [] };
+	const findings: string[] = [];
+	const followups: LaneCommand[] = [];
+	const imageLines = interestingLines(combined, /\[mem-image\]|\[mem-vol-info\]|volatility3=missing|sample_sha256/i, 18);
+	if (imageLines.length > 0)
+		findings.push(`memory forensics image/profile anchors: ${imageLines.map((line) => truncateMiddle(line, 190)).join(" | ")}`);
+	const processLines = interestingLines(combined, /\[mem-process\]|\[mem-vol\].*(pslist|pstree|cmdline|dlllist|handles|netscan|sockstat|netstat)|\[mem-strings\]/i, 22);
+	if (processLines.length > 0)
+		findings.push(`memory forensics process/network anchors: ${processLines.map((line) => truncateMiddle(line, 190)).join(" | ")}`);
+	const credentialLines = interestingLines(combined, /\[mem-credential\]|\[mem-vol-credential\]|hashdump|lsadump|cachedump|Authorization|Cookie|AWS_ACCESS_KEY|BEGIN (?:RSA|OPENSSH)|NTLM/i, 22);
+	if (credentialLines.length > 0)
+		findings.push(`memory forensics credential/artifact anchors: ${credentialLines.map((line) => truncateMiddle(line, 190)).join(" | ")}`);
+	const timelineLines = interestingLines(combined, /\[mem-timeline\]|\[mem-vol-timeline\]|\[mem-carve\]|malfind|filescan|dumpfiles|timeliner/i, 22);
+	if (timelineLines.length > 0)
+		findings.push(`memory forensics timeline/carve anchors: ${timelineLines.map((line) => truncateMiddle(line, 190)).join(" | ")}`);
+	if (imageLines.length || processLines.length || credentialLines.length || timelineLines.length) {
+		followups.push({
+			label: "memory-info-rerun",
+			command: `[ -x /tmp/pi-recon-memory-info.sh ] && /tmp/pi-recon-memory-info.sh ${targetArg} || printf '%s\n' 'rerun memory-forensics-image-info-scaffold'`,
+			evidence: "refresh memory image info/profile/banners before plugin selection",
+		});
+		followups.push({
+			label: "memory-process-network-rerun",
+			command: `[ -x /tmp/pi-recon-memory-process.sh ] && /tmp/pi-recon-memory-process.sh ${targetArg} || printf '%s\n' 'rerun memory process/network scaffold'`,
+			evidence: "rerun process tree, command line, DLL/handle and network plugin bundle",
+		});
+		followups.push({
+			label: "memory-credential-artifact-rerun",
+			command: `[ -x /tmp/pi-recon-memory-creds.sh ] && /tmp/pi-recon-memory-creds.sh ${targetArg} || printf '%s\n' 'rerun credential/artifact hunt scaffold'`,
+			evidence: "rerun credential/token/registry/browser/LSASS artifact hunt",
+		});
+		followups.push({
+			label: "memory-timeline-carve-rerun",
+			command: `[ -x /tmp/pi-recon-memory-timeline.sh ] && /tmp/pi-recon-memory-timeline.sh ${targetArg} || printf '%s\n' 'rerun memory timeline/carving scaffold'`,
+			evidence: "rerun timeliner/malfind/filescan/dumpfiles and carved artifact review",
+		});
+	}
+	return {
+		findings,
+		followups,
+		nextLane:
+			timelineLines.length > 0
+				? "report"
+				: credentialLines.length > 0
+					? "timeline-carve"
+					: processLines.length > 0
+						? "credential-artifacts"
+						: imageLines.length > 0
+							? "process-network"
+							: undefined,
+	};
+}
+
+function analyzeIosEvidence(
+	pack: LaneCommandPack,
+	combined: string,
+	targetArg: string,
+): SpecialistEvidenceAnalysis {
+	const enabled =
+		/mobile \/ ios/i.test(pack.route) ||
+		packHasSpecialistSignal(pack, /ios-|iOS IPA|ios-frida|ios-macho/i) ||
+		/\[ios-(?:ipa|plist|binary|macho|otool|symbol|class|string|frida|hook|network)/i.test(combined);
+	if (!enabled) return { findings: [], followups: [] };
+	const findings: string[] = [];
+	const followups: LaneCommand[] = [];
+	const inventoryLines = interestingLines(combined, /\[ios-ipa\]|\[ios-plist\]|\[ios-binary\]|CFBundleIdentifier|Entitlements/i, 20);
+	if (inventoryLines.length > 0)
+		findings.push(`iOS IPA inventory anchors: ${inventoryLines.map((line) => truncateMiddle(line, 190)).join(" | ")}`);
+	const machoLines = interestingLines(combined, /\[ios-macho\]|\[ios-otool\]|\[ios-symbol\]|\[ios-class\]|\[ios-string\]|SecItem|NSURLSession|CCCrypt|CryptoKit|SecTrust/i, 24);
+	if (machoLines.length > 0)
+		findings.push(`iOS Mach-O/class/selector anchors: ${machoLines.map((line) => truncateMiddle(line, 190)).join(" | ")}`);
+	const hookLines = interestingLines(combined, /\[ios-frida\]|\[ios-hook\]|\[ios-native-hook\]|\[ios-frida-hook-template\]|\[ios-frida-process\]|\[ios-objection\]/i, 22);
+	if (hookLines.length > 0)
+		findings.push(`iOS Frida/objection hook anchors: ${hookLines.map((line) => truncateMiddle(line, 190)).join(" | ")}`);
+	const replayLines = interestingLines(combined, /\[ios-network-replay\]|\[ios-network-anchor\]|signature|nonce|pinning|Authorization|body_sha256/i, 18);
+	if (replayLines.length > 0)
+		findings.push(`iOS network/keychain replay anchors: ${replayLines.map((line) => truncateMiddle(line, 190)).join(" | ")}`);
+	if (inventoryLines.length || machoLines.length || hookLines.length || replayLines.length) {
+		followups.push({
+			label: "ios-ipa-inventory-rerun",
+			command: `[ -x /tmp/pi-recon-ios-inventory.sh ] && /tmp/pi-recon-ios-inventory.sh ${targetArg} || printf '%s\n' 'rerun ios-ipa-inventory-scaffold'`,
+			evidence: "refresh IPA/App/Info.plist/binary inventory",
+		});
+		followups.push({
+			label: "ios-macho-class-map-rerun",
+			command: `[ -x /tmp/pi-recon-ios-macho.sh ] && /tmp/pi-recon-ios-macho.sh ${targetArg} || printf '%s\n' 'rerun iOS Mach-O/class map scaffold'`,
+			evidence: "rerun Objective-C/Swift selector, crypto, keychain and TLS pinning map",
+		});
+		followups.push({
+			label: "ios-frida-hook-rerun",
+			command: "sed -n '1,260p' /tmp/pi-recon-ios-frida-hooks.js 2>/dev/null; frida-ps -Uai 2>/dev/null | head -120 || true",
+			evidence: "review/rerun iOS Frida hook template and device process map",
+		});
+		followups.push({
+			label: "ios-network-replay-rerun",
+			command: `python3 - <<'PY'\nprint('[ios-network-replay] rerun ios-network-replay-scaffold or set captured request headers/body from Frida hooks for curl/node verifier')\nPY`,
+			evidence: "prepare replay verifier for iOS signed request/TLS-pinning evidence",
+		});
+	}
+	return {
+		findings,
+		followups,
+		nextLane:
+			replayLines.length > 0
+				? "report"
+				: hookLines.length > 0
+					? "network-replay"
+					: machoLines.length > 0
+						? "runtime-hooks"
+						: inventoryLines.length > 0
+							? "static-class-map"
+							: undefined,
 	};
 }
 
@@ -11088,24 +11858,47 @@ function selfHealCommandsForEvidence(params: {
 			"native-deep fallback for CFG/symbolic/fuzz anchors",
 		);
 	}
-	if (/web|api/.test(route)) {
-		add(
-			"heal-web-route-auth-map",
-			'rg -n "route|router|app\\.|fastify|express|auth|session|jwt|csrf|graphql|websocket|controller|middleware|permission|role|owner" . | head -240',
-			"widen route/auth/session evidence surface",
+		if (/web|api/.test(route)) {
+			add(
+				"heal-web-route-auth-map",
+				'rg -n "route|router|app\\.|fastify|express|auth|session|jwt|csrf|graphql|websocket|controller|middleware|permission|role|owner" . | head -240',
+				"widen route/auth/session evidence surface",
 		);
 		if (pack.target && /^https?:\/\//.test(pack.target)) {
 			add(
 				"heal-http-baseline",
 				`curl -i -sS ${shellQuote(pack.target)} | sed -n '1,120p'`,
 				"baseline HTTP status/headers/body",
+				);
+			}
+		}
+		if (/web vulnerability|web scan/.test(route) || packHasSpecialistSignal(pack, /web-scan-|web vulnerability scanner/i)) {
+			add(
+				"heal-web-scan-scope-baseline",
+				pack.target && /^https?:\/\//.test(pack.target)
+					? `[ -x /tmp/pi-recon-web-scope.sh ] && /tmp/pi-recon-web-scope.sh ${shellQuote(pack.target)} || curl -k -sS -I --max-time 12 ${shellQuote(pack.target)} | sed -n '1,120p'`
+					: 'rg -n "https?://|openapi|swagger|graphql|sitemap|robots|baseURL|apiUrl" . 2>/dev/null | head -220',
+				"specialist web scanner scope/header/tech baseline fallback",
+			);
+			add(
+				"heal-web-scan-corpus",
+				pack.target && /^https?:\/\//.test(pack.target)
+					? `[ -x /tmp/pi-recon-web-crawl.sh ] && /tmp/pi-recon-web-crawl.sh ${shellQuote(pack.target)} || printf '%s\n' 'rerun web scan crawl corpus scaffold'`
+					: 'printf "%s\n" "bind an http(s) target before crawl corpus heal"',
+				"specialist web scanner crawl/route corpus fallback",
+			);
+			add(
+				"heal-web-scan-manual-replay",
+				pack.target && /^https?:\/\//.test(pack.target)
+					? `[ -x /tmp/pi-recon-web-verify.py ] && python3 /tmp/pi-recon-web-verify.py ${shellQuote(pack.target)} || curl -k -sS -L --max-time 10 ${shellQuote(pack.target)} -w '\\n%{http_code} %{url_effective}\\n' | head -80`
+					: 'printf "%s\n" "bind an http(s) target before scanner replay heal"',
+				"specialist scanner finding replay/status/body-hash fallback",
 			);
 		}
-	}
-	if (/frontend|js/.test(route)) {
-		add(
-			"heal-js-signature-surface",
-			'rg -n "fetch\\(|XMLHttpRequest|axios|WebSocket|crypto|subtle|sign|signature|nonce|timestamp|encrypt|decrypt|md5|sha256|hmac" . | head -260',
+		if (/frontend|js/.test(route)) {
+			add(
+				"heal-js-signature-surface",
+				'rg -n "fetch\\(|XMLHttpRequest|axios|WebSocket|crypto|subtle|sign|signature|nonce|timestamp|encrypt|decrypt|md5|sha256|hmac" . | head -260',
 			"widen JS signing/encryption evidence surface",
 		);
 	}
@@ -11245,10 +12038,10 @@ function selfHealCommandsForEvidence(params: {
 		);
 	}
 
-	if (
-		/dfir|pcap|forensic|stego/.test(route) ||
-		/\.(?:pcap|pcapng|cap)$/i.test(pack.target ?? "") ||
-		packHasSpecialistSignal(pack, /pcap-flow|PCAP\/DFIR/i)
+		if (
+			/dfir|pcap|forensic|stego/.test(route) ||
+			/\.(?:pcap|pcapng|cap)$/i.test(pack.target ?? "") ||
+			packHasSpecialistSignal(pack, /pcap-flow|PCAP\/DFIR/i)
 	) {
 		add(
 			"heal-pcap-flow-summary",
@@ -11274,14 +12067,49 @@ function selfHealCommandsForEvidence(params: {
 		add(
 			"heal-pcap-transform-chain",
 			'[ -f /tmp/pi-recon-pcap-transform-chain.py ] && python3 /tmp/pi-recon-pcap-transform-chain.py || find /tmp/pi-recon-pcap-objects /tmp/pi-recon-carve -type f 2>/dev/null | head -80 | while read -r f; do echo "### $f"; file "$f"; strings -a -n 5 "$f" | head -40; done',
-			"specialist PCAP transform-chain fallback",
-		);
-	}
+				"specialist PCAP transform-chain fallback",
+			);
+		}
 
-	if (
-		/firmware|iot/.test(route) ||
-		packHasSpecialistSignal(pack, /firmware-|Firmware[/]IoT rootfs|firmware-image|firmware-rootfs/i)
-	) {
+		if (
+			/memory forensics/.test(route) ||
+			/\.(?:raw|vmem|mem|dmp|lime|core|crash)$/i.test(pack.target ?? "") ||
+			packHasSpecialistSignal(pack, /memory-forensics|mem-image|mem-vol|mem-credential/i)
+		) {
+			add(
+				"heal-memory-image-info",
+				target
+					? `[ -x /tmp/pi-recon-memory-info.sh ] && /tmp/pi-recon-memory-info.sh ${target} || { file ${target}; sha256sum ${target}; }`
+					: "find . -maxdepth 6 -type f \\( -iname '*.raw' -o -iname '*.vmem' -o -iname '*.mem' -o -iname '*.dmp' -o -iname '*.lime' -o -iname '*.core' \\) -print | head -120",
+				"specialist memory image/profile/banner fallback",
+			);
+			add(
+				"heal-memory-process-network",
+				target
+					? `[ -x /tmp/pi-recon-memory-process.sh ] && /tmp/pi-recon-memory-process.sh ${target} || strings -a -n 8 ${target} | grep -Eai 'cmd\\.exe|powershell|/bin/sh|bash|curl|wget|http|socket|connect' | head -240`
+					: 'printf "%s\n" "bind a concrete memory image before process/network heal"',
+				"specialist memory process/network fallback",
+			);
+			add(
+				"heal-memory-credential-artifact",
+				target
+					? `[ -x /tmp/pi-recon-memory-creds.sh ] && /tmp/pi-recon-memory-creds.sh ${target} || strings -a -n 6 ${target} | grep -Eai 'password|token|secret|Authorization:|Cookie:|AWS_ACCESS_KEY|BEGIN (RSA|OPENSSH)|NTLM|lsass' | head -260`
+					: 'printf "%s\n" "bind a concrete memory image before credential/artifact heal"',
+				"specialist memory credential/token/artifact fallback",
+			);
+			add(
+				"heal-memory-timeline-carve",
+				target
+					? `[ -x /tmp/pi-recon-memory-timeline.sh ] && /tmp/pi-recon-memory-timeline.sh ${target} || printf '%s\n' 'rerun memory timeline/carve scaffold after volatility3 bootstrap'`
+					: 'printf "%s\n" "bind a concrete memory image before timeline/carve heal"',
+				"specialist memory timeline/malfind/filescan/dumpfiles fallback",
+			);
+		}
+
+		if (
+			/firmware|iot/.test(route) ||
+			packHasSpecialistSignal(pack, /firmware-|Firmware[/]IoT rootfs|firmware-image|firmware-rootfs/i)
+		) {
 		add(
 			"heal-firmware-extract-rootfs",
 			target
@@ -11298,6 +12126,33 @@ function selfHealCommandsForEvidence(params: {
 			"heal-firmware-service-surface",
 			"[ -f /tmp/pi-recon-firmware-services.sh ] && /tmp/pi-recon-firmware-services.sh || find /tmp/pi-recon-firmware-extract -path '*/www/*' -o -path '*/cgi-bin/*' 2>/dev/null | head -180",
 			"specialist firmware service/web surface fallback",
+		);
+	}
+
+	if (
+		/crypto|stego/.test(route) ||
+		packHasSpecialistSignal(pack, /crypto-stego|crypto\/stego|crypto-param|crypto-transform|crypto-solver/i)
+	) {
+		add(
+			"heal-crypto-parameter-inventory",
+			target
+				? `[ -f /tmp/pi-recon-crypto-inventory.py ] && python3 /tmp/pi-recon-crypto-inventory.py ${target} || strings -a -n 4 ${target} | grep -Ei 'iv|nonce|salt|key|sig|signature|token|cipher|modulus|BEGIN|RSA|AES|base64' | head -220`
+				: "find . -maxdepth 5 -type f \\( -iname '*.txt' -o -iname '*.enc' -o -iname '*.bin' -o -iname '*.png' -o -iname '*.jpg' -o -iname '*crypto*' -o -iname '*stego*' \\) -print | head -120",
+			"specialist crypto parameter inventory fallback",
+		);
+		add(
+			"heal-crypto-transform-replay",
+			target
+				? `[ -f /tmp/pi-recon-crypto-transform.py ] && python3 /tmp/pi-recon-crypto-transform.py ${target} || python3 - <<'PY'\nprint('[crypto-transform] rerun crypto-stego-transform-replay-scaffold to regenerate deterministic transform chain')\nPY`
+				: "printf '%s\n' 'bind a concrete crypto/stego target before transform replay heal'",
+			"specialist crypto transform replay fallback",
+		);
+		add(
+			"heal-crypto-known-answer",
+			target
+				? `[ -f /tmp/pi-recon-crypto-solver.py ] && REPI_KNOWN_ANSWER="\${REPI_KNOWN_ANSWER:-}" REPI_CANDIDATE="\${REPI_CANDIDATE:-}" python3 /tmp/pi-recon-crypto-solver.py ${target} || printf '%s\n' 'set REPI_KNOWN_ANSWER/REPI_CANDIDATE after solver step'`
+				: "printf '%s\n' 'bind target and known-answer/candidate before solver verification heal'",
+			"specialist crypto solver/known-answer fallback",
 		);
 	}
 
@@ -11391,12 +12246,37 @@ function selfHealCommandsForEvidence(params: {
 			"heal-identity-ad-graph",
 			"[ -f /tmp/pi-recon-ad-graph.py ] && python3 /tmp/pi-recon-ad-graph.py || find . /tmp -maxdepth 3 -type f \\( -iname '*.json' -o -iname '*bloodhound*' -o -iname '*certipy*' \\) -print 2>/dev/null | head -120",
 			"specialist AD graph edge fallback",
-		);
-	}
-	if (/android|mobile/.test(route) || packHasSpecialistSignal(pack, /frida-gdb-trace|Frida\/GDB trace/i)) {
-		add(
-			"heal-frida-gdb-trace",
-			`[ -f /tmp/pi-recon-frida-trace.js ] && sed -n '1,260p' /tmp/pi-recon-frida-trace.js; frida-ps -Uai 2>/dev/null | head -120 || true`,
+			);
+		}
+		if (
+			/mobile \/ ios|ios|ipa/.test(route) ||
+			/\.(?:ipa)$/i.test(pack.target ?? "") ||
+			packHasSpecialistSignal(pack, /ios-|iOS IPA|ios-frida|ios-macho/i)
+		) {
+			add(
+				"heal-ios-ipa-inventory",
+				target
+					? `[ -x /tmp/pi-recon-ios-inventory.sh ] && /tmp/pi-recon-ios-inventory.sh ${target} || { file ${target}; unzip -l ${target} 2>/dev/null | head -120; }`
+					: "find . -maxdepth 6 -type f -iname '*.ipa' -o -type d -iname '*.app' 2>/dev/null | head -120",
+				"specialist iOS IPA/App inventory fallback",
+			);
+			add(
+				"heal-ios-macho-class-map",
+				target
+					? `[ -x /tmp/pi-recon-ios-macho.sh ] && /tmp/pi-recon-ios-macho.sh ${target} || strings -a -n 5 ${target} | grep -Ei 'https?://|SecItem|NSURLSession|CCCrypt|CryptoKit|SecTrust|jailbreak|signature|token' | head -220`
+					: 'printf "%s\n" "bind a concrete IPA/App before iOS Mach-O/class map heal"',
+				"specialist iOS Mach-O/class/selector fallback",
+			);
+			add(
+				"heal-ios-frida-hook-template",
+				"sed -n '1,260p' /tmp/pi-recon-ios-frida-hooks.js 2>/dev/null || printf '%s\n' 'rerun ios-frida-objection-hook-scaffold'; frida-ps -Uai 2>/dev/null | head -120 || true",
+				"specialist iOS Frida/objection hook template fallback",
+			);
+		}
+		if (/android|mobile|ios/.test(route) || packHasSpecialistSignal(pack, /frida-gdb-trace|Frida\/GDB trace/i)) {
+			add(
+				"heal-frida-gdb-trace",
+				`[ -f /tmp/pi-recon-frida-trace.js ] && sed -n '1,260p' /tmp/pi-recon-frida-trace.js; frida-ps -Uai 2>/dev/null | head -120 || true`,
 			"specialist Frida/GDB trace fallback",
 		);
 	}
@@ -11442,9 +12322,9 @@ function evaluateEvidenceQuality(params: {
 	const highSignal = params.findings.some(
 		(finding) =>
 			!/no high-signal|tool\/target\/runtime error|command-pack exited|killed/i.test(finding) &&
-			/(address anchors|comparison|interesting output|metadata|route\/auth|JS runtime|Android|next command pack|tool repair anchors|browser\/XHR\/WS|websocket endpoint|cookie\/storage|browser CDP artifact|browser runtime artifact|browser replay evaluator|browser route graph|browser auth matrix|browser IDOR\/BOLA|browser authz state machine|browser authz sequence replay|browser authz object ownership|browser authz state rollback|web API static authz|web API schema|web API state mutation|JS signing rebuild|JS signing normalized|JS first-divergence|JS signing replay harness|crypto\.subtle|pwn primitive|pwn crash register|pwn cyclic offset|pwn gadget|pwn ROP\/libc|pwn local verifier|Exploit PoC inventory|PoC replay matrix|Exploit environment pin|Exploit flake triage|Exploit artifact bundle|PCAP\/DFIR|PCAP stream ranking|PCAP secret timeline|PCAP transform chain|PCAP extracted|Malware static|Malware IOC|Malware behavior|Malware rule|Cloud identity|Cloud\/K8s runtime|Cloud metadata|Cloud privilege|Identity\/AD principal|Identity\/AD credential|Identity\/AD graph|Native deep|Native decompiler|Native compare trace|Native patch hypothesis|Native symbolic|Native fuzz|Frida\/GDB|runtime hook return)/i.test(
-				finding,
-			),
+				/(address anchors|comparison|interesting output|metadata|route\/auth|JS runtime|Android|iOS IPA|iOS Mach-O|iOS Frida|iOS network|next command pack|tool repair anchors|browser\/XHR\/WS|websocket endpoint|cookie\/storage|browser CDP artifact|browser runtime artifact|browser replay evaluator|browser route graph|browser auth matrix|browser IDOR\/BOLA|browser authz state machine|browser authz sequence replay|browser authz object ownership|browser authz state rollback|web API static authz|web API schema|web API state mutation|web scanner scope|web scanner crawl|web scanner content discovery|web scanner template|web scanner manual replay|JS signing rebuild|JS signing normalized|JS first-divergence|JS signing replay harness|crypto\.subtle|crypto parameter derivation|crypto transform replay|crypto solver script|crypto known-answer|stego extraction|pwn primitive|pwn crash register|pwn cyclic offset|pwn gadget|pwn ROP\/libc|pwn local verifier|Exploit PoC inventory|PoC replay matrix|Exploit environment pin|Exploit flake triage|Exploit artifact bundle|PCAP\/DFIR|PCAP stream ranking|PCAP secret timeline|PCAP transform chain|PCAP extracted|memory forensics image|memory forensics process|memory forensics credential|memory forensics timeline|Malware static|Malware IOC|Malware behavior|Malware rule|Cloud identity|Cloud\/K8s runtime|Cloud metadata|Cloud privilege|Identity\/AD principal|Identity\/AD credential|Identity\/AD graph|Native deep|Native decompiler|Native compare trace|Native patch hypothesis|Native symbolic|Native fuzz|Frida\/GDB|runtime hook return)/i.test(
+					finding,
+				),
 	);
 	if (highSignal) score += 25;
 	else deficits.push("no high-signal anchors parsed");
@@ -11751,19 +12631,23 @@ function analyzeLaneRun(
 	}
 
 	const specialistNextHints = [
-		mergeSpecialistEvidenceAnalysis(analyzeToolRepairEvidence(pack, combined), findings, followups),
-		mergeSpecialistEvidenceAnalysis(analyzeNativeDeepEvidence(pack, combined, targetArg), findings, followups),
-		mergeSpecialistEvidenceAnalysis(analyzeBrowserXhrWsEvidence(pack, combined, targetArg), findings, followups),
-		mergeSpecialistEvidenceAnalysis(analyzeJsSigningEvidence(pack, combined), findings, followups),
-		mergeSpecialistEvidenceAnalysis(analyzePwnPrimitiveEvidence(pack, combined, targetArg), findings, followups),
+			mergeSpecialistEvidenceAnalysis(analyzeToolRepairEvidence(pack, combined), findings, followups),
+			mergeSpecialistEvidenceAnalysis(analyzeNativeDeepEvidence(pack, combined, targetArg), findings, followups),
+			mergeSpecialistEvidenceAnalysis(analyzeBrowserXhrWsEvidence(pack, combined, targetArg), findings, followups),
+			mergeSpecialistEvidenceAnalysis(analyzeWebScannerEvidence(pack, combined, targetArg), findings, followups),
+			mergeSpecialistEvidenceAnalysis(analyzeJsSigningEvidence(pack, combined), findings, followups),
+			mergeSpecialistEvidenceAnalysis(analyzeCryptoStegoEvidence(pack, combined, targetArg), findings, followups),
+			mergeSpecialistEvidenceAnalysis(analyzePwnPrimitiveEvidence(pack, combined, targetArg), findings, followups),
 		mergeSpecialistEvidenceAnalysis(
 			analyzeExploitReliabilityEvidence(pack, combined, targetArg),
 			findings,
 			followups,
 		),
-		mergeSpecialistEvidenceAnalysis(analyzePcapDfirEvidence(pack, combined, targetArg), findings, followups),
-		mergeSpecialistEvidenceAnalysis(analyzeFirmwareIotEvidence(pack, combined, targetArg), findings, followups),
-		mergeSpecialistEvidenceAnalysis(analyzeAgentSecurityEvidence(pack, combined, targetArg), findings, followups),
+			mergeSpecialistEvidenceAnalysis(analyzePcapDfirEvidence(pack, combined, targetArg), findings, followups),
+			mergeSpecialistEvidenceAnalysis(analyzeMemoryForensicsEvidence(pack, combined, targetArg), findings, followups),
+			mergeSpecialistEvidenceAnalysis(analyzeFirmwareIotEvidence(pack, combined, targetArg), findings, followups),
+			mergeSpecialistEvidenceAnalysis(analyzeIosEvidence(pack, combined, targetArg), findings, followups),
+			mergeSpecialistEvidenceAnalysis(analyzeAgentSecurityEvidence(pack, combined, targetArg), findings, followups),
 		mergeSpecialistEvidenceAnalysis(analyzeMalwareEvidence(pack, combined, targetArg), findings, followups),
 		mergeSpecialistEvidenceAnalysis(analyzeFridaGdbEvidence(pack, combined, targetArg), findings, followups),
 		mergeSpecialistEvidenceAnalysis(analyzeCloudIdentityEvidence(pack, combined), findings, followups),
@@ -27754,12 +28638,15 @@ function harnessReverseCapabilityMarkers(): string[] {
 	return [
 		"Native deep symbol/import/string anchors",
 		"browser/XHR/WS",
+		"web scanner manual replay",
 		"web authz matrix anchors",
 		"JS signing replay harness anchors",
 		"pwn ROP/libc chain anchors",
 		"Exploit PoC inventory anchors",
 		"PCAP stream ranking anchors",
+		"memory forensics credential",
 		"Firmware image metadata anchors",
+		"iOS Frida/objection hook anchors",
 		"Agent prompt surface anchors",
 		"Malware IOC/config anchors",
 		"Cloud identity anchors",
@@ -27768,6 +28655,16 @@ function harnessReverseCapabilityMarkers(): string[] {
 		"domain:web-api",
 		"domain:rev-native",
 		"domain:pwn",
+		"domain:frontend-js",
+		"domain:web-scan",
+		"domain:mobile",
+		"domain:mobile-ios",
+		"domain:pcap-dfir",
+		"domain:memory-forensics",
+		"domain:firmware-iot",
+		"domain:crypto",
+		"domain:cloud-identity",
+		"domain:exploit-reliability",
 		"fallback_available",
 	];
 }
@@ -27838,7 +28735,7 @@ function buildHarnessArtifact(mode: HarnessMode = "quick"): HarnessArtifact {
 		`registered_commands=${Array.from(RECON_COMMAND_NAMES).join(",")}`,
 		"execution_chain=route/mission/kernel -> decision/map/lane/autopilot -> campaign/operation/delegate/swarm/supervisor/reflect -> context/operator -> verifier/compiler/replayer/autofix -> proof_loop/knowledge_graph/harness",
 		"runtime_domains=native,web_authz,live_browser,mobile,exploit_lab,pwn,pcap,firmware,agentsec,malware,cloud,identity,frida_gdb",
-		"domain_toolchain_matrix=ToolchainDomainCapabilityV1 runtime:toolchain-doctor domain:web-api domain:rev-native domain:pwn domain:mobile domain:pcap-dfir domain:firmware-iot fallback_available",
+		"domain_toolchain_matrix=ToolchainDomainCapabilityV1 runtime:toolchain-doctor domain:web-api domain:web-scan domain:frontend-js domain:rev-native domain:pwn domain:mobile domain:mobile-ios domain:pcap-dfir domain:memory-forensics domain:firmware-iot domain:crypto domain:cloud-identity domain:exploit-reliability fallback_available",
 		"compact_chain=pi-recon-compaction -> re_context resume -> re_operator dispatch -> re_proof_loop -> compact_resume_case_memory -> case_memory_lane_plan",
 	];
 	const installReadiness = [
@@ -28060,8 +28957,11 @@ function kernelSpecialistCapabilityMatrix(route?: string): string[] {
 		"native-deep: ELF/PE/Mach-O/WASM symbol/import/string map, decompiler project, compare breakpoint trace, patch hypothesis, symbolic/fuzz scaffold",
 		"pwn-primitive: mitigation/libc fingerprint, cyclic crash, offset analyzer, gadget/ROP/libc chain, local verifier, pwntools template",
 		"web-authz: browser/CDP capture, route graph, auth matrix, IDOR/BOLA probe, state machine, sequence replay, ownership and rollback proof",
+		"web-scan: httpx/katana/ffuf/nuclei scanner queue, content discovery, manual replay verifier, body hash/status proof",
 		"js-signing: fetch/XHR/WS/crypto.subtle hook, observed normalizer, first-divergence, signed replay harness",
 		"mobile-runtime: APK inventory, ADB/Frida process map, Java crypto/String/native compare hooks, anti-debug/root checks",
+		"ios-runtime: IPA/Info.plist/entitlements, Mach-O/class map, Frida/objection hooks, keychain/network replay",
+		"memory-forensics: volatility image profile, process/network map, credential/artifact hunt, timeline/carve proof",
 		"firmware-dfir: firmware/rootfs extraction, service surface, emulation scaffold, PCAP stream ranking, secret timeline, transform chain",
 		"cloud-identity: env/profile/serviceaccount map, runtime manifests/RBAC, metadata probe, privilege edge report",
 		"agentsec-malware: prompt/tool/memory/delegation boundary replay plus malware static/rule/IOC/behavior config recovery",
@@ -28430,7 +29330,7 @@ function buildKernelOutput(action: "build" | "show" | "audit" = "build", options
 	return formatKernelArtifact(kernel, path);
 }
 
-function auditCompletion(): { ready: boolean; blockers: string[]; warnings: string[]; mission?: MissionState } {
+function auditCompletion(): CompletionAudit {
 	const mission = readCurrentMission();
 	const blockers: string[] = [];
 	const warnings: string[] = [];
@@ -28564,13 +29464,25 @@ function auditCompletion(): { ready: boolean; blockers: string[]; warnings: stri
 		}
 		if (!compiler.reportPath) blockers.push(`compiler final artifact has no release report path: ${compilerPath}`);
 	}
-	return { ready: blockers.length === 0, blockers, warnings, mission };
+	const domainProofExitClosure = buildDomainProofExitClosure(mission);
+	if (domainProofExitClosure.rows.length > 0 && domainProofExitClosure.domainId) {
+		warnings.push(
+			`domain_proof_exit_closure: ${domainProofExitClosure.domainId} status=${domainProofExitClosure.status} matched=${domainProofExitClosure.matchedProofExits.length} missing=${domainProofExitClosure.missingProofExits.length}`,
+		);
+		if (domainProofExitClosure.status !== "passed") {
+			for (const blocker of domainProofExitClosure.blockers.slice(0, 10)) blockers.push(blocker);
+		}
+	}
+	return { ready: blockers.length === 0, blockers, warnings, mission, domainProofExitClosure };
 }
 
-function formatCompletionAuditFromAudit(audit: { ready: boolean; blockers: string[]; warnings: string[]; mission?: MissionState }): string {
+function formatCompletionAuditFromAudit(audit: CompletionAudit): string {
 	return [
 		audit.ready ? "completion_status: ready" : "completion_status: blocked",
 		audit.mission ? formatMission(audit.mission) : "mission: none",
+		audit.domainProofExitClosure
+			? formatDomainProofExitClosure(audit.domainProofExitClosure)
+			: "domain_proof_exit_closure:\nDomainProofExitClosureV1: false\nstatus: missing",
 		"blockers:",
 		...(audit.blockers.length ? audit.blockers.map((item) => `- ${item}`) : ["- none"]),
 		"warnings:",
@@ -28755,6 +29667,16 @@ const TOOLCHAIN_DOMAIN_CAPABILITY_MATRIX: ToolchainDomainSpec[] = [
 		proofExit: ["principal matrix", "object ownership", "state rollback", "signed replay divergence"],
 	},
 	{
+		id: "web-scan",
+		label: "Web vulnerability scanning: scope, crawl, templates, manual replay",
+		requiredAny: ["curl", "python3"],
+		preferred: ["httpx", "katana", "ffuf", "feroxbuster", "gobuster", "nuclei", "nikto", "dalfox", "sqlmap"],
+		fallbacks: ["curl", "python3", "node", "rg"],
+		playbookMarkers: ["web scanner scope", "web scanner crawl", "web scanner template", "web scanner manual replay"],
+		commandScaffolds: ["re_lane", "re_replayer", "re_verifier", "re_proof_loop"],
+		proofExit: ["scope baseline", "crawl corpus", "scanner finding queue", "manual replay verifier"],
+	},
+	{
 		id: "frontend-js",
 		label: "Frontend bundle, signer rebuild, anti-bot divergence",
 		requiredAny: ["node", "curl", "rg"],
@@ -28788,11 +29710,21 @@ const TOOLCHAIN_DOMAIN_CAPABILITY_MATRIX: ToolchainDomainSpec[] = [
 		id: "mobile",
 		label: "Android/APK: manifest, jadx/apktool, ADB/Frida hooks",
 		requiredAny: ["unzip", "strings"],
-		preferred: ["jadx", "apktool", "adb", "frida", "frida-ps", "aapt", "r2"],
+		preferred: ["jadx", "apktool", "adb", "frida", "frida-ps", "objection", "aapt", "r2"],
 		fallbacks: ["unzip", "strings", "readelf", "python3"],
 		playbookMarkers: ["APK", "manifest", "smali", "Frida", "Java crypto", "native compare"],
 		commandScaffolds: ["re_mobile_runtime", "re_lane", "re_verifier", "re_knowledge_graph"],
 		proofExit: ["manifest/package map", "Java/native hook", "anti-debug evidence", "runtime anchors"],
+	},
+	{
+		id: "mobile-ios",
+		label: "iOS/IPA: Info.plist, entitlements, Mach-O/classes, Frida/objection hooks",
+		requiredAny: ["unzip", "strings", "file"],
+		preferred: ["plutil", "otool", "nm", "codesign", "class-dump", "frida", "frida-ps", "objection"],
+		fallbacks: ["unzip", "strings", "python3", "file"],
+		playbookMarkers: ["iOS IPA", "Info.plist", "Mach-O/class", "iOS Frida", "keychain"],
+		commandScaffolds: ["re_mobile_runtime", "re_lane", "re_replayer", "re_verifier"],
+		proofExit: ["IPA inventory", "Mach-O/class map", "Frida/objection hook", "network/keychain replay"],
 	},
 	{
 		id: "pcap-dfir",
@@ -28803,6 +29735,16 @@ const TOOLCHAIN_DOMAIN_CAPABILITY_MATRIX: ToolchainDomainSpec[] = [
 		playbookMarkers: ["tcp.stream", "HTTP object", "DNS/TLS", "credential timeline", "transform-chain"],
 		commandScaffolds: ["re_lane", "re_knowledge_graph", "re_verifier", "re_replayer"],
 		proofExit: ["flow conversation", "follow-stream", "carved object", "timeline evidence"],
+	},
+	{
+		id: "memory-forensics",
+		label: "Memory forensics: image profile, process/network, credentials, timeline/carve",
+		requiredAny: ["file", "strings", "python3"],
+		preferred: ["volatility3", "yara", "foremost"],
+		fallbacks: ["file", "strings", "python3", "yara"],
+		playbookMarkers: ["memory forensics image", "memory forensics process", "memory forensics credential", "memory forensics timeline"],
+		commandScaffolds: ["re_lane", "re_knowledge_graph", "re_verifier", "re_replayer"],
+		proofExit: ["image profile", "process/network map", "credential/artifact proof", "timeline/carve evidence"],
 	},
 	{
 		id: "firmware-iot",
@@ -28979,6 +29921,342 @@ function buildToolchainDomainCapabilityOutput(action: "show" | "refresh" = "show
 	return formatToolchainDomainCapability(report, path);
 }
 
+function toolchainDomainIdForRoute(routeDomain?: string): string | undefined {
+	if (!routeDomain) return undefined;
+	if (/Web \/ API/i.test(routeDomain)) return "web-api";
+	if (/Web vulnerability scanning/i.test(routeDomain)) return "web-scan";
+	if (/Frontend JS/i.test(routeDomain)) return "frontend-js";
+	if (/Pwn \/ exploit/i.test(routeDomain)) return "pwn";
+	if (/Native reverse/i.test(routeDomain)) return "rev-native";
+	if (/Mobile \/ Android/i.test(routeDomain)) return "mobile";
+	if (/Mobile \/ iOS/i.test(routeDomain)) return "mobile-ios";
+	if (/DFIR|PCAP/i.test(routeDomain)) return "pcap-dfir";
+	if (/Memory forensics/i.test(routeDomain)) return "memory-forensics";
+	if (/Firmware \/ IoT/i.test(routeDomain)) return "firmware-iot";
+	if (/Crypto \/ stego/i.test(routeDomain)) return "crypto";
+	if (/Cloud|Identity \/ Windows \/ AD/i.test(routeDomain)) return "cloud-identity";
+	if (/Exploit reliability/i.test(routeDomain)) return "exploit-reliability";
+	if (/Malware analysis/i.test(routeDomain)) return "malware-analysis";
+	if (/Agent \/ LLM security/i.test(routeDomain)) return "agent-security";
+	if (/CTF|sandbox/i.test(routeDomain)) return "rev-native";
+	return undefined;
+}
+
+function proofExitExpectedEvidence(proofExit: string): string[] {
+	const normalized = proofExit.toLowerCase();
+	const rows: string[] = [];
+	const add = (...items: string[]) => rows.push(...items);
+	if (/offset|symbol|import|manifest|flow|filesystem|token|parameter|multi-run|prompt/.test(normalized))
+		add("path/hash-bound artifact", "tool stdout/stderr or parsed JSON row");
+	if (/leak|credential|token|config|oracle|secret/.test(normalized)) add("source line, request, trace, or carved object that exposes the value class without relying on a guess");
+	if (/runtime|hook|trace|follow-stream|conversation|state|ownership|rollback|verifier|replay|known-answer|solver|patch|graph|delegation/.test(normalized))
+		add("runtime/replay/verifier command with exit/status/hash and artifact path");
+	if (/controllable|object ownership|privilege edge|state rollback|signed replay|first divergence/.test(normalized))
+		add("before/after or principal A/B divergence evidence");
+	if (rows.length === 0) add("concrete command output", "artifact path", "verification command");
+	return Array.from(new Set(rows));
+}
+
+function proofExitRegexes(proofExit: string): RegExp[] {
+	const text = proofExit.toLowerCase();
+	const regexes: RegExp[] = [];
+	const add = (...items: RegExp[]) => regexes.push(...items);
+	if (/principal matrix/.test(text)) add(/\[auth-matrix\]|principal matrix|principal_[ab]|COOKIE_A|AUTH_A|auth_matrix/i);
+	if (/object ownership/.test(text)) add(/\[authz-ownership\]|object ownership|owner[_ -]?(principal|hash)|potential_bola|IDOR|BOLA/i);
+	if (/state rollback/.test(text)) add(/\[authz-rollback\]|state rollback|restored=(?:true|false)|rollback_hash|before=.*after=/i);
+	if (/signed replay divergence/.test(text)) add(/signed replay divergence|\[js-replay-harness\]|\[replay-eval\]|signature_key|replay_match|first-divergence/i);
+	if (/scope baseline/.test(text)) add(/\[web-scan-scope\]|\[web-scan-header\]|\[web-scan-httpx\]|scope baseline/i);
+	if (/crawl corpus/.test(text)) add(/\[web-scan-crawl\]|\[web-scan-corpus\]|crawl corpus|katana|sitemap|robots/i);
+	if (/scanner finding queue/.test(text)) add(/\[web-finding-queue\]|\[web-scan-nuclei\]|\[web-scan-nikto\]|\[web-scan-dalfox\]|nuclei_jsonl|scanner finding/i);
+	if (/manual replay verifier/.test(text)) add(/\[web-scan-verifier\]|manual replay verifier|body_sha256|status_meta=/i);
+	if (/observed normalizer/.test(text)) add(/\[js-signing-normalized\]|observed normalizer|artifact=.*js-observed|normalized artifact/i);
+	if (/first divergence/.test(text)) add(/\[js-first-divergence\]|first[- ]divergence|candidate_signature|expected_signature|suspect=/i);
+	if (/signed replay harness/.test(text)) add(/\[js-replay-harness\]|signed replay harness|REPI_REPLAY_URL|signature_key|status=\d{3}/i);
+	if (/symbol\/import map|symbol\/import|string map/.test(text)) add(/\[native-symbol\]|\[native-import\]|\[native-section\]|symbol\/import map|rabin2|readelf/i);
+	if (/comparison sink|compare/.test(text)) add(/\[native-compare\]|strcmp|strncmp|memcmp|comparison sink|compare trace/i);
+	if (/runtime trace/.test(text)) add(/\[native-.*trace\]|strace|ltrace|gdb|runtime trace|info registers|syscall/i);
+	if (/patch\/replay proof|patch/.test(text)) add(/\[native-patch\]|patch hypothesis|replay proof|branch condition|candidate jump/i);
+	if (/offset/.test(text)) add(/cyclic|offset|pattern offset|saved rip|saved eip|RIP|EIP|rsp|stack offset/i);
+	if (/leak source/.test(text)) add(/leak source|libc base|canary|GOT|PLT|puts@|printf@|address leak|leaked/i);
+	if (/controllable bytes/.test(text)) add(/controllable bytes|cyclic|AAAA|payload|overwrite|SIGSEGV|crash|register/i);
+	if (/local verifier/.test(text)) add(/local verifier|verification=pass|exploit success|replay_matrix|exit:?\s*0|success rate/i);
+	if (/manifest\/package map/.test(text)) add(/manifest|package=|aapt|AndroidManifest|apk.*package|manifest\/package/i);
+	if (/java\/native hook/.test(text)) add(/\[pi-recon-frida\]|Frida|Java\.perform|doFinal|MessageDigest|native hook|Interceptor\.attach/i);
+	if (/anti-debug/.test(text)) add(/anti-debug|anti_debug|ptrace|isDebuggerConnected|Debug\.isDebugger|frida|root check/i);
+	if (/runtime anchors/.test(text)) add(/runtime anchors|\[frida|\[native|adb devices|hook return|runtime hook/i);
+	if (/ipa inventory/.test(text)) add(/\[ios-ipa\]|\[ios-plist\]|\[ios-binary\]|Info\.plist|CFBundleIdentifier|IPA inventory/i);
+	if (/mach-o\/class map/.test(text)) add(/\[ios-macho\]|\[ios-otool\]|\[ios-symbol\]|\[ios-class\]|\[ios-string\]|Mach-O|class-dump/i);
+	if (/frida\/objection hook/.test(text)) add(/\[ios-frida\]|\[ios-hook\]|\[ios-native-hook\]|\[ios-frida-hook-template\]|\[ios-objection\]|objection hook/i);
+	if (/network\/keychain replay/.test(text)) add(/\[ios-network-replay\]|\[ios-network-anchor\]|SecItem|keychain|NSURLSession|signature|pinning/i);
+	if (/flow conversation/.test(text)) add(/flow conversation|tcp\.stream|conversation|capinfos|tshark.*conv|\[pcap-flow\]/i);
+	if (/follow-stream/.test(text)) add(/follow-stream|tcp\.stream eq|tshark.*-z follow|stream ranking|\[pcap-stream\]/i);
+	if (/carved object/.test(text)) add(/carved object|foremost|extracted artifact|HTTP object|export objects|\[pcap-extract\]/i);
+	if (/timeline evidence/.test(text)) add(/timeline evidence|credential timeline|\[pcap-secret\]|frame\.time|timestamp/i);
+	if (/image profile/.test(text)) add(/\[mem-image\]|\[mem-vol-info\]|volatility3.*(?:windows\.info|linux\.banners|mac\.banners)|sample_sha256|image profile/i);
+	if (/process\/network map/.test(text)) add(/\[mem-process\]|\[mem-vol\].*(?:pslist|pstree|cmdline|netscan|sockstat|netstat)|process\/network/i);
+	if (/credential\/artifact proof/.test(text)) add(/\[mem-credential\]|\[mem-vol-credential\]|hashdump|lsadump|Authorization|Cookie|AWS_ACCESS_KEY|credential\/artifact/i);
+	if (/timeline\/carve evidence/.test(text)) add(/\[mem-timeline\]|\[mem-vol-timeline\]|\[mem-carve\]|malfind|filescan|dumpfiles|timeliner|timeline\/carve/i);
+	if (/filesystem extraction/.test(text)) add(/filesystem extraction|rootfs|squashfs|unsquashfs|binwalk|unblob|\[firmware-extract\]/i);
+	if (/service map/.test(text)) add(/service map|inetd|dropbear|httpd|telnetd|listening|cgi-bin|\[firmware-service\]/i);
+	if (/credential\/config proof/.test(text)) add(/credential\/config proof|passwd|shadow|config secret|nvram|password|private key|\[firmware-config\]/i);
+	if (/emulation notes/.test(text)) add(/emulation notes|qemu|chroot|firmware-emulation|qemu-mips|qemu-arm/i);
+	if (/parameter derivation/.test(text)) add(/parameter derivation|modulus|exponent|iv=|nonce=|oracle|Z3|Sage|lattice|\[crypto-param\]/i);
+	if (/solver script/.test(text)) add(/solver script|solve\.py|z3|sage|known answer|assert .*==|\[crypto-solver\]/i);
+	if (/known-answer test/.test(text)) add(/known-answer|known answer|KAT|assert .*==|test vector|verification=pass/i);
+	if (/transform replay/.test(text)) add(/transform replay|decode chain|base64|xor|openssl|pipeline|\[crypto-transform\]/i);
+	if (/token source/.test(text)) add(/token source|serviceaccount|AWS_ACCESS_KEY_ID|metadata|IMDS|credential_process|k8s-serviceaccount/i);
+	if (/credential usability/.test(text)) add(/credential usability|sts get-caller-identity|can-i|nxc|ldapsearch|klist|valid credential/i);
+	if (/privilege edge/.test(text)) add(/privilege edge|rbac|iam|ClusterRoleBinding|GenericAll|WriteDacl|AdminTo|can-i/i);
+	if (/graph\/path evidence/.test(text)) add(/graph\/path evidence|BloodHound|ad-graph-edge|attack_graph|path proof|edge=/i);
+	if (/multi-run success rate/.test(text)) add(/multi-run success rate|success rate|replay matrix|runs=\d+|passed=\d+|failed=\d+/i);
+	if (/stdout\/stderr hash/.test(text)) add(/stdout_sha256|stderr_sha256|stdout\/stderr hash|body_hash|sha256/i);
+	if (/environment pin/.test(text)) add(/environment pin|ldd|Dockerfile|uname|libc|node --version|python.*version/i);
+	if (/bundle manifest/.test(text)) add(/bundle manifest|manifest\.json|artifact bundle|bundle_path|tar\.gz/i);
+	if (/ioc\/config/.test(text)) add(/IOC|malware-ioc|config extractor|C2|mutex|YARA|capa|FLOSS/i);
+	if (/behavior trace/.test(text)) add(/malware-behavior|strace|execve|connect|openat|anti-debug|syscall/i);
+	if (/tool boundary/.test(text)) add(/tool boundary|registerTool|tool schema|function_call|ToolCallTraceLedgerV1/i);
+	if (/memory poisoning/.test(text)) add(/memory poisoning|RAG|retrieval|injection-packet|quarantine|poison/i);
+	if (/injection replay/.test(text)) add(/injection replay|prompt injection|replay harness|untrusted content|boundary decision/i);
+	if (regexes.length === 0) {
+		const words = proofExit
+			.split(/[^A-Za-z0-9_@.-]+/)
+			.filter((word) => word.length >= 4)
+			.map(escapeRegExp);
+		if (words.length) regexes.push(new RegExp(words.join(".*"), "i"));
+	}
+	return regexes;
+}
+
+function domainProofExitNextCommands(domainId: string, proofExit: string, mission?: MissionState): string[] {
+	const currentMission = mission ?? readCurrentMission();
+	const active = currentMission ? activeLane(currentMission) : undefined;
+	const lane = active?.name ?? (domainId === "pwn" ? "primitive" : domainId === "web-api" ? "state" : "prove");
+	const target = mission?.task && !/^security task$/i.test(mission.task) ? mission.task : "<target>";
+	const suffix = target ? ` ${target}` : "";
+	const commands = new Set<string>([
+		`re_toolchain_domain show ${domainId}`,
+		`re_lane plan ${lane}${suffix}`,
+		`re_lane run ${lane}${suffix}`,
+		"re_verifier matrix",
+		"re_proof_loop run <target> 4 2",
+	]);
+	if (domainId === "web-api") {
+		commands.add(`re_live_browser run${suffix}`);
+		commands.add(`re_web_authz_state run${suffix}`);
+	}
+	if (domainId === "web-scan") {
+		commands.add(`re_lane plan scope${suffix}`);
+		commands.add(`re_lane run scope${suffix}`);
+		commands.add(`re_lane plan verify${suffix}`);
+	}
+	if (domainId === "frontend-js") {
+		commands.add(`re_lane plan rebuild${suffix}`);
+		commands.add("node /tmp/pi-recon-js-normalize.mjs && node /tmp/pi-recon-js-first-divergence.mjs");
+	}
+	if (domainId === "pwn" || domainId === "rev-native") {
+		commands.add(`re_native_runtime run${suffix}`);
+		commands.add(`re_exploit_lab run${suffix} 3`);
+	}
+	if (domainId === "mobile") commands.add(`re_mobile_runtime run${suffix}`);
+	if (domainId === "mobile-ios") {
+		commands.add(`re_lane plan ipa-inventory${suffix}`);
+		commands.add(`re_mobile_runtime run${suffix}`);
+	}
+	if (domainId === "exploit-reliability") commands.add(`re_exploit_lab run${suffix} 5`);
+	if (domainId === "pcap-dfir") commands.add(`re_lane plan extract${suffix}`);
+	if (domainId === "memory-forensics") commands.add(`re_lane plan process-network${suffix}`);
+	if (domainId === "firmware-iot") commands.add(`re_lane plan extract${suffix}`);
+	if (domainId === "crypto") commands.add(`re_lane plan solver${suffix}`);
+	if (domainId === "cloud-identity") commands.add(`re_lane plan privilege${suffix}`);
+	if (domainId === "malware-analysis") commands.add(`re_lane plan behavior${suffix}`);
+	if (domainId === "agent-security") commands.add(`re_lane plan injection${suffix}`);
+	if (/tool|missing|bootstrap/i.test(proofExit)) commands.add("re_bootstrap plan <missing-tool>");
+	return Array.from(commands).slice(0, 8);
+}
+
+function domainProofExitArtifactCorpus(mission?: MissionState): { sources: string[]; text: string; hash: string } {
+	ensureReconStorage();
+	const paths = new Set<string>([
+		evidenceLedgerPath(),
+		...recentMarkdownArtifacts(evidenceRunsDir(), 4),
+		...recentMarkdownArtifacts(evidenceMapsDir(), 2),
+		...recentMarkdownArtifacts(evidenceBrowserDir(), 2),
+		...recentMarkdownArtifacts(evidenceWebAuthzDir(), 2),
+		...recentMarkdownArtifacts(evidenceNativeRuntimeDir(), 2),
+		...recentMarkdownArtifacts(evidenceMobileRuntimeDir(), 2),
+		...recentMarkdownArtifacts(evidenceExploitLabDir(), 2),
+		...recentMarkdownArtifacts(evidenceReplayersDir(), 2),
+		...recentMarkdownArtifacts(evidenceVerifiersDir(), 2),
+		...recentMarkdownArtifacts(evidenceCompilersDir(), 2),
+		...recentMarkdownArtifacts(evidenceProofLoopsDir(), 2),
+		...recentMarkdownArtifacts(evidenceKnowledgeDir(), 2),
+	]);
+	const taskHints = mission
+		? [`mission_task: ${mission.task}`, `mission_route: ${mission.route.domain}`, ...mission.lanes.flatMap((lane) => [lane.name, lane.objective, ...lane.next])]
+		: [];
+	const parts: string[] = [...taskHints];
+	const sources: string[] = [];
+	for (const path of paths) {
+		if (!path || !existsSync(path)) continue;
+		const text = readText(path);
+		if (!text.trim()) continue;
+		sources.push(path);
+		parts.push(`\n--- artifact:${path} ---\n${truncateMiddle(text, 16000)}`);
+	}
+	const corpus = parts.join("\n");
+	return {
+		sources,
+		text: corpus,
+		hash: createHash("sha256").update(corpus).digest("hex"),
+	};
+}
+
+function buildDomainProofExitClosure(mission = readCurrentMission(), domainFilter?: string): DomainProofExitClosureV1 {
+	const routeDomain = mission?.route.domain;
+	const domainId = domainFilter || toolchainDomainIdForRoute(routeDomain);
+	const capability = domainId ? buildToolchainDomainCapability(domainId).domains[0] : undefined;
+	const corpus = domainProofExitArtifactCorpus(mission);
+	if (!mission || !domainId || !capability) {
+		return {
+			kind: "DomainProofExitClosureV1",
+			schemaVersion: 1,
+			generatedAt: new Date().toISOString(),
+			missionId: mission?.id,
+			routeDomain,
+			domainId,
+			status: "partial",
+			toolchainStatus: capability?.status,
+			artifactCorpusHash: corpus.hash,
+			artifactSources: corpus.sources,
+			rows: [],
+			matchedProofExits: [],
+			missingProofExits: [],
+			blockers: mission ? ["domain proof-exit route is not mapped to a specialized toolchain domain"] : ["no active mission"],
+			nextRuntimeCommands: ["re_mission new <task>", "re_route <task>", "re_toolchain_domain show"],
+		};
+	}
+	const rows = capability.proofExit.map<DomainProofExitRowV1>((proofExit) => {
+		const regexes = proofExitRegexes(proofExit);
+		const matchedLines = uniqueNonEmpty(
+			regexes.flatMap((pattern) => interestingLines(corpus.text, pattern, 6)),
+			10,
+		);
+		const matchedArtifacts = corpus.sources.filter((path) => {
+			const text = readText(path);
+			return regexes.some((pattern) => pattern.test(text));
+		});
+		return {
+			proofExit,
+			status: matchedLines.length || matchedArtifacts.length ? "matched" : "missing",
+			matchedArtifacts: matchedArtifacts.slice(0, 8),
+			matchedLines: matchedLines.slice(0, 8),
+			expectedEvidence: proofExitExpectedEvidence(proofExit),
+			nextCommands: domainProofExitNextCommands(domainId, proofExit, mission),
+		};
+	});
+	const missingProofExits = rows.filter((row) => row.status === "missing").map((row) => row.proofExit);
+	const matchedProofExits = rows.filter((row) => row.status === "matched").map((row) => row.proofExit);
+	const status: DomainProofExitClosureStatus =
+		missingProofExits.length === 0
+			? "passed"
+			: matchedProofExits.length > 0 || corpus.sources.length > 1
+				? "partial"
+				: "blocked";
+	const blockers = [
+		...(capability.status === "blocked" ? [`toolchain critical_gap for ${domainId}: ${capability.missingRequired.join(", ") || "requiredAny missing"}`] : []),
+		...missingProofExits.map((proofExit) => `domain_proof_exit_missing:${domainId}:${proofExit}`),
+	];
+	return {
+		kind: "DomainProofExitClosureV1",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		missionId: mission.id,
+		routeDomain,
+		domainId,
+		status,
+		toolchainStatus: capability.status,
+		artifactCorpusHash: corpus.hash,
+		artifactSources: corpus.sources,
+		rows,
+		matchedProofExits,
+		missingProofExits,
+		blockers,
+		nextRuntimeCommands: uniqueNonEmpty(
+			[
+				`re_toolchain_domain show ${domainId}`,
+				...rows.filter((row) => row.status === "missing").flatMap((row) => row.nextCommands),
+				"re_verifier matrix",
+				"re_proof_loop run <target> 4 2",
+				"re_complete audit",
+			],
+			14,
+		),
+	};
+}
+
+function formatDomainProofExitClosure(report: DomainProofExitClosureV1, path?: string): string {
+	return [
+		"domain_proof_exit_closure:",
+		"DomainProofExitClosureV1: true",
+		path ? `artifact: ${path}` : undefined,
+		`status: ${report.status}`,
+		`domain: ${report.domainId ?? "unmapped"}`,
+		`route: ${report.routeDomain ?? "unknown"}`,
+		`toolchain_status: ${report.toolchainStatus ?? "unknown"}`,
+		`artifact_corpus_sha256: ${report.artifactCorpusHash}`,
+		`artifact_sources: ${report.artifactSources.length}`,
+		"proof_exit_rows:",
+		...(report.rows.length
+			? report.rows.flatMap((row) => [
+					`- proof_exit: ${row.proofExit}`,
+					`  status: ${row.status}`,
+					`  matched_artifacts: ${row.matchedArtifacts.join(", ") || "none"}`,
+					`  matched_lines: ${row.matchedLines.map((line) => truncateMiddle(line.replace(/\s+/g, " "), 220)).join(" | ") || "none"}`,
+					`  expected_evidence: ${row.expectedEvidence.join(" | ")}`,
+					`  next: ${row.nextCommands.slice(0, 5).join(" | ")}`,
+				])
+			: ["- none"]),
+		"missing:",
+		...(report.missingProofExits.length ? report.missingProofExits.map((item) => `- ${item}`) : ["- none"]),
+		"blockers:",
+		...(report.blockers.length ? report.blockers.map((item) => `- ${item}`) : ["- none"]),
+		"next_runtime_commands:",
+		...report.nextRuntimeCommands.map((item) => `- ${item}`),
+	]
+		.filter(Boolean)
+		.join("\n");
+}
+
+function writeDomainProofExitClosureArtifact(report: DomainProofExitClosureV1): string {
+	ensureReconStorage();
+	const path = join(
+		evidenceToolchainDir(),
+		`${report.generatedAt.replace(/[:.]/g, "-")}-${report.domainId ?? "unmapped"}-domain-proof-exit-closure.md`,
+	);
+	writeFileSync(path, `${formatDomainProofExitClosure(report)}\n\n## JSON\n\n\`\`\`json\n${JSON.stringify(report, null, 2)}\n\`\`\`\n`, "utf-8");
+	appendEvidence({
+		kind: "artifact",
+		title: "domain-proof-exit-closure",
+		fact: `DomainProofExitClosureV1 domain=${report.domainId ?? "unmapped"} status=${report.status} missing=${report.missingProofExits.length}`,
+		command: "re_domain_proof_exit show",
+		path,
+		hash: report.artifactCorpusHash,
+		verify: `cat ${path}`,
+		confidence: "domain proof-exit closure bound to ToolchainDomainCapabilityV1 and runtime artifacts",
+	});
+	updateMissionGate("minimal_path_proven", report.status === "passed" ? "done" : report.matchedProofExits.length ? "pending" : "blocked", `DomainProofExitClosureV1 ${report.status}`);
+	return path;
+}
+
+function buildDomainProofExitClosureOutput(action: "show" | "write" = "show", domainFilter?: string): string {
+	const report = buildDomainProofExitClosure(readCurrentMission(), domainFilter);
+	if (action === "write") {
+		const path = writeDomainProofExitClosureArtifact(report);
+		return formatDomainProofExitClosure(report, path);
+	}
+	return formatDomainProofExitClosure(report);
+}
+
 function bootstrapCatalogFor(tool: string): BootstrapCatalogEntry | undefined {
 	return TOOL_BOOTSTRAP_CATALOG.find((entry) => entry.tool.toLowerCase() === tool.toLowerCase());
 }
@@ -29064,6 +30342,13 @@ function toolsFromCommand(command: string): string[] {
 		"adb",
 		"frida",
 		"frida-ps",
+		"objection",
+		"ios-deploy",
+		"class-dump",
+		"otool",
+		"nm",
+		"codesign",
+		"plutil",
 		"curl",
 		"rg",
 		"jq",
@@ -29073,9 +30358,18 @@ function toolsFromCommand(command: string): string[] {
 		"mitmproxy",
 		"nmap",
 		"ffuf",
+		"feroxbuster",
+		"gobuster",
+		"nikto",
+		"dalfox",
+		"arjun",
+		"nuclei",
+		"httpx",
+		"katana",
 		"tshark",
 		"capinfos",
 		"tcpdump",
+		"volatility3",
 		"binwalk",
 		"foremost",
 		"unblob",
@@ -29117,10 +30411,19 @@ function recommendedToolsForRoute(route: RoutePlan, pack?: LaneCommandPack, map?
 		for (const tool of ["checksec", "gdb", "ROPgadget", "ropper", "one_gadget", "patchelf"]) tools.add(tool);
 	}
 	if (domain === "Mobile / Android") {
-		for (const tool of ["jadx", "apktool", "adb", "frida", "frida-ps", "aapt", "readelf", "r2"]) tools.add(tool);
+		for (const tool of ["jadx", "apktool", "adb", "frida", "frida-ps", "objection", "aapt", "readelf", "r2"])
+			tools.add(tool);
+	}
+	if (domain === "Mobile / iOS") {
+		for (const tool of ["unzip", "plutil", "otool", "nm", "codesign", "class-dump", "frida", "frida-ps", "objection"])
+			tools.add(tool);
 	}
 	if (domain === "Web / API security") {
 		for (const tool of ["curl", "node", "nmap", "ffuf", "gobuster", "sqlmap", "playwright"]) tools.add(tool);
+	}
+	if (domain === "Web vulnerability scanning") {
+		for (const tool of ["curl", "httpx", "katana", "ffuf", "feroxbuster", "gobuster", "nuclei", "nikto", "dalfox", "sqlmap"])
+			tools.add(tool);
 	}
 	if (domain === "Frontend JS reverse") {
 		for (const tool of ["node", "npm", "curl", "playwright", "rg"]) tools.add(tool);
@@ -29148,6 +30451,9 @@ function recommendedToolsForRoute(route: RoutePlan, pack?: LaneCommandPack, map?
 	}
 	if (/DFIR/i.test(domain)) {
 		for (const tool of ["tshark", "capinfos", "tcpdump", "exiftool", "binwalk", "foremost"]) tools.add(tool);
+	}
+	if (domain === "Memory forensics") {
+		for (const tool of ["volatility3", "file", "strings", "yara", "python3", "foremost"]) tools.add(tool);
 	}
 	if (/Malware/i.test(domain)) {
 		for (const tool of [
@@ -37132,7 +38438,7 @@ function appendProofLoopMemoryEvent(proof: ProofLoopArtifact, artifactPath: stri
 }
 
 function appendCompletionMemoryEvent(
-	audit: { ready: boolean; blockers: string[]; warnings: string[]; mission?: MissionState },
+	audit: CompletionAudit,
 	artifactPath?: string,
 ): MemoryEventV1 | undefined {
 	if (!audit.mission) return undefined;
@@ -37146,6 +38452,9 @@ function appendCompletionMemoryEvent(
 		lessons: uniqueNonEmpty(
 			[
 				`Completion audit ${audit.ready ? "ready" : "blocked"}: blockers=${audit.blockers.length} warnings=${audit.warnings.length}.`,
+				audit.domainProofExitClosure
+					? `DomainProofExitClosureV1 ${audit.domainProofExitClosure.domainId ?? "unmapped"} status=${audit.domainProofExitClosure.status} missing=${audit.domainProofExitClosure.missingProofExits.length}.`
+					: undefined,
 				...audit.warnings,
 			],
 			32,
@@ -37174,6 +38483,7 @@ function appendCompletionMemoryEvent(
 				latestProofLoopArtifactPath(),
 				latestCompilerArtifactPath(),
 				latestSupervisorArtifactPath(),
+				...(audit.domainProofExitClosure?.artifactSources ?? []),
 			],
 			80,
 		),
@@ -37380,6 +38690,19 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 			const text = buildToolchainDomainCapabilityOutput("show", parts.join(" ") || undefined);
 			updateMissionGate("tool_index_checked", "done", `/re-toolchain ${action}`);
 			sendDisplayMessage(pi, "REPI Toolchain Domain Capability", truncateMiddle(text, 16000));
+		},
+	});
+	pi.registerCommand("re-domain-proof-exit", {
+		description:
+			"Show/write REPI domain proof-exit closure from runtime artifacts: /re-domain-proof-exit [show|write] [domain]",
+		handler: async (args) => {
+			const parts = args.trim().split(/\s+/).filter(Boolean);
+			const first = parts[0];
+			const action = first === "write" ? (parts.shift() as "write") : "show";
+			if (first === "show") parts.shift();
+			const domain = parts.join(" ") || undefined;
+			const text = buildDomainProofExitClosureOutput(action, domain);
+			sendDisplayMessage(pi, "REPI Domain Proof Exit Closure", truncateMiddle(text, 18000));
 		},
 	});
 	pi.registerCommand("re-memory", {
@@ -39763,6 +41086,31 @@ function installReconTools(pi: ExtensionAPI): void {
 			return {
 				content: [{ type: "text" as const, text: truncateMiddle(formatToolchainDomainCapability(report, path), 20000) }],
 				details: { action: params.action, domain: params.domain, path, coverage: report.coverage } as Record<string, unknown>,
+			};
+		},
+	});
+	pi.registerTool({
+		name: "re_domain_proof_exit",
+		label: "RE Domain Proof Exit Closure",
+		description:
+			"Check whether the active reverse/pentest domain has runtime evidence satisfying ToolchainDomainCapabilityV1 proof-exit criteria before final completion.",
+		promptSnippet:
+			"Use re_domain_proof_exit before final claims to convert missing domain proof exits into concrete next commands.",
+		promptGuidelines: [
+			"Call re_domain_proof_exit show after re_lane/re_native_runtime/re_live_browser/replayer/proof-loop artifacts exist.",
+			"Treat domain_proof_exit_missing blockers as commands to run, not as narrative refusal.",
+			"Use write mode to persist a DomainProofExitClosureV1 artifact for release/completion audit.",
+		],
+		parameters: Type.Object({
+			action: Type.Union([Type.Literal("show"), Type.Literal("write")]),
+			domain: Type.Optional(Type.String()),
+		}),
+		async execute(_toolCallId, params) {
+			const report = buildDomainProofExitClosure(readCurrentMission(), params.domain);
+			const path = params.action === "write" ? writeDomainProofExitClosureArtifact(report) : undefined;
+			return {
+				content: [{ type: "text" as const, text: truncateMiddle(formatDomainProofExitClosure(report, path), 20000) }],
+				details: { action: params.action, domain: params.domain, path, status: report.status, missingProofExits: report.missingProofExits } as Record<string, unknown>,
 			};
 		},
 	});

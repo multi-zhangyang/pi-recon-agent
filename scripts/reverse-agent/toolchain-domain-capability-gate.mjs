@@ -15,7 +15,7 @@ const sha256 = (value) => createHash("sha256").update(String(value ?? "")).diges
 const shortHash = (value) => sha256(value).slice(0, 24);
 const check = (id, ok, evidence = {}) => ({ id, status: ok ? "pass" : "fail", evidence });
 
-const DOMAIN_MARKERS = ["domain:web-api", "domain:rev-native", "domain:pwn", "domain:mobile", "domain:pcap-dfir", "domain:firmware-iot", "domain:crypto"];
+const DOMAIN_MARKERS = ["domain:web-api", "domain:web-scan", "domain:frontend-js", "domain:rev-native", "domain:pwn", "domain:mobile", "domain:mobile-ios", "domain:pcap-dfir", "domain:memory-forensics", "domain:firmware-iot", "domain:crypto", "domain:cloud-identity", "domain:exploit-reliability"];
 
 const DOMAIN_TOOLCHAINS = [
 	{
@@ -27,6 +27,16 @@ const DOMAIN_TOOLCHAINS = [
 		playbookMarkers: ["route", "auth/session", "IDOR/BOLA", "JS signing", "XHR/WS"],
 		commandScaffolds: ["re_live_browser", "re_web_authz_state", "re_map", "re_lane", "re_operator"],
 		proofExit: ["principal matrix", "object ownership", "state rollback", "signed replay divergence"],
+	},
+	{
+		id: "web-scan",
+		label: "Web vulnerability scanning: scope, crawl, templates, manual replay",
+		requiredAny: ["curl", "python3"],
+		preferred: ["httpx", "katana", "ffuf", "feroxbuster", "gobuster", "nuclei", "nikto", "dalfox", "sqlmap"],
+		fallbacks: ["curl", "python3", "node", "rg"],
+		playbookMarkers: ["web scanner scope", "web scanner crawl", "web scanner template", "web scanner manual replay"],
+		commandScaffolds: ["re_lane", "re_replayer", "re_verifier", "re_proof_loop"],
+		proofExit: ["scope baseline", "crawl corpus", "scanner finding queue", "manual replay verifier"],
 	},
 	{
 		id: "frontend-js",
@@ -62,11 +72,21 @@ const DOMAIN_TOOLCHAINS = [
 		id: "mobile",
 		label: "Android/APK: manifest, jadx/apktool, ADB/Frida hooks",
 		requiredAny: ["unzip", "strings"],
-		preferred: ["jadx", "apktool", "adb", "frida", "frida-ps", "aapt", "r2"],
+		preferred: ["jadx", "apktool", "adb", "frida", "frida-ps", "objection", "aapt", "r2"],
 		fallbacks: ["unzip", "strings", "readelf", "python3"],
 		playbookMarkers: ["APK", "manifest", "smali", "Frida", "Java crypto", "native compare"],
 		commandScaffolds: ["re_mobile_runtime", "re_lane", "re_verifier", "re_knowledge_graph"],
 		proofExit: ["manifest/package map", "Java/native hook", "anti-debug evidence", "runtime anchors"],
+	},
+	{
+		id: "mobile-ios",
+		label: "iOS/IPA: Info.plist, entitlements, Mach-O/classes, Frida/objection hooks",
+		requiredAny: ["unzip", "strings", "file"],
+		preferred: ["plutil", "otool", "nm", "codesign", "class-dump", "frida", "frida-ps", "objection"],
+		fallbacks: ["unzip", "strings", "python3", "file"],
+		playbookMarkers: ["iOS IPA", "Info.plist", "Mach-O/class", "iOS Frida", "keychain"],
+		commandScaffolds: ["re_mobile_runtime", "re_lane", "re_replayer", "re_verifier"],
+		proofExit: ["IPA inventory", "Mach-O/class map", "Frida/objection hook", "network/keychain replay"],
 	},
 	{
 		id: "pcap-dfir",
@@ -77,6 +97,16 @@ const DOMAIN_TOOLCHAINS = [
 		playbookMarkers: ["tcp.stream", "HTTP object", "DNS/TLS", "credential timeline", "transform-chain"],
 		commandScaffolds: ["re_lane", "re_knowledge_graph", "re_verifier", "re_replayer"],
 		proofExit: ["flow conversation", "follow-stream", "carved object", "timeline evidence"],
+	},
+	{
+		id: "memory-forensics",
+		label: "Memory forensics: image profile, process/network, credentials, timeline/carve",
+		requiredAny: ["file", "strings", "python3"],
+		preferred: ["volatility3", "yara", "foremost"],
+		fallbacks: ["file", "strings", "python3", "yara"],
+		playbookMarkers: ["memory forensics image", "memory forensics process", "memory forensics credential", "memory forensics timeline"],
+		commandScaffolds: ["re_lane", "re_knowledge_graph", "re_verifier", "re_replayer"],
+		proofExit: ["image profile", "process/network map", "credential/artifact proof", "timeline/carve evidence"],
 	},
 	{
 		id: "firmware-iot",
@@ -232,7 +262,7 @@ function validateReport(report) {
 	if (report.kind !== "ToolchainDomainCapabilityV1") errors.push("kind_invalid");
 	if (report.runtime !== "runtime:toolchain-doctor") errors.push("runtime_marker_missing");
 	const ids = new Set(report.domains.map((domain) => domain.domainId));
-	for (const id of ["web-api", "rev-native", "pwn", "mobile", "pcap-dfir", "firmware-iot", "crypto"]) {
+	for (const id of ["web-api", "web-scan", "frontend-js", "rev-native", "pwn", "mobile", "mobile-ios", "pcap-dfir", "memory-forensics", "firmware-iot", "crypto", "cloud-identity", "exploit-reliability"]) {
 		if (!ids.has(id)) errors.push(`domain_missing:${id}`);
 	}
 	for (const domain of report.domains) {
@@ -277,7 +307,7 @@ function main() {
 		return { id, rejected: !result.ok, errors: result.errors };
 	});
 	checks.push(check("negative:toolchain-domain-report", negatives.every((row) => row.rejected), { negatives }));
-	checks.push(markerCheck("code:toolchain-domain-runtime", "packages/coding-agent/src/core/recon-profile.ts", ["ToolchainDomainCapabilityV1", "TOOLCHAIN_DOMAIN_CAPABILITY_MATRIX", "buildToolchainDomainCapability", "formatToolchainDomainCapability", "re_toolchain_domain", "runtime:toolchain-doctor", "domain:web-api", "domain:rev-native", "domain:pwn", "domain:mobile", "domain:pcap-dfir", "domain:firmware-iot", "fallback_available"]));
+	checks.push(markerCheck("code:toolchain-domain-runtime", "packages/coding-agent/src/core/recon-profile.ts", ["ToolchainDomainCapabilityV1", "TOOLCHAIN_DOMAIN_CAPABILITY_MATRIX", "buildToolchainDomainCapability", "formatToolchainDomainCapability", "re_toolchain_domain", "runtime:toolchain-doctor", "domain:web-api", "domain:web-scan", "domain:frontend-js", "domain:rev-native", "domain:pwn", "domain:mobile", "domain:mobile-ios", "domain:pcap-dfir", "domain:memory-forensics", "domain:firmware-iot", "domain:crypto", "domain:cloud-identity", "domain:exploit-reliability", "fallback_available"]));
 	checks.push(markerCheck("profile:toolchain-domain-runtime-mirror", "repi-profile/extensions/reverse-pentest-core.ts", ["ToolchainDomainCapabilityV1", "TOOLCHAIN_DOMAIN_CAPABILITY_MATRIX", "buildToolchainDomainCapability", "formatToolchainDomainCapability", "re_toolchain_domain", "runtime:toolchain-doctor"]));
 	checks.push(markerCheck("harness:toolchain-domain", "scripts/reverse-agent/repi-top-harness.mjs", ["gate:toolchain-domain-capability", "toolchain:domain-capability-hard-eval", "ToolchainDomainCapabilityV1", "child:gate:toolchain-domain-capability"]));
 	checks.push(markerCheck("autonomy:toolchain-domain", "scripts/reverse-agent/autonomy-control-plane.mjs", ["toolchain_domain_capability_gate", "ToolchainDomainCapabilityV1", "runtime:toolchain-doctor", "domain_toolchain_matrix"]));

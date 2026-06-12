@@ -113,7 +113,8 @@
 		"gate:capability-release-bundle": "node scripts/reverse-agent/capability-release-bundle-gate.mjs . --strict",
 		"gate:release-ci-pipeline": "node scripts/reverse-agent/release-ci-pipeline-gate.mjs . --strict",
 		"gate:release-evidence-index": "node scripts/reverse-agent/release-evidence-index-gate.mjs . --strict",
-		"gate:toolchain-domain-capability": "node scripts/reverse-agent/toolchain-domain-capability-gate.mjs . --strict"
+		"gate:toolchain-domain-capability": "node scripts/reverse-agent/toolchain-domain-capability-gate.mjs . --strict",
+		"gate:domain-proof-exit-closure": "node scripts/reverse-agent/domain-proof-exit-closure-gate.mjs . --strict"
 	},
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "0.0.26",

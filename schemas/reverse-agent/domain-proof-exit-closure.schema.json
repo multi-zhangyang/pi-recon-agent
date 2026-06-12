@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repi.local/schemas/domain-proof-exit-closure.schema.json",
+  "title": "DomainProofExitClosureV1",
+  "type": "object",
+  "required": ["kind", "schemaVersion", "generatedAt", "status", "artifactCorpusHash", "rows", "matchedProofExits", "missingProofExits", "blockers", "nextRuntimeCommands"],
+  "properties": {
+    "kind": { "const": "DomainProofExitClosureV1" },
+    "schemaVersion": { "const": 1 },
+    "generatedAt": { "type": "string" },
+    "missionId": { "type": "string" },
+    "routeDomain": { "type": "string" },
+    "domainId": { "type": "string" },
+    "status": { "enum": ["passed", "partial", "blocked"] },
+    "toolchainStatus": { "enum": ["ready", "degraded", "blocked"] },
+    "artifactCorpusHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "artifactSources": { "type": "array", "items": { "type": "string" } },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["proofExit", "status", "matchedArtifacts", "matchedLines", "expectedEvidence", "nextCommands"],
+        "properties": {
+          "proofExit": { "type": "string" },
+          "status": { "enum": ["matched", "missing"] },
+          "matchedArtifacts": { "type": "array", "items": { "type": "string" } },
+          "matchedLines": { "type": "array", "items": { "type": "string" } },
+          "expectedEvidence": { "type": "array", "items": { "type": "string" } },
+          "nextCommands": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "matchedProofExits": { "type": "array", "items": { "type": "string" } },
+    "missingProofExits": { "type": "array", "items": { "type": "string" } },
+    "blockers": { "type": "array", "items": { "type": "string", "pattern": "domain_proof_exit_missing|toolchain critical_gap|.*" } },
+    "nextRuntimeCommands": { "type": "array", "items": { "type": "string" } }
+  }
+}

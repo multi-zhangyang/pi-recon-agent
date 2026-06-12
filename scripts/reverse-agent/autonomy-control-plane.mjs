@@ -1108,6 +1108,24 @@ const REQUIREMENTS = [
 				markers: ["gate:toolchain-domain-capability", "toolchain:domain-capability-hard-eval", "ToolchainDomainCapabilityV1", "child:gate:toolchain-domain-capability"],
 			},
 			{
+				id: "domain_proof_exit_closure_gate",
+				description: "DomainProofExitClosureV1 把 ToolchainDomainCapabilityV1 的 proof-exit 接入 completion audit：final 前必须把 offset/leak/local verifier、principal matrix/object ownership/state rollback、crypto known-answer 等专业域退出条件绑定 runtime artifact，否则输出 domain_proof_exit_missing 并回到 operator/proof-loop。",
+				files: ["packages/coding-agent/src/core/recon-profile.ts", "scripts/reverse-agent/domain-proof-exit-closure-gate.mjs", "schemas/reverse-agent/domain-proof-exit-closure.schema.json"],
+				markers: ["DomainProofExitClosureV1", "domain_proof_exit_closure", "domain_proof_exit_missing", "buildDomainProofExitClosure", "re_domain_proof_exit"],
+			},
+			{
+				id: "domain_proof_exit_closure_npm_gate",
+				description: "package 暴露 gate:domain-proof-exit-closure，供顶级 harness 和 CI 验证专业 proof-exit 不游离于完成审计之外。",
+				files: ["package.json"],
+				markers: ["gate:domain-proof-exit-closure", "domain-proof-exit-closure-gate.mjs"],
+			},
+			{
+				id: "domain_proof_exit_closure_top_harness_gate",
+				description: "top harness 把 DomainProofExitClosureV1 接成 child gate，防止 completion 只看通用 gates 而忽略专业域 proof-exit。",
+				files: ["scripts/reverse-agent/repi-top-harness.mjs"],
+				markers: ["gate:domain-proof-exit-closure", "toolchain:domain-proof-exit-closure-hard-eval", "DomainProofExitClosureV1", "child:gate:domain-proof-exit-closure"],
+			},
+			{
 				id: "parallel_provider_worker_matrix_core_contract",
 				description: "ParallelProviderWorkerMatrixV1 把 provider matrix 提升为多 worker 并发 runtime 合同，绑定 claim-aware provider worker merge、timeout cancel 与 failure/repair。",
 				files: ["packages/coding-agent/src/core/recon-profile.ts"],

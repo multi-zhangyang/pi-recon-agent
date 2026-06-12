@@ -252,3 +252,29 @@ MemoryReplayEvaluatorV12: before trusting long-term memory, prefer `re_memory re
 MemoryStrategyCapsuleV13: when memory replay/quality suggests reusable strategy, run `re_memory strategy` and prefer promoted strategy capsules for operator planning. A strategy capsule must carry trigger conditions, recommended commands, verifier commands, fallback commands, avoid commands, and applicability boundaries before it is trusted.
 
 MemoryUxDashboardV16: 对长期记忆有疑问时先用 `re_memory status` 查看 `status-report.json` / `status-board.md`，用 `re_memory why <query>` 解释召回原因、score、命令和 lessons；需要人工治理时用 `re_memory promote <event-id>` / `re_memory demote <event-id>` / `re_memory forget <event-id>`，这些动作必须走 append_only_memory_governance，写入 `governance-ledger.jsonl`，不得直接重写历史记忆。
+
+## REPI capability floor update
+
+marker: user_perceived_capability_floor
+
+逆向/渗透/安全任务不要先给泛化建议。若用户觉得工具少、路线不专业或限制多，先暴露领域工具链：`re_toolchain_domain show <domain>` / `/re-toolchain show <domain>`，输出 `ToolchainDomainCapabilityV1`、`runtime:toolchain-doctor`、`fallback_available`、`critical_gap`、`proofExit`、`nextRuntimeCommands` 和 `recommendedInstallHints`。缺工具先 fallback，再 `re_bootstrap plan`。
+
+marker: tool_index_source_of_truth
+
+REPI runtime tool-index 的事实源是 `~/.repi/agent/recon/tools/tool-index.md`；`repi-profile/tools/tool-index.md` 只是 seed/docs；不要默认读 `.pi/tools/tool-index.md`，除非用户明确要求导入旧 Pi 状态。
+
+marker: restriction_to_operator_queue
+
+scope、账号、窗口、工具、env-gated runtime 或 final gate 不完整时，不停在“不能做”。把限制转成 `re_map`、`re_live_browser plan`、`re_lane plan/run`、`re_bootstrap plan`、`re_operator dispatch`、`re_proof_loop` 或一个精确缺口问题。
+
+marker: DomainProofExitClosureV1
+
+完成前用 `re_domain_proof_exit` / `/re-domain-proof-exit show|write [domain]` 生成 `domain_proof_exit_closure`。`domain_proof_exit_missing` 必须阻断最终 claim，并回到专项 runtime/verifier/proof-loop；不要用 narrative-only 结论放行。
+
+
+## 专业域扩展：web-scan / mobile-ios / memory-forensics
+
+- `web-scan`：当任务是漏洞扫描、目录扫描、资产发现、nuclei/ffuf/katana/sqlmap/dalfox/nikto 时，必须走 scope baseline → crawl corpus → scanner finding queue → manual replay verifier，不把扫描器输出直接当最终漏洞。关键 anchors：web scanner scope anchors、web scanner crawl corpus anchors、web scanner template finding anchors、web scanner manual replay anchors。
+- `mobile-ios`：当目标是 iOS/IPA/Objective-C/Swift/Keychain/越狱检测/TLS pinning 时，必须生成 IPA inventory、Info.plist/Entitlements、Mach-O/class/selector map、Frida/objection hook、network/keychain replay。关键 anchors：iOS IPA inventory anchors、iOS Mach-O/class/selector anchors、iOS Frida/objection hook anchors、iOS network/keychain replay anchors。
+- `memory-forensics`：当目标是 raw/vmem/memdump/dmp/hiberfil/pagefile/volatility/内存取证时，必须生成 image profile、process/network map、credential/artifact hunt、timeline/carve evidence。关键 anchors：memory forensics image/profile anchors、memory forensics process/network anchors、memory forensics credential/artifact anchors、memory forensics timeline/carve anchors。
+- ToolchainDomainCapabilityV1 domains include `web-scan`, `mobile-ios`, and `memory-forensics`; proof-exit 缺口必须进入 `domain_proof_exit_missing` 和下一条 `re_lane`/`re_verifier`/`re_proof_loop` 命令。

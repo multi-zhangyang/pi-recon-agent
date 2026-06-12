@@ -53,6 +53,65 @@ re_kernel → re_decision_core → re_map → re_operation → re_delegate
 - `re_verifier` / `re_compiler` / `re_replayer` / `re_autofix` / `re_proof_loop`：验证、报告编译、复现、修复、闭环证明。
 - `re_complete`：完成审计，阻断缺证据、未完成 compact resume、claim gate 缺口。
 
+### 专业工具链快速诊断
+
+marker: `toolchain_runtime_floor`
+
+遇到“工具少 / 路线不专业 / 不知道下一步怎么打”时，先让 REPI 输出领域工具链矩阵，而不是泛泛建议：
+
+```text
+/re-tools refresh
+/re-toolchain show
+/re-toolchain show pwn
+/re-toolchain show web-api
+/re-toolchain show crypto
+/re-bootstrap plan <missing-tool>
+```
+
+等价 tool：`re_toolchain_domain`。输出是 `ToolchainDomainCapabilityV1` / `runtime:toolchain-doctor`，包含 `presentRequired`、`missingPreferred`、`fallback_available`、`critical_gap`、`proofExit`、`recommendedInstallHints` 和 `nextRuntimeCommands`。
+
+marker: `domain_runbook_floor`
+
+每个逆向/渗透领域回答都应至少落到：最小 triage 命令、一个 runtime 命令、预期 evidence anchors、proof-exit、fallback/bootstrap 命令。缺工具不是停止理由，先用 fallback；fallback 不够再 `re_bootstrap plan`。
+
+
+### 专业域新增能力：Web 扫描、iOS、内存取证
+
+REPI 现在把用户最容易感到“工具少”的三类任务下沉成可执行 command pack，而不是只给建议：
+
+- `web-scan`：`httpx/katana/ffuf/feroxbuster/gobuster/nuclei/nikto/dalfox/sqlmap` + curl verifier；输出 `web scanner scope anchors`、`crawl corpus`、`scanner finding queue`、`manual replay verifier`。
+- `mobile-ios`：IPA/Info.plist/Entitlements、Mach-O/class/selector、Frida/objection hook、Keychain/NSURLSession/CommonCrypto/TLS pinning replay。
+- `memory-forensics`：volatility3 image profile、process/network、credential/artifact hunt、timeline/carve；volatility 缺失时降级到 file/strings/yara。
+
+对应验证：
+
+```bash
+npm run gate:toolchain-domain-capability
+/re-toolchain show web-scan
+/re-toolchain show mobile-ios
+/re-toolchain show memory-forensics
+```
+
+### Domain proof-exit 完成闭环
+
+marker: `DomainProofExitClosureV1`
+
+`re_complete audit` 现在不只看通用 gates，还会把当前任务路由映射到 `ToolchainDomainCapabilityV1` 的专业 proof-exit：例如 pwn 必须闭合 `offset / leak source / controllable bytes / local verifier`，Web/API 必须闭合 `principal matrix / object ownership / state rollback / signed replay divergence`，Web scan 必须闭合 `scope baseline / crawl corpus / scanner finding queue / manual replay verifier`，iOS 必须闭合 `IPA inventory / Mach-O/class map / Frida/objection hook / network/keychain replay`，Memory forensics 必须闭合 `image profile / process/network map / credential/artifact proof / timeline/carve evidence`，Crypto 必须闭合 `parameter derivation / solver script / known-answer test / transform replay`。
+
+```text
+/re-domain-proof-exit show
+/re-domain-proof-exit write pwn
+re_domain_proof_exit {"action":"write","domain":"crypto"}
+npm run gate:domain-proof-exit-closure
+```
+
+如果缺口存在，输出 `domain_proof_exit_closure` 与 `domain_proof_exit_missing:<domain>:<proof-exit>`，并给出下一条 `re_lane` / `re_verifier` / `re_proof_loop` 命令，不会用 narrative-only 结论放行。
+
+marker: `restriction_to_operator_queue`
+
+scope 不完整、工具缺失、env-gated runtime 或 final gate blocked 都必须转成 operator queue：`re_map`、`re_live_browser plan`、`re_lane plan/run`、`re_bootstrap plan`、`re_operator dispatch`、`re_proof_loop`。不要停在“不能做”。
+
+
 ### 2. 已接入的控制面
 
 - `ReconParallelPlanV1`：并行 worker plan、coverage、release gate metadata。
@@ -100,7 +159,7 @@ re_kernel → re_decision_core → re_map → re_operation → re_delegate
 - Swarm provider manifest parity：`SwarmProviderManifestParityGateV1` / `npm run gate:swarm-provider-manifest-parity` 把 `re_swarm` command-level `SubagentRuntimeManifestV1`、`WorkerChildSessionRuntimeBatchV1` 与 `ParallelProviderWorkerMatrixV1` 拉到同一个 parity contract：workerId、claimRefs、mergeKey、stdout/stderr/transcript hash、provider env-ref-only、failure/repair refs 必须一致；新增 multi-provider 共享 claim/failure/repair merge ledger、live provider-backed shared ledger matrix、ProviderBackedLongWindowSharedMergeLedgerV1 四段长窗口 ledger，以及 ProviderWorkerExtendedRetryManifestChainV1 七次 retry attempt manifest chain，要求 retry attempt 单调、同 signature 且绑定同一 runtime manifest hash；all_child_sessions_match_parity_rows 逐 worker 校验所有 child sessions 的 model/sessionDir/hash/mergeKey/claimRefs/failureRepairRefs，child-session-nonfirst-row-drift 负例会阻断；负例覆盖 workerId mismatch、claim ref dropped、missing runtime hash、literal provider secret、failure/repair unlinked、single-provider matrix、shared ledger missing worker、retry/repair manifest unbound、provider window missing、retry non-monotonic、manifest drift、long-window too short、extended retry too short 和 long-window secret leak。
 - Provider runtime matrix：新增 `ProviderRuntimeMatrixV1` hard-eval，把自定义模型接入从单 OpenAI-compatible smoke 扩展到 **OpenAI Chat Completions-compatible**、**OpenAI Responses-compatible** 与 **Anthropic-compatible** 三类主流 provider runtime。`npm run gate:provider-runtime-matrix` 会起本地 mock provider，同时配置 isolated `~/.repi/agent/models.json`，验证 `repi --list-models`、`repi --provider ... --model ... -p ...`、streaming request、env-ref-only API key、Authorization / x-api-key 来源、request-log/transcript/stdout/stderr hash、无 `.pi` profile 污染、无 update banner 和无 literal secret；负例覆盖缺 env-ref、错误 endpoint、Responses case 缺失、Anthropic case 缺失、update banner 泄漏和 list-models 缺 provider。
 - Provider Endpoint Doctor：新增 `ProviderEndpointDoctorV1` runtime 子命令与 hard-eval。`repi provider-doctor --base-url <url> --model <id> --api auto` 会自动探测 OpenAI Chat Completions / OpenAI Responses / Anthropic Messages 三类 endpoint，输出可直接复制到 `~/.repi/agent/models.json` 的 env-ref-only template；如果 `/v1/responses` 返回 `endpoint_not_found` 但 `/v1/chat/completions` 可用，会明确建议 `api: "openai-completions"`，不会静默 fallback。`npm run gate:provider-endpoint-doctor` 用本地 mock 网关验证 endpoint 诊断、推荐配置、secret redaction、无 `.pi` 污染和无 update banner。
-- Toolchain Domain Capability：新增 `ToolchainDomainCapabilityV1` / `re_toolchain_domain` / `/re-toolchain`，把专业逆向/渗透工具链按 `web-api`、`frontend-js`、`rev-native`、`pwn`、`mobile`、`pcap-dfir`、`firmware-iot`、`crypto`、`cloud-identity`、`exploit-reliability` 做成 runtime-backed matrix。它读取本机 tool-index，输出 required/preferred/fallback、`fallback_available`、`critical_gap`、proof-exit 和下一条 `re_lane`/`re_bootstrap`/专项 runtime 命令，避免“工具少/只会泛化建议”。`npm run gate:toolchain-domain-capability` 会用 `runtime:toolchain-doctor`、负例和 source markers 验证该能力。
+- Toolchain Domain Capability：新增 `ToolchainDomainCapabilityV1` / `re_toolchain_domain` / `/re-toolchain`，把专业逆向/渗透工具链按 `web-api`、`web-scan`、`frontend-js`、`rev-native`、`pwn`、`mobile`、`mobile-ios`、`pcap-dfir`、`memory-forensics`、`firmware-iot`、`crypto`、`cloud-identity`、`exploit-reliability` 做成 runtime-backed matrix。它读取本机 tool-index，输出 required/preferred/fallback、`fallback_available`、`critical_gap`、proof-exit 和下一条 `re_lane`/`re_bootstrap`/专项 runtime 命令，避免“工具少/只会泛化建议”。`npm run gate:toolchain-domain-capability` 会用 `runtime:toolchain-doctor`、负例和 source markers 验证该能力。
 - Provider failure injection：新增 `ProviderFailureInjectionReportV1` hard-eval，把 provider 失败路径接入 canonical `FailureLedgerEventV1` / `RepairQueueItemV1`。`npm run gate:provider-failure-injection` 会用真实 `repi --provider ... -p ...` 打本地 mock provider 的 HTTP 500、malformed SSE、Anthropic error event 三类失败，验证非零退出、失败文本捕获、request-log/transcript/stdout/stderr artifact、failure↔repair signature 链接、append-only writeback、exhausted 后 `escalate` 且不继续盲 retry，并用 duplicate signature、exhausted unpaused rerun、loose field、missing repair 负例保护 failure/repair validator。
 - Repair rollback policy：`RepairRollbackPolicyV1` 已从 hard-eval 推进到 `re_autofix` runtime wiring。`re_autofix plan/apply` 发现 state-changing `patch_queue` 时会写 live `repairRollbackPolicyPath`（`*-repair-rollback-policy.json`），固化 baseline snapshot、allowlist、regression gates、rollback restore proof，并把 rollback 型 `FailureLedgerEventV1` / `RepairQueueItemV1` 写入 canonical ledger；`npm run gate:repair-rollback-policy` 同时验证临时 workspace baseline→repair→rollback 和 `runtime:repair-rollback-live-wiring`，负例覆盖 baseline missing、allowlist violation、rollback not restored、missing regression gate 和 failure/repair unlinked。
 - Tool call trace ledger：新增 `ToolCallTraceLedgerV1` hard-eval，把 `tool_call` / `tool_result` 变成 append-only runtime trace。`npm run gate:tool-call-trace-ledger` 会触发真实 REPI extension hook，写 `~/.repi/agent/recon/evidence/tool-calls/tool-call-trace.jsonl` 和 `tool-call-trace-report.json`，验证 toolCallId、输入/输出 sha256、脱敏预览、replay hint、hash-chain、result 必须有 prior call，并用 hash drift、secret leak、missing output hash、missing replay 负例保护工具调用可观测性。
