@@ -15,13 +15,23 @@
     "keepRecentTokens": 36000
   },
   "memory": {
+    "schemaVersion": 2,
+    "mode": "scoped",
+    "autoRecall": true,
     "autoInject": false,
-    "autoDeposit": false,
-    "startupDigest": "status",
-    "scopePolicy": "session",
+    "rawAutoInject": false,
+    "autoDeposit": "high-value",
+    "startupDigest": "scoped",
+    "scopePolicy": "mission+workspace+target",
+    "contextMemoryMode": "scoped",
     "includeGlobalMemoryInContextPack": false,
     "activeRecall": false,
-    "maxInjectedTokens": 1200
+    "maxInjectedTokens": 1200,
+    "startupBudgetTokens": 800,
+    "contextPackBudgetTokens": 1200,
+    "maxStartupItems": 5,
+    "minRecallScore": 0.35,
+    "rawTranscriptRetention": "external-only"
   },
   "branchSummary": {
     "reserveTokens": 24576,

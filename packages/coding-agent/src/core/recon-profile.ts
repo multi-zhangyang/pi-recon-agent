@@ -6070,16 +6070,27 @@ function memoryVectorSearchReportPath(): string {
 }
 
 type RepiMemoryStartupDigestMode = "off" | "status" | "scoped" | "full";
-type RepiMemoryScopePolicy = "session" | "workspace" | "target" | "global";
+type RepiMemoryAutoDepositMode = "off" | "high-value" | "all";
+type RepiMemoryContextMode = "off" | "scoped" | "global";
+type RepiMemoryScopePolicy = "session" | "workspace" | "target" | "global" | "mission+workspace+target";
 
 type RepiMemoryRuntimeSettings = {
+	mode: "off" | "scoped" | "global";
+	autoRecall: boolean;
 	autoInject: boolean;
-	autoDeposit: boolean;
+	rawAutoInject: boolean;
+	autoDepositMode: RepiMemoryAutoDepositMode;
 	startupDigest: RepiMemoryStartupDigestMode;
+	contextMemoryMode: RepiMemoryContextMode;
 	includeGlobalMemoryInContextPack: boolean;
 	activeRecall: boolean;
 	scopePolicy: RepiMemoryScopePolicy;
 	maxInjectedTokens: number;
+	startupBudgetTokens: number;
+	contextPackBudgetTokens: number;
+	maxStartupItems: number;
+	minRecallScore: number;
+	rawTranscriptRetention: "external-only" | "inline";
 };
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -6107,17 +6118,46 @@ function numberSetting(value: unknown): number | undefined {
 }
 
 function normalizeMemoryStartupDigest(value: unknown): RepiMemoryStartupDigestMode {
-	const raw = String(value ?? "status").trim().toLowerCase();
+	const raw = String(value ?? "scoped").trim().toLowerCase();
 	if (raw === "off" || raw === "disabled" || raw === "none") return "off";
-	if (raw === "full" || raw === "legacy") return "full";
-	if (raw === "scoped" || raw === "scope") return "scoped";
-	return "status";
+	if (raw === "full" || raw === "legacy" || raw === "raw") return "full";
+	if (raw === "status") return "status";
+	return "scoped";
+}
+
+function normalizeMemoryMode(value: unknown): "off" | "scoped" | "global" {
+	const raw = String(value ?? "scoped").trim().toLowerCase();
+	if (raw === "off" || raw === "disabled" || raw === "none") return "off";
+	if (raw === "global" || raw === "legacy" || raw === "full") return "global";
+	return "scoped";
+}
+
+function normalizeMemoryContextMode(value: unknown): RepiMemoryContextMode {
+	const raw = String(value ?? "scoped").trim().toLowerCase();
+	if (raw === "off" || raw === "disabled" || raw === "none") return "off";
+	if (raw === "global" || raw === "full" || raw === "legacy") return "global";
+	return "scoped";
+}
+
+function normalizeMemoryAutoDepositMode(value: unknown): RepiMemoryAutoDepositMode {
+	if (typeof value === "boolean") return value ? "high-value" : "off";
+	const raw = String(value ?? "high-value").trim().toLowerCase();
+	if (raw === "0" || raw === "false" || raw === "no" || raw === "off" || raw === "disabled" || raw === "none")
+		return "off";
+	if (raw === "1" || raw === "true" || raw === "yes" || raw === "on" || raw === "high" || raw === "high_value")
+		return "high-value";
+	if (raw === "all" || raw === "raw" || raw === "legacy") return "all";
+	return "high-value";
 }
 
 function normalizeMemoryScopePolicy(value: unknown): RepiMemoryScopePolicy {
-	const raw = String(value ?? "session").trim().toLowerCase();
-	if (raw === "workspace" || raw === "target" || raw === "global") return raw;
-	return "session";
+	const raw = String(value ?? "mission+workspace+target").trim().toLowerCase();
+	if (raw === "session" || raw === "workspace" || raw === "target" || raw === "global") return raw;
+	return "mission+workspace+target";
+}
+
+function normalizeMemoryRetention(value: unknown): "external-only" | "inline" {
+	return String(value ?? "external-only").trim().toLowerCase() === "inline" ? "inline" : "external-only";
 }
 
 function boundedPositiveInteger(value: unknown, fallback: number, min = 200, max = 20_000): number {
@@ -6126,28 +6166,65 @@ function boundedPositiveInteger(value: unknown, fallback: number, min = 200, max
 	return Math.max(min, Math.min(max, Math.floor(parsed)));
 }
 
+function boundedScore(value: unknown, fallback: number): number {
+	const parsed = typeof value === "number" ? value : Number(value);
+	if (!Number.isFinite(parsed)) return fallback;
+	return Math.max(0, Math.min(1, parsed > 1 ? parsed / 100 : parsed));
+}
+
+function envString(name: string): string | undefined {
+	const raw = process.env[name];
+	return raw === undefined || !raw.trim() ? undefined : raw;
+}
+
 function repiMemorySettings(): RepiMemoryRuntimeSettings {
 	const settings = readJsonObjectFile<Record<string, unknown>>(join(getAgentDir(), "settings.json")) ?? {};
 	const memory = isPlainRecord(settings.memory) ? settings.memory : {};
-	const autoDepositSetting = booleanSetting(memory.autoDeposit) ?? booleanSetting(memory.autoWriteback);
+	const mode = normalizeMemoryMode(envString("REPI_MEMORY_MODE") ?? stringSetting(memory.mode));
+	const includeGlobalMemoryInContextPack =
+		envBoolean("REPI_MEMORY_CONTEXT_PACK") ?? booleanSetting(memory.includeGlobalMemoryInContextPack) ?? false;
+	const contextMemoryMode = includeGlobalMemoryInContextPack
+		? "global"
+		: normalizeMemoryContextMode(envString("REPI_MEMORY_CONTEXT_MODE") ?? stringSetting(memory.contextMemoryMode));
 	return {
+		mode,
+		autoRecall: envBoolean("REPI_MEMORY_AUTO_RECALL") ?? booleanSetting(memory.autoRecall) ?? mode !== "off",
 		autoInject: envBoolean("REPI_MEMORY_AUTO_INJECT") ?? booleanSetting(memory.autoInject) ?? false,
-		autoDeposit:
-			envBoolean("REPI_MEMORY_AUTO_DEPOSIT") ??
-			envBoolean("REPI_MEMORY_AUTO_WRITEBACK") ??
-			autoDepositSetting ??
-			false,
-		startupDigest: normalizeMemoryStartupDigest(
-			process.env.REPI_MEMORY_STARTUP_DIGEST ?? stringSetting(memory.startupDigest) ?? "status",
+		rawAutoInject: envBoolean("REPI_MEMORY_RAW_AUTO_INJECT") ?? booleanSetting(memory.rawAutoInject) ?? false,
+		autoDepositMode: normalizeMemoryAutoDepositMode(
+			envString("REPI_MEMORY_AUTO_DEPOSIT_MODE") ??
+				envString("REPI_MEMORY_AUTO_DEPOSIT") ??
+				envString("REPI_MEMORY_AUTO_WRITEBACK") ??
+				memory.autoDeposit ??
+				memory.autoWriteback,
 		),
-		includeGlobalMemoryInContextPack:
-			envBoolean("REPI_MEMORY_CONTEXT_PACK") ?? booleanSetting(memory.includeGlobalMemoryInContextPack) ?? false,
+		startupDigest: normalizeMemoryStartupDigest(
+			process.env.REPI_MEMORY_STARTUP_DIGEST ?? stringSetting(memory.startupDigest) ?? "scoped",
+		),
+		contextMemoryMode,
+		includeGlobalMemoryInContextPack,
 		activeRecall: envBoolean("REPI_MEMORY_ACTIVE_RECALL") ?? booleanSetting(memory.activeRecall) ?? false,
 		scopePolicy: normalizeMemoryScopePolicy(process.env.REPI_MEMORY_SCOPE_POLICY ?? stringSetting(memory.scopePolicy)),
 		maxInjectedTokens: boundedPositiveInteger(
 			process.env.REPI_MEMORY_MAX_INJECTED_TOKENS ?? numberSetting(memory.maxInjectedTokens),
 			1200,
 		),
+		startupBudgetTokens: boundedPositiveInteger(
+			process.env.REPI_MEMORY_STARTUP_BUDGET_TOKENS ?? numberSetting(memory.startupBudgetTokens),
+			800,
+		),
+		contextPackBudgetTokens: boundedPositiveInteger(
+			process.env.REPI_MEMORY_CONTEXT_BUDGET_TOKENS ?? numberSetting(memory.contextPackBudgetTokens),
+			1200,
+		),
+		maxStartupItems: boundedPositiveInteger(
+			process.env.REPI_MEMORY_MAX_STARTUP_ITEMS ?? numberSetting(memory.maxStartupItems),
+			5,
+			0,
+			24,
+		),
+		minRecallScore: boundedScore(process.env.REPI_MEMORY_MIN_RECALL_SCORE ?? numberSetting(memory.minRecallScore), 0.35),
+		rawTranscriptRetention: normalizeMemoryRetention(memory.rawTranscriptRetention),
 	};
 }
 
@@ -6163,58 +6240,147 @@ function memoryFileStatusLine(label: string, path: string): string {
 	return `${label}=present rows=${memoryLineCount(path)} bytes=${stat.size}`;
 }
 
+function formatMemoryRuntimeStatus(
+	settings = repiMemorySettings(),
+	options: { route?: string; target?: string } = {},
+): string {
+	return [
+		"memory_runtime:",
+		`mode=${settings.mode}`,
+		`auto_recall=${settings.autoRecall}`,
+		`auto_deposit=${settings.autoDepositMode}`,
+		`startup_digest=${settings.startupDigest}`,
+		`active_recall=${settings.activeRecall}`,
+		`context_memory=${settings.contextMemoryMode}`,
+		`global_memory_context=${settings.includeGlobalMemoryInContextPack}`,
+		`scope_policy=${settings.scopePolicy}`,
+		`startup_budget_tokens=${settings.startupBudgetTokens}`,
+		`context_budget_tokens=${settings.contextPackBudgetTokens}`,
+		`max_startup_items=${settings.maxStartupItems}`,
+		`min_recall_score=${settings.minRecallScore}`,
+		`raw_transcript_retention=${settings.rawTranscriptRetention}`,
+		`route=${options.route ?? "none"}`,
+		`target_scope=${options.target ? memoryTargetScope(options.target) : "workspace"}`,
+		"raw_history=external_only_by_default",
+		memoryFileStatusLine("events", memoryEventsPath()),
+		memoryFileStatusLine("case_memory", caseMemoryPath()),
+	].join("\n");
+}
+
 function formatMemoryIsolationStatus(
 	settings = repiMemorySettings(),
 	options: { route?: string; target?: string } = {},
 ): string {
 	return [
-		"memory_isolation:",
-		`mode=${settings.autoInject ? settings.startupDigest : "isolated"}`,
-		`auto_inject=${settings.autoInject}`,
-		`auto_deposit=${settings.autoDeposit}`,
-		`active_recall=${settings.activeRecall}`,
-		`context_pack_global_memory=${settings.includeGlobalMemoryInContextPack}`,
-		`scope_policy=${settings.scopePolicy}`,
-		`route=${options.route ?? "none"}`,
-		`target_scope=${options.target ? memoryTargetScope(options.target) : "workspace"}`,
-		"historical_memory_content=not_injected_by_default",
-		memoryFileStatusLine("events", memoryEventsPath()),
-		memoryFileStatusLine("case_memory", caseMemoryPath()),
+		formatMemoryRuntimeStatus(settings, options),
 		"explicit_recall:",
 		"- re_memory search <query>",
 		"- re_memory scope <target>",
 		"- re_memory active <target>",
-		"opt_in:",
-		"- set memory.autoInject=true and memory.startupDigest=scoped/full in ~/.repi/agent/settings.json",
 	].join("\n");
 }
 
+function memoryRecallQuery(options: { route?: string; target?: string; query?: string } = {}): string {
+	return uniqueNonEmpty([options.query, options.target, options.route], 3).join(" ");
+}
+
+function memoryNormalizedRecallScore(hit: MemoryRetrievalHit): number {
+	return Math.max(0, Math.min(1, hit.score > 1 ? hit.score / 100 : hit.score));
+}
+
+function memoryRecallScopeAllowed(hit: MemoryRetrievalHit, options: { route?: string; target?: string }): boolean {
+	if (repiMemorySettings().scopePolicy === "global") return true;
+	return !memoryScopeIsolationRow(hit.event, currentMemoryScope({ route: options.route, target: options.target })).blocksInjection;
+}
+
+function scopedMemoryRecallHits(
+	options: { route?: string; target?: string; query?: string; maxItems?: number; minScore?: number } = {},
+): MemoryRetrievalHit[] {
+	const settings = repiMemorySettings();
+	const query = memoryRecallQuery(options);
+	const maxItems = options.maxItems ?? settings.maxStartupItems;
+	if (maxItems <= 0 || !query.trim()) return [];
+	return searchMemoryEvents(query, { route: options.route, target: options.target, limit: Math.max(maxItems * 4, maxItems) })
+		.filter((hit) => memoryRecallScopeAllowed(hit, options))
+		.filter((hit) => memoryNormalizedRecallScore(hit) >= (options.minScore ?? settings.minRecallScore))
+		.slice(0, maxItems);
+}
+
+function memoryRecallCardLines(hit: MemoryRetrievalHit, index: number): string[] {
+	const event = hit.event;
+	const score = memoryNormalizedRecallScore(hit).toFixed(2);
+	const lessons = event.lessons.slice(0, 2).map((item) => truncateMiddle(item, 180));
+	const reuseRules = event.reuseRules.slice(0, 2).map((item) => truncateMiddle(item, 180));
+	const commands = event.commands.slice(0, 3).map((item) => truncateMiddle(item, 180));
+	return [
+		`- card=${index + 1} id=${event.id} score=${score} outcome=${event.outcome} route=${event.route} target=${event.target ?? "workspace"}`,
+		...(lessons.length ? lessons.map((item) => `  lesson: ${item}`) : []),
+		...(reuseRules.length ? reuseRules.map((item) => `  reuse: ${item}`) : []),
+		...(commands.length ? commands.map((item) => `  command: ${item}`) : []),
+		`  source: case=${event.caseSignature} ts=${event.ts} reasons=${hit.reasons.slice(0, 6).join(",") || "score"}`,
+	];
+}
+
+function formatScopedMemoryRecallPacket(
+	options: { route?: string; target?: string; query?: string; budgetTokens?: number; maxItems?: number } = {},
+): string {
+	const settings = repiMemorySettings();
+	const hits = scopedMemoryRecallHits({
+		route: options.route,
+		target: options.target,
+		query: options.query,
+		maxItems: options.maxItems ?? settings.maxStartupItems,
+		minScore: settings.minRecallScore,
+	});
+	const packet = [
+		formatMemoryRuntimeStatus(settings, options),
+		"memory_recall_packet:",
+		"recall_type=scoped_summary_cards",
+		`query=${memoryRecallQuery(options) || "none"}`,
+		`cards=${hits.length}`,
+		"cards_detail:",
+		...(hits.length ? hits.flatMap(memoryRecallCardLines) : ["- none"]),
+		"recall_contract:",
+		"- use cards only as hypotheses or known local workflow hints",
+		"- verify against current workspace/runtime before acting",
+		"- do not assume previous target state unless scope and evidence match",
+	].join("\n");
+	return truncateMiddle(packet, (options.budgetTokens ?? settings.startupBudgetTokens) * 4);
+}
+
 function buildScopedMemoryDigest(options: { route?: string; target?: string; query?: string } = {}): string {
-	const query = options.query ?? options.target ?? options.route ?? "";
-	const hits = searchMemoryEvents(query, { route: options.route, target: options.target, limit: 6 });
-	return formatMemoryRetrieval(query, hits);
+	return formatScopedMemoryRecallPacket(options);
 }
 
 function buildStartupMemoryDigest(options: { route?: string; target?: string } = {}): string {
 	const settings = repiMemorySettings();
-	if (settings.startupDigest === "off") return "memory_startup: disabled";
-	if (!settings.autoInject || settings.startupDigest === "status") return formatMemoryIsolationStatus(settings, options);
-	const digest =
-		settings.startupDigest === "full"
-			? buildMemoryDigest()
-			: buildScopedMemoryDigest({ route: options.route, target: options.target });
-	return truncateMiddle(digest, settings.maxInjectedTokens);
+	if (settings.mode === "off" || settings.startupDigest === "off") return "memory_startup: disabled";
+	if (settings.rawAutoInject && settings.autoInject && settings.startupDigest === "full") {
+		return truncateMiddle(buildMemoryDigest(), settings.maxInjectedTokens * 4);
+	}
+	if (settings.autoRecall && settings.startupDigest === "scoped") {
+		return formatScopedMemoryRecallPacket({
+			route: options.route,
+			target: options.target,
+			budgetTokens: settings.startupBudgetTokens,
+			maxItems: settings.maxStartupItems,
+		});
+	}
+	return formatMemoryIsolationStatus(settings, options);
 }
 
 function buildContextMemoryTail(options: { route?: string; target?: string } = {}): string {
 	const settings = repiMemorySettings();
-	if (!settings.includeGlobalMemoryInContextPack) return formatMemoryIsolationStatus(settings, options);
-	if (settings.startupDigest === "full") return truncateMiddle(buildMemoryDigest(), settings.maxInjectedTokens);
-	if (settings.startupDigest === "scoped") {
-		return truncateMiddle(
-			buildScopedMemoryDigest({ route: options.route, target: options.target }),
-			settings.maxInjectedTokens,
-		);
+	if (settings.includeGlobalMemoryInContextPack || settings.contextMemoryMode === "global") {
+		return truncateMiddle(buildMemoryDigest(), settings.contextPackBudgetTokens * 4);
+	}
+	if (settings.contextMemoryMode === "scoped" && settings.autoRecall) {
+		return formatScopedMemoryRecallPacket({
+			route: options.route,
+			target: options.target,
+			budgetTokens: settings.contextPackBudgetTokens,
+			maxItems: Math.max(settings.maxStartupItems, 6),
+		});
 	}
 	return formatMemoryIsolationStatus(settings, options);
 }
@@ -23329,7 +23495,8 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume"; 
 	const workerScoreboard = Array.from(new Set(supervisor?.workerScoreboard ?? [])).slice(0, 32);
 	const swarmRetryQueue = swarmRetry.rows;
 	const memorySettings = repiMemorySettings();
-	const includeContextMemory = memorySettings.includeGlobalMemoryInContextPack;
+	const includeContextMemory =
+		memorySettings.includeGlobalMemoryInContextPack || memorySettings.contextMemoryMode === "global";
 	const caseMemoryPlan = includeContextMemory ? currentCaseMemoryLanePlan(target) : undefined;
 	const caseMemoryNextCommands = includeContextMemory ? caseMemoryOperatorCommands(caseMemoryPlan, target) : [];
 	const reflectionReuseRules = includeContextMemory
@@ -32747,6 +32914,27 @@ function getToolResultCommand(event: ToolResultEvent): string | undefined {
 		.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
 		.join(" ");
 	return args ? `${event.toolName} ${args}` : event.toolName;
+}
+
+function shouldAutoDepositToolResult(
+	event: ToolResultEvent,
+	text: string,
+	command: string | undefined,
+	settings = repiMemorySettings(),
+): boolean {
+	if (settings.autoDepositMode === "off") return false;
+	if (settings.autoDepositMode === "all") return true;
+	const haystack = `${event.toolName}\n${command ?? ""}\n${text}`.toLowerCase();
+	if (/^(?:re_lane|re_operator|re_verifier|re_compiler|re_replayer|re_autofix|re_proof_loop|re_swarm|re_supervisor|re_context)$/.test(event.toolName))
+		return true;
+	if (event.isError) {
+		return /command not found|no such file|cannot stat|modulenotfounderror|importerror|timeout|permission denied|segmentation fault|traceback|exception|blocked|failed/i.test(text);
+	}
+	if (/^(?:pwd|ls(?:\s|$)|cat\s+[^|;&]{1,80}$|echo\s+)/i.test(command ?? "")) return false;
+	if (!text.trim() || text.length < 30) return false;
+	return /flag|vulnerab|exploit|crash|segmentation fault|asan|ubsan|leak|libc|canary|offset|rop|gadget|auth|idor|bola|csrf|xss|sqli|jwt|cookie|session|route|endpoint|status=\d{3}|http\/|websocket|signature|hmac|nonce|firmware|rootfs|cve|secret|token|password|private key|sha256|md5|entry|symbol|import|xref|strings|checksec|nx|pie|relro|canary|evidence|verifier|replay|proof|finding|high-value/.test(
+		haystack,
+	);
 }
 
 function toolTraceRedact(value: string): string {
@@ -43520,29 +43708,36 @@ export function createReconExtensionFactory() {
 			}
 			stats.calls += 1;
 			if (event.isError) stats.failures += 1;
-			if (stats.active && event.toolName !== "re_memory" && repiMemorySettings().autoDeposit) {
+			const memorySettings = repiMemorySettings();
+			if (stats.active && event.toolName !== "re_memory" && memorySettings.autoDepositMode !== "off") {
 				try {
 					const text = textBlocksToString(event.content);
 					const command = getToolResultCommand(event);
-					appendMemoryDepositionRuntimeEvent(
-						{
-							stage: event.toolName === "bash" ? "shell" : "tool",
-							source: `tool_result:${event.toolName}`,
-							status: event.isError ? "blocked" : "written",
-							task: `runtime tool result: ${event.toolName}`,
-							route: stats.lastRoute?.domain ?? "runtime",
-							command,
-							stdout: text,
-							outcome: event.isError ? "failure" : "partial",
-							confidence: event.isError ? 0.66 : 0.58,
-							lessons: [truncateMiddle(text || `${event.toolName} completed`, 900)],
-							failurePatterns: event.isError ? [truncateMiddle(text || `${event.toolName} failed`, 900)] : [],
-							reuseRules: event.isError ? [] : [`reuse ${event.toolName} only with bound artifact/evidence hash`],
-							commands: command ? [command] : [],
-							reason: "automatic post-tool writeback autocapture from REPI runtime hook",
-						},
-						{ writeback: true },
-					);
+					if (shouldAutoDepositToolResult(event, text, command, memorySettings)) {
+						appendMemoryDepositionRuntimeEvent(
+							{
+								stage: event.toolName === "bash" ? "shell" : "tool",
+								source: `tool_result:${event.toolName}`,
+								status: event.isError ? "blocked" : "written",
+								task: `runtime tool result: ${event.toolName}`,
+								route: stats.lastRoute?.domain ?? "runtime",
+								command,
+								stdout: text,
+								outcome: event.isError ? "failure" : "partial",
+								confidence: event.isError ? 0.66 : 0.58,
+								lessons: [truncateMiddle(text || `${event.toolName} completed`, 900)],
+								failurePatterns: event.isError
+									? [truncateMiddle(text || `${event.toolName} failed`, 900)]
+									: [],
+								reuseRules: event.isError
+									? []
+									: [`reuse ${event.toolName} only with bound artifact/evidence hash`],
+								commands: command ? [command] : [],
+								reason: "high-value scoped auto writeback from REPI runtime hook",
+							},
+							{ writeback: true },
+						);
+					}
 				} catch (error) {
 					pi.appendEntry("repi-memory-deposition-error", { timestamp: Date.now(), error: String(error).slice(0, 500) });
 				}

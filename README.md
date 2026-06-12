@@ -526,50 +526,83 @@ Gate 关键词：runtime_adapter_execution_gate、adapter_runner_parser_ingest_c
 
 REPI 自动 compact 阈值默认围绕上下文窗口百分比工作：warningPercent=80，triggerPercent=85，并保留 reserve tokens。达到阈值时生成 context pack，后续通过 exact resume 继续任务。
 
-### 默认记忆隔离
+### 默认记忆模式：scoped auto memory
 
-长期记忆默认只沉淀，不会在新任务启动时自动注入旧任务内容：
+REPI 默认启用“作用域自动记忆”：自动沉淀高价值经验，启动新任务时只召回同 workspace / target / route 的小卡片，不把旧日志、旧对话、全量 events 原文塞进上下文。
 
-- `memory.autoInject=false`：启动包只显示 memory 状态和计数，不塞入历史 events/case-memory。
-- `memory.autoDeposit=false`：普通 tool result 不再自动写入长期记忆，避免噪声无限增长。
-- `memory.includeGlobalMemoryInContextPack=false`：context pack 默认不携带全局 memory tail / active injection pack。
-- `memory.activeRecall=false`：不主动执行 active recall；需要时由操作者显式召回。
-- 历史 evidence/context 也默认不在新任务启动时注入，只保留路径、计数和手动恢复命令。
+默认策略：
 
-显式召回：
+- `memory.mode=scoped`：长期记忆可用，但必须经过 scope 过滤。
+- `memory.autoRecall=true`：新任务启动时自动召回少量相关 memory cards。
+- `memory.autoDeposit=high-value`：只自动沉淀成功复现、关键失败修复、漏洞/逆向锚点、可复用命令等高价值事件；普通 stdout 不入库。
+- `memory.startupDigest=scoped`：启动包只放摘要卡片，不放原始 history。
+- `memory.contextMemoryMode=scoped`：context pack 只带 scoped memory cards，不带全局 memory tail / active injection pack。
+- `memory.rawTranscriptRetention=external-only`：原始 events/case-memory 保存在磁盘，默认不进 prompt。
+
+默认配置：
+
+```json
+{
+  "memory": {
+    "schemaVersion": 2,
+    "mode": "scoped",
+    "autoRecall": true,
+    "autoInject": false,
+    "rawAutoInject": false,
+    "autoDeposit": "high-value",
+    "startupDigest": "scoped",
+    "scopePolicy": "mission+workspace+target",
+    "contextMemoryMode": "scoped",
+    "includeGlobalMemoryInContextPack": false,
+    "activeRecall": false,
+    "startupBudgetTokens": 800,
+    "contextPackBudgetTokens": 1200,
+    "maxStartupItems": 5,
+    "minRecallScore": 0.35,
+    "rawTranscriptRetention": "external-only"
+  }
+}
+```
+
+手动召回/维护：
 
 ```text
 re_memory search <query>
 re_memory scope <target>
 re_memory active <target>
+re_memory status
+re_memory promote <event-id>
+re_memory demote <event-id>
+re_memory forget <event-id>
 re_context show
 re_context resume <ref>
 re_evidence show <query>
 ```
 
-如需恢复旧的主动记忆行为，在 `~/.repi/agent/settings.json` 中显式开启：
+如果确实要恢复旧式全局记忆注入，必须显式开启 raw/global 模式：
 
 ```json
 {
   "memory": {
+    "mode": "global",
+    "rawAutoInject": true,
     "autoInject": true,
-    "startupDigest": "scoped",
+    "startupDigest": "full",
+    "contextMemoryMode": "global",
     "includeGlobalMemoryInContextPack": true,
-    "activeRecall": true,
-    "autoDeposit": true,
-    "maxInjectedTokens": 1200
+    "autoDeposit": "all"
   }
 }
 ```
 
-临时兼容开关：
+临时开关：
 
 ```bash
-REPI_MEMORY_AUTO_INJECT=1 repi
-REPI_MEMORY_CONTEXT_PACK=1 repi
-REPI_MEMORY_ACTIVE_RECALL=1 repi
-REPI_CONTEXT_AUTO_INJECT=1 repi
-REPI_EVIDENCE_AUTO_INJECT=1 repi
+REPI_MEMORY_AUTO_RECALL=0 repi                    # 只关闭自动召回
+REPI_MEMORY_AUTO_DEPOSIT_MODE=off repi            # 只关闭自动沉淀
+REPI_MEMORY_AUTO_DEPOSIT_MODE=high-value repi     # 仅高价值沉淀
+REPI_MEMORY_CONTEXT_MODE=scoped repi              # context pack 带 scoped cards
+REPI_MEMORY_RAW_AUTO_INJECT=1 REPI_MEMORY_AUTO_INJECT=1 REPI_MEMORY_STARTUP_DIGEST=full repi
 ```
 
 核心文件：

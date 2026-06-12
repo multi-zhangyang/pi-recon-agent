@@ -23,57 +23,73 @@ const beforeAgentStart = between(source, 'pi.on("before_agent_start"', 'pi.on("t
 const scopedArtifactIndex = between(source, "function scopedContextArtifactIndex", "function contextArtifactIndex");
 const contextPack = between(source, "function buildContextPack", "function formatContextPack");
 const toolResult = between(source, 'pi.on("tool_result"', 'pi.on("session_before_compact"');
+const settingsMemory = settings.memory ?? {};
 
 const checks = [
 	{
-		id: "startup-memory-full-digest-not-default",
+		id: "startup-raw-memory-not-default",
 		pass: !/Memory digest:[\s\S]*buildMemoryDigest\(\)/.test(beforeAgentStart),
-		evidence: "before_agent_start must use buildStartupMemoryDigest, not raw buildMemoryDigest",
+		evidence: "before_agent_start uses scoped recall packet, not raw buildMemoryDigest",
 	},
 	{
 		id: "startup-context-pack-not-default",
 		pass: !/Context\/resume pack:[\s\S]*buildContextDigest\(\)/.test(beforeAgentStart),
-		evidence: "before_agent_start must use buildStartupContextDigest, not raw buildContextDigest",
+		evidence: "before_agent_start does not inject old context packs by default",
 	},
 	{
 		id: "startup-evidence-ledger-not-default",
 		pass: !/Evidence ledger tail:[\s\S]*buildEvidenceDigest\(\)/.test(beforeAgentStart),
-		evidence: "before_agent_start must use buildStartupEvidenceDigest, not raw buildEvidenceDigest",
+		evidence: "before_agent_start does not inject old evidence ledger by default",
 	},
 	{
-		id: "context-memory-tail-isolated",
+		id: "scoped-recall-packet-present",
+		pass:
+			/formatScopedMemoryRecallPacket/.test(source) &&
+			/memory_recall_packet/.test(source) &&
+			/scoped_summary_cards/.test(source),
+		evidence: "runtime has bounded scoped memory cards",
+	},
+	{
+		id: "context-memory-tail-scoped-helper",
 		pass: /memoryTail:\s*buildContextMemoryTail/.test(contextPack),
-		evidence: "context pack memoryTail must route through isolation helper",
+		evidence: "context pack memoryTail routes through scoped/global policy helper",
 	},
 	{
-		id: "context-artifact-index-memory-gated",
+		id: "context-artifact-index-raw-memory-gated",
 		pass:
 			/includeGlobalMemoryInContextPack/.test(scopedArtifactIndex) &&
 			/includeMemoryArtifacts/.test(scopedArtifactIndex),
-		evidence: "memory artifacts in context index must be gated",
+		evidence: "raw memory artifacts in context index require explicit global mode",
 	},
 	{
-		id: "auto-deposit-disabled-by-default",
-		pass: /repiMemorySettings\(\)\.autoDeposit/.test(toolResult),
-		evidence: "post-tool memory deposition must be config-gated",
-	},
-	{
-		id: "profile-memory-defaults-isolated",
+		id: "high-value-auto-deposit-gated",
 		pass:
-			settings.memory?.autoInject === false &&
-			settings.memory?.autoDeposit === false &&
-			settings.memory?.includeGlobalMemoryInContextPack === false &&
-			settings.memory?.activeRecall === false &&
-			settings.memory?.startupDigest === "status",
-		evidence: "repi-profile/settings.json memory defaults must be isolated",
+			/autoDepositMode/.test(toolResult) &&
+			/shouldAutoDepositToolResult/.test(toolResult) &&
+			/high-value scoped auto writeback/.test(toolResult),
+		evidence: "post-tool memory deposition is high-value gated, not all stdout",
 	},
 	{
-		id: "init-memory-defaults-isolated",
+		id: "profile-memory-defaults-scoped",
 		pass:
-			/autoInject:\s*existingMemory\.autoInject\s*\?\?\s*false/.test(init) &&
-			/autoDeposit:\s*existingMemory\.autoDeposit\s*\?\?\s*false/.test(init) &&
-			/includeGlobalMemoryInContextPack:\s*existingMemory\.includeGlobalMemoryInContextPack\s*\?\?\s*false/.test(init),
-		evidence: "init-repi-profile must write isolated memory defaults",
+			settingsMemory.schemaVersion === 2 &&
+			settingsMemory.mode === "scoped" &&
+			settingsMemory.autoRecall === true &&
+			settingsMemory.autoDeposit === "high-value" &&
+			settingsMemory.startupDigest === "scoped" &&
+			settingsMemory.contextMemoryMode === "scoped" &&
+			settingsMemory.includeGlobalMemoryInContextPack === false &&
+			settingsMemory.rawAutoInject === false,
+		evidence: "repi-profile/settings.json defaults to scoped auto memory, raw injection off",
+	},
+	{
+		id: "init-memory-v2-migrates-old-isolation",
+		pass:
+			/schemaVersion:\s*2/.test(init) &&
+			/legacyAutoDeposit/.test(init) &&
+			/autoRecall:\s*existingMemory\.autoRecall\s*\?\?\s*true/.test(init) &&
+			/autoDeposit:\s*legacyAutoDeposit\s*\?\?\s*"high-value"/.test(init),
+		evidence: "init-repi-profile migrates previous closed memory defaults to scoped auto memory",
 	},
 ];
 
@@ -83,6 +99,6 @@ for (const check of checks) {
 
 const failed = checks.filter((check) => !check.pass);
 if (failed.length && strict) {
-	console.error(`memory isolation gate failed: ${failed.map((check) => check.id).join(", ")}`);
+	console.error(`memory scoped gate failed: ${failed.map((check) => check.id).join(", ")}`);
 	process.exit(1);
 }

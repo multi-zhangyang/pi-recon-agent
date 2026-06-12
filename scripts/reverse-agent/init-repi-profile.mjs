@@ -98,15 +98,32 @@ settings.compaction = {
 };
 const existingMemory =
 	settings.memory && typeof settings.memory === "object" && !Array.isArray(settings.memory) ? settings.memory : {};
+const migrateMemoryV1 = Number(existingMemory.schemaVersion ?? 0) < 2;
+const legacyAutoDeposit =
+	migrateMemoryV1 && existingMemory.autoDeposit === false ? "high-value" : existingMemory.autoDeposit;
+const legacyStartupDigest =
+	migrateMemoryV1 && existingMemory.startupDigest === "status" ? "scoped" : existingMemory.startupDigest;
+const legacyScopePolicy =
+	migrateMemoryV1 && existingMemory.scopePolicy === "session" ? "mission+workspace+target" : existingMemory.scopePolicy;
 settings.memory = {
 	...existingMemory,
+	schemaVersion: 2,
+	mode: existingMemory.mode ?? "scoped",
+	autoRecall: existingMemory.autoRecall ?? true,
 	autoInject: existingMemory.autoInject ?? false,
-	autoDeposit: existingMemory.autoDeposit ?? false,
-	startupDigest: existingMemory.startupDigest ?? "status",
-	scopePolicy: existingMemory.scopePolicy ?? "session",
+	rawAutoInject: existingMemory.rawAutoInject ?? false,
+	autoDeposit: legacyAutoDeposit ?? "high-value",
+	startupDigest: legacyStartupDigest ?? "scoped",
+	scopePolicy: legacyScopePolicy ?? "mission+workspace+target",
+	contextMemoryMode: existingMemory.contextMemoryMode ?? "scoped",
 	includeGlobalMemoryInContextPack: existingMemory.includeGlobalMemoryInContextPack ?? false,
 	activeRecall: existingMemory.activeRecall ?? false,
 	maxInjectedTokens: existingMemory.maxInjectedTokens ?? 1200,
+	startupBudgetTokens: existingMemory.startupBudgetTokens ?? 800,
+	contextPackBudgetTokens: existingMemory.contextPackBudgetTokens ?? 1200,
+	maxStartupItems: existingMemory.maxStartupItems ?? 5,
+	minRecallScore: existingMemory.minRecallScore ?? 0.35,
+	rawTranscriptRetention: existingMemory.rawTranscriptRetention ?? "external-only",
 };
 settings.branchSummary = { reserveTokens: 24576, skipPrompt: true, ...(settings.branchSummary ?? {}) };
 settings.retry = {
