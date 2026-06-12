@@ -278,3 +278,8 @@ marker: DomainProofExitClosureV1
 - `mobile-ios`：当目标是 iOS/IPA/Objective-C/Swift/Keychain/越狱检测/TLS pinning 时，必须生成 IPA inventory、Info.plist/Entitlements、Mach-O/class/selector map、Frida/objection hook、network/keychain replay。关键 anchors：iOS IPA inventory anchors、iOS Mach-O/class/selector anchors、iOS Frida/objection hook anchors、iOS network/keychain replay anchors。
 - `memory-forensics`：当目标是 raw/vmem/memdump/dmp/hiberfil/pagefile/volatility/内存取证时，必须生成 image profile、process/network map、credential/artifact hunt、timeline/carve evidence。关键 anchors：memory forensics image/profile anchors、memory forensics process/network anchors、memory forensics credential/artifact anchors、memory forensics timeline/carve anchors。
 - ToolchainDomainCapabilityV1 domains include `web-scan`, `mobile-ios`, and `memory-forensics`; proof-exit 缺口必须进入 `domain_proof_exit_missing` 和下一条 `re_lane`/`re_verifier`/`re_proof_loop` 命令。
+
+
+marker: ReLaneSpecialistCommandPackGateV1
+
+specialist_command_pack_gate：逆向/渗透任务进入 `re_lane` 前，优先调用 `re_lane_specialist_pack` / `/re-lane-specialist-pack show [domain]` 查看 `runtime:re_lane-specialist-command-pack`。每个专业域必须从 route matcher 落到 lane seeds、command pack markers、specialist evidence analyzer anchors、self-heal commands 和 proof-exit bridge；缺口进入 `re_lane plan/run`、`re_verifier matrix`、`re_replayer run`、`re_domain_proof_exit show|write`，不能用 narrative-only 建议放行。

@@ -107,6 +107,46 @@ npm run gate:domain-proof-exit-closure
 
 如果缺口存在，输出 `domain_proof_exit_closure` 与 `domain_proof_exit_missing:<domain>:<proof-exit>`，并给出下一条 `re_lane` / `re_verifier` / `re_proof_loop` 命令，不会用 narrative-only 结论放行。
 
+### ReLane 专项 command pack 闭环
+
+marker: `ReLaneSpecialistCommandPackGateV1`
+
+`re_lane` 不再只按 lane 名字给通用命令。`ReLaneSpecialistCommandPackGateV1` / `runtime:re_lane-specialist-command-pack` 会验证每个专业域都有：`route_to_domain_lane_seed_matrix`、`domain_lane_command_pack_markers`、`specialist_evidence_analyzer_anchor_matrix`、`self_heal_command_fallback_matrix`、`proof_exit_bridge_matrix`。也就是说，Web/API、Web scan、JS signing、native、pwn、Android、iOS、PCAP/DFIR、memory forensics、firmware、crypto、cloud/AD、exploit reliability 都必须能从 route 落到 lane seeds、命令包、锚点分析、自修复命令和 proof-exit。
+
+```text
+/re-lane-specialist-pack show
+/re-lane-specialist-pack show pwn
+re_lane_specialist_pack {"action":"show","domain":"web-scan"}
+npm run gate:relane-specialist-command-pack
+```
+
+常用 cookbook：
+
+```text
+/re-toolchain show web-scan
+/re-lane-specialist-pack show web-scan
+/re-lane plan scope https://target.example
+/re-lane run scope https://target.example
+/re-domain-proof-exit write web-scan
+/re-proof-loop run https://target.example 4 2
+```
+
+```text
+/re-toolchain show mobile-ios
+/re-lane-specialist-pack show mobile-ios
+/re-lane plan ipa-inventory ./app.ipa
+/re-lane run ipa-inventory ./app.ipa
+/re-domain-proof-exit write mobile-ios
+```
+
+```text
+/re-toolchain show memory-forensics
+/re-lane-specialist-pack show memory-forensics
+/re-lane plan process-network ./memory.raw
+/re-lane run process-network ./memory.raw
+/re-domain-proof-exit write memory-forensics
+```
+
 marker: `restriction_to_operator_queue`
 
 scope 不完整、工具缺失、env-gated runtime 或 final gate blocked 都必须转成 operator queue：`re_map`、`re_live_browser plan`、`re_lane plan/run`、`re_bootstrap plan`、`re_operator dispatch`、`re_proof_loop`。不要停在“不能做”。
@@ -159,7 +199,8 @@ scope 不完整、工具缺失、env-gated runtime 或 final gate blocked 都必
 - Swarm provider manifest parity：`SwarmProviderManifestParityGateV1` / `npm run gate:swarm-provider-manifest-parity` 把 `re_swarm` command-level `SubagentRuntimeManifestV1`、`WorkerChildSessionRuntimeBatchV1` 与 `ParallelProviderWorkerMatrixV1` 拉到同一个 parity contract：workerId、claimRefs、mergeKey、stdout/stderr/transcript hash、provider env-ref-only、failure/repair refs 必须一致；新增 multi-provider 共享 claim/failure/repair merge ledger、live provider-backed shared ledger matrix、ProviderBackedLongWindowSharedMergeLedgerV1 四段长窗口 ledger，以及 ProviderWorkerExtendedRetryManifestChainV1 七次 retry attempt manifest chain，要求 retry attempt 单调、同 signature 且绑定同一 runtime manifest hash；all_child_sessions_match_parity_rows 逐 worker 校验所有 child sessions 的 model/sessionDir/hash/mergeKey/claimRefs/failureRepairRefs，child-session-nonfirst-row-drift 负例会阻断；负例覆盖 workerId mismatch、claim ref dropped、missing runtime hash、literal provider secret、failure/repair unlinked、single-provider matrix、shared ledger missing worker、retry/repair manifest unbound、provider window missing、retry non-monotonic、manifest drift、long-window too short、extended retry too short 和 long-window secret leak。
 - Provider runtime matrix：新增 `ProviderRuntimeMatrixV1` hard-eval，把自定义模型接入从单 OpenAI-compatible smoke 扩展到 **OpenAI Chat Completions-compatible**、**OpenAI Responses-compatible** 与 **Anthropic-compatible** 三类主流 provider runtime。`npm run gate:provider-runtime-matrix` 会起本地 mock provider，同时配置 isolated `~/.repi/agent/models.json`，验证 `repi --list-models`、`repi --provider ... --model ... -p ...`、streaming request、env-ref-only API key、Authorization / x-api-key 来源、request-log/transcript/stdout/stderr hash、无 `.pi` profile 污染、无 update banner 和无 literal secret；负例覆盖缺 env-ref、错误 endpoint、Responses case 缺失、Anthropic case 缺失、update banner 泄漏和 list-models 缺 provider。
 - Provider Endpoint Doctor：新增 `ProviderEndpointDoctorV1` runtime 子命令与 hard-eval。`repi provider-doctor --base-url <url> --model <id> --api auto` 会自动探测 OpenAI Chat Completions / OpenAI Responses / Anthropic Messages 三类 endpoint，输出可直接复制到 `~/.repi/agent/models.json` 的 env-ref-only template；如果 `/v1/responses` 返回 `endpoint_not_found` 但 `/v1/chat/completions` 可用，会明确建议 `api: "openai-completions"`，不会静默 fallback。`npm run gate:provider-endpoint-doctor` 用本地 mock 网关验证 endpoint 诊断、推荐配置、secret redaction、无 `.pi` 污染和无 update banner。
-- Toolchain Domain Capability：新增 `ToolchainDomainCapabilityV1` / `re_toolchain_domain` / `/re-toolchain`，把专业逆向/渗透工具链按 `web-api`、`web-scan`、`frontend-js`、`rev-native`、`pwn`、`mobile`、`mobile-ios`、`pcap-dfir`、`memory-forensics`、`firmware-iot`、`crypto`、`cloud-identity`、`exploit-reliability` 做成 runtime-backed matrix。它读取本机 tool-index，输出 required/preferred/fallback、`fallback_available`、`critical_gap`、proof-exit 和下一条 `re_lane`/`re_bootstrap`/专项 runtime 命令，避免“工具少/只会泛化建议”。`npm run gate:toolchain-domain-capability` 会用 `runtime:toolchain-doctor`、负例和 source markers 验证该能力。
+- ReLane specialist command pack：新增 `ReLaneSpecialistCommandPackGateV1` / `re_lane_specialist_pack` / `/re-lane-specialist-pack`，把 route、lane seeds、command pack markers、specialist analyzer anchors、self-heal commands 与 proof-exit bridge 接成可验证闭环；`npm run gate:relane-specialist-command-pack` 用正/负例阻断“只给泛化建议”的回退。
+- Toolchain Domain Capability：新增 `ToolchainDomainCapabilityV1` / `re_toolchain_domain` / `/re-toolchain`，把专业逆向/渗透工具链按 `web-api`、`web-scan`、`frontend-js`、`rev-native`、`pwn`、`mobile`、`mobile-ios`、`pcap-dfir`、`memory-forensics`、`firmware-iot`、`crypto`、`cloud-identity`、`agent-security`、`malware-analysis`、`exploit-reliability` 做成 runtime-backed matrix。它读取本机 tool-index，输出 required/preferred/fallback、`fallback_available`、`critical_gap`、proof-exit 和下一条 `re_lane`/`re_bootstrap`/专项 runtime 命令，避免“工具少/只会泛化建议”。`npm run gate:toolchain-domain-capability` 会用 `runtime:toolchain-doctor`、负例和 source markers 验证该能力。
 - Provider failure injection：新增 `ProviderFailureInjectionReportV1` hard-eval，把 provider 失败路径接入 canonical `FailureLedgerEventV1` / `RepairQueueItemV1`。`npm run gate:provider-failure-injection` 会用真实 `repi --provider ... -p ...` 打本地 mock provider 的 HTTP 500、malformed SSE、Anthropic error event 三类失败，验证非零退出、失败文本捕获、request-log/transcript/stdout/stderr artifact、failure↔repair signature 链接、append-only writeback、exhausted 后 `escalate` 且不继续盲 retry，并用 duplicate signature、exhausted unpaused rerun、loose field、missing repair 负例保护 failure/repair validator。
 - Repair rollback policy：`RepairRollbackPolicyV1` 已从 hard-eval 推进到 `re_autofix` runtime wiring。`re_autofix plan/apply` 发现 state-changing `patch_queue` 时会写 live `repairRollbackPolicyPath`（`*-repair-rollback-policy.json`），固化 baseline snapshot、allowlist、regression gates、rollback restore proof，并把 rollback 型 `FailureLedgerEventV1` / `RepairQueueItemV1` 写入 canonical ledger；`npm run gate:repair-rollback-policy` 同时验证临时 workspace baseline→repair→rollback 和 `runtime:repair-rollback-live-wiring`，负例覆盖 baseline missing、allowlist violation、rollback not restored、missing regression gate 和 failure/repair unlinked。
 - Tool call trace ledger：新增 `ToolCallTraceLedgerV1` hard-eval，把 `tool_call` / `tool_result` 变成 append-only runtime trace。`npm run gate:tool-call-trace-ledger` 会触发真实 REPI extension hook，写 `~/.repi/agent/recon/evidence/tool-calls/tool-call-trace.jsonl` 和 `tool-call-trace-report.json`，验证 toolCallId、输入/输出 sha256、脱敏预览、replay hint、hash-chain、result 必须有 prior call，并用 hash drift、secret leak、missing output hash、missing replay 负例保护工具调用可观测性。
