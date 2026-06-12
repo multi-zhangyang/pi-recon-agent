@@ -136,6 +136,14 @@ npm run clean:repi-legacy-profile:apply
 
 ## 模型与 provider 配置
 
+REPI 的模型配置文件是：
+
+```text
+~/.repi/agent/models.json
+```
+
+配置格式与底层模型注册器兼容，核心结构是 **providers 对象**，不是数组。provider 名称就是启动时 `--provider` 使用的名字。
+
 REPI 支持主流模型接入方式：
 
 - OpenAI-compatible Chat Completions。
@@ -144,13 +152,48 @@ REPI 支持主流模型接入方式：
 - OpenRouter / gateway / local inference server。
 - 常规官方 provider 环境变量。
 
-推荐把配置写入：
+### 字段说明
 
-```text
-~/.repi/agent/models.json
+| 字段 | 说明 |
+| --- | --- |
+| `providers.<name>` | provider id，例如 `openai-compatible`、`local-openai`、`anthropic-gateway`。 |
+| `name` | UI 展示名，可选。 |
+| `baseUrl` | API 地址。OpenAI-compatible 通常带 `/v1`；Anthropic-compatible 按网关要求填写。 |
+| `api` | API 协议：`openai-completions`、`openai-responses`、`anthropic-messages`。 |
+| `apiKey` | 推荐写 `$ENV_NAME`，运行时从环境变量读取；不要把真实 key 写进文件。 |
+| `authHeader` | Anthropic-compatible 网关如果需要 `Authorization: Bearer`，设为 `true`。 |
+| `models[].id` | 模型 ID，启动时 `--model` 使用。 |
+| `models[].contextWindow` | 上下文窗口 token 数，用于上下文预算、compact 阈值等。 |
+| `models[].maxTokens` | 单次最大输出 token。 |
+| `models[].reasoning` | 是否支持 thinking/reasoning。 |
+| `models[].input` | 输入模态，例如 `["text"]` 或 `["text", "image"]`。 |
+| `models[].cost` | 价格配置，单位是 **美元 / 百万 tokens**。 |
+
+`cost` 支持四个字段：
+
+```json
+{
+  "input": 0.95,
+  "output": 4,
+  "cacheRead": 0.16,
+  "cacheWrite": 0.95
+}
 ```
 
-示例：OpenAI-compatible gateway。
+运行时按如下方式估算成本：
+
+```text
+cost = input_tokens * input / 1_000_000
+     + output_tokens * output / 1_000_000
+     + cache_read_tokens * cacheRead / 1_000_000
+     + cache_write_tokens * cacheWrite / 1_000_000
+```
+
+如果你的网关不收费、内网统一结算，或者不想显示费用，可以全部填 `0`。
+
+### OpenAI-compatible Chat Completions
+
+适用于大多数 `/v1/chat/completions` 网关、本地推理服务、New API、LiteLLM、vLLM、Ollama/LM Studio 的 OpenAI-compatible 代理等。
 
 ```json
 {
@@ -163,6 +206,14 @@ REPI 支持主流模型接入方式：
       "models": [
         {
           "id": "provider/model-id",
+          "name": "Provider Model",
+          "input": ["text", "image"],
+          "cost": {
+            "input": 0.95,
+            "output": 4,
+            "cacheRead": 0.16,
+            "cacheWrite": 0.95
+          },
           "contextWindow": 262144,
           "maxTokens": 16384,
           "reasoning": true
@@ -178,6 +229,118 @@ REPI 支持主流模型接入方式：
 ```bash
 export OPENAI_COMPATIBLE_API_KEY="..."
 repi --provider openai-compatible --model provider/model-id
+```
+
+### OpenAI Responses-compatible
+
+适用于 `/v1/responses` 协议的网关或官方兼容服务。
+
+```json
+{
+  "providers": {
+    "responses-gateway": {
+      "name": "Responses Gateway",
+      "baseUrl": "https://gateway.example/v1",
+      "api": "openai-responses",
+      "apiKey": "$RESPONSES_GATEWAY_API_KEY",
+      "models": [
+        {
+          "id": "provider/responses-model",
+          "input": ["text", "image"],
+          "cost": {
+            "input": 1,
+            "output": 4,
+            "cacheRead": 0.1,
+            "cacheWrite": 1
+          },
+          "contextWindow": 262144,
+          "maxTokens": 32768,
+          "reasoning": true,
+          "compat": {
+            "supportsDeveloperRole": true,
+            "supportsLongCacheRetention": false
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+### Anthropic-compatible Messages
+
+适用于 `/v1/messages` 风格的 Anthropic-compatible 网关。
+
+```json
+{
+  "providers": {
+    "anthropic-gateway": {
+      "name": "Anthropic Gateway",
+      "baseUrl": "https://gateway.example",
+      "api": "anthropic-messages",
+      "apiKey": "$ANTHROPIC_GATEWAY_API_KEY",
+      "authHeader": true,
+      "compat": {
+        "supportsEagerToolInputStreaming": false,
+        "supportsCacheControlOnTools": false,
+        "supportsLongCacheRetention": false
+      },
+      "models": [
+        {
+          "id": "provider/claude-compatible-model",
+          "input": ["text"],
+          "cost": {
+            "input": 3,
+            "output": 15,
+            "cacheRead": 0.3,
+            "cacheWrite": 3.75
+          },
+          "contextWindow": 200000,
+          "maxTokens": 8192,
+          "reasoning": false
+        }
+      ]
+    }
+  }
+}
+```
+
+### 本地或免费网关
+
+本地服务通常不需要真实计费，可以这样写：
+
+```json
+{
+  "providers": {
+    "local-openai": {
+      "name": "Local OpenAI-compatible",
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "$LOCAL_LLM_API_KEY",
+      "models": [
+        {
+          "id": "local/model",
+          "input": ["text"],
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          },
+          "contextWindow": 32768,
+          "maxTokens": 4096,
+          "reasoning": false
+        }
+      ]
+    }
+  }
+}
+```
+
+如果本地服务不校验 key，也仍建议给一个占位环境变量，保持配置格式一致：
+
+```bash
+export LOCAL_LLM_API_KEY="local"
 ```
 
 诊断自定义网关：
