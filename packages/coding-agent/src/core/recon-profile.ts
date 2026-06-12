@@ -5840,6 +5840,10 @@ function memoryPlaybooksArchiveDir(): string {
 	return join(memoryPlaybooksDir(), "archive");
 }
 
+function reconArchiveDir(): string {
+	return join(reconDir(), "archive");
+}
+
 function memoryEventsPath(): string {
 	return memoryPath("events.jsonl");
 }
@@ -6230,6 +6234,7 @@ function ensureReconStorage(): void {
 	mkdirSync(memoryTransactionsDir(), { recursive: true });
 	mkdirSync(memoryPlaybooksDir(), { recursive: true });
 	mkdirSync(memoryPlaybooksArchiveDir(), { recursive: true });
+	mkdirSync(reconArchiveDir(), { recursive: true });
 	mkdirSync(join(reconDir(), "mission"), { recursive: true });
 	mkdirSync(join(reconDir(), "evidence"), { recursive: true });
 	mkdirSync(evidenceRunsDir(), { recursive: true });
@@ -8533,6 +8538,58 @@ function commandContainsPoison(command?: string): boolean {
 	return Boolean(internalTarget && looksLikeNaturalLanguageTarget(internalTarget));
 }
 
+function sanitizeMemoryText(value?: string, fallback?: string): string | undefined {
+	const text = value?.trim();
+	if (!text) return fallback;
+	if (containsRepiPoison(text)) return fallback;
+	return truncateMiddle(text, 4000);
+}
+
+function sanitizeMemoryList(values?: string[], limit = 40): string[] {
+	return uniqueNonEmpty(
+		(values ?? [])
+			.map((value) => sanitizeMemoryText(value))
+			.filter((value): value is string => Boolean(value)),
+		limit,
+	);
+}
+
+function sanitizeMemoryCommands(values?: string[], limit = 40): string[] {
+	return uniqueNonEmpty(
+		(values ?? [])
+			.map((value) => normalizeHistoricalCommand(value, undefined, undefined))
+			.filter((value): value is string => Boolean(value)),
+		limit,
+	);
+}
+
+function sanitizeMemoryTag(value?: string): string | undefined {
+	const text = sanitizeMemoryText(value);
+	if (!text || looksLikeNaturalLanguageTarget(text)) return undefined;
+	return truncateMiddle(text.replace(/\s+/g, "-"), 120);
+}
+
+function sanitizeMemoryRoute(value?: string, fallback = "manual"): string {
+	const text = sanitizeMemoryText(value, fallback) ?? fallback;
+	return looksLikeNaturalLanguageTarget(text) ? fallback : truncateMiddle(text, 160);
+}
+
+function sanitizeMemoryCaseSignature(value?: string): string | undefined {
+	const text = sanitizeMemoryText(value);
+	if (!text || containsRepiPoison(text)) return undefined;
+	return /^[a-z0-9:_-]{8,96}$/i.test(text) ? text : undefined;
+}
+
+function sanitizeMemoryArtifactPaths(values?: string[], limit = 80): string[] {
+	return uniqueNonEmpty(
+		(values ?? []).filter((value) => {
+			if (!value || containsRepiPoison(value)) return false;
+			return classifyRepiTarget(value).kind !== "invalid-natural-language";
+		}),
+		limit,
+	);
+}
+
 function pythonString(value: string): string {
 	return JSON.stringify(value);
 }
@@ -10661,16 +10718,30 @@ function laneCommandPack(mission: MissionState, lane: MissionLane, target?: stri
 	}
 
 	if (isPwnRoute) {
-		add(
-			"pwn-mitigations",
-			`file ${targetArg}; checksec --file=${targetArg} 2>/dev/null || true; ldd ${targetArg} || true`,
-			"mitigations/loader/libc",
-		);
-		add(
-			"crash-seed",
-			`python3 - <<'PY'\nfrom subprocess import run, PIPE\np=${targetPython}\nfor n in (16,64,128,256,512):\n    r=run([p], input=b'A'*n, stdout=PIPE, stderr=PIPE, timeout=3)\n    print('n=',n,'code=',r.returncode,'out=',r.stdout[:80],'err=',r.stderr[:80])\nPY`,
-			"crash/control seed",
-		);
+		if (targetIsDirectory) {
+			notes.push("pwn_target_type=directory；只枚举候选可执行文件，不对目录直接跑 checksec/ldd/crash-seed。");
+			add(
+				"pwn-directory-executable-candidates",
+				`find ${targetArg} -maxdepth 4 -type f \\( -perm -111 -o -name '*.so' -o -name '*.elf' -o -name 'vuln' \\) -exec file {} \\; 2>/dev/null | grep -E 'ELF|PIE|shared object|executable' | tee /tmp/repi-pwn-candidates.txt | head -120`,
+				"candidate executables/shared objects for pwn primitive lanes",
+			);
+			add(
+				"pwn-directory-next-lanes",
+				`awk -F: '{print $1}' /tmp/repi-pwn-candidates.txt 2>/dev/null | head -40 | sed 's#^#re_lane plan primitive #'`,
+				"derive per-candidate primitive lanes instead of crashing the directory path",
+			);
+		} else {
+			add(
+				"pwn-mitigations",
+				`file ${targetArg}; checksec --file=${targetArg} 2>/dev/null || true; ldd ${targetArg} || true`,
+				"mitigations/loader/libc",
+			);
+			add(
+				"crash-seed",
+				`python3 - <<'PY'\nfrom subprocess import run, PIPE\np=${targetPython}\nfor n in (16,64,128,256,512):\n    r=run([p], input=b'A'*n, stdout=PIPE, stderr=PIPE, timeout=3)\n    print('n=',n,'code=',r.returncode,'out=',r.stdout[:80],'err=',r.stderr[:80])\nPY`,
+				"crash/control seed",
+			);
+		}
 	}
 
 	if (/report/.test(laneName)) {
@@ -16374,7 +16445,57 @@ async function runAutoLaneChain(
 	].join("\n");
 }
 
-function ensureAutopilotMission(params: { task?: string; target?: string }): MissionState {
+function archiveReconFileIfExists(path: string, archiveRoot: string, archived: string[]): void {
+	try {
+		if (!existsSync(path)) return;
+		const relative = path.startsWith(reconDir()) ? path.slice(reconDir().length + 1) : artifactBasename(path);
+		const target = join(archiveRoot, relative);
+		mkdirSync(dirname(target), { recursive: true });
+		renameSync(path, target);
+		archived.push(`${path} -> ${target}`);
+	} catch (error) {
+		archived.push(`${path} -> archive_failed:${String(error).slice(0, 180)}`);
+	}
+}
+
+function prepareAutopilotCleanState(params: { target?: string; task?: string }): string[] {
+	ensureReconStorage();
+	const timestamp = new Date().toISOString();
+	const archiveRoot = join(reconArchiveDir(), `autopilot-clean-state-${timestamp.replace(/[:.]/g, "-")}`);
+	mkdirSync(archiveRoot, { recursive: true });
+	const archived: string[] = [];
+	for (const path of [
+		currentMissionPath(),
+		memoryPath("dispatcher-feedback-board.md"),
+		memoryPath("compaction-auto-resume-board.md"),
+		memoryPath("compaction-resume-ledger.jsonl"),
+		compactResumeTransitionLedgerPath(),
+		memoryScopeIsolationReportPath(),
+		memoryArtifactScopeFilterReportPath(),
+	]) {
+		archiveReconFileIfExists(path, archiveRoot, archived);
+	}
+	writeFileSync(
+		join(archiveRoot, "manifest.json"),
+		`${JSON.stringify(
+			{
+				kind: "repi-autopilot-clean-state-archive",
+				generatedAt: timestamp,
+				target: sanitizeTargetForCommand(params.target),
+				task: sanitizeMemoryText(params.task),
+				archived,
+				policy: "archive volatile mission/context/dispatcher state; keep tool-index and immutable evidence available through scoped filters",
+			},
+			null,
+			2,
+		)}\n`,
+		"utf-8",
+	);
+	ensureReconStorage();
+	return [`archive_root=${archiveRoot}`, ...archived.slice(0, 16)];
+}
+
+function ensureAutopilotMission(params: { task?: string; target?: string; cleanState?: boolean }): MissionState {
 	const task =
 		params.task?.trim() ||
 		(readCurrentMission()?.task ?? `autopilot ${params.target ? `target ${params.target}` : "security task"}`);
@@ -16394,9 +16515,11 @@ async function runAutopilot(
 		mapDepth?: number;
 		maxAutoSteps?: number;
 		runAuto?: boolean;
+		cleanState?: boolean;
 	},
 ): Promise<string> {
 	const action = params.action ?? "run";
+	const cleanStateSummary = params.cleanState ? prepareAutopilotCleanState(params) : [];
 	const mission = ensureAutopilotMission({ task: params.task, target: params.target });
 	const lane = activeLane(mission, params.lane);
 	if (!lane) return `autopilot_result:\nstatus: blocked\nreason: no active lane\n${formatMission(mission)}`;
@@ -16411,6 +16534,8 @@ async function runAutopilot(
 			`mission_id: ${mission.id}`,
 			`lane: ${lane.name}`,
 			`target: ${initialPack.target ?? params.target ?? "<TARGET>"}`,
+			`clean_state: ${params.cleanState ? "applied" : "off"}`,
+			...(cleanStateSummary.length ? cleanStateSummary.map((item) => `clean_state_${item}`) : []),
 			"stages:",
 			"- re_map target/depth -> evidence/maps artifact",
 			"- bootstrap plan from route/map/command-pack/tool-index",
@@ -16489,6 +16614,8 @@ async function runAutopilot(
 		`lane: ${mappedLane.name}`,
 		`target: ${strategy.pack.target ?? params.target ?? "<TARGET>"}`,
 		`execution_strategy: ${strategy.mode}`,
+		`clean_state: ${params.cleanState ? "applied" : "off"}`,
+		...(cleanStateSummary.length ? cleanStateSummary.map((item) => `clean_state_${item}`) : []),
 		`field_journal_anchor: ${anchor}`,
 		"",
 		...outputs.map((output) => truncateMiddle(output, 16000)),
@@ -19234,6 +19361,18 @@ function latestSwarmArtifactPath(options: ArtifactScopeFilterOptions = {}): stri
 	return latestScopedMarkdownArtifact("swarm", evidenceSwarmsDir(), options);
 }
 
+function latestSwarmRunArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	for (const path of scopedMarkdownArtifacts("swarm", evidenceSwarmsDir(), 24, {
+		...options,
+		requestedBy: options.requestedBy ?? "latest_swarm_run_for_supervisor",
+		write: options.write ?? false,
+	})) {
+		const text = readText(path);
+		if (/^mode:\s*run$/im.test(text)) return path;
+	}
+	return undefined;
+}
+
 function swarmArtifactPath(swarm: Pick<SwarmArtifact, "timestamp" | "route" | "mode">): string {
 	return join(
 		evidenceSwarmsDir(),
@@ -21679,7 +21818,8 @@ function reviewDelegatePacket(packet: DelegatePacket, ledger: string): Superviso
 function latestSwarmForSupervisor(
 	options: { target?: string } = {},
 ): { swarm: SwarmArtifact; path: string } | undefined {
-	const path = latestSwarmArtifactPath();
+	const scope = options.target ? { target: options.target, requestedBy: "supervisor_swarm_run" } : {};
+	const path = latestSwarmRunArtifactPath(scope) ?? latestSwarmArtifactPath(scope);
 	if (!path) return undefined;
 	const swarm = parseSwarmArtifact(path);
 	if (!swarm) return undefined;
@@ -23491,6 +23631,37 @@ function writeContextPackArtifact(pack: ContextPackArtifact): string {
 	return path;
 }
 
+function archiveCorruptCompactionResumeLedger(path: string, text: string, blocked: string[]): string | undefined {
+	if (!text.trim() || process.env.REPI_DISABLE_AUTO_LEDGER_REPAIR === "1") return undefined;
+	try {
+		const timestamp = new Date().toISOString();
+		const dir = join(reconArchiveDir(), `compact-ledger-corrupt-${timestamp.replace(/[:.]/g, "-")}`);
+		mkdirSync(dir, { recursive: true });
+		const archivedPath = join(dir, artifactBasename(path));
+		writeFileSync(archivedPath, text, "utf-8");
+		writeFileSync(
+			join(dir, "repair.json"),
+			`${JSON.stringify(
+				{
+					kind: "repi-compact-ledger-auto-repair",
+					generatedAt: timestamp,
+					sourcePath: path,
+					archivedPath,
+					blocked,
+					policy: "corrupt legacy compaction ledger is archived and runtime falls back to a fresh cold-start resume queue",
+				},
+				null,
+				2,
+			)}\n`,
+			"utf-8",
+		);
+		writeFileSync(path, "", "utf-8");
+		return archivedPath;
+	} catch {
+		return undefined;
+	}
+}
+
 function verifyCompactionResumeLedger(): { path: string; rows: number; status: "pass" | "missing" | "corrupt"; blocked: string[] } {
 	const path = memoryPath("compaction-resume-ledger.jsonl");
 	const text = readText(path);
@@ -23525,6 +23696,10 @@ function verifyCompactionResumeLedger(): { path: string; rows: number; status: "
 		if (row.contextSha256 && !/^[a-f0-9]{64}$/.test(row.contextSha256))
 			blocked.push(`compaction resume ledger contextSha256 invalid at row ${index + 1}`);
 		previousText += `${line}\n`;
+	}
+	if (blocked.length) {
+		const archived = archiveCorruptCompactionResumeLedger(path, text, blocked);
+		if (archived) return { path, rows: 0, status: "missing", blocked: [] };
 	}
 	return { path, rows, status: blocked.length ? "corrupt" : "pass", blocked };
 }
@@ -25957,7 +26132,11 @@ function gateAssertions(): VerifierAssertion[] {
 		evidence: gate.note ? [`note: ${gate.note}`] : [],
 		counterEvidence: gate.status === "done" ? [] : [`gate status=${gate.status}`],
 		requiredFollowups:
-			gate.status === "done" ? ["re_complete audit"] : [`close gate: ${gate.name}`, "re_operator escalate"],
+			gate.status === "done"
+				? ["re_complete audit"]
+				: gate.name === "harness_ready"
+					? ["re_harness full", "re_autofix plan harness_ready", "re_verifier matrix"]
+					: [`close gate: ${gate.name}`, "re_operator escalate"],
 	}));
 }
 
@@ -29085,8 +29264,9 @@ function buildKnowledgeGraphOutput(
 	options: { target?: string; query?: string } = {},
 ): string {
 	if (action === "show") {
+		const showTarget = sanitizeTargetForCommand(options.target) ?? sanitizeTargetForCommand(options.query);
 		const path = latestKnowledgeGraphArtifactPath(
-			options.target ? { target: options.target, requestedBy: "knowledge_graph_show" } : {},
+			showTarget ? { target: showTarget, requestedBy: "knowledge_graph_show" } : {},
 		);
 		if (!path) return "knowledge_graph:\nstatus: missing\nnext: re_knowledge_graph build";
 		return truncateMiddle(readText(path), 22000);
@@ -32739,9 +32919,9 @@ function parseMemoryAppendDirectives(text: string): Partial<MemoryEventInput> {
 		24,
 	);
 	return {
-		route: kv.get("route"),
-		target: kv.get("target"),
-		caseSignature: kv.get("casesignature") ?? kv.get("case_signature") ?? kv.get("case"),
+		route: kv.get("route") ? sanitizeMemoryRoute(kv.get("route")) : undefined,
+		target: sanitizeTargetForCommand(kv.get("target")),
+		caseSignature: sanitizeMemoryCaseSignature(kv.get("casesignature") ?? kv.get("case_signature") ?? kv.get("case")),
 		outcome:
 			outcome === "success" || outcome === "failure" || outcome === "blocked" || outcome === "partial" || outcome === "repair"
 				? outcome
@@ -32750,7 +32930,7 @@ function parseMemoryAppendDirectives(text: string): Partial<MemoryEventInput> {
 		replayVerified: parseBooleanDirective(kv.get("replayverified") ?? kv.get("replay_verified")),
 		playbookCandidate: parseBooleanDirective(kv.get("playbookcandidate") ?? kv.get("playbook_candidate")),
 		verifierRuleCandidate: parseBooleanDirective(kv.get("verifierrulecandidate") ?? kv.get("verifier_rule_candidate")),
-		artifactPaths: artifacts,
+		artifactPaths: sanitizeMemoryArtifactPaths(artifacts, 24),
 	};
 }
 
@@ -33391,15 +33571,16 @@ function appendMemoryEventTransaction(input: MemoryEventInput): {
 		const caseScan = jsonlScan(caseMemoryPath(), isCaseMemory, "CaseMemoryV1");
 		const events = eventScan.rows;
 		const ts = new Date().toISOString();
-		const task = input.task ?? mission?.task ?? "manual memory";
-		const route = input.route ?? mission?.route.domain ?? "manual";
-		const target = input.target;
+		const task = sanitizeMemoryText(input.task ?? mission?.task, "manual memory") ?? "manual memory";
+		const route = sanitizeMemoryRoute(input.route ?? mission?.route.domain, "manual");
+		const target = sanitizeTargetForCommand(input.target);
 		const memoryScope = currentMemoryScope({ route, target, mission });
-		const domainTags = uniqueNonEmpty([route, input.source, ...(input.domainTags ?? [])], 24);
-		const artifactHashes = uniqueNonEmpty(input.artifactPaths ?? [], 80);
-		const artifacts = uniqueNonEmpty([...(input.artifacts ?? []).map((item) => item.path), ...artifactHashes], 80);
-		const normalizedArtifacts = uniqueNonEmpty(input.artifacts?.map((item) => item.path) ?? [], 80).length
-			? uniqueNonEmpty(input.artifacts?.map((item) => item.path) ?? [], 80).map((path) =>
+		const domainTags = uniqueNonEmpty([route, input.source, ...(input.domainTags ?? [])].map(sanitizeMemoryTag), 24);
+		const artifactHashes = sanitizeMemoryArtifactPaths(input.artifactPaths, 80);
+		const artifacts = sanitizeMemoryArtifactPaths([...(input.artifacts ?? []).map((item) => item.path), ...artifactHashes], 80);
+		const normalizedArtifactPaths = sanitizeMemoryArtifactPaths(input.artifacts?.map((item) => item.path) ?? [], 80);
+		const normalizedArtifacts = normalizedArtifactPaths.length
+			? normalizedArtifactPaths.map((path) =>
 					(input.artifacts ?? []).find((item) => item.path === path) ?? { path, sha256: null, tier: memoryArtifactTier(path) },
 				)
 			: [];
@@ -33408,7 +33589,7 @@ function appendMemoryEventTransaction(input: MemoryEventInput): {
 			...normalizedArtifacts,
 			...hashed.filter((item) => !normalizedArtifacts.some((artifact) => artifact.path === item.path)),
 		].slice(0, 80);
-		const caseSignature = input.caseSignature ?? memoryEventSignature({ task, route, target, domainTags });
+		const caseSignature = sanitizeMemoryCaseSignature(input.caseSignature) ?? memoryEventSignature({ task, route, target, domainTags });
 		const row: MemoryEventV1 = {
 			kind: "repi-memory-event",
 			schemaVersion: 1,
@@ -33422,10 +33603,10 @@ function appendMemoryEventTransaction(input: MemoryEventInput): {
 			domainTags,
 			caseSignature,
 			outcome: input.outcome ?? "partial",
-			lessons: uniqueNonEmpty(input.lessons ?? [], 40),
-			failurePatterns: uniqueNonEmpty(input.failurePatterns ?? [], 40),
-			reuseRules: uniqueNonEmpty(input.reuseRules ?? [], 40),
-			commands: uniqueNonEmpty(input.commands ?? [], 40),
+			lessons: sanitizeMemoryList(input.lessons, 40),
+			failurePatterns: sanitizeMemoryList(input.failurePatterns, 40),
+			reuseRules: sanitizeMemoryList(input.reuseRules, 40),
+			commands: sanitizeMemoryCommands(input.commands, 40),
 			artifacts: mergedArtifacts,
 			artifactHashes: mergedArtifacts,
 			memoryScope,
@@ -33602,11 +33783,19 @@ function appendMemoryDepositionRuntimeEvent(
 ): MemoryDepositionRuntimeEventV7 {
 	ensureReconStorage();
 	const mission = readCurrentMission();
-	const task = input.task ?? mission?.task ?? input.command ?? "runtime memory deposition";
-	const route = input.route ?? mission?.route.domain ?? "runtime";
-	const target = input.target ?? artifactScopeInferTarget(input.command ?? task);
-	const commands = uniqueNonEmpty([...(input.commands ?? []), input.command, ...extractMemoryCommands(input.lessons?.join("\n") ?? "")], 40);
-	const artifactPaths = uniqueNonEmpty([...(input.artifactPaths ?? []), ...(input.artifacts ?? []).map((artifact) => artifact.path)], 80);
+	const task = sanitizeMemoryText(input.task ?? mission?.task ?? input.command, "runtime memory deposition") ?? "runtime memory deposition";
+	const route = sanitizeMemoryRoute(input.route ?? mission?.route.domain, "runtime");
+	const target = sanitizeTargetForCommand(input.target) ?? sanitizeTargetForCommand(artifactScopeInferTarget(input.command ?? task));
+	const commands = sanitizeMemoryCommands(
+		[...(input.commands ?? []), input.command, ...extractMemoryCommands(input.lessons?.join("\n") ?? "")].filter(
+			(value): value is string => Boolean(value),
+		),
+		40,
+	);
+	const artifactPaths = sanitizeMemoryArtifactPaths(
+		[...(input.artifactPaths ?? []), ...(input.artifacts ?? []).map((artifact) => artifact.path)],
+		80,
+	);
 	const artifactHashes = input.artifacts?.length
 		? [
 				...input.artifacts,
@@ -33627,9 +33816,9 @@ function appendMemoryDepositionRuntimeEvent(
 			caseSignature,
 			domainTags: uniqueNonEmpty([route, input.stage ?? "tool", "MemoryDepositionEngineV7"], 12),
 			outcome,
-			lessons: uniqueNonEmpty(input.lessons ?? [input.reason ?? task], 40),
-			failurePatterns: uniqueNonEmpty(input.failurePatterns ?? (outcome === "failure" || outcome === "blocked" ? [input.reason ?? task] : []), 40),
-			reuseRules: uniqueNonEmpty(input.reuseRules ?? [], 40),
+			lessons: sanitizeMemoryList(input.lessons ?? [input.reason ?? task], 40),
+			failurePatterns: sanitizeMemoryList(input.failurePatterns ?? (outcome === "failure" || outcome === "blocked" ? [input.reason ?? task] : []), 40),
+			reuseRules: sanitizeMemoryList(input.reuseRules, 40),
 			commands,
 			artifacts: artifactHashes,
 			confidence: input.confidence ?? 0.62,
@@ -33666,13 +33855,17 @@ function appendMemoryDepositionRuntimeEvent(
 			artifactHashes,
 			claimIds: uniqueNonEmpty(input.claimIds ?? [], 40),
 			compactResumeId: input.compactResumeId,
-			lessons: uniqueNonEmpty(input.lessons ?? [input.reason ?? task], 40),
-			failurePatterns: uniqueNonEmpty(input.failurePatterns ?? [], 40),
-			reuseRules: uniqueNonEmpty(input.reuseRules ?? [], 40),
+			lessons: sanitizeMemoryList(input.lessons ?? [input.reason ?? task], 40),
+			failurePatterns: sanitizeMemoryList(input.failurePatterns, 40),
+			reuseRules: sanitizeMemoryList(input.reuseRules, 40),
 			commands,
 			memoryEventId,
-			caseSignature,
-			reason: truncateMiddle(input.reason ?? "runtime step captured by MemoryDepositionEngineV7", 420),
+			caseSignature: sanitizeMemoryCaseSignature(caseSignature),
+			reason: truncateMiddle(
+				sanitizeMemoryText(input.reason, "runtime step captured by MemoryDepositionEngineV7") ??
+					"runtime step captured by MemoryDepositionEngineV7",
+				420,
+			),
 			prevHash: events.at(-1)?.entryHash ?? "0".repeat(64),
 		};
 		const row: MemoryDepositionRuntimeEventV7 = { ...rowBase, entryHash: memoryDepositionEventHash({ ...rowBase, entryHash: "" }) };
@@ -33708,6 +33901,139 @@ function recordMemoryDepositionFromMemoryEvent(event: MemoryEventV1): MemoryDepo
 	} catch {
 		return undefined;
 	}
+}
+
+function redactRepiPoisonText(text: string): string {
+	let out = text;
+	for (const pattern of REPI_POISON_PATTERNS) out = out.replace(pattern, "[REPI_POISON_REDACTED]");
+	return out.replace(/😅/g, "");
+}
+
+function sanitizeMemoryEventRow(event: MemoryEventV1): MemoryEventV1 | undefined {
+	if (containsRepiPoison(JSON.stringify(event))) return undefined;
+	const task = sanitizeMemoryText(event.task, "manual memory") ?? "manual memory";
+	const route = sanitizeMemoryRoute(event.route, "manual");
+	const target = sanitizeTargetForCommand(event.target);
+	const row: MemoryEventV1 = {
+		...event,
+		task,
+		route,
+		target,
+		domainTags: uniqueNonEmpty([route, event.source, ...event.domainTags].map(sanitizeMemoryTag), 24),
+		lessons: sanitizeMemoryList(event.lessons, 40),
+		failurePatterns: sanitizeMemoryList(event.failurePatterns, 40),
+		reuseRules: sanitizeMemoryList(event.reuseRules, 40),
+		commands: sanitizeMemoryCommands(event.commands, 40),
+		memoryScope: currentMemoryScope({ route, target, mission: readCurrentMission() }),
+		entryHash: "",
+	};
+	return row;
+}
+
+function sanitizeMemoryDepositionRow(event: MemoryDepositionRuntimeEventV7): MemoryDepositionRuntimeEventV7 | undefined {
+	if (containsRepiPoison(JSON.stringify(event))) return undefined;
+	const task = sanitizeMemoryText(event.task, "runtime memory deposition") ?? "runtime memory deposition";
+	const route = sanitizeMemoryRoute(event.route, "runtime");
+	const target = sanitizeTargetForCommand(event.target);
+	const row: MemoryDepositionRuntimeEventV7 = {
+		...event,
+		task,
+		route,
+		target,
+		command: event.command ? normalizeHistoricalCommand(event.command, undefined, undefined) : undefined,
+		lessons: sanitizeMemoryList(event.lessons, 40),
+		failurePatterns: sanitizeMemoryList(event.failurePatterns, 40),
+		reuseRules: sanitizeMemoryList(event.reuseRules, 40),
+		commands: sanitizeMemoryCommands(event.commands, 40),
+		reason: sanitizeMemoryText(event.reason, "runtime step captured by MemoryDepositionEngineV7") ?? "runtime step captured by MemoryDepositionEngineV7",
+		caseSignature: sanitizeMemoryCaseSignature(event.caseSignature),
+		entryHash: "",
+	};
+	return row;
+}
+
+function sanitizeReconPoisonedState(): string {
+	ensureReconStorage();
+	const timestamp = new Date().toISOString();
+	const archiveRoot = join(reconArchiveDir(), `poison-cleanup-${timestamp.replace(/[:.]/g, "-")}`);
+	mkdirSync(archiveRoot, { recursive: true });
+	const actions: string[] = [];
+	const archiveOriginal = (path: string, text: string) => {
+		const relative = path.startsWith(reconDir()) ? path.slice(reconDir().length + 1) : artifactBasename(path);
+		const archived = join(archiveRoot, relative);
+		mkdirSync(dirname(archived), { recursive: true });
+		writeFileSync(archived, text, "utf-8");
+		return archived;
+	};
+	const rawEventsText = readText(memoryEventsPath());
+	if (containsRepiPoison(rawEventsText)) {
+		const archived = archiveOriginal(memoryEventsPath(), rawEventsText);
+		let prevHash = "0".repeat(64);
+		const cleanEvents = readMemoryEvents()
+			.map(sanitizeMemoryEventRow)
+			.filter((event): event is MemoryEventV1 => Boolean(event))
+			.map((event, index) => {
+				const row: MemoryEventV1 = { ...event, seq: index + 1, prevHash, entryHash: "" };
+				row.entryHash = memoryEventHash(row);
+				prevHash = row.entryHash;
+				return row;
+			});
+		writeFileAtomic(
+			memoryEventsPath(),
+			cleanEvents.length ? `${cleanEvents.map((event) => JSON.stringify(event)).join("\n")}\n` : "",
+		);
+		const cases = rebuildCaseMemoryFromEvents(cleanEvents);
+		writeFileAtomic(caseMemoryPath(), cases.length ? `${cases.map((row) => JSON.stringify(row)).join("\n")}\n` : "");
+		actions.push(`memory_events_sanitized archived=${archived} kept=${cleanEvents.length}`);
+	}
+	const rawDepositionText = readText(memoryDepositionEventBusPath());
+	if (containsRepiPoison(rawDepositionText)) {
+		const archived = archiveOriginal(memoryDepositionEventBusPath(), rawDepositionText);
+		let prevHash = "0".repeat(64);
+		const cleanRows = readMemoryDepositionEvents()
+			.map(sanitizeMemoryDepositionRow)
+			.filter((event): event is MemoryDepositionRuntimeEventV7 => Boolean(event))
+			.map((event, index) => {
+				const rowBase: Omit<MemoryDepositionRuntimeEventV7, "entryHash"> = {
+					...event,
+					seq: index + 1,
+					prevHash,
+				};
+				const row: MemoryDepositionRuntimeEventV7 = {
+					...rowBase,
+					entryHash: memoryDepositionEventHash({ ...rowBase, entryHash: "" }),
+				};
+				prevHash = row.entryHash;
+				return row;
+			});
+		writeFileAtomic(
+			memoryDepositionEventBusPath(),
+			cleanRows.length ? `${cleanRows.map((event) => JSON.stringify(event)).join("\n")}\n` : "",
+		);
+		actions.push(`memory_deposition_sanitized archived=${archived} kept=${cleanRows.length}`);
+	}
+	const textPaths = [
+		currentMissionPath(),
+		memoryPath("dispatcher-feedback-board.md"),
+		memoryPath("compaction-auto-resume-board.md"),
+		...recentMarkdownArtifacts(evidenceKernelDir(), 12),
+		...recentMarkdownArtifacts(evidenceDecisionsDir(), 12),
+		...recentMarkdownArtifacts(evidenceContextsDir(), 12),
+	];
+	for (const path of textPaths) {
+		const text = readText(path);
+		if (!containsRepiPoison(text)) continue;
+		const archived = archiveOriginal(path, text);
+		writeFileAtomic(path, redactRepiPoisonText(text));
+		actions.push(`text_redacted path=${path} archived=${archived}`);
+	}
+	buildMemoryStoreVerificationUnlocked({ write: true });
+	return [
+		"memory_sanitize:",
+		`archive_root: ${archiveRoot}`,
+		...(actions.length ? actions.map((action) => `- ${action}`) : ["- no poison markers found"]),
+		"next: re_memory verify && re_memory supervise",
+	].join("\n");
 }
 
 function buildMemoryDepositionReport(options: { write?: boolean } = {}): MemoryDepositionReportV7 {
@@ -38709,10 +39035,13 @@ function buildArtifactScopeFilterReport(options: {
 		const targetMismatch =
 			Boolean(options.target && explicitTarget) &&
 			memoryTargetScope(explicitTarget) !== memoryTargetScope(options.target);
-		const verdict = targetMismatch ? "block" : row?.verdict ?? "allow";
+		const untrackedTargetScope = Boolean(options.target && !row && !explicitTarget);
+		const verdict = targetMismatch ? "block" : untrackedTargetScope ? "warn" : row?.verdict ?? "allow";
 		const reasons = targetMismatch
 			? [`artifact_target_mismatch:${explicitTarget}!=${options.target}`]
-			: row?.reasons ?? ["untracked_artifact_no_memory_scope_binding"];
+			: untrackedTargetScope
+				? [`untracked_artifact_no_memory_scope_binding_for_target:${options.target}`]
+				: row?.reasons ?? ["untracked_artifact_no_memory_scope_binding"];
 		return {
 			kind: "repi-artifact-scope-filter-decision",
 			schemaVersion: 1,
@@ -38728,9 +39057,7 @@ function buildArtifactScopeFilterReport(options: {
 				verdict === "block"
 					? "quarantine"
 					: verdict === "warn"
-						? row?.recommendedAction === "manual-review"
-							? "manual-review"
-							: "retain"
+						? "manual-review"
 						: "allow",
 			matchedBy: match.matchedBy,
 		};
@@ -40240,7 +40567,7 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 	});
 	pi.registerCommand("re-memory", {
 		description:
-			"Read, append, evolve, search, orchestrate, verify, repair, snapshot, compact-resume, eval, feedback, quality, replay, strategy, active-kernel, mature, retention, vector, distill, sediment, supervise, or maintain REPI memory: /re-memory [show|events|search|orchestrate|pre-task|pre-operator|post-tool|post-failure|post-success|pre-compact|post-compact|final|quality|replay|strategy|active|mature|retention|vector|append|evolve|verify|repair-index|snapshot|compact-resume|resume-ledger|eval|feedback|consolidate|distill|sediment|supervise|playbooks|prune-playbooks] ...",
+			"Read, append, evolve, search, orchestrate, verify, repair, snapshot, compact-resume, eval, feedback, quality, replay, strategy, active-kernel, mature, retention, vector, distill, sediment, supervise, sanitize poison, or maintain REPI memory: /re-memory [show|events|search|orchestrate|pre-task|pre-operator|post-tool|post-failure|post-success|pre-compact|post-compact|final|quality|replay|strategy|active|mature|retention|vector|append|evolve|verify|repair-index|snapshot|compact-resume|resume-ledger|eval|feedback|consolidate|distill|sediment|supervise|sanitize|playbooks|prune-playbooks] ...",
 		handler: async (args) => {
 			const trimmed = args.trim();
 			const memoryOrchestratorMatch =
@@ -40265,8 +40592,16 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 				sendDisplayMessage(pi, "REPI Memory Orchestrator", formatMemoryOrchestrator(report));
 				return;
 			}
+			if (trimmed === "sanitize" || trimmed === "clean-poison") {
+				const text = sanitizeReconPoisonedState();
+				updateMissionGate("memory_checked", "done", "memory poison sanitizer executed");
+				sendDisplayMessage(pi, "REPI Memory Sanitizer", text);
+				return;
+			}
 			if (trimmed.startsWith("append ")) {
-				const body = trimmed.slice("append ".length);
+				const body =
+					sanitizeMemoryText(trimmed.slice("append ".length), "memory input sanitized by poison filter") ??
+					"memory input sanitized by poison filter";
 				const directives = parseMemoryAppendDirectives(body);
 				const anchor = appendJournal("manual", "operator-note", body);
 				const event = appendMemoryEvent({
@@ -40289,7 +40624,9 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 				return;
 			}
 			if (trimmed.startsWith("evolve ")) {
-				const body = trimmed.slice("evolve ".length);
+				const body =
+					sanitizeMemoryText(trimmed.slice("evolve ".length), "memory input sanitized by poison filter") ??
+					"memory input sanitized by poison filter";
 				const anchor = appendEvolution("manual evolution", body);
 				const event = appendMemoryEvent({
 					source: "operator",
@@ -40542,14 +40879,18 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 		},
 	});
 	pi.registerCommand("re-auto", {
-		description: "Run REPI bounded autopilot: /re-auto [plan|run] [target] [max-auto-steps]",
+		description: "Run REPI bounded autopilot: /re-auto [plan|run] [--clean-state] [target] [max-auto-steps]",
 		handler: async (args) => {
 			const parts = args.trim().split(/\s+/).filter(Boolean);
 			const action = parts[0] === "plan" || parts[0] === "run" ? (parts.shift() as "plan" | "run") : "run";
 			const last = parts.at(-1);
 			const maxAutoSteps = last && /^\d+$/.test(last) ? Number(parts.pop()) : undefined;
+			const cleanState = parts.includes("--clean-state") || parts.includes("clean-state");
+			for (let index = parts.length - 1; index >= 0; index -= 1) {
+				if (parts[index] === "--clean-state" || parts[index] === "clean-state") parts.splice(index, 1);
+			}
 			const target = parts.join(" ") || undefined;
-			const text = await runAutopilot(pi, { action, target, maxAutoSteps });
+			const text = await runAutopilot(pi, { action, target, maxAutoSteps, cleanState });
 			sendDisplayMessage(pi, "REPI Autopilot", text);
 		},
 	});
@@ -41221,6 +41562,8 @@ function installReconTools(pi: ExtensionAPI): void {
 				Type.Literal("supervise"),
 				Type.Literal("supervisor"),
 				Type.Literal("lifecycle"),
+				Type.Literal("sanitize"),
+				Type.Literal("clean-poison"),
 				Type.Literal("playbooks"),
 				Type.Literal("prune-playbooks"),
 			]),
@@ -41235,6 +41578,17 @@ function installReconTools(pi: ExtensionAPI): void {
 			text: Type.Optional(Type.String()),
 		}),
 		async execute(_toolCallId, params) {
+			if (params.action === "sanitize" || params.action === "clean-poison") {
+				const text = sanitizeReconPoisonedState();
+				updateMissionGate("memory_checked", "done", "memory poison sanitizer executed");
+				return {
+					content: [{ type: "text" as const, text }],
+					details: { action: params.action, archiveRoot: /^archive_root:\s*(.+)$/m.exec(text)?.[1]?.trim() } as Record<
+						string,
+						unknown
+					>,
+				};
+			}
 			if (
 				params.action === "orchestrate" ||
 				params.action === "orchestrator" ||
@@ -41273,7 +41627,9 @@ function installReconTools(pi: ExtensionAPI): void {
 				params.action === "writeback" ||
 				params.action === "runtime-event"
 			) {
-				const text = params.text ?? params.query ?? "";
+				const text =
+					sanitizeMemoryText(params.text ?? params.query ?? "", "memory input sanitized by poison filter") ??
+					"memory input sanitized by poison filter";
 				const directives = parseMemoryAppendDirectives(text);
 				const outcome = directives.outcome ?? (/fail|error|blocked|timeout|exception/i.test(text) ? "failure" : "partial");
 				const deposition = appendMemoryDepositionRuntimeEvent(
@@ -41344,7 +41700,9 @@ function installReconTools(pi: ExtensionAPI): void {
 				params.action === "experience-report"
 			) {
 				if (params.action === "learn" && (params.text ?? params.query)) {
-					const text = params.text ?? params.query ?? "";
+					const text =
+						sanitizeMemoryText(params.text ?? params.query ?? "", "memory input sanitized by poison filter") ??
+						"memory input sanitized by poison filter";
 					const directives = parseMemoryAppendDirectives(text);
 					appendMemoryEvent({
 						source: "manual",
@@ -41406,7 +41764,9 @@ function installReconTools(pi: ExtensionAPI): void {
 				};
 			}
 			if (params.action === "append") {
-				const text = params.text ?? "";
+				const text =
+					sanitizeMemoryText(params.text ?? "", "memory input sanitized by poison filter") ??
+					"memory input sanitized by poison filter";
 				const directives = parseMemoryAppendDirectives(text);
 				const anchor = appendJournal(params.scene ?? "agent", params.title ?? "field-note", text);
 				const event = appendMemoryEvent({
@@ -41432,7 +41792,9 @@ function installReconTools(pi: ExtensionAPI): void {
 				};
 			}
 			if (params.action === "evolve") {
-				const text = params.text ?? "";
+				const text =
+					sanitizeMemoryText(params.text ?? "", "memory input sanitized by poison filter") ??
+					"memory input sanitized by poison filter";
 				const anchor = appendEvolution(params.title ?? "agent evolution", text);
 				const event = appendMemoryEvent({
 					source: "operator",
@@ -41945,6 +42307,7 @@ function installReconTools(pi: ExtensionAPI): void {
 			mapDepth: Type.Optional(Type.Number()),
 			maxAutoSteps: Type.Optional(Type.Number()),
 			runAuto: Type.Optional(Type.Boolean()),
+			cleanState: Type.Optional(Type.Boolean()),
 		}),
 		async execute(_toolCallId, params) {
 			const text = await runAutopilot(pi, {
@@ -41955,6 +42318,7 @@ function installReconTools(pi: ExtensionAPI): void {
 				mapDepth: params.mapDepth,
 				maxAutoSteps: params.maxAutoSteps,
 				runAuto: params.runAuto,
+				cleanState: params.cleanState,
 			});
 			return {
 				content: [{ type: "text" as const, text }],
