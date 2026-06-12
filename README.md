@@ -154,21 +154,22 @@ REPI 支持主流模型接入方式：
 
 ```json
 {
-  "providers": [
-    {
+  "providers": {
+    "openai-compatible": {
       "name": "openai-compatible",
-      "type": "openai-completions",
-      "baseURL": "https://gateway.example/v1",
-      "apiKeyEnv": "OPENAI_COMPATIBLE_API_KEY",
+      "baseUrl": "https://gateway.example/v1",
+      "api": "openai-completions",
+      "apiKey": "$OPENAI_COMPATIBLE_API_KEY",
       "models": [
         {
           "id": "provider/model-id",
           "contextWindow": 262144,
-          "supportsThinking": true
+          "maxTokens": 16384,
+          "reasoning": true
         }
       ]
     }
-  ]
+  }
 }
 ```
 
@@ -489,8 +490,8 @@ repi provider-doctor --base-url https://gateway.example/v1 --model provider/mode
 
 - `~/.repi/agent/models.json`
 - provider name 是否匹配
-- apiKeyEnv 是否指向真实环境变量
-- baseURL 是否包含正确 `/v1` 路径
+- apiKey 是否使用 `$ENV_NAME` 形式并指向真实环境变量
+- baseUrl 是否包含正确 `/v1` 路径
 
 ### Gate 失败
 

@@ -49,6 +49,9 @@ jobs:
       - name: REPI release evidence index gate
         run: npm run gate:release-evidence-index -- --no-write
 
+      - name: REPI runtime adapter execution gate
+        run: npm run gate:runtime-adapter-execution
+
       - name: Top-level REPI independence harness
         run: npm run gate:repi-harness
 
