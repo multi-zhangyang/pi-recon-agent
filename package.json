@@ -96,6 +96,7 @@
 		"gate:memory-active-kernel": "node scripts/reverse-agent/memory-active-kernel-gate.mjs . --strict",
 		"gate:memory-maturation-runtime": "node scripts/reverse-agent/memory-maturation-runtime-gate.mjs . --strict",
 		"gate:memory-ux": "node scripts/reverse-agent/memory-ux-gate.mjs . --strict",
+		"gate:memory-isolation-default": "node scripts/reverse-agent/memory-isolation-gate.mjs . --strict",
 		"gate:repair-rollback-policy": "node scripts/reverse-agent/repair-rollback-policy-gate.mjs . --strict",
 		"gate:tool-call-trace-ledger": "node scripts/reverse-agent/tool-call-trace-ledger-gate.mjs . --strict",
 		"gate:worker-lease-scheduler": "node scripts/reverse-agent/worker-lease-scheduler-gate.mjs . --strict",

@@ -96,6 +96,18 @@ settings.compaction = {
 	reserveTokens: migratedLegacyReserveTokens ?? 16384,
 	keepRecentTokens: existingCompaction.keepRecentTokens ?? 36000,
 };
+const existingMemory =
+	settings.memory && typeof settings.memory === "object" && !Array.isArray(settings.memory) ? settings.memory : {};
+settings.memory = {
+	...existingMemory,
+	autoInject: existingMemory.autoInject ?? false,
+	autoDeposit: existingMemory.autoDeposit ?? false,
+	startupDigest: existingMemory.startupDigest ?? "status",
+	scopePolicy: existingMemory.scopePolicy ?? "session",
+	includeGlobalMemoryInContextPack: existingMemory.includeGlobalMemoryInContextPack ?? false,
+	activeRecall: existingMemory.activeRecall ?? false,
+	maxInjectedTokens: existingMemory.maxInjectedTokens ?? 1200,
+};
 settings.branchSummary = { reserveTokens: 24576, skipPrompt: true, ...(settings.branchSummary ?? {}) };
 settings.retry = {
 	enabled: true,

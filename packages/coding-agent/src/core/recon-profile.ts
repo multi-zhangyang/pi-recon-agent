@@ -6069,6 +6069,173 @@ function memoryVectorSearchReportPath(): string {
 	return memoryPath("vector-search-report.json");
 }
 
+type RepiMemoryStartupDigestMode = "off" | "status" | "scoped" | "full";
+type RepiMemoryScopePolicy = "session" | "workspace" | "target" | "global";
+
+type RepiMemoryRuntimeSettings = {
+	autoInject: boolean;
+	autoDeposit: boolean;
+	startupDigest: RepiMemoryStartupDigestMode;
+	includeGlobalMemoryInContextPack: boolean;
+	activeRecall: boolean;
+	scopePolicy: RepiMemoryScopePolicy;
+	maxInjectedTokens: number;
+};
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+	return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function envBoolean(name: string): boolean | undefined {
+	const raw = process.env[name];
+	if (raw === undefined) return undefined;
+	if (/^(?:1|true|yes|on)$/i.test(raw.trim())) return true;
+	if (/^(?:0|false|no|off)$/i.test(raw.trim())) return false;
+	return undefined;
+}
+
+function booleanSetting(value: unknown): boolean | undefined {
+	return typeof value === "boolean" ? value : undefined;
+}
+
+function stringSetting(value: unknown): string | undefined {
+	return typeof value === "string" ? value : undefined;
+}
+
+function numberSetting(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeMemoryStartupDigest(value: unknown): RepiMemoryStartupDigestMode {
+	const raw = String(value ?? "status").trim().toLowerCase();
+	if (raw === "off" || raw === "disabled" || raw === "none") return "off";
+	if (raw === "full" || raw === "legacy") return "full";
+	if (raw === "scoped" || raw === "scope") return "scoped";
+	return "status";
+}
+
+function normalizeMemoryScopePolicy(value: unknown): RepiMemoryScopePolicy {
+	const raw = String(value ?? "session").trim().toLowerCase();
+	if (raw === "workspace" || raw === "target" || raw === "global") return raw;
+	return "session";
+}
+
+function boundedPositiveInteger(value: unknown, fallback: number, min = 200, max = 20_000): number {
+	const parsed = typeof value === "number" ? value : Number(value);
+	if (!Number.isFinite(parsed)) return fallback;
+	return Math.max(min, Math.min(max, Math.floor(parsed)));
+}
+
+function repiMemorySettings(): RepiMemoryRuntimeSettings {
+	const settings = readJsonObjectFile<Record<string, unknown>>(join(getAgentDir(), "settings.json")) ?? {};
+	const memory = isPlainRecord(settings.memory) ? settings.memory : {};
+	const autoDepositSetting = booleanSetting(memory.autoDeposit) ?? booleanSetting(memory.autoWriteback);
+	return {
+		autoInject: envBoolean("REPI_MEMORY_AUTO_INJECT") ?? booleanSetting(memory.autoInject) ?? false,
+		autoDeposit:
+			envBoolean("REPI_MEMORY_AUTO_DEPOSIT") ??
+			envBoolean("REPI_MEMORY_AUTO_WRITEBACK") ??
+			autoDepositSetting ??
+			false,
+		startupDigest: normalizeMemoryStartupDigest(
+			process.env.REPI_MEMORY_STARTUP_DIGEST ?? stringSetting(memory.startupDigest) ?? "status",
+		),
+		includeGlobalMemoryInContextPack:
+			envBoolean("REPI_MEMORY_CONTEXT_PACK") ?? booleanSetting(memory.includeGlobalMemoryInContextPack) ?? false,
+		activeRecall: envBoolean("REPI_MEMORY_ACTIVE_RECALL") ?? booleanSetting(memory.activeRecall) ?? false,
+		scopePolicy: normalizeMemoryScopePolicy(process.env.REPI_MEMORY_SCOPE_POLICY ?? stringSetting(memory.scopePolicy)),
+		maxInjectedTokens: boundedPositiveInteger(
+			process.env.REPI_MEMORY_MAX_INJECTED_TOKENS ?? numberSetting(memory.maxInjectedTokens),
+			1200,
+		),
+	};
+}
+
+function memoryLineCount(path: string): number {
+	const text = readText(path);
+	if (!text.trim()) return 0;
+	return text.split(/\r?\n/).filter((line) => line.trim()).length;
+}
+
+function memoryFileStatusLine(label: string, path: string): string {
+	if (!existsSync(path)) return `${label}=missing`;
+	const stat = statSync(path);
+	return `${label}=present rows=${memoryLineCount(path)} bytes=${stat.size}`;
+}
+
+function formatMemoryIsolationStatus(
+	settings = repiMemorySettings(),
+	options: { route?: string; target?: string } = {},
+): string {
+	return [
+		"memory_isolation:",
+		`mode=${settings.autoInject ? settings.startupDigest : "isolated"}`,
+		`auto_inject=${settings.autoInject}`,
+		`auto_deposit=${settings.autoDeposit}`,
+		`active_recall=${settings.activeRecall}`,
+		`context_pack_global_memory=${settings.includeGlobalMemoryInContextPack}`,
+		`scope_policy=${settings.scopePolicy}`,
+		`route=${options.route ?? "none"}`,
+		`target_scope=${options.target ? memoryTargetScope(options.target) : "workspace"}`,
+		"historical_memory_content=not_injected_by_default",
+		memoryFileStatusLine("events", memoryEventsPath()),
+		memoryFileStatusLine("case_memory", caseMemoryPath()),
+		"explicit_recall:",
+		"- re_memory search <query>",
+		"- re_memory scope <target>",
+		"- re_memory active <target>",
+		"opt_in:",
+		"- set memory.autoInject=true and memory.startupDigest=scoped/full in ~/.repi/agent/settings.json",
+	].join("\n");
+}
+
+function buildScopedMemoryDigest(options: { route?: string; target?: string; query?: string } = {}): string {
+	const query = options.query ?? options.target ?? options.route ?? "";
+	const hits = searchMemoryEvents(query, { route: options.route, target: options.target, limit: 6 });
+	return formatMemoryRetrieval(query, hits);
+}
+
+function buildStartupMemoryDigest(options: { route?: string; target?: string } = {}): string {
+	const settings = repiMemorySettings();
+	if (settings.startupDigest === "off") return "memory_startup: disabled";
+	if (!settings.autoInject || settings.startupDigest === "status") return formatMemoryIsolationStatus(settings, options);
+	const digest =
+		settings.startupDigest === "full"
+			? buildMemoryDigest()
+			: buildScopedMemoryDigest({ route: options.route, target: options.target });
+	return truncateMiddle(digest, settings.maxInjectedTokens);
+}
+
+function buildContextMemoryTail(options: { route?: string; target?: string } = {}): string {
+	const settings = repiMemorySettings();
+	if (!settings.includeGlobalMemoryInContextPack) return formatMemoryIsolationStatus(settings, options);
+	if (settings.startupDigest === "full") return truncateMiddle(buildMemoryDigest(), settings.maxInjectedTokens);
+	if (settings.startupDigest === "scoped") {
+		return truncateMiddle(
+			buildScopedMemoryDigest({ route: options.route, target: options.target }),
+			settings.maxInjectedTokens,
+		);
+	}
+	return formatMemoryIsolationStatus(settings, options);
+}
+
+function buildStartupContextDigest(options: { route?: string; target?: string } = {}): string {
+	const latest = latestContextPackArtifactPath();
+	if (envBoolean("REPI_CONTEXT_AUTO_INJECT") === true) return buildContextDigest(3000);
+	return [
+		"context_startup_isolation:",
+		"historical_context_pack=not_injected_by_default",
+		`latest_context_pack=${latest ?? "none"}`,
+		`route=${options.route ?? "none"}`,
+		`target_scope=${options.target ? memoryTargetScope(options.target) : "workspace"}`,
+		"manual_resume:",
+		"- re_context show",
+		"- re_context resume <ref>",
+		"opt_in:",
+		"- set REPI_CONTEXT_AUTO_INJECT=1 for legacy startup context injection",
+	].join("\n");
+}
+
 function missionPath(name: string): string {
 	return join(reconDir(), "mission", name);
 }
@@ -16790,6 +16957,37 @@ function buildEvidenceDigest(query?: string): string {
 	return lines.length ? lines.join("\n") : "No matching evidence lines";
 }
 
+function buildStartupEvidenceDigest(options: { target?: string } = {}): string {
+	ensureReconStorage();
+	if (envBoolean("REPI_EVIDENCE_AUTO_INJECT") === true) return buildEvidenceDigest(options.target);
+	const path = evidenceLedgerPath();
+	const rows = memoryLineCount(path);
+	const bytes = existsSync(path) ? statSync(path).size : 0;
+	return [
+		"evidence_startup_isolation:",
+		"historical_evidence_ledger=not_injected_by_default",
+		`ledger_path=${path}`,
+		`ledger_rows=${rows}`,
+		`ledger_bytes=${bytes}`,
+		"manual_recall:",
+		"- re_evidence show",
+		"- re_evidence show <query>",
+		"opt_in:",
+		"- set REPI_EVIDENCE_AUTO_INJECT=1 for legacy startup evidence injection",
+	].join("\n");
+}
+
+function buildContextEvidenceTail(options: { target?: string } = {}): string {
+	if (envBoolean("REPI_EVIDENCE_CONTEXT_PACK") === true) return truncateMiddle(buildEvidenceDigest(), 7000);
+	if (options.target) {
+		const scoped = buildEvidenceDigest(options.target);
+		if (scoped && scoped !== "No matching evidence lines" && !scoped.startsWith("证据 ledger 为空")) {
+			return truncateMiddle(scoped, 7000);
+		}
+	}
+	return buildStartupEvidenceDigest(options);
+}
+
 function recentMarkdownArtifacts(dir: string, limit: number): string[] {
 	try {
 		return readdirSync(dir)
@@ -23011,58 +23209,69 @@ function scopedContextArtifactIndex(options: ArtifactScopeFilterOptions = {}): {
 			return [kind, path, path ? decisions.get(knowledgeScopePathKey(path)) : undefined];
 		},
 	);
-	const memoryPairs: Array<[string, string | undefined]> = [
-		["artifact_scope_filter", existingPath(memoryArtifactScopeFilterReportPath())],
-		["memory_events", existingPath(memoryEventsPath())],
-		["memory_case_memory", existingPath(caseMemoryPath())],
-		["memory_retrieval_report", existingPath(memoryRetrievalReportPath())],
-		["memory_store_report", existingPath(memoryStoreReportPath())],
-		["memory_store_snapshot", existingPath(memoryStoreSnapshotPath())],
-		["memory_usefulness_eval", existingPath(memoryUsefulnessEvalReportPath())],
-		["memory_feedback_closure", existingPath(memoryFeedbackClosureReportPath())],
-		["memory_scope_isolation", existingPath(memoryScopeIsolationReportPath())],
-		["memory_orchestrator", existingPath(memoryOrchestratorReportPath())],
-		["memory_deposition_report", existingPath(memoryDepositionReportPath())],
-		["memory_deposition_events", existingPath(memoryDepositionEventBusPath())],
-		["memory_experience_report", existingPath(memoryExperienceReportPath())],
-		["memory_experience_episodes", existingPath(memoryExperienceEpisodesPath())],
-		["memory_experience_claims", existingPath(memoryExperienceClaimsPath())],
-		["memory_experience_lesson_book", existingPath(memoryExperienceLessonBookPath())],
-		["memory_experience_promotions", existingPath(memoryExperiencePromotionLedgerPath())],
-		["memory_skill_capsule_report", existingPath(memorySkillCapsuleReportPath())],
-		["memory_skill_capsules", existingPath(memorySkillCapsuleLedgerPath())],
-		["memory_skill_capsule_book", existingPath(memorySkillCapsuleBookPath())],
-		["memory_distill_promotion_report", existingPath(memoryDistillPromotionReportPath())],
-		["memory_distill_promotion_candidates", existingPath(memoryDistillPromotionCandidateLedgerPath())],
-		["memory_distill_promotion_book", existingPath(memoryDistillPromotionBookPath())],
-		["memory_quality_report", existingPath(memoryQualityReportPath())],
-		["memory_quality_ledger", existingPath(memoryQualityLedgerPath())],
-		["memory_quality_board", existingPath(memoryQualityBoardPath())],
-		["memory_replay_report", existingPath(memoryReplayEvaluatorReportPath())],
-		["memory_replay_ledger", existingPath(memoryReplayEvaluatorLedgerPath())],
-		["memory_replay_board", existingPath(memoryReplayEvaluatorBoardPath())],
-		["memory_strategy_capsule_report", existingPath(memoryStrategyCapsuleReportPath())],
-		["memory_strategy_capsules", existingPath(memoryStrategyCapsuleLedgerPath())],
-		["memory_strategy_capsule_book", existingPath(memoryStrategyCapsuleBookPath())],
-		["memory_active_kernel_report", existingPath(memoryActiveKernelReportPath())],
-		["memory_active_injection_pack", existingPath(memoryActiveInjectionPackPath())],
-		["memory_active_strategy_board", existingPath(memoryActiveStrategyBoardPath())],
-		["memory_maturation_runtime_report", existingPath(memoryMaturationRuntimeReportPath())],
-		["memory_maturation_runtime_ledger", existingPath(memoryMaturationRuntimeLedgerPath())],
-		["memory_maturation_action_board", existingPath(memoryMaturationActionBoardPath())],
-		["compact_resume_transition_ledger", existingPath(compactResumeTransitionLedgerPath())],
-		["compact_resume_ledger_v2_report", existingPath(compactResumeLedgerV2ReportPath())],
-		["memory_vector_index", existingPath(memoryVectorIndexPath())],
-		["memory_vector_search", existingPath(memoryVectorSearchReportPath())],
-		["memory_distillation_report", existingPath(memoryDistillationReportPath())],
-		["memory_quarantine", existingPath(memoryQuarantinePath())],
-		["memory_semantic_index", existingPath(memorySemanticIndexPath())],
-		["memory_contradiction_ledger", existingPath(memoryContradictionLedgerPath())],
-		["memory_injection_packet", existingPath(memoryInjectionPacketPath())],
-		["memory_sedimentation_report", existingPath(memorySedimentationReportPath())],
-		["memory_supervisor_report", existingPath(memorySupervisorReportPath())],
-		["memory_lifecycle_board", existingPath(memoryLifecycleBoardPath())],
-	];
+	const memorySettings = repiMemorySettings();
+	const includeMemoryArtifacts =
+		memorySettings.includeGlobalMemoryInContextPack || /^re_memory_/i.test(scope.requestedBy ?? "");
+	const memoryPairs: Array<[string, string | undefined]> = includeMemoryArtifacts
+		? [
+				["artifact_scope_filter", existingPath(memoryArtifactScopeFilterReportPath())],
+				["memory_events", existingPath(memoryEventsPath())],
+				["memory_case_memory", existingPath(caseMemoryPath())],
+				["memory_retrieval_report", existingPath(memoryRetrievalReportPath())],
+				["memory_store_report", existingPath(memoryStoreReportPath())],
+				["memory_store_snapshot", existingPath(memoryStoreSnapshotPath())],
+				["memory_usefulness_eval", existingPath(memoryUsefulnessEvalReportPath())],
+				["memory_feedback_closure", existingPath(memoryFeedbackClosureReportPath())],
+				["memory_scope_isolation", existingPath(memoryScopeIsolationReportPath())],
+				["memory_orchestrator", existingPath(memoryOrchestratorReportPath())],
+				["memory_deposition_report", existingPath(memoryDepositionReportPath())],
+				["memory_deposition_events", existingPath(memoryDepositionEventBusPath())],
+				["memory_experience_report", existingPath(memoryExperienceReportPath())],
+				["memory_experience_episodes", existingPath(memoryExperienceEpisodesPath())],
+				["memory_experience_claims", existingPath(memoryExperienceClaimsPath())],
+				["memory_experience_lesson_book", existingPath(memoryExperienceLessonBookPath())],
+				["memory_experience_promotions", existingPath(memoryExperiencePromotionLedgerPath())],
+				["memory_skill_capsule_report", existingPath(memorySkillCapsuleReportPath())],
+				["memory_skill_capsules", existingPath(memorySkillCapsuleLedgerPath())],
+				["memory_skill_capsule_book", existingPath(memorySkillCapsuleBookPath())],
+				["memory_distill_promotion_report", existingPath(memoryDistillPromotionReportPath())],
+				["memory_distill_promotion_candidates", existingPath(memoryDistillPromotionCandidateLedgerPath())],
+				["memory_distill_promotion_book", existingPath(memoryDistillPromotionBookPath())],
+				["memory_quality_report", existingPath(memoryQualityReportPath())],
+				["memory_quality_ledger", existingPath(memoryQualityLedgerPath())],
+				["memory_quality_board", existingPath(memoryQualityBoardPath())],
+				["memory_replay_report", existingPath(memoryReplayEvaluatorReportPath())],
+				["memory_replay_ledger", existingPath(memoryReplayEvaluatorLedgerPath())],
+				["memory_replay_board", existingPath(memoryReplayEvaluatorBoardPath())],
+				["memory_strategy_capsule_report", existingPath(memoryStrategyCapsuleReportPath())],
+				["memory_strategy_capsules", existingPath(memoryStrategyCapsuleLedgerPath())],
+				["memory_strategy_capsule_book", existingPath(memoryStrategyCapsuleBookPath())],
+				["memory_active_kernel_report", existingPath(memoryActiveKernelReportPath())],
+				["memory_active_injection_pack", existingPath(memoryActiveInjectionPackPath())],
+				["memory_active_strategy_board", existingPath(memoryActiveStrategyBoardPath())],
+				["memory_maturation_runtime_report", existingPath(memoryMaturationRuntimeReportPath())],
+				["memory_maturation_runtime_ledger", existingPath(memoryMaturationRuntimeLedgerPath())],
+				["memory_maturation_action_board", existingPath(memoryMaturationActionBoardPath())],
+				["compact_resume_transition_ledger", existingPath(compactResumeTransitionLedgerPath())],
+				["compact_resume_ledger_v2_report", existingPath(compactResumeLedgerV2ReportPath())],
+				["memory_vector_index", existingPath(memoryVectorIndexPath())],
+				["memory_vector_search", existingPath(memoryVectorSearchReportPath())],
+				["memory_distillation_report", existingPath(memoryDistillationReportPath())],
+				["memory_quarantine", existingPath(memoryQuarantinePath())],
+				["memory_semantic_index", existingPath(memorySemanticIndexPath())],
+				["memory_contradiction_ledger", existingPath(memoryContradictionLedgerPath())],
+				["memory_injection_packet", existingPath(memoryInjectionPacketPath())],
+				["memory_sedimentation_report", existingPath(memorySedimentationReportPath())],
+				["memory_supervisor_report", existingPath(memorySupervisorReportPath())],
+				["memory_lifecycle_board", existingPath(memoryLifecycleBoardPath())],
+			]
+		: [
+				["artifact_scope_filter", existingPath(memoryArtifactScopeFilterReportPath())],
+				["memory_scope_isolation", existingPath(memoryScopeIsolationReportPath())],
+				["memory_status_report", existingPath(memoryStatusReportPath())],
+				["compact_resume_transition_ledger", existingPath(compactResumeTransitionLedgerPath())],
+				["compact_resume_ledger_v2_report", existingPath(compactResumeLedgerV2ReportPath())],
+			];
 	const entries = [
 		...pairs
 			.filter((pair): pair is [string, string, ArtifactScopeFilterDecisionV1 | undefined] => Boolean(pair[1]))
@@ -23090,12 +23299,15 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume"; 
 	const timestamp = new Date().toISOString();
 	const mission = readCurrentMission();
 	const active = mission ? activeLane(mission) : undefined;
-	const contextLatestScope = options.target ? { target: options.target, requestedBy: "context_pack_latest_artifact_consumer" } : {};
-	const supervisorPath = latestSupervisorArtifactPath(contextLatestScope);
-	const reflectionPath = latestReflectionArtifactPath(contextLatestScope);
+	const requestedTarget = options.target ?? artifactScopeInferTarget(mission?.task);
+	const contextLatestScope = requestedTarget
+		? { target: requestedTarget, requestedBy: "context_pack_latest_artifact_consumer" }
+		: {};
+	const supervisorPath = requestedTarget ? latestSupervisorArtifactPath(contextLatestScope) : undefined;
+	const reflectionPath = requestedTarget ? latestReflectionArtifactPath(contextLatestScope) : undefined;
 	const supervisor = supervisorPath ? parseSupervisorArtifact(supervisorPath) : undefined;
 	const reflection = reflectionPath ? parseReflectionArtifact(reflectionPath) : undefined;
-	const target = options.target ?? reflection?.target ?? supervisor?.target;
+	const target = requestedTarget ?? reflection?.target ?? supervisor?.target;
 	const autonomousBudget = autonomousExecutionBudget(target);
 	const swarmRetry = latestSwarmRetryQueue(target);
 	const gateSummary = mission
@@ -23116,18 +23328,24 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume"; 
 	const commanderMergeBudget = Array.from(new Set(supervisor?.commanderMergeBudget ?? [])).slice(0, 16);
 	const workerScoreboard = Array.from(new Set(supervisor?.workerScoreboard ?? [])).slice(0, 32);
 	const swarmRetryQueue = swarmRetry.rows;
-	const caseMemoryPlan = currentCaseMemoryLanePlan(target);
-	const caseMemoryNextCommands = caseMemoryOperatorCommands(caseMemoryPlan, target);
-	const reflectionReuseRules = Array.from(new Set(reflection?.reuseRules ?? [])).slice(0, 24);
+	const memorySettings = repiMemorySettings();
+	const includeContextMemory = memorySettings.includeGlobalMemoryInContextPack;
+	const caseMemoryPlan = includeContextMemory ? currentCaseMemoryLanePlan(target) : undefined;
+	const caseMemoryNextCommands = includeContextMemory ? caseMemoryOperatorCommands(caseMemoryPlan, target) : [];
+	const reflectionReuseRules = includeContextMemory
+		? Array.from(new Set(reflection?.reuseRules ?? [])).slice(0, 24)
+		: [];
 	const route = mission?.route.domain ?? reflection?.route ?? supervisor?.route;
 	const mode = options.mode ?? "pack";
-	const memoryOrchestrator = buildMemoryOrchestratorReport({
-		phase: mode === "resume" ? "post-compact" : "pre-compact",
-		query: target ?? route ?? mission?.task,
-		route,
-		target,
-		write: true,
-	});
+	const memoryOrchestrator = includeContextMemory
+		? buildMemoryOrchestratorReport({
+				phase: mode === "resume" ? "post-compact" : "pre-compact",
+				query: target ?? route ?? mission?.task,
+				route,
+				target,
+				write: true,
+			})
+		: undefined;
 	const contextPath = contextPackArtifactPathFor({ timestamp, route, target, mode });
 	const scope = {
 		missionId: mission?.id ?? reflection?.missionId ?? supervisor?.missionId,
@@ -23157,7 +23375,9 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume"; 
 			...repairCommands,
 			...caseMemoryNextCommands,
 			...autonomousBudget.nextActions,
-			memoryOrchestratorPhaseCommand(mode === "resume" ? "post-compact" : "pre-task", target),
+			...(includeContextMemory
+				? [memoryOrchestratorPhaseCommand(mode === "resume" ? "post-compact" : "pre-task", target)]
+				: []),
 			`re_decision_core tick${commandTargetSuffix(target)}`,
 			...laneCommands,
 			supervisorPath ? "re_supervisor repair" : `re_supervisor review${commandTargetSuffix(target)}`,
@@ -23167,8 +23387,7 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume"; 
 			"re_replayer run",
 			"re_autofix plan",
 			"re_knowledge_graph build",
-			"re_memory active",
-			"re_memory skills",
+			...(memorySettings.activeRecall ? ["re_memory active", "re_memory skills"] : []),
 			"re_complete audit",
 			"re_context pack",
 		]),
@@ -23226,15 +23445,68 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume"; 
 			});
 		}
 		const compactResumeLedgerV2 = buildCompactResumeLedgerV2Report({ write: true });
-		const memoryDeposition = buildMemoryDepositionReport({ write: true });
-		const memoryExperience = buildMemoryExperienceReport({ write: true, route, target });
-		const memorySkillCapsules = buildMemorySkillCapsuleReport({ write: true, route, target });
-		const memoryDistillPromotion = buildMemoryDistillPromotionReport({ write: true, route, target });
-		const memoryQuality = buildMemoryQualityLedgerReport({ write: true, route, target });
-		const memoryReplay = buildMemoryReplayEvaluatorReport({ write: true, route, target, quality: memoryQuality });
-		const memoryStrategy = buildMemoryStrategyCapsuleReport({ write: true, route, target, quality: memoryQuality, replay: memoryReplay, skillCapsules: memorySkillCapsules });
-		const memoryActiveKernel = buildMemoryActiveKernelReport({ write: true, route, target, quality: memoryQuality, replay: memoryReplay, strategy: memoryStrategy });
-		const memoryMaturation = buildMemoryMaturationRuntimeReport({ write: true, route, target, quality: memoryQuality, replay: memoryReplay, strategy: memoryStrategy, active: memoryActiveKernel, deposition: memoryDeposition, experience: memoryExperience, skillCapsules: memorySkillCapsules, distillPromotion: memoryDistillPromotion });
+		const memoryDeposition = includeContextMemory ? buildMemoryDepositionReport({ write: true }) : undefined;
+		const memoryExperience = includeContextMemory ? buildMemoryExperienceReport({ write: true, route, target }) : undefined;
+		const memorySkillCapsules = includeContextMemory
+			? buildMemorySkillCapsuleReport({ write: true, route, target })
+			: undefined;
+		const memoryDistillPromotion = includeContextMemory
+			? buildMemoryDistillPromotionReport({ write: true, route, target })
+			: undefined;
+		const memoryQuality = includeContextMemory
+			? buildMemoryQualityLedgerReport({ write: true, route, target })
+			: undefined;
+		const memoryReplay =
+			includeContextMemory && memoryQuality
+				? buildMemoryReplayEvaluatorReport({ write: true, route, target, quality: memoryQuality })
+				: undefined;
+		const memoryStrategy =
+			includeContextMemory && memoryQuality && memoryReplay && memorySkillCapsules
+				? buildMemoryStrategyCapsuleReport({
+						write: true,
+						route,
+						target,
+						quality: memoryQuality,
+						replay: memoryReplay,
+						skillCapsules: memorySkillCapsules,
+					})
+				: undefined;
+		const memoryActiveKernel =
+			includeContextMemory && memorySettings.activeRecall && memoryQuality && memoryReplay && memoryStrategy
+				? buildMemoryActiveKernelReport({
+						write: true,
+						route,
+						target,
+						quality: memoryQuality,
+						replay: memoryReplay,
+						strategy: memoryStrategy,
+					})
+				: undefined;
+		const memoryMaturation =
+			includeContextMemory &&
+			memorySettings.activeRecall &&
+			memoryQuality &&
+			memoryReplay &&
+			memoryStrategy &&
+			memoryActiveKernel &&
+			memoryDeposition &&
+			memoryExperience &&
+			memorySkillCapsules &&
+			memoryDistillPromotion
+				? buildMemoryMaturationRuntimeReport({
+						write: true,
+						route,
+						target,
+						quality: memoryQuality,
+						replay: memoryReplay,
+						strategy: memoryStrategy,
+						active: memoryActiveKernel,
+						deposition: memoryDeposition,
+						experience: memoryExperience,
+						skillCapsules: memorySkillCapsules,
+						distillPromotion: memoryDistillPromotion,
+					})
+				: undefined;
 		const artifactSelection = scopedContextArtifactIndex({ target, route, requestedBy: "context_artifact_index" });
 		const artifactIndex = artifactSelection.entries;
 		const artifactScopeFilter = artifactSelection.artifactScopeFilter;
@@ -23288,8 +23560,8 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume"; 
 		activeLane: active?.name,
 		gateSummary,
 		missionSnapshot: mission ? formatMission(mission) : "no active mission",
-		evidenceTail: truncateMiddle(buildEvidenceDigest(), 7000),
-		memoryTail: truncateMiddle(buildMemoryDigest(), 6000),
+		evidenceTail: buildContextEvidenceTail({ target }),
+		memoryTail: buildContextMemoryTail({ route, target }),
 		toolDigest: truncateMiddle(buildToolDigest(), 5000),
 		completionAudit: truncateMiddle(formatCompletionAudit(), 5000),
 			artifactIndex,
@@ -23328,32 +23600,66 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume"; 
 					autonomousBudget.ledgerPath,
 					autonomousBudget.formalPlaybookPath,
 					existsSync(compactionResumeTelemetryPath()) ? compactionResumeTelemetryPath() : undefined,
-					existsSync(memoryOrchestrator.reportPath) ? memoryOrchestrator.reportPath : undefined,
-					existsSync(memoryDeposition.depositionReportPath) ? memoryDeposition.depositionReportPath : undefined,
-					existsSync(memoryDeposition.depositionEventBusPath) ? memoryDeposition.depositionEventBusPath : undefined,
-					existsSync(memoryExperience.reportPath) ? memoryExperience.reportPath : undefined,
-					existsSync(memoryExperience.lessonBookPath) ? memoryExperience.lessonBookPath : undefined,
-					existsSync(memorySkillCapsules.reportPath) ? memorySkillCapsules.reportPath : undefined,
-					existsSync(memorySkillCapsules.capsuleBookPath) ? memorySkillCapsules.capsuleBookPath : undefined,
-					existsSync(memorySkillCapsules.capsuleLedgerPath) ? memorySkillCapsules.capsuleLedgerPath : undefined,
-					existsSync(memoryDistillPromotion.reportPath) ? memoryDistillPromotion.reportPath : undefined,
-					existsSync(memoryDistillPromotion.promotionBookPath) ? memoryDistillPromotion.promotionBookPath : undefined,
-					existsSync(memoryDistillPromotion.candidateLedgerPath) ? memoryDistillPromotion.candidateLedgerPath : undefined,
-					existsSync(memoryQuality.reportPath) ? memoryQuality.reportPath : undefined,
-					existsSync(memoryQuality.boardPath) ? memoryQuality.boardPath : undefined,
-					existsSync(memoryQuality.ledgerPath) ? memoryQuality.ledgerPath : undefined,
-					existsSync(memoryReplay.reportPath) ? memoryReplay.reportPath : undefined,
-					existsSync(memoryReplay.boardPath) ? memoryReplay.boardPath : undefined,
-					existsSync(memoryReplay.ledgerPath) ? memoryReplay.ledgerPath : undefined,
-					existsSync(memoryStrategy.reportPath) ? memoryStrategy.reportPath : undefined,
-					existsSync(memoryStrategy.strategyBookPath) ? memoryStrategy.strategyBookPath : undefined,
-					existsSync(memoryStrategy.capsuleLedgerPath) ? memoryStrategy.capsuleLedgerPath : undefined,
-					existsSync(memoryActiveKernel.reportPath) ? memoryActiveKernel.reportPath : undefined,
-					existsSync(memoryActiveKernel.injectionPackPath) ? memoryActiveKernel.injectionPackPath : undefined,
-					existsSync(memoryActiveKernel.strategyBoardPath) ? memoryActiveKernel.strategyBoardPath : undefined,
-					existsSync(memoryMaturation.reportPath) ? memoryMaturation.reportPath : undefined,
-					existsSync(memoryMaturation.ledgerPath) ? memoryMaturation.ledgerPath : undefined,
-					existsSync(memoryMaturation.actionBoardPath) ? memoryMaturation.actionBoardPath : undefined,
+					memoryOrchestrator?.reportPath && existsSync(memoryOrchestrator.reportPath)
+						? memoryOrchestrator.reportPath
+						: undefined,
+					memoryDeposition?.depositionReportPath && existsSync(memoryDeposition.depositionReportPath)
+						? memoryDeposition.depositionReportPath
+						: undefined,
+					memoryDeposition?.depositionEventBusPath && existsSync(memoryDeposition.depositionEventBusPath)
+						? memoryDeposition.depositionEventBusPath
+						: undefined,
+					memoryExperience?.reportPath && existsSync(memoryExperience.reportPath) ? memoryExperience.reportPath : undefined,
+					memoryExperience?.lessonBookPath && existsSync(memoryExperience.lessonBookPath)
+						? memoryExperience.lessonBookPath
+						: undefined,
+					memorySkillCapsules?.reportPath && existsSync(memorySkillCapsules.reportPath)
+						? memorySkillCapsules.reportPath
+						: undefined,
+					memorySkillCapsules?.capsuleBookPath && existsSync(memorySkillCapsules.capsuleBookPath)
+						? memorySkillCapsules.capsuleBookPath
+						: undefined,
+					memorySkillCapsules?.capsuleLedgerPath && existsSync(memorySkillCapsules.capsuleLedgerPath)
+						? memorySkillCapsules.capsuleLedgerPath
+						: undefined,
+					memoryDistillPromotion?.reportPath && existsSync(memoryDistillPromotion.reportPath)
+						? memoryDistillPromotion.reportPath
+						: undefined,
+					memoryDistillPromotion?.promotionBookPath && existsSync(memoryDistillPromotion.promotionBookPath)
+						? memoryDistillPromotion.promotionBookPath
+						: undefined,
+					memoryDistillPromotion?.candidateLedgerPath && existsSync(memoryDistillPromotion.candidateLedgerPath)
+						? memoryDistillPromotion.candidateLedgerPath
+						: undefined,
+					memoryQuality?.reportPath && existsSync(memoryQuality.reportPath) ? memoryQuality.reportPath : undefined,
+					memoryQuality?.boardPath && existsSync(memoryQuality.boardPath) ? memoryQuality.boardPath : undefined,
+					memoryQuality?.ledgerPath && existsSync(memoryQuality.ledgerPath) ? memoryQuality.ledgerPath : undefined,
+					memoryReplay?.reportPath && existsSync(memoryReplay.reportPath) ? memoryReplay.reportPath : undefined,
+					memoryReplay?.boardPath && existsSync(memoryReplay.boardPath) ? memoryReplay.boardPath : undefined,
+					memoryReplay?.ledgerPath && existsSync(memoryReplay.ledgerPath) ? memoryReplay.ledgerPath : undefined,
+					memoryStrategy?.reportPath && existsSync(memoryStrategy.reportPath) ? memoryStrategy.reportPath : undefined,
+					memoryStrategy?.strategyBookPath && existsSync(memoryStrategy.strategyBookPath)
+						? memoryStrategy.strategyBookPath
+						: undefined,
+					memoryStrategy?.capsuleLedgerPath && existsSync(memoryStrategy.capsuleLedgerPath)
+						? memoryStrategy.capsuleLedgerPath
+						: undefined,
+					memoryActiveKernel?.reportPath && existsSync(memoryActiveKernel.reportPath)
+						? memoryActiveKernel.reportPath
+						: undefined,
+					memoryActiveKernel?.injectionPackPath && existsSync(memoryActiveKernel.injectionPackPath)
+						? memoryActiveKernel.injectionPackPath
+						: undefined,
+					memoryActiveKernel?.strategyBoardPath && existsSync(memoryActiveKernel.strategyBoardPath)
+						? memoryActiveKernel.strategyBoardPath
+						: undefined,
+					memoryMaturation?.reportPath && existsSync(memoryMaturation.reportPath)
+						? memoryMaturation.reportPath
+						: undefined,
+					memoryMaturation?.ledgerPath && existsSync(memoryMaturation.ledgerPath) ? memoryMaturation.ledgerPath : undefined,
+					memoryMaturation?.actionBoardPath && existsSync(memoryMaturation.actionBoardPath)
+						? memoryMaturation.actionBoardPath
+						: undefined,
 					existsSync(compactResumeLedgerV2.reportPath) ? compactResumeLedgerV2.reportPath : undefined,
 					existsSync(compactResumeLedgerV2.transitionPath) ? compactResumeLedgerV2.transitionPath : undefined,
 				].filter(Boolean) as string[],
@@ -43155,14 +43461,14 @@ export function createReconExtensionFactory() {
 				"Decision core:",
 				buildDecisionCoreOutput("tick", { target: event.prompt }),
 				"",
-				"Evidence ledger tail:",
-				buildEvidenceDigest(),
+				"Evidence ledger status:",
+				buildStartupEvidenceDigest({ target: event.prompt }),
 				"",
-				"Memory digest:",
-				buildMemoryDigest(),
+				"Memory status:",
+				buildStartupMemoryDigest({ route: route.domain, target: event.prompt }),
 				"",
-				"Context/resume pack:",
-				buildContextDigest(),
+				"Context/resume status:",
+				buildStartupContextDigest({ route: route.domain, target: event.prompt }),
 				"",
 				"Tool index digest:",
 				buildToolDigest(),
@@ -43214,7 +43520,7 @@ export function createReconExtensionFactory() {
 			}
 			stats.calls += 1;
 			if (event.isError) stats.failures += 1;
-			if (stats.active && event.toolName !== "re_memory") {
+			if (stats.active && event.toolName !== "re_memory" && repiMemorySettings().autoDeposit) {
 				try {
 					const text = textBlocksToString(event.content);
 					const command = getToolResultCommand(event);
@@ -43267,7 +43573,7 @@ export function createReconExtensionFactory() {
 				thresholdPolicy:
 					"triggerPercent/warningPercent from settings.compaction; compactionTriggerTokens = min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)",
 				mission: readCurrentMission(),
-				evidenceTail: truncateMiddle(buildEvidenceDigest(), 3000),
+				evidenceTail: truncateMiddle(buildContextEvidenceTail({ target: contextPack.target }), 3000),
 				contextPath,
 				compactionKind: details.kind,
 				resumeCommand: details.resumeCommand,

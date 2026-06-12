@@ -32,6 +32,7 @@ if [ -n "$NPM_PREFIX" ]; then
 fi
 
 ln -sfn "$ROOT/repi" "$BIN_DIR/repi"
+node "$ROOT/scripts/reverse-agent/init-repi-profile.mjs" "$ROOT"
 REPI_INIT_VERBOSE=1 "$ROOT/repi" --offline --help >/dev/null 2>&1
 cat <<MSG
 Installed REPI:

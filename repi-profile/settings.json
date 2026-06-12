@@ -14,6 +14,15 @@
     "reserveTokens": 16384,
     "keepRecentTokens": 36000
   },
+  "memory": {
+    "autoInject": false,
+    "autoDeposit": false,
+    "startupDigest": "status",
+    "scopePolicy": "session",
+    "includeGlobalMemoryInContextPack": false,
+    "activeRecall": false,
+    "maxInjectedTokens": 1200
+  },
   "branchSummary": {
     "reserveTokens": 24576,
     "skipPrompt": true

@@ -526,6 +526,52 @@ Gate 关键词：runtime_adapter_execution_gate、adapter_runner_parser_ingest_c
 
 REPI 自动 compact 阈值默认围绕上下文窗口百分比工作：warningPercent=80，triggerPercent=85，并保留 reserve tokens。达到阈值时生成 context pack，后续通过 exact resume 继续任务。
 
+### 默认记忆隔离
+
+长期记忆默认只沉淀，不会在新任务启动时自动注入旧任务内容：
+
+- `memory.autoInject=false`：启动包只显示 memory 状态和计数，不塞入历史 events/case-memory。
+- `memory.autoDeposit=false`：普通 tool result 不再自动写入长期记忆，避免噪声无限增长。
+- `memory.includeGlobalMemoryInContextPack=false`：context pack 默认不携带全局 memory tail / active injection pack。
+- `memory.activeRecall=false`：不主动执行 active recall；需要时由操作者显式召回。
+- 历史 evidence/context 也默认不在新任务启动时注入，只保留路径、计数和手动恢复命令。
+
+显式召回：
+
+```text
+re_memory search <query>
+re_memory scope <target>
+re_memory active <target>
+re_context show
+re_context resume <ref>
+re_evidence show <query>
+```
+
+如需恢复旧的主动记忆行为，在 `~/.repi/agent/settings.json` 中显式开启：
+
+```json
+{
+  "memory": {
+    "autoInject": true,
+    "startupDigest": "scoped",
+    "includeGlobalMemoryInContextPack": true,
+    "activeRecall": true,
+    "autoDeposit": true,
+    "maxInjectedTokens": 1200
+  }
+}
+```
+
+临时兼容开关：
+
+```bash
+REPI_MEMORY_AUTO_INJECT=1 repi
+REPI_MEMORY_CONTEXT_PACK=1 repi
+REPI_MEMORY_ACTIVE_RECALL=1 repi
+REPI_CONTEXT_AUTO_INJECT=1 repi
+REPI_EVIDENCE_AUTO_INJECT=1 repi
+```
+
 核心文件：
 
 ```text
@@ -566,6 +612,7 @@ Compact / resume gates：
 npm run check
 npx vitest --run packages/coding-agent/test/recon-profile.test.ts
 npm run gate:repi-harness
+npm run gate:memory-isolation-default
 node scripts/reverse-agent/repi-top-harness.mjs . --strict --json
 node scripts/reverse-agent/autonomy-control-plane.mjs . --strict --json
 ```
