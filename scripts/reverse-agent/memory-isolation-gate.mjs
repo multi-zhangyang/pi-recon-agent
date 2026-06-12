@@ -63,7 +63,10 @@ const checks = [
 	},
 	{
 		id: "context-memory-tail-scoped-helper",
-		pass: /memoryTail:\s*buildContextMemoryTail/.test(contextPack),
+		pass:
+			/memoryTail:\s*buildContextMemoryTail/.test(contextPack) ||
+			(/const contextMemoryTail\s*=\s*buildContextMemoryTail/.test(contextPack) &&
+				/memoryTail:\s*contextMemoryTail/.test(contextPack)),
 		evidence: "context pack memoryTail routes through scoped/global policy helper",
 	},
 	{
@@ -71,7 +74,7 @@ const checks = [
 		pass:
 			/includeGlobalMemoryInContextPack/.test(scopedArtifactIndex) &&
 			/includeMemoryArtifacts/.test(scopedArtifactIndex),
-		evidence: "raw memory artifacts in context index require explicit global mode",
+		evidence: "raw memory content stays gated; scoped context may index structured memory report metadata",
 	},
 	{
 		id: "high-value-auto-deposit-gated",

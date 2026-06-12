@@ -249,13 +249,21 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} remove <source> [-l]      Remove extension source from settings
   ${APP_NAME} uninstall <source> [-l]   Alias for remove
 ${updateCommandLine}
+  ${APP_NAME} doctor [--fix|--json]
+                                 Check and optionally repair the REPI install/runtime profile
+  ${APP_NAME} smoke [--full|--json]
+                                 Run fast REPI harness checks
+  ${APP_NAME} memory status|diff|consolidate
+                                 Inspect scoped memory and consolidate high-value events
+  ${APP_NAME} model doctor|cost
+                                 Inspect configured providers and estimate model cost
   ${APP_NAME} list [--approve|--no-approve]
                                  List installed extensions from settings
   ${APP_NAME} config [--no-approve]
                                  Open TUI to enable/disable package resources
   ${APP_NAME} provider-doctor --base-url <url> --model <id>
                                  Probe OpenAI/Anthropic-compatible endpoints and print a REPI models.json template
-  ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list/provider-doctor
+  ${APP_NAME} <command> --help          Show help for package/provider commands; wrapper commands support their own --help
 
 ${chalk.bold("Options:")}
   --provider <name>              Provider name (default: configured provider/model)

@@ -63,12 +63,21 @@ export OPENAI_COMPAT_API_KEY=<your-token>
 验证解析，不调用真实模型：
 
 ```bash
+repi model doctor
 repi --offline --list-models
 repi --offline --list-models openai-compatible
 repi --offline --list-models provider/model-id
 ```
 
 真实调用时使用 `repi --provider openai-compatible --model provider/model-id --thinking off --no-tools --no-session -p "Reply exactly: PROVIDER_OK"` 并设置对应环境变量。
+
+费用估算：
+
+```bash
+repi model cost --provider openai-compatible --model provider/model-id --input-tokens 100000 --output-tokens 10000 --cache-read-tokens 50000
+```
+
+费用字段写在 `models[].cost.input/output/cacheRead/cacheWrite`，单位是美元 / 百万 tokens；不需要展示费用时填 `0`。
 
 OpenAI Responses-compatible provider 使用 `api: "openai-responses"`，运行时必须能接收 `POST /v1/responses`。如果 smoke 显示 `/v1/responses` 404，而 `/v1/chat/completions` 可用，就说明该网关当前按 Chat Completions 暴露，应改用 `api: "openai-completions"`，不要依赖自动降级。
 

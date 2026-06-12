@@ -27,7 +27,8 @@ marker: model_provider_configuration_runtime
 - 凭据优先用环境变量引用：`"apiKey": "$OPENAI_COMPAT_API_KEY"`；不要把真实 token 写进文档、示例或仓库。
 - 最小 OpenAI-compatible 示例：provider 写入 `~/.repi/agent/models.json`，`baseUrl` 通常是 `https://host/v1` 或 `http://127.0.0.1:8000/v1`，模型条目必须有 `id`、`contextWindow`、`maxTokens`。
 - 网关格式不确定时先给 `repi provider-doctor --base-url <url> --model <id> --api auto`；它会探测 OpenAI Chat Completions / OpenAI Responses / Anthropic Messages endpoint，输出 env-ref-only `models.json` template，并把 `/v1/responses` 的 `endpoint_not_found` 诊断成应改用 `openai-completions`。
-- 验证命令：`repi --offline --list-models` 与 `repi --offline --list-models <provider-or-model>`；这是 parse-only，不调用 provider。真实调用用 `repi --provider <provider-id> --model <model-id> --thinking off --no-tools --no-session -p "Reply exactly: PROVIDER_OK"` 并设置对应环境变量。
+- 验证命令：`repi model doctor`、`repi --offline --list-models` 与 `repi --offline --list-models <provider-or-model>`；这是 parse-only，不调用 provider。真实调用用 `repi --provider <provider-id> --model <model-id> --thinking off --no-tools --no-session -p "Reply exactly: PROVIDER_OK"` 并设置对应环境变量。
+- 成本/cache：`models[].cost.input/output/cacheRead/cacheWrite` 单位是美元 / 百万 tokens；用 `repi model cost --provider <id> --model <id> --input-tokens N --output-tokens N --cache-read-tokens N --cache-write-tokens N` 估算。
 - auto compact 默认：`triggerPercent: 85`、`warningPercent: 80`、`reserveTokens: 16384`、`keepRecentTokens: 36000`；触发阈值是 `min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)`，可在 `~/.repi/agent/settings.json` 覆盖。
 - 详细文档入口：`README.md` 的“模型 / provider 配置”和 `docs/reverse-agent/model-provider-formats.md`、`docs/reverse-agent/repi-runtime-configuration.md`。
 

@@ -8,6 +8,8 @@ const json = process.argv.includes("--json");
 
 const steps = [
 	{ id: "doctor", cmd: "node", args: ["scripts/reverse-agent/repi-doctor.mjs", root] },
+	{ id: "memory-status", cmd: "node", args: ["scripts/reverse-agent/memory-inspect.mjs", root, "status", "--json"] },
+	{ id: "model-doctor", cmd: "node", args: ["scripts/reverse-agent/model-inspect.mjs", root, "doctor", "--json"] },
 	{ id: "memory-scoped-gate", cmd: "npm", args: ["run", "gate:memory-isolation-default"] },
 	{ id: "shrinkwrap", cmd: "npm", args: ["run", "check:shrinkwrap"] },
 	{ id: "ts-imports", cmd: "npm", args: ["run", "check:ts-imports"] },

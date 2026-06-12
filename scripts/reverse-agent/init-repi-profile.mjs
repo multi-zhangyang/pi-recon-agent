@@ -149,6 +149,7 @@ for (const [rel, body] of [
 	["recon/memory/core-memory.md", "# REPI Core Memory\n\n固定偏好、项目不变量、长期稳定事实写在这里；保持短小。\n\n"],
 	["recon/memory/project-memory.md", "# REPI Project Memory\n\n当前 workspace 的构建、运行、测试、入口、常用命令写在这里。\n\n"],
 	["recon/memory/procedural-memory.md", "# REPI Procedural Memory\n\n可复用 workflow / checklist / verified command template 写在这里。\n\n"],
+	["recon/memory/events.jsonl", ""],
 	["recon/evidence/ledger.md", "# REPI Evidence Ledger\n\n"],
 	["recon/tools/tool-index.md", "# REPI Tool Index\n\n"],
 ]) {

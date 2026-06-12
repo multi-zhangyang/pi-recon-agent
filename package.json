@@ -122,7 +122,12 @@
 		"gate:relane-specialist-command-pack": "node scripts/reverse-agent/relane-specialist-command-pack-gate.mjs . --strict",
 		"gate:pwn-advanced-capability": "node scripts/reverse-agent/pwn-advanced-capability-gate.mjs . --strict",
 		"gate:professional-runtime-bridges": "node scripts/reverse-agent/professional-runtime-bridges-gate.mjs . --strict",
-		"gate:runtime-adapter-execution": "node scripts/reverse-agent/runtime-adapter-execution-gate.mjs . --strict"
+		"gate:runtime-adapter-execution": "node scripts/reverse-agent/runtime-adapter-execution-gate.mjs . --strict",
+		"memory:status": "node scripts/reverse-agent/memory-inspect.mjs . status",
+		"memory:diff": "node scripts/reverse-agent/memory-inspect.mjs . diff",
+		"model:doctor": "node scripts/reverse-agent/model-inspect.mjs . doctor",
+		"model:cost": "node scripts/reverse-agent/model-inspect.mjs . cost",
+		"doctor:repi:fix": "node scripts/reverse-agent/repi-doctor.mjs . --fix"
 	},
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "0.0.26",

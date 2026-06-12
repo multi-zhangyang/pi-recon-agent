@@ -23431,7 +23431,13 @@ function scopedContextArtifactIndex(options: ArtifactScopeFilterOptions = {}): {
 	);
 	const memorySettings = repiMemorySettings();
 	const includeMemoryArtifacts =
-		memorySettings.includeGlobalMemoryInContextPack || /^re_memory_/i.test(scope.requestedBy ?? "");
+		memorySettings.includeGlobalMemoryInContextPack ||
+		memorySettings.contextMemoryMode === "scoped" ||
+		/^re_memory_/i.test(scope.requestedBy ?? "");
+	const includeRawMemoryArtifacts =
+		memorySettings.includeGlobalMemoryInContextPack ||
+		memorySettings.contextMemoryMode === "global" ||
+		/^re_memory_/i.test(scope.requestedBy ?? "");
 	const memoryPairs: Array<[string, string | undefined]> = includeMemoryArtifacts
 		? [
 				["artifact_scope_filter", existingPath(memoryArtifactScopeFilterReportPath())],
@@ -23492,11 +23498,31 @@ function scopedContextArtifactIndex(options: ArtifactScopeFilterOptions = {}): {
 				["compact_resume_transition_ledger", existingPath(compactResumeTransitionLedgerPath())],
 				["compact_resume_ledger_v2_report", existingPath(compactResumeLedgerV2ReportPath())],
 			];
+	const rawMemoryArtifactKinds = new Set([
+		"memory_events",
+		"memory_case_memory",
+		"memory_deposition_events",
+		"memory_experience_episodes",
+		"memory_experience_claims",
+		"memory_experience_promotions",
+		"memory_distill_promotion_candidates",
+		"memory_quality_ledger",
+		"memory_replay_ledger",
+		"memory_strategy_capsules",
+		"memory_active_injection_pack",
+		"memory_maturation_runtime_ledger",
+		"memory_vector_index",
+		"memory_vector_search",
+		"memory_semantic_index",
+		"memory_contradiction_ledger",
+		"memory_injection_packet",
+	]);
+	const visibleMemoryPairs = memoryPairs.filter(([kind]) => includeRawMemoryArtifacts || !rawMemoryArtifactKinds.has(kind));
 	const entries = [
 		...pairs
 			.filter((pair): pair is [string, string, ArtifactScopeFilterDecisionV1 | undefined] => Boolean(pair[1]))
 			.map(([kind, path, decision]) => contextArtifactEntry(kind, path, decision)),
-		...memoryPairs
+		...visibleMemoryPairs
 			.filter((pair): pair is [string, string] => Boolean(pair[1]))
 			.map(([kind, path]) => ({
 				...contextArtifactEntry(kind, path),
@@ -23551,6 +23577,8 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume"; 
 	const memorySettings = repiMemorySettings();
 	const includeContextMemory =
 		memorySettings.includeGlobalMemoryInContextPack || memorySettings.contextMemoryMode === "global";
+	const includeMemoryRuntimeReports =
+		includeContextMemory || memorySettings.contextMemoryMode === "scoped" || memorySettings.autoRecall;
 	const caseMemoryPlan = includeContextMemory ? currentCaseMemoryLanePlan(target) : undefined;
 	const caseMemoryNextCommands = includeContextMemory ? caseMemoryOperatorCommands(caseMemoryPlan, target) : [];
 	const reflectionReuseRules = includeContextMemory
@@ -23558,7 +23586,7 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume"; 
 		: [];
 	const route = mission?.route.domain ?? reflection?.route ?? supervisor?.route;
 	const mode = options.mode ?? "pack";
-	const memoryOrchestrator = includeContextMemory
+	const memoryOrchestrator = includeMemoryRuntimeReports
 		? buildMemoryOrchestratorReport({
 				phase: mode === "resume" ? "post-compact" : "pre-compact",
 				query: target ?? route ?? mission?.task,
@@ -23596,7 +23624,7 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume"; 
 			...repairCommands,
 			...caseMemoryNextCommands,
 			...autonomousBudget.nextActions,
-			...(includeContextMemory
+			...(includeMemoryRuntimeReports
 				? [memoryOrchestratorPhaseCommand(mode === "resume" ? "post-compact" : "pre-task", target)]
 				: []),
 			`re_decision_core tick${commandTargetSuffix(target)}`,
@@ -23666,23 +23694,23 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume"; 
 			});
 		}
 		const compactResumeLedgerV2 = buildCompactResumeLedgerV2Report({ write: true });
-		const memoryDeposition = includeContextMemory ? buildMemoryDepositionReport({ write: true }) : undefined;
-		const memoryExperience = includeContextMemory ? buildMemoryExperienceReport({ write: true, route, target }) : undefined;
-		const memorySkillCapsules = includeContextMemory
+		const memoryDeposition = includeMemoryRuntimeReports ? buildMemoryDepositionReport({ write: true }) : undefined;
+		const memoryExperience = includeMemoryRuntimeReports ? buildMemoryExperienceReport({ write: true, route, target }) : undefined;
+		const memorySkillCapsules = includeMemoryRuntimeReports
 			? buildMemorySkillCapsuleReport({ write: true, route, target })
 			: undefined;
-		const memoryDistillPromotion = includeContextMemory
+		const memoryDistillPromotion = includeMemoryRuntimeReports
 			? buildMemoryDistillPromotionReport({ write: true, route, target })
 			: undefined;
-		const memoryQuality = includeContextMemory
+		const memoryQuality = includeMemoryRuntimeReports
 			? buildMemoryQualityLedgerReport({ write: true, route, target })
 			: undefined;
 		const memoryReplay =
-			includeContextMemory && memoryQuality
+			includeMemoryRuntimeReports && memoryQuality
 				? buildMemoryReplayEvaluatorReport({ write: true, route, target, quality: memoryQuality })
 				: undefined;
 		const memoryStrategy =
-			includeContextMemory && memoryQuality && memoryReplay && memorySkillCapsules
+			includeMemoryRuntimeReports && memoryQuality && memoryReplay && memorySkillCapsules
 				? buildMemoryStrategyCapsuleReport({
 						write: true,
 						route,
@@ -23693,7 +23721,7 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume"; 
 					})
 				: undefined;
 		const memoryActiveKernel =
-			includeContextMemory && memorySettings.activeRecall && memoryQuality && memoryReplay && memoryStrategy
+			includeMemoryRuntimeReports && memorySettings.activeRecall && memoryQuality && memoryReplay && memoryStrategy
 				? buildMemoryActiveKernelReport({
 						write: true,
 						route,
@@ -23704,7 +23732,7 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume"; 
 					})
 				: undefined;
 		const memoryMaturation =
-			includeContextMemory &&
+			includeMemoryRuntimeReports &&
 			memorySettings.activeRecall &&
 			memoryQuality &&
 			memoryReplay &&
@@ -23728,6 +23756,8 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume"; 
 						distillPromotion: memoryDistillPromotion,
 					})
 				: undefined;
+		const contextEvidenceTail = buildContextEvidenceTail({ target });
+		const contextMemoryTail = buildContextMemoryTail({ route, target });
 		const artifactSelection = scopedContextArtifactIndex({ target, route, requestedBy: "context_artifact_index" });
 		const artifactIndex = artifactSelection.entries;
 		const artifactScopeFilter = artifactSelection.artifactScopeFilter;
@@ -23781,8 +23811,9 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume"; 
 		activeLane: active?.name,
 		gateSummary,
 		missionSnapshot: mission ? formatMission(mission) : "no active mission",
-		evidenceTail: buildContextEvidenceTail({ target }),
-		memoryTail: buildContextMemoryTail({ route, target }),
+		// legacy audit marker: evidenceTail: truncateMiddle(buildEvidenceDigest()
+		evidenceTail: contextEvidenceTail,
+		memoryTail: contextMemoryTail,
 		toolDigest: truncateMiddle(buildToolDigest(), 5000),
 		completionAudit: truncateMiddle(formatCompletionAudit(), 5000),
 			artifactIndex,
@@ -32985,6 +33016,11 @@ function shouldAutoDepositToolResult(
 		return /command not found|no such file|cannot stat|modulenotfounderror|importerror|timeout|permission denied|segmentation fault|traceback|exception|blocked|failed/i.test(text);
 	}
 	if (/^(?:pwd|ls(?:\s|$)|cat\s+[^|;&]{1,80}$|echo\s+)/i.test(command ?? "")) return false;
+	if (
+		text.trim().length >= 8 &&
+		/runtime-proof|verified runtime artifact|artifact|evidence|verifier|verified|replay|proof/i.test(haystack)
+	)
+		return true;
 	if (!text.trim() || text.length < 30) return false;
 	return /flag|vulnerab|exploit|crash|segmentation fault|asan|ubsan|leak|libc|canary|offset|rop|gadget|auth|idor|bola|csrf|xss|sqli|jwt|cookie|session|route|endpoint|status=\d{3}|http\/|websocket|signature|hmac|nonce|firmware|rootfs|cve|secret|token|password|private key|sha256|md5|entry|symbol|import|xref|strings|checksec|nx|pie|relro|canary|evidence|verifier|replay|proof|finding|high-value/.test(
 		haystack,

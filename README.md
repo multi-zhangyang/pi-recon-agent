@@ -122,6 +122,7 @@ cd pi-recon-agent
 git pull
 npm install
 npm run install:repi
+repi doctor --fix
 repi doctor
 repi smoke
 npm run check
@@ -348,12 +349,18 @@ export LOCAL_LLM_API_KEY="local"
 诊断自定义网关：
 
 ```bash
+repi model doctor
+repi model cost --provider openai-compatible --model provider/model-id --input-tokens 100000 --output-tokens 10000
 repi provider-doctor --base-url https://gateway.example/v1 --model provider/model-id --api auto
 npm run gate:provider-endpoint-doctor
 npm run gate:provider-runtime-matrix
 ```
 
-相关能力：Provider Endpoint Doctor、provider-doctor、gate:provider-endpoint-doctor、Provider runtime matrix、gate:provider-runtime-matrix、ProviderRuntimeMatrixV1、OpenAI Responses-compatible、Anthropic-compatible。
+`repi model doctor` 是离线检查：解析 `~/.repi/agent/models.json`、检查 provider/model 元数据、环境变量引用、context window、max tokens 和 cost/cache 字段，不会输出真实 key。
+
+`repi model cost` 按 `cost.input/output/cacheRead/cacheWrite` 估算费用，单位是美元 / 百万 tokens。
+
+相关能力：Model Doctor、Provider Endpoint Doctor、provider-doctor、gate:provider-endpoint-doctor、Provider runtime matrix、gate:provider-runtime-matrix、ProviderRuntimeMatrixV1、OpenAI Responses-compatible、Anthropic-compatible。
 
 ---
 
@@ -578,6 +585,15 @@ case-memory.jsonl    案例索引/摘要，召回时只转成 bounded cards
 
 手动召回/维护：
 
+```bash
+repi memory status                  # 查看当前记忆姿态、污染保护、事件数量、文件状态
+repi memory diff                    # 查看尚未 consolidation 的高价值事件
+repi memory consolidate --dry-run   # 只看蒸馏计划
+repi memory consolidate             # 写入 project/procedural memory
+```
+
+会话内命令：
+
 ```text
 re_memory search <query>
 re_memory scope <target>
@@ -671,10 +687,15 @@ CLI 快速控制面：
 
 ```bash
 repi doctor                         # 安装、runtime、模型解析、memory scoped defaults
-repi smoke                          # 快速 smoke：doctor + memory gate + shrinkwrap + imports
+repi doctor --fix                   # 自动重建 runtime profile、补 memory 文件、重装 repi 入口
+repi smoke                          # 快速 smoke：doctor + memory/model status + memory gate + shrinkwrap + imports
 repi smoke --full                   # smoke 后追加 npm run check
+repi memory status                  # scoped memory 状态与污染保护
+repi memory diff                    # 未蒸馏高价值事件差异
 repi memory consolidate --dry-run   # 查看 memory 蒸馏计划
 repi memory consolidate             # 把高价值 events 蒸馏到 project/procedural memory
+repi model doctor                   # 离线检查 provider/model 配置
+repi model cost --provider openai-compatible --model provider/model-id --input-tokens 100000 --output-tokens 10000
 ```
 
 专业能力 gates：
@@ -738,6 +759,7 @@ npm run gate:tool-call-trace-ledger
 ```bash
 which repi
 repi --offline --help
+repi doctor --fix
 npm run install:repi
 ```
 
@@ -752,6 +774,8 @@ REPI: independent product; built-in reverse/pentest kernel is enabled.
 ### 模型不可用
 
 ```bash
+repi model doctor
+repi model cost --provider openai-compatible --model provider/model-id --input-tokens 100000 --output-tokens 10000
 repi --offline --list-models
 repi provider-doctor --base-url https://gateway.example/v1 --model provider/model-id --api auto
 ```

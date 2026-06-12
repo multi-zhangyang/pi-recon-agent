@@ -213,7 +213,29 @@ function main() {
 			checks.push(check("runtime:pack-schema", packValidation.errors.length === 0, packValidation));
 			checks.push(check("runtime:resume-schema", resumeValidation.errors.length === 0, resumeValidation));
 			checks.push(check("runtime:resume-verification-pass", probeData.resume?.exactResumeVerification?.blocked?.length === 0 && probeData.resume?.resumeQueueStatus === "done" && probeData.resume?.closure?.status === "closed", { exactResumeVerification: probeData.resume?.exactResumeVerification, resumeQueueStatus: probeData.resume?.resumeQueueStatus, closure: probeData.resume?.closure }));
-			checks.push(check("runtime:memory-hash-contract", ["memory_events", "memory_case_memory", "memory_store_report", "memory_feedback_closure", "memory_scope_isolation", "memory_vector_index", "memory_vector_search", "memory_injection_packet", "memory_sedimentation_report"].every((kind) => (probeData.pack?.artifactIndex ?? []).some((artifact) => artifact.kind === kind)), { artifactKinds: (probeData.pack?.artifactIndex ?? []).map((artifact) => artifact.kind) }));
+			const artifactKinds = (probeData.pack?.artifactIndex ?? []).map((artifact) => artifact.kind);
+			const requiredScopedMemoryReports = [
+				"memory_store_report",
+				"memory_feedback_closure",
+				"memory_scope_isolation",
+				"memory_orchestrator",
+				"memory_deposition_report",
+				"memory_experience_report",
+				"memory_skill_capsule_report",
+				"memory_distill_promotion_report",
+				"memory_quality_report",
+				"memory_replay_report",
+				"memory_strategy_capsule_report",
+				"memory_sedimentation_report",
+			];
+			const forbiddenRawMemoryKinds = [
+				"memory_events",
+				"memory_case_memory",
+				"memory_deposition_events",
+				"memory_injection_packet",
+				"memory_active_injection_pack",
+			];
+			checks.push(check("runtime:memory-hash-contract", requiredScopedMemoryReports.every((kind) => artifactKinds.includes(kind)) && forbiddenRawMemoryKinds.every((kind) => !artifactKinds.includes(kind)), { artifactKinds, requiredScopedMemoryReports, forbiddenRawMemoryKinds }));
 		} else {
 			checks.push(check("runtime:pack-schema", false, { error: "probe output missing" }));
 			checks.push(check("runtime:resume-schema", false, { error: "probe output missing" }));

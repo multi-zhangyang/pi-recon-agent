@@ -42,10 +42,44 @@ case "${1:-}" in
     exec node "$ROOT/scripts/reverse-agent/repi-smoke.mjs" "$ROOT" "$@"
     ;;
   memory)
-    if [ "${2:-}" = "consolidate" ]; then
-      shift 2
-      exec node "$ROOT/scripts/reverse-agent/memory-consolidate.mjs" "$ROOT" "$@"
-    fi
+    sub="${2:-status}"
+    if [ "$#" -ge 2 ]; then shift 2; else shift 1; fi
+    case "$sub" in
+      consolidate)
+        exec node "$ROOT/scripts/reverse-agent/memory-consolidate.mjs" "$ROOT" "$@"
+        ;;
+      status|diff)
+        exec node "$ROOT/scripts/reverse-agent/memory-inspect.mjs" "$ROOT" "$sub" "$@"
+        ;;
+      help|--help|-h)
+        cat <<'MSG'
+Usage:
+  repi memory status [--json]
+  repi memory diff [--json] [--limit N] [--all]
+  repi memory consolidate [--dry-run] [--json]
+MSG
+        exit 0
+        ;;
+      *)
+        echo "Unknown repi memory command: $sub" >&2
+        echo "Run: repi memory --help" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  model|models)
+    sub="${2:-doctor}"
+    if [ "$#" -ge 2 ]; then shift 2; else shift 1; fi
+    case "$sub" in
+      doctor|status|cost|help|--help|-h)
+        exec node "$ROOT/scripts/reverse-agent/model-inspect.mjs" "$ROOT" "$sub" "$@"
+        ;;
+      *)
+        echo "Unknown repi model command: $sub" >&2
+        echo "Run: repi model --help" >&2
+        exit 2
+        ;;
+    esac
     ;;
 esac
 
