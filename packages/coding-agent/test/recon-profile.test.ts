@@ -112,6 +112,7 @@ describe("REPI kernel profile", () => {
 			["re_tool_index", {}],
 			["re_toolchain_domain", {}],
 			["re_runtime_bridge", {}],
+			["re_runtime_adapter", {}],
 			["re_lane_specialist_pack", {}],
 			["re_domain_proof_exit", {}],
 			["re_mission", {}],
@@ -151,6 +152,7 @@ describe("REPI kernel profile", () => {
 			["re-tools", {}],
 			["re-toolchain", {}],
 			["re-runtime-bridge", {}],
+			["re-runtime-adapter", {}],
 			["re-lane-specialist-pack", {}],
 			["re-domain-proof-exit", {}],
 			["re-memory", {}],
@@ -446,6 +448,19 @@ describe("REPI kernel profile", () => {
 		expect(runtimeBridge.content[0]?.text).toContain("ProfessionalRuntimeBridgesGateV1");
 		expect(runtimeBridge.content[0]?.text).toContain("cdp-network-capture");
 
+		const runtimeAdapterTool = tools.get("re_runtime_adapter") as {
+			execute: (
+				toolCallId: string,
+				params: Record<string, unknown>,
+			) => Promise<{ content: Array<{ text: string }> }>;
+		};
+		const runtimeAdapter = await runtimeAdapterTool.execute("tool-call-id", {
+			action: "plan",
+			adapter: "r2-native-xref-adapter",
+		});
+		expect(runtimeAdapter.content[0]?.text).toContain("RuntimeAdapterExecutionGateV1");
+		expect(runtimeAdapter.content[0]?.text).toContain("adapter-r2-native-xref-runner");
+
 		const missionTool = tools.get("re_mission") as {
 			execute: (
 				toolCallId: string,
@@ -569,6 +584,7 @@ describe("REPI kernel profile", () => {
 		expect(commands.has("re-tools")).toBe(true);
 		expect(commands.has("re-toolchain")).toBe(true);
 		expect(commands.has("re-runtime-bridge")).toBe(true);
+		expect(commands.has("re-runtime-adapter")).toBe(true);
 		expect(commands.has("re-memory")).toBe(true);
 		expect(commands.has("re-mission")).toBe(true);
 		expect(commands.has("re-evidence")).toBe(true);
@@ -607,6 +623,7 @@ describe("REPI kernel profile", () => {
 		expect(tools.has("re_tool_index")).toBe(true);
 		expect(tools.has("re_toolchain_domain")).toBe(true);
 		expect(tools.has("re_runtime_bridge")).toBe(true);
+		expect(tools.has("re_runtime_adapter")).toBe(true);
 		expect(tools.has("re_mission")).toBe(true);
 		expect(tools.has("re_evidence")).toBe(true);
 		expect(tools.has("re_graph")).toBe(true);

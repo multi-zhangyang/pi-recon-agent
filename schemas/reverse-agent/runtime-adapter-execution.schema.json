@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repi.local/schemas/runtime-adapter-execution.schema.json",
+  "title": "RuntimeAdapterExecutionGateV1",
+  "description": "runtime_adapter_execution_gate / adapter_runner_parser_ingest_contract / r2_ghidra_native_adapter_contract / frida_mobile_adapter_contract / web_cdp_adapter_contract / pwntools_exploit_verifier_adapter_contract / tshark_pcap_adapter_contract / binwalk_firmware_adapter_contract / runtime:adapter-execution",
+  "type": "object",
+  "required": ["kind", "schemaVersion", "RuntimeAdapterExecutionGateV1", "runtime", "requiredGates", "adapters", "closure", "nextRuntimeCommands", "negativeCases", "invariants"],
+  "properties": {
+    "kind": { "const": "RuntimeAdapterExecutionGateV1" },
+    "schemaVersion": { "const": 1 },
+    "RuntimeAdapterExecutionGateV1": { "const": true },
+    "runtime": { "const": "runtime:adapter-execution" },
+    "requiredGates": { "type": "array", "contains": { "const": "runtime_adapter_execution_gate" } },
+    "adapters": {
+      "type": "array",
+      "minItems": 7,
+      "items": {
+        "type": "object",
+        "required": ["adapterId", "bridgeId", "domainId", "runnerKind", "tool", "fallbackTool", "commandTemplate", "fallbackCommandTemplate", "parserRules", "artifactKinds", "ingestTargets", "proofExitSignals", "nextRuntimeCommands"],
+        "properties": {
+          "adapterId": { "type": "string" },
+          "bridgeId": { "type": "string" },
+          "domainId": { "type": "string" },
+          "runnerKind": { "type": "string" },
+          "tool": { "type": "string" },
+          "fallbackTool": { "type": "string" },
+          "commandTemplate": { "type": "string" },
+          "fallbackCommandTemplate": { "type": "string" },
+          "parserRules": { "type": "array", "minItems": 2 },
+          "artifactKinds": { "type": "array", "minItems": 2 },
+          "ingestTargets": { "type": "array", "contains": { "const": "evidence-ledger" } },
+          "proofExitSignals": { "type": "array", "minItems": 2 },
+          "nextRuntimeCommands": { "type": "array", "contains": { "type": "string", "pattern": "re_runtime_adapter" } }
+        }
+      }
+    },
+    "closure": {
+      "type": "object",
+      "required": ["allAdapterSpecsPresent", "allHaveRunnerTemplates", "allHaveParserRules", "allHaveArtifactKinds", "allHaveIngestTargets", "allHaveProofExitSignals", "allHaveNativeOrFallbackTool", "allEnvRefsSecretFree", "fixtureParity"],
+      "properties": {
+        "allAdapterSpecsPresent": { "const": true },
+        "allHaveRunnerTemplates": { "const": true },
+        "allHaveParserRules": { "const": true },
+        "allHaveArtifactKinds": { "const": true },
+        "allHaveIngestTargets": { "const": true },
+        "allHaveProofExitSignals": { "const": true },
+        "allHaveNativeOrFallbackTool": { "const": true },
+        "allEnvRefsSecretFree": { "const": true },
+        "fixtureParity": { "const": true }
+      }
+    },
+    "nextRuntimeCommands": { "type": "array", "contains": { "type": "string", "pattern": "re_runtime_adapter" } },
+    "negativeCases": { "type": "array", "minItems": 7 },
+    "invariants": { "type": "array", "minItems": 8 }
+  }
+}

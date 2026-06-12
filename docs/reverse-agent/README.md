@@ -864,3 +864,20 @@ npm run gate:professional-runtime-bridges
 ```
 
 合同关键字：`professional_runtime_bridge_gate`、`real_toolchain_bridge_contract`、`exploit_verifier_runtime_contract`、`web_cdp_replay_contract`、`mobile_frida_dynamic_bridge_contract`、`artifact_backed_tool_execution_plan`、`env_ref_secret_boundary`。
+
+## RuntimeAdapterExecutionGateV1
+
+`RuntimeAdapterExecutionGateV1` 接在 `ProfessionalRuntimeBridgesGateV1` 后面，目标是让真实工具桥有可运行的 adapter contract，而不是停留在命令列表。
+
+合同关键字：`runtime_adapter_execution_gate`、`adapter_runner_parser_ingest_contract`、`r2_ghidra_native_adapter_contract`、`frida_mobile_adapter_contract`、`web_cdp_adapter_contract`、`pwntools_exploit_verifier_adapter_contract`、`tshark_pcap_adapter_contract`、`binwalk_firmware_adapter_contract`。
+
+运行：
+
+```bash
+re_runtime_adapter show
+re_runtime_adapter plan r2-native-xref-adapter ./target
+re_runtime_adapter run pwntools-local-verifier-adapter ./chall 60000
+npm run gate:runtime-adapter-execution
+```
+
+每次 `run` 都会生成 `RuntimeAdapterExecutionArtifactV1`，保存 runner、exit code、stdout/stderr hash、parser signals、artifact kinds、ingest targets 和 proof-exit signals。

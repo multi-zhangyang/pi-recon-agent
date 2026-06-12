@@ -520,3 +520,16 @@ npm run gate:professional-runtime-bridges
 ```
 
 The gate rejects narrative-only bridges and secret literals through `runtime_execution_bridge_matrix`, `artifact_backed_tool_execution_plan`, and `env_ref_secret_boundary`.
+
+### RuntimeAdapterExecutionGateV1 / re_runtime_adapter
+
+`re_runtime_adapter` is the executable adapter layer behind REPI runtime bridges. It binds adapter runner commands, parser rules, artifact kinds, ingest targets, and proof-exit signals for r2/Ghidra/Frida/CDP/pwntools/tshark/binwalk style workflows.
+
+```bash
+re_runtime_adapter show
+re_runtime_adapter plan web-cdp-network-adapter https://target.local
+re_runtime_adapter run r2-native-xref-adapter ./target 60000
+npm run gate:runtime-adapter-execution
+```
+
+The runtime_adapter_execution_gate requires `adapter_runner_parser_ingest_contract`, writes `RuntimeAdapterExecutionArtifactV1`, and rejects missing runner/parser/artifact/ingest/proof-exit/env-ref contracts.

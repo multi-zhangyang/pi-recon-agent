@@ -1,0 +1,36 @@
+{
+  "kind": "RuntimeAdapterExecutionGateV1",
+  "schemaVersion": 1,
+  "RuntimeAdapterExecutionGateV1": true,
+  "runtime": "runtime:adapter-execution",
+  "requiredGates": [
+    "runtime_adapter_execution_gate",
+    "adapter_runner_parser_ingest_contract",
+    "r2_ghidra_native_adapter_contract",
+    "frida_mobile_adapter_contract",
+    "web_cdp_adapter_contract",
+    "pwntools_exploit_verifier_adapter_contract",
+    "tshark_pcap_adapter_contract",
+    "binwalk_firmware_adapter_contract",
+    "runtime:adapter-execution"
+  ],
+  "adapters": [
+    { "id": "r2-native-xref-adapter", "mustHave": ["adapter-r2-native-xref-runner", "parser-r2-symbol-import-xref", "native-xref-json", "evidence-ledger", "knowledge-graph", "memory-event"] },
+    { "id": "ghidra-headless-summary-adapter", "mustHave": ["adapter-ghidra-headless-summary-runner", "parser-ghidra-function-summary", "ghidra-headless-summary", "evidence-ledger", "knowledge-graph", "memory-event"] },
+    { "id": "frida-mobile-hook-adapter", "mustHave": ["adapter-frida-mobile-hook-runner", "parser-frida-hook-output", "frida-hook-output-jsonl", "mobile-runtime-attach-manifest"] },
+    { "id": "web-cdp-network-adapter", "mustHave": ["adapter-web-cdp-network-runner", "parser-cdp-network-event", "cdp-network-har", "xhr-ws-route-map", "signed-replay-diff"] },
+    { "id": "pwntools-local-verifier-adapter", "mustHave": ["adapter-pwntools-local-verifier-runner", "parser-pwn-crash-offset", "pwn-verifier-matrix", "stdout-stderr-hashes"] },
+    { "id": "tshark-pcap-flow-adapter", "mustHave": ["adapter-tshark-pcap-flow-runner", "parser-tshark-conversation", "pcap-flow-conversations"] },
+    { "id": "binwalk-firmware-extract-adapter", "mustHave": ["adapter-binwalk-firmware-extract-runner", "parser-binwalk-signature", "firmware-signature-map", "rootfs-extraction-manifest"] }
+  ],
+  "negativeCases": [
+    { "id": "missing-runner-template", "rejected": true },
+    { "id": "missing-parser-rule", "rejected": true },
+    { "id": "missing-ingest-target", "rejected": true },
+    { "id": "missing-artifact-kind", "rejected": true },
+    { "id": "missing-proof-exit-signal", "rejected": true },
+    { "id": "literal-secret-env-ref", "rejected": true },
+    { "id": "missing-adapter-domain", "rejected": true }
+  ],
+  "notes": "RuntimeAdapterExecutionGateV1 locks the adapter runner -> parser -> artifact ingest contract for r2/Ghidra/Frida/CDP/pwntools/tshark/binwalk style execution without requiring a benchmark suite."
+}

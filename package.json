@@ -117,7 +117,8 @@
 		"gate:domain-proof-exit-closure": "node scripts/reverse-agent/domain-proof-exit-closure-gate.mjs . --strict",
 		"gate:relane-specialist-command-pack": "node scripts/reverse-agent/relane-specialist-command-pack-gate.mjs . --strict",
 		"gate:pwn-advanced-capability": "node scripts/reverse-agent/pwn-advanced-capability-gate.mjs . --strict",
-		"gate:professional-runtime-bridges": "node scripts/reverse-agent/professional-runtime-bridges-gate.mjs . --strict"
+		"gate:professional-runtime-bridges": "node scripts/reverse-agent/professional-runtime-bridges-gate.mjs . --strict",
+		"gate:runtime-adapter-execution": "node scripts/reverse-agent/runtime-adapter-execution-gate.mjs . --strict"
 	},
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "0.0.26",

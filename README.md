@@ -1192,3 +1192,33 @@ npm run gate:repi-harness
 ```
 
 该 gate 要求每条桥都有可执行命令模板、fallback 工具、`.repi/evidence/...` artifact plan、env-ref-only 配置、proof-exit mapping 和负例拒绝（例如 `narrative-only-bridge`、`literal-secret-in-env-ref`）。
+
+## Runtime Adapter Execution（runner → parser → artifact ingest）
+
+REPI 新增 `RuntimeAdapterExecutionGateV1`，用于把真实工具桥从“命令建议”推进到“可运行 adapter”。每个 adapter 都包含：
+
+- adapter runner：native 工具命令和 fallback 命令。
+- parser：从 stdout/stderr 解析 proof-exit 信号。
+- artifact ingest：写入 `.repi/evidence/...`，并绑定 `evidence-ledger`、`knowledge-graph`、`memory-event`。
+- proof exit：把工具结果映射到 domain proof-exit。
+
+常用命令：
+
+```bash
+re_runtime_adapter show
+re_runtime_adapter plan r2-native-xref-adapter ./target
+re_runtime_adapter run r2-native-xref-adapter ./target 60000
+re_runtime_adapter run web-cdp-network-adapter https://example.test 60000
+re_runtime_adapter run frida-mobile-hook-adapter com.example.app 60000
+npm run gate:runtime-adapter-execution
+```
+
+当前内置 adapter：
+
+- `r2-native-xref-adapter`：r2 native xref / symbol / strings，fallback 到 file/strings/objdump。
+- `ghidra-headless-summary-adapter`：Ghidra headless summary，fallback 到 readelf/objdump。
+- `frida-mobile-hook-adapter`：Frida mobile hook output，fallback 到 adb package inspection。
+- `web-cdp-network-adapter`：CDP/XHR/WS/replay-diff signals，fallback 到 curl capture。
+- `pwntools-local-verifier-adapter`：pwn crash/primitive/multirun verifier scaffold，fallback 到 checksec/gdb。
+- `tshark-pcap-flow-adapter`：PCAP conversation / HTTP object / credential timeline，fallback 到 strings。
+- `binwalk-firmware-extract-adapter`：firmware signatures/rootfs extraction/service map，fallback 到 file/strings。
