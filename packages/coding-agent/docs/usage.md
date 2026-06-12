@@ -292,8 +292,6 @@ repi --exclude-tools ask_question
 
 ## Design Principles
 
-REPI keeps the core small and pushes workflow-specific behavior into extensions, skills, prompt templates, and packages.
+REPI is organized around executable security-research workflows: passive mapping first, runtime proof before broad claims, evidence-ledger writeback, memory feedback, compact/resume continuity, and gate-backed capability claims.
 
-It intentionally does not include built-in MCP, sub-agents, permission popups, plan mode, to-dos, or background bash. You can build or install those workflows as extensions or packages, or use external tools such as containers and tmux.
-
-For the full rationale, read the [blog post](https://mariozechner.at/posts/2025-11-30-repi-coding-agent/).
+The core remains extensible through extensions, skills, prompt templates, packages, runtime adapters, and external sandboxes. Built-in reverse/pentest commands provide the default operating system; project-specific policy and tool routing can still be layered on top.

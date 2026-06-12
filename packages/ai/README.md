@@ -1141,7 +1141,7 @@ const response = await complete(model, context);
 
 // Or override with explicit key
 const response = await complete(model, context, {
-  apiKey: 'sk-different-key'
+  apiKey: process.env.OPENAI_API_KEY ?? 'test-key'
 });
 ```
 

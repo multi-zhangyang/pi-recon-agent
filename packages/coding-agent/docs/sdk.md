@@ -429,7 +429,7 @@ const { session } = await createAgentSession({
 });
 
 // Runtime API key override (not persisted to disk)
-authStorage.setRuntimeApiKey("anthropic", "sk-my-temp-key");
+authStorage.setRuntimeApiKey("anthropic", process.env.ANTHROPIC_API_KEY ?? "test-key");
 
 // Custom auth storage location
 const customAuth = AuthStorage.create("/my/app/auth.json");

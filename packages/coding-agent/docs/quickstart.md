@@ -4,33 +4,51 @@ This page gets you from install to a useful first repi session.
 
 ## Install
 
-REPI is distributed as an npm package:
+### Source install
+
+Use this path when working from the open-source repository:
 
 ```bash
-npm install -g --ignore-scripts @pi-recon/repi-coding-agent
+git clone https://github.com/multi-zhangyang/pi-recon-agent.git
+cd pi-recon-agent
+npm install
+npm run install:repi
 ```
 
-`--ignore-scripts` disables dependency lifecycle scripts during install. REPI does not require install scripts for normal npm installs.
+Validate that the installed launcher is usable:
+
+```bash
+repi --offline --help
+repi --offline --list-models
+```
+
+### npm package install
+
+After the package is published, REPI can also be installed as a global npm package:
+
+```bash
+npm install -g @pi-recon/repi-coding-agent
+```
 
 ### Uninstall
 
-Use the package manager that installed repi. The curl installer uses npm globally, so curl and npm installs are removed with npm:
+If you installed from source with `npm run install:repi`, remove the global launcher symlink and keep or delete `~/.repi/agent` as needed:
 
 ```bash
-# curl installer or npm install -g
+sudo rm -f /usr/local/bin/repi
+# optional: rm -rf ~/.repi/agent
+```
+
+If you installed the npm package globally, use the matching package manager:
+
+```bash
 npm uninstall -g @pi-recon/repi-coding-agent
-
-# pnpm
 pnpm remove -g @pi-recon/repi-coding-agent
-
-# Yarn
 yarn global remove @pi-recon/repi-coding-agent
-
-# Bun
 bun uninstall -g @pi-recon/repi-coding-agent
 ```
 
-Uninstalling repi leaves settings, credentials, sessions, and installed repi packages in `~/.repi/agent/`.
+Uninstalling the CLI does not automatically remove settings, credentials, sessions, and installed repi packages in `~/.repi/agent/`.
 
 Then start repi in the project directory you want it to work on:
 
@@ -58,7 +76,7 @@ Then select a provider. Built-in subscription logins include Claude Pro/Max, Cha
 Set an API key before launching repi:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+export ANTHROPIC_API_KEY=<anthropic-api-key>
 repi
 ```
 

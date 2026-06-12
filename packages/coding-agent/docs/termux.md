@@ -16,13 +16,15 @@ pkg update && pkg upgrade
 # Install dependencies
 pkg install nodejs termux-api git
 
-# Install repi
-npm install -g --ignore-scripts @pi-recon/repi-coding-agent
-
-# Create config directory
-mkdir -p ~/.repi/agent
+# Install from source
+cd ~
+git clone https://github.com/multi-zhangyang/pi-recon-agent.git
+cd pi-recon-agent
+npm install
+npm run install:repi
 
 # Run repi
+repi --offline --help
 repi
 ```
 

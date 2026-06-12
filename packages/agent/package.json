@@ -41,7 +41,7 @@
 		"transport",
 		"state-management"
 	],
-	"author": "Mario Zechner",
+	"author": "REPI Contributors",
 	"license": "MIT",
 	"repository": {
 		"type": "git",

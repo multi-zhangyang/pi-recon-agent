@@ -146,24 +146,24 @@ Set `api` at provider level (default for all models) or model level (override pe
 The `apiKey` and `headers` fields support command execution, environment interpolation, and literals:
 
 - **Shell command:** `"!command"` at the start executes the whole value as a command and uses stdout
-  ```json
+  ```text
   "apiKey": "!security find-generic-password -ws 'anthropic'"
   "apiKey": "!op read 'op://vault/item/credential'"
   ```
 - **Environment interpolation:** `"$ENV_VAR"` or `"${ENV_VAR}"` uses the value of the named variable. Interpolation works inside larger literals.
-  ```json
+  ```text
   "apiKey": "$MY_API_KEY"
   "apiKey": "${KEY_PREFIX}_${KEY_SUFFIX}"
   ```
   `$FOO_BAR` is the variable `FOO_BAR`; use `${FOO}_BAR` when `BAR` is literal text. Missing environment variables make the value unresolved.
 - **Escapes:** `"$$"` emits a literal `"$"`; `"$!"` emits a literal `"!"` without triggering command execution.
-  ```json
+  ```text
   "apiKey": "$$literal-dollar-prefix"
   "apiKey": "$!literal-bang-prefix"
   ```
 - **Literal value:** Used directly
-  ```json
-  "apiKey": "sk-..."
+  ```text
+  "apiKey": "test-key"
   ```
 
 Legacy uppercase env-var-like values such as `MY_API_KEY` are migrated to `$MY_API_KEY` on startup.
@@ -187,7 +187,7 @@ If your command is slow, expensive, rate-limited, or should keep using a previou
         "x-portkey-api-key": "$PORTKEY_API_KEY",
         "x-secret": "!op read 'op://vault/item/secret'"
       },
-      "models": [...]
+      "models": []
     }
   }
 }
@@ -279,7 +279,7 @@ To merge custom models into a built-in provider, include the `models` array:
       "baseUrl": "https://my-proxy.example.com/v1",
       "apiKey": "$ANTHROPIC_API_KEY",
       "api": "anthropic-messages",
-      "models": [...]
+      "models": []
     }
   }
 }
@@ -383,7 +383,7 @@ For providers with partial OpenAI compatibility, use the `compat` field.
         "supportsUsageInStreaming": false,
         "maxTokensField": "max_tokens"
       },
-      "models": [...]
+      "models": []
     }
   }
 }

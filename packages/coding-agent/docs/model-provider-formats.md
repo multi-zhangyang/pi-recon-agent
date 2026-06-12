@@ -16,7 +16,7 @@ Use `~/.repi/agent/models.json` for custom providers. The important field is `ap
 
 Recommended credential style:
 
-```json
+```text
 "apiKey": "$OPENAI_COMPAT_API_KEY"
 ```
 

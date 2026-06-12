@@ -80,7 +80,7 @@ Requirements: Node.js >= 23.6.0 for `@earendil-works/gondolin`, plus QEMU (requi
 
 Run the whole `repi` process in Docker when you want the simplest local container boundary.
 
-`Dockerfile.repi`:
+`Dockerfile.repi` for source installs:
 
 ```dockerfile
 FROM node:24-bookworm-slim
@@ -88,10 +88,21 @@ FROM node:24-bookworm-slim
 RUN apt-get update \
   && apt-get install -y --no-install-recommends bash ca-certificates git ripgrep \
   && rm -rf /var/lib/apt/lists/*
-RUN npm install -g --ignore-scripts @pi-recon/repi-coding-agent
+
+ARG REPI_REPO=https://github.com/multi-zhangyang/pi-recon-agent.git
+RUN git clone "$REPI_REPO" /opt/pi-recon-agent \
+  && cd /opt/pi-recon-agent \
+  && npm ci --ignore-scripts \
+  && npm run install:repi
 
 WORKDIR /workspace
 ENTRYPOINT ["repi"]
+```
+
+After the npm package is published, the install step can be replaced with:
+
+```dockerfile
+RUN npm install -g @pi-recon/repi-coding-agent
 ```
 
 Build and run:

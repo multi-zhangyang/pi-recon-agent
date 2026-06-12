@@ -5,7 +5,7 @@ See [AGENTS.md](https://github.com/multi-zhangyang/pi-recon-agent/blob/main/AGEN
 ## Setup
 
 ```bash
-git clone https://github.com/earendil-works/pi-recon-agent
+git clone https://github.com/multi-zhangyang/pi-recon-agent.git
 cd pi-recon-agent
 npm install
 npm run build
@@ -14,14 +14,14 @@ npm run build
 Run from source:
 
 ```bash
-/path/to/pi-recon-agent/repi-test.sh
+/path/to/pi-recon-agent/repi
 ```
 
-The script can be run from any directory. REPI keeps the caller's current working directory.
+The source launcher can be run from any directory. REPI keeps the caller's current working directory.
 
-## Forking / Rebranding
+## Product metadata
 
-Configure via `package.json`:
+Core CLI metadata is configured via `package.json`:
 
 ```json
 {
@@ -32,7 +32,7 @@ Configure via `package.json`:
 }
 ```
 
-Change `name`, `configDir`, and `bin` field for your fork. Affects CLI banner, config paths, and environment variable names.
+For REPI releases, keep `name: "repi"`, `configDir: ".repi"`, and the `bin.repi` entry aligned. These fields affect the CLI banner, config paths, runtime profile directory, and environment variable names.
 
 ## Path Resolution
 

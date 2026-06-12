@@ -42,7 +42,7 @@ Anthropic subscription auth is active for Claude Pro/Max accounts. Third-party h
 Use `/login` in interactive mode and select a provider to store an API key in `auth.json`, or set credentials via environment variable:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+export ANTHROPIC_API_KEY=<anthropic-api-key>
 repi
 ```
 
@@ -86,19 +86,19 @@ Store credentials in `~/.repi/agent/auth.json`:
 
 ```json
 {
-  "anthropic": { "type": "api_key", "key": "sk-ant-..." },
-  "ant-ling": { "type": "api_key", "key": "..." },
-  "openai": { "type": "api_key", "key": "sk-..." },
-  "deepseek": { "type": "api_key", "key": "sk-..." },
-  "nvidia": { "type": "api_key", "key": "nvapi-..." },
-  "google": { "type": "api_key", "key": "..." },
-  "opencode": { "type": "api_key", "key": "..." },
-  "opencode-go": { "type": "api_key", "key": "..." },
-  "together": { "type": "api_key", "key": "..." },
-  "xiaomi": { "type": "api_key", "key": "..." },
-  "xiaomi-token-plan-cn":  { "type": "api_key", "key": "..." },
-  "xiaomi-token-plan-ams": { "type": "api_key", "key": "..." },
-  "xiaomi-token-plan-sgp": { "type": "api_key", "key": "..." }
+  "anthropic": { "type": "api_key", "key": "<anthropic-api-key>" },
+  "ant-ling": { "type": "api_key", "key": "<api-key>" },
+  "openai": { "type": "api_key", "key": "<api-key>" },
+  "deepseek": { "type": "api_key", "key": "<api-key>" },
+  "nvidia": { "type": "api_key", "key": "<nvidia-api-key>" },
+  "google": { "type": "api_key", "key": "<api-key>" },
+  "opencode": { "type": "api_key", "key": "<api-key>" },
+  "opencode-go": { "type": "api_key", "key": "<api-key>" },
+  "together": { "type": "api_key", "key": "<api-key>" },
+  "xiaomi": { "type": "api_key", "key": "<api-key>" },
+  "xiaomi-token-plan-cn":  { "type": "api_key", "key": "<api-key>" },
+  "xiaomi-token-plan-ams": { "type": "api_key", "key": "<api-key>" },
+  "xiaomi-token-plan-sgp": { "type": "api_key", "key": "<api-key>" }
 }
 ```
 
@@ -109,24 +109,24 @@ The file is created with `0600` permissions (user read/write only). Auth file cr
 The `key` field supports command execution, environment interpolation, and literals:
 
 - **Shell command:** `"!command"` at the start executes the whole value as a command and uses stdout (cached for process lifetime)
-  ```json
+  ```text
   { "type": "api_key", "key": "!security find-generic-password -ws 'anthropic'" }
   { "type": "api_key", "key": "!op read 'op://vault/item/credential'" }
   ```
 - **Environment interpolation:** `"$ENV_VAR"` or `"${ENV_VAR}"` uses the value of the named variable. Interpolation works inside larger literals.
-  ```json
+  ```text
   { "type": "api_key", "key": "$MY_ANTHROPIC_KEY" }
   { "type": "api_key", "key": "${KEY_PREFIX}_${KEY_SUFFIX}" }
   ```
   `$FOO_BAR` is the variable `FOO_BAR`; use `${FOO}_BAR` when `BAR` is literal text. Missing environment variables make the value unresolved.
 - **Escapes:** `"$$"` emits a literal `"$"`; `"$!"` emits a literal `"!"` without triggering command execution.
-  ```json
+  ```text
   { "type": "api_key", "key": "$$literal-dollar-prefix" }
   { "type": "api_key", "key": "$!literal-bang-prefix" }
   ```
 - **Literal value:** Used directly
-  ```json
-  { "type": "api_key", "key": "sk-ant-..." }
+  ```text
+  { "type": "api_key", "key": "<anthropic-api-key>" }
   { "type": "api_key", "key": "public" }
   ```
 

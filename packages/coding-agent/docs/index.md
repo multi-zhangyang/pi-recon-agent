@@ -1,30 +1,33 @@
 # REPI Documentation
 
-REPI is a minimal terminal coding harness. It is designed to stay small at the core while being extended through TypeScript extensions, skills, prompt templates, themes, and repi packages.
+REPI is an autonomous reverse-engineering and security-research agent harness. It combines a terminal coding agent with REPI's reverse/pentest kernel, isolated runtime profile, evidence ledger, memory/compact/resume flow, runtime adapters, and release gates.
 
 ## Quick start
 
-Install REPI with npm:
+### Source install
 
 ```bash
-npm install -g --ignore-scripts @pi-recon/repi-coding-agent
+git clone https://github.com/multi-zhangyang/pi-recon-agent.git
+cd pi-recon-agent
+npm install
+npm run install:repi
 ```
 
-`--ignore-scripts` disables dependency lifecycle scripts during install. REPI does not require install scripts for normal npm installs.
-
-On Linux or macOS, you can also use the installer:
+Validate the installation:
 
 ```bash
-curl -fsSL https://github.com/multi-zhangyang/pi-recon-agent | sh
+repi --offline --help
+repi --offline --list-models
+npm run gate:repi-harness
 ```
 
-To uninstall repi itself, use npm for curl and npm installs:
+### npm package install
+
+After the package is published, the CLI package can also be installed with npm:
 
 ```bash
-npm uninstall -g @pi-recon/repi-coding-agent
+npm install -g @pi-recon/repi-coding-agent
 ```
-
-For pnpm, Yarn, or Bun installs, use the matching global remove command: `pnpm remove -g @pi-recon/repi-coding-agent`, `yarn global remove @pi-recon/repi-coding-agent`, or `bun uninstall -g @pi-recon/repi-coding-agent`.
 
 Then run it in a project directory:
 
@@ -32,7 +35,7 @@ Then run it in a project directory:
 repi
 ```
 
-Authenticate with `/login` for subscription providers, or set an API key such as `ANTHROPIC_API_KEY` before starting repi.
+Configure providers in `~/.repi/agent/models.json`, use `/login` for supported built-in providers, or set the relevant API-key environment variable before starting REPI.
 
 For the full first-run flow, see [Quickstart](quickstart.md).
 
@@ -41,6 +44,7 @@ For the full first-run flow, see [Quickstart](quickstart.md).
 - [Quickstart](quickstart.md) - install, authenticate, and run a first session.
 - [Using REPI](usage.md) - interactive mode, slash commands, context files, and CLI reference.
 - [Providers](providers.md) - subscription and API-key setup for built-in providers.
+- [Custom models](models.md) - add model entries for supported provider APIs.
 - [Containerization](containerization.md) - sandbox repi with OpenShell, Gondolin, or Docker.
 - [Settings](settings.md) - global and project settings.
 - [Keybindings](keybindings.md) - default shortcuts and custom keybindings.
@@ -54,7 +58,6 @@ For the full first-run flow, see [Quickstart](quickstart.md).
 - [Prompt templates](prompt-templates.md) - reusable prompts that expand from slash commands.
 - [Themes](themes.md) - built-in and custom terminal themes.
 - [REPI packages](packages.md) - bundle and share extensions, skills, prompts, and themes.
-- [Custom models](models.md) - add model entries for supported provider APIs.
 - [Custom providers](custom-provider.md) - implement custom APIs and OAuth flows.
 
 ## Programmatic usage

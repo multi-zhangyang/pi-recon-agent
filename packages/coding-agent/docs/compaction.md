@@ -2,7 +2,7 @@
 
 LLMs have limited context windows. When conversations grow too long, repi uses compaction to summarize older content while preserving recent work. This page covers both auto-compaction and branch summarization.
 
-**Source files** ([pi-recon-agent](https://github.com/earendil-works/pi-recon-agent)):
+**Source files** ([pi-recon-agent](https://github.com/multi-zhangyang/pi-recon-agent)):
 - [`packages/coding-agent/src/core/compaction/compaction.ts`](https://github.com/multi-zhangyang/pi-recon-agent/blob/main/packages/coding-agent/src/core/compaction/compaction.ts) - Auto-compaction logic
 - [`packages/coding-agent/src/core/compaction/branch-summarization.ts`](https://github.com/multi-zhangyang/pi-recon-agent/blob/main/packages/coding-agent/src/core/compaction/branch-summarization.ts) - Branch summarization
 - [`packages/coding-agent/src/core/compaction/utils.ts`](https://github.com/multi-zhangyang/pi-recon-agent/blob/main/packages/coding-agent/src/core/compaction/utils.ts) - Shared utilities (file tracking, serialization)
