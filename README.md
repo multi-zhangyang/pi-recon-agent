@@ -454,22 +454,45 @@ repi --tools read,grep,find,ls -p "只读分析 src/ 的路由、鉴权和入口
 /re-domain-proof-exit write <domain>
 ```
 
-### 多子代理并行池
+### 多子代理控制面
 
-`repi swarm llm-run` 会真实拉起多个隔离 worker 进程；每个 worker 使用独立临时 `REPI_CODING_AGENT_DIR`，复制当前模型配置和本机凭据，默认 `--no-session`，并把 stdout/stderr hash、退出码、耗时和合并摘要写到：
+`repi swarm` 提供 `plan → run → status → merge` 控制面。`run` 会真实拉起多个隔离 worker 进程；每个 worker 使用独立临时 `REPI_CODING_AGENT_DIR`，复制当前模型配置和本机凭据，默认 `--no-session`，并把 stdout/stderr hash、退出码、耗时、结构化 claim merge 和合并摘要写到：
 
 ```text
 ~/.repi/agent/recon/evidence/llm-swarms/<run-id>/report.json
+~/.repi/agent/recon/evidence/llm-swarms/<run-id>/merge-report.json
 ```
 
-示例：
+规划分工，不调用模型：
 
 ```bash
-repi swarm llm-run ./target --workers 4 \
+repi swarm plan ./target --workers 5
+```
+
+真实并行执行：
+
+```bash
+repi swarm run ./target --workers 5 \
   --provider openai-compatible \
   --model provider/model-id \
   --tools bash,read,grep,ls \
-  --prompt "Worker {id}: 对 {target} 做一个独立逆向/渗透分析分支，输出 evidence、blockers、nextCommands。"
+  --prompt "重点检查签名逻辑、鉴权状态机和可复现证据。"
+```
+
+如果只想验证多 worker 调度和模型输出，不给 worker 工具：
+
+```bash
+repi swarm run local-selfcheck --workers 2 \
+  --provider openai-compatible \
+  --model provider/model-id \
+  --no-tools
+```
+
+查看和合并：
+
+```bash
+repi swarm status latest
+repi swarm merge latest
 ```
 
 自检并发模型调用：
@@ -765,6 +788,10 @@ repi memory quarantine <event-id>    # 记忆隔离
 repi memory diff                    # 未蒸馏高价值事件差异
 repi memory consolidate --dry-run   # 查看 memory 蒸馏计划
 repi memory consolidate             # 把高价值 events 蒸馏到 project/procedural memory
+repi swarm plan <target> --workers 5
+repi swarm run <target> --workers 5 --provider <provider> --model <model>
+repi swarm status latest
+repi swarm merge latest
 repi swarm llm-run <target> --workers 3 --provider <provider> --model <model>
 repi model doctor                   # 离线检查 provider/model 配置
 repi model add --provider <id> --api openai-completions --base-url <url> --model <id>

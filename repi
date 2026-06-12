@@ -52,8 +52,8 @@ case "${1:-}" in
     sub="${2:-help}"
     if [ "$#" -ge 2 ]; then shift 2; else shift 1; fi
     case "$sub" in
-      llm-run|run-llm|workers)
-        exec node "$ROOT/scripts/reverse-agent/repi-swarm-llm-run.mjs" "$ROOT" "$@"
+      plan|run|status|merge|llm-run|run-llm|workers)
+        exec node "$ROOT/scripts/reverse-agent/repi-swarm-llm-run.mjs" "$ROOT" "$sub" "$@"
         ;;
       help|--help|-h)
         exec node "$ROOT/scripts/reverse-agent/repi-swarm-llm-run.mjs" "$ROOT" --help

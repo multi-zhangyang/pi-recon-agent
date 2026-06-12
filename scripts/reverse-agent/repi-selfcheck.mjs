@@ -142,6 +142,12 @@ const rows = [];
 rows.push(runRepi("doctor", ["doctor"], { timeoutMs: 60_000 }));
 rows.push(runRepi("model-doctor", ["model", "doctor"], { timeoutMs: 60_000 }));
 rows.push(
+	runRepi("swarm-plan", ["swarm", "plan", "local-selfcheck", "--workers", "2", "--json"], {
+		expectStdout: /SwarmPlannerV1/,
+		timeoutMs: 60_000,
+	}),
+);
+rows.push(
 	runRepi("model-min", [...modelArgs, "--no-session", "--no-tools", "-p", "Reply exactly: REPI_MODEL_OK"], {
 		expectStdout: /REPI_MODEL_OK/,
 		timeoutMs,
