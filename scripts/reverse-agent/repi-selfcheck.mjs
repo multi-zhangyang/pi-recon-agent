@@ -187,6 +187,26 @@ if (deep) {
 		if (existsSync(source)) copyFileSync(source, join(isolatedAgentDir, name));
 	}
 	rows.push(
+		runRepi(
+			"swarm-llm-run",
+			[
+				"swarm",
+				"llm-run",
+				"local-selfcheck",
+				"--workers",
+				"3",
+				...modelArgs,
+				"--prompt",
+				"Reply exactly: REPI_SWARM_WORKER_{id}_OK",
+				"--expect",
+				"REPI_SWARM_WORKER_{id}_OK",
+				"--timeout-ms",
+				String(timeoutMs),
+			],
+			{ timeoutMs: Math.max(timeoutMs + 15_000, timeoutMs * 2) },
+		),
+	);
+	rows.push(
 		runRepi("re-swarm-slash", [...modelArgs, "--no-session", "--mode", "json", "/re-swarm run local-selfcheck 1 1"], {
 			timeoutMs,
 			expectStdout: /re_swarm|swarm|worker/i,

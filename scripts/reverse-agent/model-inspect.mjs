@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const rawArgs = process.argv.slice(2);
-const knownCommands = new Set(["doctor", "status", "cost", "help"]);
+const knownCommands = new Set(["doctor", "status", "cost", "add", "login", "test", "default", "help"]);
 let root = process.cwd();
 if (rawArgs[0] && !rawArgs[0].startsWith("--") && !knownCommands.has(rawArgs[0])) {
 	root = resolve(rawArgs.shift());
@@ -21,9 +21,15 @@ const allowedApis = new Set(["openai-completions", "openai-responses", "anthropi
 function usage() {
 	return `Usage:
   repi model doctor [--json]
+  repi model add --provider <id> --api <openai-completions|openai-responses|anthropic-messages> --base-url <url> --model <id> [options]
+  repi model login --provider <id> --api-key <key>
+  repi model login --provider <id> --api-key-stdin
+  repi model default --provider <id> --model <id>
+  repi model test --provider <id> --model <id> [--timeout-ms N]
   repi model cost --provider <id> --model <id> --input-tokens N --output-tokens N [--cache-read-tokens N] [--cache-write-tokens N]
 
 model doctor is offline: it parses ~/.repi/agent/models.json, checks provider/model metadata, env-key references, context window and cost fields.
+model add writes ~/.repi/agent/models.json with env-ref credentials by default; model login writes ~/.repi/agent/auth.json locally.
 `;
 }
 
@@ -32,6 +38,24 @@ function readJson(path) {
 		return JSON.parse(readFileSync(path, "utf8"));
 	} catch (error) {
 		return { __error: error instanceof Error ? error.message : String(error) };
+	}
+}
+
+function readJsonObject(path, fallback = {}) {
+	if (!existsSync(path)) return fallback;
+	const parsed = readJson(path);
+	if (parsed?.__error) throw new Error(`${path}: ${parsed.__error}`);
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`${path}: expected JSON object`);
+	return parsed;
+}
+
+function writeJsonFile(path, data, mode = 0o600) {
+	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+	writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`, { encoding: "utf8", mode });
+	try {
+		chmodSync(path, mode);
+	} catch {
+		// Best-effort on non-POSIX filesystems.
 	}
 }
 
@@ -50,6 +74,25 @@ function numberFlag(args, names, fallback = 0) {
 	const value = flagValue(args, names, "");
 	const parsed = Number(value);
 	return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function intFlag(args, names, fallback, min, max) {
+	const value = flagValue(args, names, "");
+	const parsed = Number.parseInt(value, 10);
+	if (!Number.isFinite(parsed)) return fallback;
+	return Math.max(min, Math.min(max, parsed));
+}
+
+function boolFlag(args, names, fallback = false) {
+	const value = flagValue(args, names, "");
+	if (!value) return fallback;
+	if (/^(?:1|true|yes|y|on)$/i.test(value)) return true;
+	if (/^(?:0|false|no|n|off)$/i.test(value)) return false;
+	return fallback;
+}
+
+function positional(args, offset = 0) {
+	return args.filter((arg) => !arg.startsWith("--"))[offset];
 }
 
 function redact(value) {
@@ -242,6 +285,260 @@ function buildCostReport() {
 	};
 }
 
+function providerEnvName(providerId) {
+	return `REPI_${String(providerId)
+		.toUpperCase()
+		.replace(/[^A-Z0-9]+/g, "_")
+		.replace(/^_+|_+$/g, "")}_API_KEY`;
+}
+
+function inputList(value) {
+	const items = String(value || "text")
+		.split(",")
+		.map((item) => item.trim())
+		.filter(Boolean);
+	return items.length ? items : ["text"];
+}
+
+function costFromFlags(args) {
+	return {
+		input: numberFlag(args, ["--input-cost", "--cost-input"], 0),
+		output: numberFlag(args, ["--output-cost", "--cost-output"], 0),
+		cacheRead: numberFlag(args, ["--cache-read-cost", "--cost-cache-read"], 0),
+		cacheWrite: numberFlag(args, ["--cache-write-cost", "--cost-cache-write"], 0),
+	};
+}
+
+function upsertDefaultSetting(providerId, modelId) {
+	const settingsPath = join(agentDir, "settings.json");
+	const settings = readJsonObject(settingsPath, {});
+	settings.defaultProvider = providerId;
+	settings.defaultModel = modelId;
+	writeJsonFile(settingsPath, settings, 0o600);
+	return settingsPath;
+}
+
+function buildAddReport() {
+	const providerId = flagValue(rawArgs, "--provider") ?? positional(rawArgs, 0);
+	const modelId = flagValue(rawArgs, "--model");
+	const api = flagValue(rawArgs, "--api", "openai-completions");
+	const baseUrl = flagValue(rawArgs, ["--base-url", "--baseUrl"]);
+	if (!providerId || !modelId || !baseUrl || !api) {
+		return {
+			kind: "repi-model-add-report",
+			schemaVersion: 1,
+			generatedAt: new Date().toISOString(),
+			ok: false,
+			error: "model add requires --provider <id> --base-url <url> --model <id> [--api <style>]",
+		};
+	}
+	if (!allowedApis.has(api)) {
+		return {
+			kind: "repi-model-add-report",
+			schemaVersion: 1,
+			generatedAt: new Date().toISOString(),
+			ok: false,
+			error: `unsupported api=${api}; allowed=${[...allowedApis].join(",")}`,
+		};
+	}
+	const apiKeyEnv = flagValue(rawArgs, ["--api-key-env", "--env"], providerEnvName(providerId));
+	if (!/^[A-Z_][A-Z0-9_]*$/.test(apiKeyEnv)) {
+		return {
+			kind: "repi-model-add-report",
+			schemaVersion: 1,
+			generatedAt: new Date().toISOString(),
+			ok: false,
+			error: `invalid api key env name: ${apiKeyEnv}`,
+		};
+	}
+	const modelsConfig = readJsonObject(modelsPath, { providers: {} });
+	if (!modelsConfig.providers || typeof modelsConfig.providers !== "object" || Array.isArray(modelsConfig.providers)) {
+		modelsConfig.providers = {};
+	}
+	const previousProvider = modelsConfig.providers[providerId] && typeof modelsConfig.providers[providerId] === "object" ? modelsConfig.providers[providerId] : {};
+	const modelEntry = {
+		id: modelId,
+		name: flagValue(rawArgs, ["--model-name", "--name"], modelId),
+		input: inputList(flagValue(rawArgs, "--input", "text")),
+		cost: costFromFlags(rawArgs),
+		contextWindow: intFlag(rawArgs, ["--context-window", "--context"], 262144, 1024, 1048576),
+		maxTokens: intFlag(rawArgs, ["--max-tokens", "--max-output"], 16384, 64, 131072),
+		reasoning: rawArgs.includes("--reasoning") ? boolFlag(rawArgs, "--reasoning", true) : boolFlag(rawArgs, "--reasoning", false),
+	};
+	const oldModels = Array.isArray(previousProvider.models) ? previousProvider.models : [];
+	const nextModels = [...oldModels.filter((model) => model?.id !== modelId), modelEntry];
+	const authHeader =
+		rawArgs.includes("--auth-header") || rawArgs.includes("--authHeader")
+			? boolFlag(rawArgs, ["--auth-header", "--authHeader"], true)
+			: previousProvider.authHeader;
+	modelsConfig.providers[providerId] = {
+		...previousProvider,
+		name: flagValue(rawArgs, "--provider-name", previousProvider.name ?? providerId),
+		baseUrl,
+		api,
+		apiKey: `$${apiKeyEnv}`,
+		...(authHeader === undefined ? {} : { authHeader }),
+		models: nextModels,
+	};
+	writeJsonFile(modelsPath, modelsConfig, 0o600);
+	let authWritten = false;
+	const apiKey = flagValue(rawArgs, "--api-key");
+	if (apiKey) {
+		const auth = readJsonObject(authPath, {});
+		auth[providerId] = { type: "api_key", key: apiKey };
+		writeJsonFile(authPath, auth, 0o600);
+		authWritten = true;
+	}
+	let settingsPath = undefined;
+	if (rawArgs.includes("--set-default") || rawArgs.includes("--default")) settingsPath = upsertDefaultSetting(providerId, modelId);
+	return {
+		kind: "repi-model-add-report",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		ok: true,
+		provider: providerId,
+		model: modelId,
+		api,
+		baseUrl: redact(baseUrl),
+		apiKey: `$${apiKeyEnv}`,
+		apiKeyEnvPresent: Boolean(process.env[apiKeyEnv]),
+		authWritten,
+		modelsPath,
+		authPath,
+		settingsPath,
+		next: [
+			...(authWritten || process.env[apiKeyEnv] ? [] : [`export ${apiKeyEnv}=...`]),
+			`repi model test --provider ${providerId} --model ${modelId}`,
+			`repi --provider ${providerId} --model ${modelId}`,
+		],
+	};
+}
+
+function buildLoginReport() {
+	const providerId = flagValue(rawArgs, "--provider") ?? positional(rawArgs, 0);
+	if (!providerId) {
+		return {
+			kind: "repi-model-login-report",
+			schemaVersion: 1,
+			generatedAt: new Date().toISOString(),
+			ok: false,
+			error: "model login requires --provider <id>",
+		};
+	}
+	let apiKey = flagValue(rawArgs, "--api-key");
+	if (!apiKey && rawArgs.includes("--api-key-stdin")) {
+		apiKey = readFileSync(0, "utf8").trim();
+	}
+	if (!apiKey) {
+		return {
+			kind: "repi-model-login-report",
+			schemaVersion: 1,
+			generatedAt: new Date().toISOString(),
+			ok: false,
+			error: "model login requires --api-key <key> or --api-key-stdin",
+		};
+	}
+	const auth = readJsonObject(authPath, {});
+	auth[providerId] = { type: "api_key", key: apiKey };
+	writeJsonFile(authPath, auth, 0o600);
+	return {
+		kind: "repi-model-login-report",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		ok: true,
+		provider: providerId,
+		authPath,
+		keyPreview: redact(apiKey),
+		next: [`repi model test --provider ${providerId} --model <model-id>`],
+	};
+}
+
+function buildDefaultReport() {
+	const providerId = flagValue(rawArgs, "--provider") ?? positional(rawArgs, 0);
+	const modelId = flagValue(rawArgs, "--model") ?? positional(rawArgs, providerId && positional(rawArgs, 0) === providerId ? 1 : 0);
+	if (!providerId || !modelId) {
+		return {
+			kind: "repi-model-default-report",
+			schemaVersion: 1,
+			generatedAt: new Date().toISOString(),
+			ok: false,
+			error: "model default requires --provider <id> --model <id>",
+		};
+	}
+	const settingsPath = upsertDefaultSetting(providerId, modelId);
+	return {
+		kind: "repi-model-default-report",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		ok: true,
+		provider: providerId,
+		model: modelId,
+		settingsPath,
+		next: ["repi model doctor", "repi"],
+	};
+}
+
+function buildTestReport() {
+	const providerId = flagValue(rawArgs, "--provider") ?? positional(rawArgs, 0);
+	const modelId = flagValue(rawArgs, "--model") ?? positional(rawArgs, providerId && positional(rawArgs, 0) === providerId ? 1 : 0);
+	const testTimeoutMs = intFlag(rawArgs, "--timeout-ms", 120_000, 5000, 30 * 60 * 1000);
+	if (!providerId || !modelId) {
+		return {
+			kind: "repi-model-test-report",
+			schemaVersion: 1,
+			generatedAt: new Date().toISOString(),
+			ok: false,
+			error: "model test requires --provider <id> --model <id>",
+		};
+	}
+	const result = spawnSync(
+		join(root, "repi"),
+		[
+			"--approve",
+			"--provider",
+			providerId,
+			"--model",
+			modelId,
+			"--thinking",
+			"off",
+			"--no-session",
+			"--no-tools",
+			"-p",
+			"Reply exactly: REPI_MODEL_OK",
+		],
+		{
+			cwd: root,
+			env: {
+				...process.env,
+				REPI_SKIP_VERSION_CHECK: "1",
+				REPI_SKIP_PACKAGE_UPDATE_CHECK: "1",
+				REPI_TELEMETRY: "0",
+				REPI_PRINT_PROGRESS: "0",
+			},
+			encoding: "utf8",
+			timeout: testTimeoutMs,
+			maxBuffer: 4 * 1024 * 1024,
+		},
+	);
+	const stdout = redact(result.stdout ?? "");
+	const stderr = redact(result.stderr ?? "");
+	const exit = result.status ?? (result.signal ? 128 : 1);
+	return {
+		kind: "repi-model-test-report",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		ok: exit === 0 && /REPI_MODEL_OK/.test(stdout),
+		provider: providerId,
+		model: modelId,
+		exit,
+		signal: result.signal,
+		timeoutMs: testTimeoutMs,
+		stdoutTail: stdout.slice(-2000),
+		stderrTail: stderr.slice(-2000),
+		error: result.error ? String(result.error.message || result.error) : undefined,
+	};
+}
+
 function printDoctor(report) {
 	console.log("REPI Model Doctor");
 	console.log(`modelsPath: ${report.modelsPath}`);
@@ -273,18 +570,57 @@ function printCost(report) {
 	console.log(`estimatedUsd=${report.estimatedUsd.toFixed(8)}`);
 }
 
+function printMutationReport(title, report) {
+	if (!report.ok) {
+		console.error(report.error);
+		return;
+	}
+	console.log(title);
+	if (report.provider) console.log(`provider=${report.provider}`);
+	if (report.model) console.log(`model=${report.model}`);
+	if (report.api) console.log(`api=${report.api}`);
+	if (report.baseUrl) console.log(`baseUrl=${report.baseUrl}`);
+	if (report.apiKey) console.log(`apiKey=${report.apiKey}${report.apiKeyEnvPresent ? " (env set)" : " (env missing)"}`);
+	if (report.modelsPath) console.log(`modelsPath=${report.modelsPath}`);
+	if (report.authPath) console.log(`authPath=${report.authPath}${report.authWritten ? " (updated)" : ""}`);
+	if (report.settingsPath) console.log(`settingsPath=${report.settingsPath}`);
+	if (report.keyPreview) console.log(`key=${report.keyPreview}`);
+	if (report.exit !== undefined) {
+		console.log(`exit=${report.exit} ok=${report.ok}`);
+		if (report.stdoutTail) console.log(`stdout: ${report.stdoutTail.replace(/\n/g, "\\n").slice(-800)}`);
+		if (report.stderrTail) console.log(`stderr: ${report.stderrTail.replace(/\n/g, "\\n").slice(-800)}`);
+	}
+	for (const next of report.next ?? []) console.log(`next: ${next}`);
+	console.log(`verdict: ${report.ok ? "pass" : "fail"}`);
+}
+
 if (command === "help" || command === "--help" || command === "-h") {
 	console.log(usage());
 	process.exit(0);
 }
-if (command !== "doctor" && command !== "status" && command !== "cost") {
+if (!["doctor", "status", "cost", "add", "login", "test", "default"].includes(command)) {
 	console.error(`Unknown model command: ${command}`);
 	console.error(usage());
 	process.exit(2);
 }
 
-const report = command === "cost" ? buildCostReport() : buildDoctorReport();
+const report =
+	command === "cost"
+		? buildCostReport()
+		: command === "add"
+			? buildAddReport()
+			: command === "login"
+				? buildLoginReport()
+				: command === "default"
+					? buildDefaultReport()
+					: command === "test"
+						? buildTestReport()
+						: buildDoctorReport();
 if (json) console.log(JSON.stringify(report, null, 2));
 else if (command === "cost") printCost(report);
+else if (command === "add") printMutationReport("REPI Model Add", report);
+else if (command === "login") printMutationReport("REPI Model Login", report);
+else if (command === "default") printMutationReport("REPI Model Default", report);
+else if (command === "test") printMutationReport("REPI Model Test", report);
 else printDoctor(report);
 process.exit(report.ok ? 0 : 1);

@@ -3576,7 +3576,7 @@ type MemorySupervisorReportV1 = {
 	};
 };
 
-type MemoryUxGovernanceActionV16 = "promote" | "demote" | "forget";
+type MemoryUxGovernanceActionV16 = "promote" | "demote" | "forget" | "quarantine";
 
 type MemoryUxWhyRowV16 = {
 	eventId: string;
@@ -5711,7 +5711,7 @@ const RECON_PROMPTS = [
 		description: "REPI 模型/provider/API key/auto compact 配置说明",
 		argumentHint: "[provider-or-error]",
 		content:
-			"REPI configuration help: $ARGUMENTS\n\n直接给出 ~/.repi/agent/models.json、~/.repi/agent/settings.json、~/.repi/agent/auth.json 的配置步骤；给 OpenAI Chat Completions-compatible / OpenAI Responses-compatible / Anthropic-compatible / local runtime 示例；说明 repi 独立于 pi；网关格式不确定时先给 repi provider-doctor --base-url <url> --model <id> --api auto；给 repi --offline --list-models 和 repi --offline --list-models <provider-or-model> 做 parse-only 验证；真实调用才用 repi --provider <provider-id> --model <model-id> --thinking off --no-tools --no-session -p \"Reply exactly: PROVIDER_OK\"；说明 auto compact 默认 triggerPercent=85、warningPercent=80、reserveTokens=16384、keepRecentTokens=36000，阈值 min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)。",
+			"REPI configuration help: $ARGUMENTS\n\n直接给出 ~/.repi/agent/models.json、~/.repi/agent/settings.json、~/.repi/agent/auth.json 的配置步骤；优先使用 repi model add/login/default/test 命令，再给 OpenAI Chat Completions-compatible / OpenAI Responses-compatible / Anthropic-compatible / local runtime JSON 示例；网关格式不确定时先给 repi provider-doctor --base-url <url> --model <id> --api auto；给 repi model doctor、repi --offline --list-models 和 repi --offline --list-models <provider-or-model> 做 parse-only 验证；真实调用可用 repi model test --provider <provider-id> --model <model-id> 或 repi --provider <provider-id> --model <model-id> --thinking off --no-tools --no-session -p \"Reply exactly: PROVIDER_OK\"；说明 auto compact 默认 triggerPercent=85、warningPercent=80、reserveTokens=16384、keepRecentTokens=36000，阈值 min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)。",
 	},
 	{
 		name: "reverse",
@@ -6073,6 +6073,31 @@ function memoryStatusBoardPath(): string {
 
 function memoryGovernanceLedgerPath(): string {
 	return memoryPath("governance-ledger.jsonl");
+}
+
+function memoryBlockingGovernanceBySource(): Map<string, { action: "forget" | "quarantine"; reason?: string; id?: string }> {
+	const rows = jsonlRecords(
+		memoryGovernanceLedgerPath(),
+		(value): value is { action?: string; applied?: boolean; sourceEventId?: string; reason?: string; id?: string } =>
+			typeof value === "object" &&
+			value !== null &&
+			typeof (value as { action?: unknown }).action === "string" &&
+			(typeof (value as { sourceEventId?: unknown }).sourceEventId === "string" ||
+				typeof (value as { eventId?: unknown }).eventId === "string"),
+	);
+	const blocked = new Map<string, { action: "forget" | "quarantine"; reason?: string; id?: string }>();
+	for (const row of rows) {
+		if (row.applied === false) continue;
+		const sourceEventId = String(row.sourceEventId ?? (row as { eventId?: string }).eventId ?? "").trim();
+		if (!sourceEventId) continue;
+		const action = String(row.action ?? "").toLowerCase();
+		if (action === "forget" || action === "quarantine") {
+			blocked.set(sourceEventId, { action, reason: row.reason, id: row.id });
+		} else if (action === "promote" || action === "retain") {
+			blocked.delete(sourceEventId);
+		}
+	}
+	return blocked;
 }
 
 function compactResumeTransitionLedgerPath(): string {
@@ -38138,6 +38163,7 @@ function searchMemoryEvents(query?: string, options?: { route?: string; target?:
 	const events = readMemoryEvents();
 	const caseMemory = latestCaseMemoryBySignature();
 	const qualityByEvent = latestMemoryQualityByEvent();
+	const governanceBlocked = memoryBlockingGovernanceBySource();
 	const vectorReport = searchMemoryVectors(query, options);
 	const vectorByEvent = new Map(vectorReport.hits.map((hit) => [hit.eventId, hit]));
 	const queryTokens = uniqueNonEmpty((query ?? "").toLowerCase().split(/[^a-z0-9一-鿿]+/), 24).filter(
@@ -38145,6 +38171,8 @@ function searchMemoryEvents(query?: string, options?: { route?: string; target?:
 	);
 	const semanticTokens = memoryHybridQueryTokens(queryTokens);
 	const hits = events.flatMap((event) => {
+		const governance = governanceBlocked.get(event.id);
+		if (governance) return [];
 		if (options?.route && !memoryRouteMatches(event.route, options.route)) return [];
 		const haystack = memoryTextForSearch(event);
 		const haystackTokens = memorySearchTokens(haystack);
@@ -42166,6 +42194,7 @@ function installReconTools(pi: ExtensionAPI): void {
 				Type.Literal("promote"),
 				Type.Literal("demote"),
 				Type.Literal("forget"),
+				Type.Literal("quarantine"),
 				Type.Literal("append"),
 				Type.Literal("evolve"),
 				Type.Literal("verify"),
@@ -42460,7 +42489,12 @@ function installReconTools(pi: ExtensionAPI): void {
 					details: report as unknown as Record<string, unknown>,
 				};
 			}
-			if (params.action === "promote" || params.action === "demote" || params.action === "forget") {
+			if (
+				params.action === "promote" ||
+				params.action === "demote" ||
+				params.action === "forget" ||
+				params.action === "quarantine"
+			) {
 				const decision = applyMemoryUxGovernance(params.action, {
 					query: params.query,
 					text: params.text,

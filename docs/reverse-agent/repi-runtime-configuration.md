@@ -24,7 +24,23 @@ REPI 是独立产品，不读写原版 `pi` 的默认 profile。
 
 适用于大多数商业网关、本地 vLLM/SGLang/LM Studio/Ollama OpenAI shim。
 
-写入 `~/.repi/agent/models.json`：
+推荐用命令写入：
+
+```bash
+repi model add \
+  --provider openai-compatible \
+  --api openai-completions \
+  --base-url https://api.example.com/v1 \
+  --model provider/model-id \
+  --context-window 128000 \
+  --max-tokens 16384 \
+  --set-default
+
+repi model login --provider openai-compatible --api-key-stdin
+repi model test --provider openai-compatible --model provider/model-id
+```
+
+也可以手动写入 `~/.repi/agent/models.json`：
 
 ```json
 {
@@ -54,7 +70,7 @@ REPI 是独立产品，不读写原版 `pi` 的默认 profile。
 }
 ```
 
-设置密钥：
+如果没有使用 `repi model login`，就设置密钥环境变量：
 
 ```bash
 export OPENAI_COMPAT_API_KEY=<your-token>
@@ -69,7 +85,11 @@ repi --offline --list-models openai-compatible
 repi --offline --list-models provider/model-id
 ```
 
-真实调用时使用 `repi --provider openai-compatible --model provider/model-id --thinking off --no-tools --no-session -p "Reply exactly: PROVIDER_OK"` 并设置对应环境变量。
+真实调用时使用：
+
+```bash
+repi --provider openai-compatible --model provider/model-id --thinking off --no-tools --no-session -p "Reply exactly: PROVIDER_OK"
+```
 
 费用估算：
 
@@ -139,7 +159,13 @@ OpenAI Responses-compatible endpoint 把 `REPI_REMOTE_PROVIDER_API` 改成 `open
 
 ## 4. 默认模型
 
-在 `~/.repi/agent/settings.json` 里写：
+推荐命令：
+
+```bash
+repi model default --provider openai-compatible --model provider/model-id
+```
+
+也可以在 `~/.repi/agent/settings.json` 里写：
 
 ```json
 {

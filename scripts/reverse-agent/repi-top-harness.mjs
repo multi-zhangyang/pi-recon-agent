@@ -197,6 +197,10 @@ function staticContractChecks() {
 			"packages/coding-agent/src/cli.ts",
 		], ["ARGS=(--recon"]),
 	);
+	checks.push(markerCheck("launcher:repi-swarm-llm-run", "repi", ["swarm)", "llm-run|run-llm|workers", "repi-swarm-llm-run.mjs"], []));
+	checks.push(markerCheck("swarm:llm-worker-pool-cli", "scripts/reverse-agent/repi-swarm-llm-run.mjs", ["repi-llm-worker-pool-report", "LLMWorkerPoolV1", "REPI_CODING_AGENT_DIR", "--no-session", "Promise.all", "stdoutSha256", "evidenceRoot"], []));
+	checks.push(markerCheck("model:cli-control-plane", "scripts/reverse-agent/model-inspect.mjs", ["repi model add", "repi model login", "repi model test", "repi model default", "auth.json", "settings.json", "apiKeyEnvPresent"], []));
+	checks.push(markerCheck("memory:cli-governance", "scripts/reverse-agent/memory-inspect.mjs", ["repi memory why", "governance-ledger.jsonl", "append_only_memory_governance", "quarantine", "visibleByDefault"], []));
 	checks.push(
 		markerCheck("code:repi-bootstrap-defaults", "packages/coding-agent/src/cli/repi-bootstrap.ts", [
 			"bootstrapRepiCli",

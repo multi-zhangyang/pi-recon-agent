@@ -147,6 +147,29 @@ REPI 的模型配置文件是：
 
 配置格式与底层模型注册器兼容，核心结构是 **providers 对象**，不是数组。provider 名称就是启动时 `--provider` 使用的名字。
 
+推荐先用 CLI 写入配置，再按需手动编辑 JSON：
+
+```bash
+# 1) 注册一个 OpenAI-compatible Chat Completions provider
+repi model add \
+  --provider openai-compatible \
+  --api openai-completions \
+  --base-url https://gateway.example/v1 \
+  --model provider/model-id \
+  --context-window 262144 \
+  --max-tokens 16384 \
+  --reasoning true \
+  --set-default
+
+# 2) 保存 API key 到本机 ~/.repi/agent/auth.json
+repi model login --provider openai-compatible --api-key-stdin
+
+# 3) 验证真实调用
+repi model test --provider openai-compatible --model provider/model-id
+```
+
+`model add` 默认在 `models.json` 里只写 `$REPI_<PROVIDER>_API_KEY` 这种环境变量引用；如果使用 `model login`，真实 key 只写入本机 `auth.json`，不会进入仓库。
+
 REPI 支持主流模型接入方式：
 
 - OpenAI-compatible Chat Completions。
@@ -349,6 +372,10 @@ export LOCAL_LLM_API_KEY="local"
 诊断自定义网关：
 
 ```bash
+repi model add --provider openai-compatible --api openai-completions --base-url https://gateway.example/v1 --model provider/model-id
+repi model login --provider openai-compatible --api-key-stdin
+repi model default --provider openai-compatible --model provider/model-id
+repi model test --provider openai-compatible --model provider/model-id
 repi model doctor
 repi model cost --provider openai-compatible --model provider/model-id --input-tokens 100000 --output-tokens 10000
 repi provider-doctor --base-url https://gateway.example/v1 --model provider/model-id --api auto
@@ -425,6 +452,34 @@ repi --tools read,grep,find,ls -p "只读分析 src/ 的路由、鉴权和入口
 /re-toolchain show
 /re-lane-specialist-pack show
 /re-domain-proof-exit write <domain>
+```
+
+### 多子代理并行池
+
+`repi swarm llm-run` 会真实拉起多个隔离 worker 进程；每个 worker 使用独立临时 `REPI_CODING_AGENT_DIR`，复制当前模型配置和本机凭据，默认 `--no-session`，并把 stdout/stderr hash、退出码、耗时和合并摘要写到：
+
+```text
+~/.repi/agent/recon/evidence/llm-swarms/<run-id>/report.json
+```
+
+示例：
+
+```bash
+repi swarm llm-run ./target --workers 4 \
+  --provider openai-compatible \
+  --model provider/model-id \
+  --tools bash,read,grep,ls \
+  --prompt "Worker {id}: 对 {target} 做一个独立逆向/渗透分析分支，输出 evidence、blockers、nextCommands。"
+```
+
+自检并发模型调用：
+
+```bash
+repi swarm llm-run local-selfcheck --workers 3 \
+  --provider openai-compatible \
+  --model provider/model-id \
+  --prompt "Reply exactly: REPI_SWARM_WORKER_{id}_OK" \
+  --expect "REPI_SWARM_WORKER_{id}_OK"
 ```
 
 ---
@@ -587,6 +642,9 @@ case-memory.jsonl    案例索引/摘要，召回时只转成 bounded cards
 
 ```bash
 repi memory status                  # 查看当前记忆姿态、污染保护、事件数量、文件状态
+repi memory why <query-or-event-id> # 解释某条记忆为什么会被召回/可见
+repi memory forget <event-id>       # 追加 tombstone，不重写历史
+repi memory quarantine <event-id>   # 追加 quarantine，阻断后续召回/注入
 repi memory diff                    # 查看尚未 consolidation 的高价值事件
 repi memory consolidate --dry-run   # 只看蒸馏计划
 repi memory consolidate             # 写入 project/procedural memory
@@ -701,10 +759,18 @@ repi smoke                          # 快速 smoke：doctor + memory/model statu
 repi smoke --full                   # smoke 后追加 npm run check
 repi selfcheck --deep               # 模型、工具、记忆、并发 worker、编排能力 dogfood 自检
 repi memory status                  # scoped memory 状态与污染保护
+repi memory why <query-or-event-id>  # 召回解释
+repi memory forget <event-id>        # 记忆 tombstone
+repi memory quarantine <event-id>    # 记忆隔离
 repi memory diff                    # 未蒸馏高价值事件差异
 repi memory consolidate --dry-run   # 查看 memory 蒸馏计划
 repi memory consolidate             # 把高价值 events 蒸馏到 project/procedural memory
+repi swarm llm-run <target> --workers 3 --provider <provider> --model <model>
 repi model doctor                   # 离线检查 provider/model 配置
+repi model add --provider <id> --api openai-completions --base-url <url> --model <id>
+repi model login --provider <id> --api-key-stdin
+repi model default --provider <id> --model <id>
+repi model test --provider <id> --model <id>
 repi model cost --provider openai-compatible --model provider/model-id --input-tokens 100000 --output-tokens 10000
 ```
 
