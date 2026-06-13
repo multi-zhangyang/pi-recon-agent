@@ -146,6 +146,22 @@ const missionSource = readFileSync(join(root, "scripts", "reverse-agent", "repi-
 const engageSource = readFileSync(join(root, "scripts", "reverse-agent", "repi-engage.mjs"), "utf8");
 checks.push(
 	check(
+		"compact:sane-threshold-and-safe-autoresume",
+		/Number\.isFinite\(contextTokens\)[\s\S]{0,240}contextTokens <= 0/.test(
+			readFileSync(join(root, "packages", "coding-agent", "src", "core", "compaction", "compaction.ts"), "utf8"),
+		) &&
+			/reserveTokens > 0 && reserveTokens < contextWindow/.test(
+				readFileSync(join(root, "packages", "coding-agent", "src", "core", "compaction", "compaction.ts"), "utf8"),
+			) &&
+			/pi-recon-auto-resume[\s\S]{0,700}deliverAs:\s*"steer"[\s\S]{0,120}triggerTurn:\s*true/.test(reconProfileSource) &&
+			/_continueQueuedMessages[\s\S]{0,260}agent\.continue/.test(
+				readFileSync(join(root, "packages", "coding-agent", "src", "core", "agent-session.ts"), "utf8"),
+			),
+		{ markers: ["no tiny compact", "reserve below context", "queued auto-resume trigger"] },
+	),
+);
+checks.push(
+	check(
 		"memory:runtime-redaction-wired",
 		reconProfileSource.includes("function redactMemorySensitiveText") &&
 			/sanitizeMemoryText[\s\S]{0,240}redactMemorySensitiveText/.test(reconProfileSource) &&

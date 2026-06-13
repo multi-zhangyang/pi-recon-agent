@@ -271,6 +271,34 @@ describe("shouldCompact", () => {
 		expect(compactionTriggerTokens(100000, settings)).toBe(70000);
 		expect(shouldCompact(70001, 100000, settings)).toBe(true);
 	});
+
+	it("should ignore an invalid reserve budget instead of compacting tiny setup turns", () => {
+		const settings: CompactionSettings = {
+			enabled: true,
+			reserveTokens: 16384,
+			keepRecentTokens: 20000,
+			triggerPercent: 85,
+		};
+
+		expect(compactionTriggerTokens(8192, settings)).toBe(6963);
+		expect(shouldCompact(1, 8192, settings)).toBe(false);
+		expect(shouldCompact(6963, 8192, settings)).toBe(false);
+		expect(shouldCompact(6964, 8192, settings)).toBe(true);
+	});
+
+	it("should not compact invalid or empty context measurements", () => {
+		const settings: CompactionSettings = {
+			enabled: true,
+			reserveTokens: 10000,
+			keepRecentTokens: 20000,
+			triggerPercent: 85,
+		};
+
+		expect(compactionTriggerTokens(0, settings)).toBe(Number.POSITIVE_INFINITY);
+		expect(shouldCompact(0, 100000, settings)).toBe(false);
+		expect(shouldCompact(Number.NaN, 100000, settings)).toBe(false);
+		expect(shouldCompact(1, 0, settings)).toBe(false);
+	});
 });
 
 describe("findCutPoint", () => {

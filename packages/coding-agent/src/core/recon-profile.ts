@@ -24457,7 +24457,7 @@ function buildReconCompactionSummary(params: {
 		...resumeCommands.map((command) => `- next: ${command}`),
 		"",
 		"## Compaction boundary",
-		"- threshold_policy: triggerPercent/warningPercent from settings.compaction; runtime trigger uses compactionTriggerTokens = min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)",
+		"- threshold_policy: triggerPercent/warningPercent from settings.compaction; runtime trigger uses compactionTriggerTokens = earlier valid percent/reserve threshold with sane floor",
 		`- first_kept_entry_id: ${event.preparation.firstKeptEntryId}`,
 		`- tokens_before: ${event.preparation.tokensBefore}`,
 		`- branch_entries: ${event.branchEntries?.length ?? 0}`,
@@ -44029,7 +44029,7 @@ export function createReconExtensionFactory() {
 				policy:
 					"REPI owned compaction: preserve goal, route, evidence, commands, files, unresolved assumptions, dispatcher budgets, and next steps.",
 				thresholdPolicy:
-					"triggerPercent/warningPercent from settings.compaction; compactionTriggerTokens = min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)",
+					"triggerPercent/warningPercent from settings.compaction; compactionTriggerTokens = earlier valid percent/reserve threshold with sane floor",
 				mission: readCurrentMission(),
 				evidenceTail: truncateMiddle(buildContextEvidenceTail({ target: contextPack.target }), 3000),
 				contextPath,
@@ -44064,7 +44064,7 @@ export function createReconExtensionFactory() {
 				contract,
 				canAutoResume,
 				canAutoResume
-					? "verified contract; trigger bounded resume turn"
+					? "verified contract; queue bounded resume turn after compaction"
 					: !contract.verified
 						? "contract not verified"
 						: compactAutoResumeIds.has(resumeId)
@@ -44085,7 +44085,7 @@ export function createReconExtensionFactory() {
 						display: true,
 						details: autoResume,
 					},
-					{ triggerTurn: true },
+					{ deliverAs: "steer", triggerTurn: true },
 				);
 			}
 			if (ctx.hasUI) {

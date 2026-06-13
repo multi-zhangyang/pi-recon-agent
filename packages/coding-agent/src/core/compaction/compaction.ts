@@ -222,18 +222,39 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 /**
  * Return the token threshold that triggers compaction.
  *
- * Backward compatible default: contextWindow - reserveTokens.
- * If triggerPercent is configured, compact at the earlier of the percentage
- * threshold and the reserve-token threshold. This lets products such as REPI
- * mimic top-tier harness behavior with explicit 80/85% context-watermark policy
- * while still preserving a hard response/tool budget near the model limit.
+ * Uses the earlier valid threshold from:
+ * - triggerPercent: contextWindow * triggerPercent / 100
+ * - reserveTokens: contextWindow - reserveTokens, only when reserveTokens leaves a usable window
+ *
+ * The reserve threshold is intentionally ignored when reserveTokens >= contextWindow.
+ * That configuration used to produce a negative threshold and could compact a
+ * one-token setup/error turn. A sane lower floor keeps bootstrap/model-config
+ * conversations from self-compacting before there is useful history to preserve.
  */
 export function compactionTriggerTokens(contextWindow: number, settings: CompactionSettings): number {
-	const reserveThreshold = contextWindow - settings.reserveTokens;
+	if (!Number.isFinite(contextWindow) || contextWindow <= 0) return Number.POSITIVE_INFINITY;
+
+	const thresholds: number[] = [];
 	const triggerPercent = settings.triggerPercent;
-	if (typeof triggerPercent !== "number" || triggerPercent <= 0 || triggerPercent >= 100) return reserveThreshold;
-	const percentThreshold = Math.floor((contextWindow * triggerPercent) / 100);
-	return Math.min(percentThreshold, reserveThreshold);
+	if (
+		typeof triggerPercent === "number" &&
+		Number.isFinite(triggerPercent) &&
+		triggerPercent > 0 &&
+		triggerPercent < 100
+	) {
+		thresholds.push(Math.floor((contextWindow * triggerPercent) / 100));
+	}
+
+	const reserveTokens = Number.isFinite(settings.reserveTokens) ? Math.max(0, settings.reserveTokens) : 0;
+	if (reserveTokens > 0 && reserveTokens < contextWindow) {
+		thresholds.push(contextWindow - reserveTokens);
+	}
+
+	const positiveThresholds = thresholds.filter((threshold) => threshold > 0);
+	const rawThreshold =
+		positiveThresholds.length > 0 ? Math.min(...positiveThresholds) : Math.floor(contextWindow * 0.9);
+	const floor = Math.min(Math.max(1024, Math.floor(contextWindow * 0.25)), Math.max(1, contextWindow - 1));
+	return Math.max(rawThreshold, floor);
 }
 
 /**
@@ -241,8 +262,11 @@ export function compactionTriggerTokens(contextWindow: number, settings: Compact
  */
 export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
 	if (!settings.enabled) return false;
-	if (contextWindow <= 0) return false;
-	return contextTokens > compactionTriggerTokens(contextWindow, settings);
+	if (!Number.isFinite(contextTokens) || contextTokens <= 0) return false;
+	if (!Number.isFinite(contextWindow) || contextWindow <= 0) return false;
+	const threshold = compactionTriggerTokens(contextWindow, settings);
+	if (!Number.isFinite(threshold) || threshold <= 0) return false;
+	return contextTokens > threshold;
 }
 
 // ============================================================================

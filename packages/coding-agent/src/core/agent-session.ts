@@ -937,6 +937,18 @@ export class AgentSession {
 		}
 	}
 
+	private async _continueQueuedMessages(): Promise<void> {
+		if (!this.agent.hasQueuedMessages()) return;
+		try {
+			await this.agent.continue();
+			while (await this._handlePostAgentRun()) {
+				await this.agent.continue();
+			}
+		} finally {
+			this._flushPendingBashMessages();
+		}
+	}
+
 	private async _handlePostAgentRun(): Promise<boolean> {
 		const msg = this._lastAssistantMessage;
 		this._lastAssistantMessage = undefined;
@@ -1311,6 +1323,9 @@ export class AgentSession {
 			} else {
 				this.agent.steer(appMessage);
 			}
+		} else if (options?.triggerTurn && options.deliverAs === "steer" && this.agent.state.messages.length > 0) {
+			this.agent.steer(appMessage);
+			await this._continueQueuedMessages();
 		} else if (options?.triggerTurn) {
 			await this._runAgentPrompt(appMessage);
 		} else {
