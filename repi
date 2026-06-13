@@ -109,6 +109,11 @@ Models:
   repi model list [--provider <id>] [--model <id>] [--show-urls]
   repi model doctor|test|cost|export|import
 
+MCP:
+  repi mcp status
+  repi mcp list
+  repi mcp probe <server-id>
+
 Memory:
   repi memory status|list|show|why|forget|quarantine|doctor|export|purge|sanitize|diff|consolidate
 
@@ -156,6 +161,20 @@ MSG
   engage|attack|reverse|web)
     shift
     exec node "$ROOT/scripts/reverse-agent/repi-engage.mjs" "$ROOT" "$@"
+    ;;
+  mcp)
+    sub="${2:-status}"
+    if [ "$#" -ge 2 ]; then shift 2; else shift 1; fi
+    case "$sub" in
+      status|config|list|tools|probe|help|--help|-h)
+        exec node "$ROOT/scripts/reverse-agent/repi-mcp.mjs" "$ROOT" "$sub" "$@"
+        ;;
+      *)
+        echo "Unknown repi mcp command: $sub" >&2
+        echo "Run: repi mcp --help" >&2
+        exit 2
+        ;;
+    esac
     ;;
   swarm)
     sub="${2:-help}"

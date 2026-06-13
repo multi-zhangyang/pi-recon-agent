@@ -263,6 +263,8 @@ ${updateCommandLine}
                                  Inspect, explain, govern, export, purge, and consolidate scoped memory
   ${APP_NAME} model list|add|edit|remove|login|test|default|doctor|cost|export|import
                                  Configure providers, store local credentials, test models, export/import templates, and estimate cost
+  ${APP_NAME} mcp status|list|probe [server-id]
+                                 Inspect and probe configured MCP stdio/http servers and tool lists
   ${APP_NAME} swarm plan|run|status|merge|llm-run <target> --workers N
                                  Plan/run isolated parallel LLM worker processes and write a merge report
   ${APP_NAME} list [--approve|--no-approve]

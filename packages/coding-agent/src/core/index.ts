@@ -83,4 +83,13 @@ export {
 	type TurnStartEvent,
 	type WorkingIndicatorOptions,
 } from "./extensions/index.ts";
+export {
+	createMcpManager,
+	type McpConfigFile,
+	McpManager,
+	type McpProbeResult,
+	type McpServerConfig,
+	type McpServerEntry,
+	type McpToolSummary,
+} from "./mcp-manager.ts";
 export { createSyntheticSourceInfo } from "./source-info.ts";

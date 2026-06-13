@@ -30,6 +30,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "agent", description: "Show or stop REPI child agent thread runs" },
 	{ name: "spawn", description: "Spawn an isolated REPI child agent thread" },
 	{ name: "merge", description: "Merge a REPI child agent thread output summary" },
+	{ name: "mcp", description: "Show or probe configured MCP servers and tools" },
 	{ name: "changelog", description: "Show changelog entries" },
 	{ name: "hotkeys", description: "Show all keyboard shortcuts" },
 	{ name: "fork", description: "Create a new fork from a previous user message" },

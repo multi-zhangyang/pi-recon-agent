@@ -74,6 +74,7 @@ import {
 	wrapRegisteredTools,
 } from "./extensions/index.ts";
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
+import { createMcpManager, type McpManager } from "./mcp-manager.ts";
 import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
 import type { ModelRegistry } from "./model-registry.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
@@ -318,6 +319,7 @@ export class AgentSession {
 	private _baseSystemPrompt = "";
 	private _baseSystemPromptOptions!: BuildSystemPromptOptions;
 	private _agentThreadManager?: AgentThreadManager;
+	private _mcpManager?: McpManager;
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -356,6 +358,12 @@ export class AgentSession {
 	get agentThreadManager(): AgentThreadManager {
 		this._agentThreadManager ??= createAgentThreadManager({ cwd: this._cwd });
 		return this._agentThreadManager;
+	}
+
+	/** REPI MCP manager for trusted external tool servers. */
+	get mcpManager(): McpManager {
+		this._mcpManager ??= createMcpManager({ cwd: this._cwd });
+		return this._mcpManager;
 	}
 
 	private async _getRequiredRequestAuth(model: Model<any>): Promise<{

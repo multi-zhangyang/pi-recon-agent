@@ -116,6 +116,13 @@ REPI 已经有逆向/渗透 profile、模型配置、隔离 profile、trust、co
 - MCP tool 输出大结果落盘，只把 file reference + 摘要进上下文。
 - 在 subagent spec 中可限制 MCP server 和 MCP tools。
 
+**当前进展（2026-06-13）**
+
+- 已新增 `packages/coding-agent/src/core/mcp-manager.ts`，可读取 `~/.repi/agent/mcp.json` 与 `<cwd>/.repi/mcp.json`，支持 `mcpServers`/`servers` 配置表。
+- 已支持 stdio server 的 `initialize`、`notifications/initialized`、`tools/list` 探测和 `allowedTools/blockedTools` 过滤；输出默认脱敏。
+- 已接入 CLI：`repi mcp status/list/probe <server>`，并接入交互式 `/mcp`、`/mcp list`、`/mcp <server>`。
+- 仍需后续把 MCP tools 真正注册进 agent tool registry，补 streamable HTTP/OAuth、per-tool approval、tool-call artifact 落盘和 MCP resource mention。
+
 ### P0-5：context/compact 要升级为完整 context manager，不只是阈值触发 summary
 
 **现状证据**

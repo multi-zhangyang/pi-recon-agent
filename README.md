@@ -494,6 +494,7 @@ repi commands
 | `repi attack/reverse/web <target>` | `engage` 的战术别名，适合红队、二进制逆向和 Web/API 任务。 |
 | `repi model ...` | 维护 provider/model/auth/cost 配置。 |
 | `repi memory ...` | 查看、解释、隔离、导出长期记忆。 |
+| `repi mcp status/list/probe` | 查看和探测 MCP server 配置与工具列表。 |
 | `repi swarm ...` | 多 worker 分工、运行、合并。 |
 
 会话内 reverse/pentest workflow 命令：
@@ -512,6 +513,9 @@ repi commands
 | `/re-supervisor` / `re_supervisor` | supervisor_review、supervisor_artifact、claim gate、repair queue。 |
 | `/re-reflect` / `re_reflect` | reflection_cycle、reflection_artifact、经验沉淀。 |
 | `/re-context` / `re_context` | context_pack、context_artifact、context_pack_ready、exact resume。 |
+| `/context` | 查看当前上下文预算、占用分类和 top consumers。 |
+| `/agents` `/spawn` `/agent` `/merge` | 会话内一等子代理线程控制面。 |
+| `/mcp` `/mcp list` `/mcp <server>` | 查看或探测 MCP server 和工具列表。 |
 | `/re-operator` / `re_operator` | operator_queue、operator_artifact、operator_queue_ready。 |
 | `/re-verifier` / `re_verifier` | verifier_matrix、verifier_artifact、verifier_matrix_ready。 |
 | `/re-compiler` / `re_compiler` | compiler_report、compiler_artifact、compiler_ready。 |
@@ -664,6 +668,53 @@ child agent thread 的运行记录写到：
 ~/.repi/agent/recon/agent-threads/<run-id>/stdout.txt
 ~/.repi/agent/recon/agent-threads/<run-id>/stderr.txt
 ~/.repi/agent/recon/agent-threads/<run-id>/merge.md
+```
+
+---
+
+## MCP Server 接入
+
+REPI 支持读取 MCP server 配置，并可对 stdio server 执行初始化探测和 `tools/list`。当前基础运行时先做配置、探测、工具索引和脱敏输出；后续会继续把 MCP tools 接入 agent tool registry 和 per-tool approval。
+
+配置文件：
+
+```text
+~/.repi/agent/mcp.json
+<cwd>/.repi/mcp.json
+```
+
+示例：
+
+```json
+{
+  "mcpServers": {
+    "demo": {
+      "transport": "stdio",
+      "command": "node",
+      "args": ["/absolute/path/to/mcp-server.js"],
+      "env": {
+        "DEMO_API_KEY": "$DEMO_API_KEY"
+      },
+      "allowedTools": ["search", "fetch"]
+    }
+  }
+}
+```
+
+常用命令：
+
+```bash
+repi mcp status
+repi mcp list
+repi mcp probe demo
+```
+
+会话内：
+
+```text
+/mcp
+/mcp list
+/mcp demo
 ```
 
 ---

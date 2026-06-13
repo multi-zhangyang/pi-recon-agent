@@ -25,6 +25,7 @@ const PRODUCT_COMMANDS = new Set([
 	"memory",
 	"model",
 	"models",
+	"mcp",
 	"swarm",
 ]);
 
@@ -93,6 +94,8 @@ function commandSpec(command: string, args: string[]): ProductCommandSpec | unde
 		case "model":
 		case "models":
 			return { script: "model-inspect.mjs", normalizeArgs: (rest) => rest };
+		case "mcp":
+			return { script: "repi-mcp.mjs", normalizeArgs: (rest) => rest };
 		case "swarm": {
 			const sub = args[0] ?? "help";
 			if (sub === "--help" || sub === "-h") {

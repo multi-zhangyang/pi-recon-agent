@@ -2576,6 +2576,11 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
+			if (text === "/mcp" || text.startsWith("/mcp ")) {
+				this.editor.setText("");
+				await this.handleMcpCommand(text);
+				return;
+			}
 			if (text === "/changelog") {
 				this.handleChangelogCommand();
 				this.editor.setText("");
@@ -5423,6 +5428,26 @@ export class InteractiveMode {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(info, 1, 0));
 		this.ui.requestRender();
+	}
+
+	private async handleMcpCommand(text: string): Promise<void> {
+		const args = text.replace(/^\/mcp\s*/, "").trim();
+		const manager = this.session.mcpManager;
+		try {
+			let info: string;
+			if (!args || args === "config" || args === "status") {
+				info = manager.formatConfig();
+			} else if (args === "list" || args === "tools" || args === "probe") {
+				info = manager.formatProbeResults(await manager.probeAll());
+			} else {
+				info = manager.formatProbeResults([await manager.probeServer(args)]);
+			}
+			this.chatContainer.addChild(new Spacer(1));
+			this.chatContainer.addChild(new Text(info, 1, 0));
+			this.ui.requestRender();
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
 	}
 
 	private handleChangelogCommand(): void {
