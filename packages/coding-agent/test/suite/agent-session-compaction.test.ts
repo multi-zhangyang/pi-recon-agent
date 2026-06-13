@@ -5,12 +5,14 @@ import {
 	type AssistantMessage,
 	createAssistantMessageEventStream,
 	fauxAssistantMessage,
+	fauxToolCall,
 	type Model,
 } from "@pi-recon/repi-ai";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createReconExtensionFactory } from "../../src/core/recon-profile.ts";
 import type { CustomEntry } from "../../src/core/session-manager.ts";
-import { createHarness, type Harness } from "./harness.ts";
+import { createHarness, getMessageText, type Harness } from "./harness.ts";
 
 type SessionWithCompactionInternals = {
 	_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<boolean>;
@@ -342,6 +344,97 @@ describe("AgentSession compaction characterization", () => {
 		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
 
 		await expect(sessionInternals._runAutoCompaction("threshold", false)).resolves.toBe(true);
+	});
+
+	it("compacts at turn boundary before the next autonomous tool-loop LLM call", async () => {
+		const toolCalls: string[] = [];
+		const harness = await createHarness({
+			models: [{ id: "faux-1", contextWindow: 10_000 }],
+			settings: { compaction: { keepRecentTokens: 1, triggerPercent: 50 } },
+			tools: [
+				{
+					name: "echo",
+					label: "Echo",
+					description: "Echo a value",
+					parameters: Type.Object({ value: Type.String() }),
+					execute: async (_toolCallId, params) => {
+						const value =
+							typeof params === "object" && params !== null && "value" in params ? String(params.value) : "";
+						toolCalls.push(value);
+						return {
+							content: [{ type: "text", text: `echo:${value}` }],
+							details: {},
+						};
+					},
+				},
+			],
+			initialActiveToolNames: ["echo"],
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", async (event) => ({
+						compaction: {
+							summary: "turn boundary compacted",
+							firstKeptEntryId: event.preparation.firstKeptEntryId,
+							tokensBefore: event.preparation.tokensBefore,
+							details: {},
+						},
+					}));
+				},
+			],
+		});
+		harnesses.push(harness);
+
+		const model = harness.getModel();
+		const responses: AssistantMessage[] = [
+			{
+				...fauxAssistantMessage([fauxToolCall("echo", { value: "one" })], {
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				}),
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage: createUsage(6_000),
+			},
+			{
+				...fauxAssistantMessage("after compact continue", { timestamp: Date.now() + 1 }),
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage: createUsage(10),
+			},
+		];
+		let streamCalls = 0;
+		harness.session.agent.streamFn = (requestModel) => {
+			const stream = createAssistantMessageEventStream();
+			const message = responses[streamCalls++];
+			queueMicrotask(() => {
+				if (!message) {
+					const error = createAssistant(harness, { stopReason: "error", errorMessage: "unexpected stream call" });
+					stream.push({ type: "error", reason: "error", error });
+					stream.end(error);
+					return;
+				}
+				const finalMessage = { ...message, model: requestModel.id };
+				const reason =
+					finalMessage.stopReason === "length" || finalMessage.stopReason === "toolUse"
+						? finalMessage.stopReason
+						: "stop";
+				stream.push({ type: "done", reason, message: finalMessage });
+				stream.end(finalMessage);
+			});
+			return stream;
+		};
+
+		await harness.session.prompt("start autonomous work");
+
+		expect(toolCalls).toEqual(["one"]);
+		expect(streamCalls).toBe(2);
+		expect(harness.sessionManager.getEntries().some((entry) => entry.type === "compaction")).toBe(true);
+		expect(harness.eventsOfType("compaction_start").some((event) => event.reason === "threshold")).toBe(true);
+		expect(harness.session.messages.some((message) => getMessageText(message) === "after compact continue")).toBe(
+			true,
+		);
 	});
 
 	it("does not retry overflow recovery more than once", async () => {

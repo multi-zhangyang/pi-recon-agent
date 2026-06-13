@@ -636,7 +636,8 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	time("parseArgs");
 	let appMode = resolveAppMode(parsed, process.stdin.isTTY);
-	const shouldTakeOverStdout = appMode !== "interactive";
+	const shouldTakeOverStdout =
+		appMode !== "interactive" && !parsed.help && !parsed.version && parsed.listModels === undefined && !parsed.export;
 	if (shouldTakeOverStdout) {
 		takeOverStdout();
 	}

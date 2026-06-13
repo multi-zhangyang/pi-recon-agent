@@ -752,7 +752,7 @@ Gate 关键词：runtime_adapter_execution_gate、adapter_runner_parser_ingest_c
 
 ## Memory / Compact / Resume
 
-REPI 自动 compact 阈值默认围绕上下文窗口百分比工作：warningPercent=80，triggerPercent=85，并保留 reserve tokens。达到阈值时生成 context pack，后续通过 exact resume 继续任务。
+REPI 自动 compact 阈值默认围绕上下文窗口百分比工作：warningPercent=80，triggerPercent=85，并保留 reserve tokens。达到阈值时生成 context pack，后续通过 exact resume 继续任务。普通流式 provider 无法在模型正在输出 token 时由客户端改写同一次请求上下文；REPI 的本地 auto-compact 会在 assistant turn + tool results 结束后、下一次 LLM 请求前触发，长工具循环会先停在该安全边界 compact/resume 再继续。
 
 ### 默认记忆模式：scoped auto memory
 

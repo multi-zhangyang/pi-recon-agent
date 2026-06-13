@@ -260,18 +260,21 @@ function fileInfo(name) {
 	}
 }
 
-function eventSummary(event, score) {
-	return {
+function eventSummary(event, score, options = {}) {
+	const summary = {
 		id: redact(event.id ?? "unknown"),
 		ts: safeTime(event.ts),
 		score,
 		outcome: redact(event.outcome ?? "unknown"),
 		route: clip(event.route ?? "unknown", 120),
 		target: clip(event.target ?? "workspace", 160),
-		commands: (event.commands ?? []).slice(0, 3).map((value) => clip(value, 260)),
-		reuseRules: (event.reuseRules ?? []).slice(0, 3).map((value) => clip(value, 260)),
-		lessons: (event.lessons ?? []).slice(0, 3).map((value) => clip(value, 260)),
 	};
+	if (options.details !== false) {
+		summary.commands = (event.commands ?? []).slice(0, 3).map((value) => clip(value, 260));
+		summary.reuseRules = (event.reuseRules ?? []).slice(0, 3).map((value) => clip(value, 260));
+		summary.lessons = (event.lessons ?? []).slice(0, 3).map((value) => clip(value, 260));
+	}
+	return summary;
 }
 
 function governanceRows() {
@@ -422,7 +425,7 @@ function buildListReport() {
 		invalidLines: jsonl.invalid,
 		ok: true,
 		rows: rows.map((row) => ({
-			...eventSummary(row.event, row.score),
+			...eventSummary(row.event, row.score, { details: verbose }),
 			reasons: row.reasons,
 			governance: row.governance,
 			visibleByDefault: row.governance === "none",
@@ -541,7 +544,7 @@ function buildReport() {
 			total: events.length,
 			highValue: highValue.length,
 			pendingHighValue: pending.length,
-			lastEvent: lastEvent ? eventSummary(lastEvent, scoreEvent(lastEvent)) : null,
+			lastEvent: lastEvent ? eventSummary(lastEvent, scoreEvent(lastEvent), { details: false }) : null,
 		},
 		caseStore: {
 			path: caseMemoryPath,
@@ -561,7 +564,7 @@ function buildReport() {
 			total: governanceRows().length,
 			blockingSourceIds: governedSourceIds().size,
 		},
-		pending: pending.slice(0, limit).map(({ event, score }) => eventSummary(event, score)),
+		pending: pending.slice(0, limit).map(({ event, score }) => eventSummary(event, score, { details: false })),
 	};
 }
 

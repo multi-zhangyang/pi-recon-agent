@@ -213,6 +213,12 @@ min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)
 
 如果上下文贵或任务很长，可以把 `triggerPercent` 改成 `80`；如果模型输出很长，增大 `reserveTokens`。
 
+触发时机：
+
+- provider 支持服务端 `context_management` / compaction 时，服务端可以在一次生成内部先 compact 再继续生成；这是唯一能做到“真正 mid-stream / mid-response 续跑”的方式。
+- 对 OpenAI-compatible / Anthropic-compatible 网关等普通流式接口，客户端不能在模型已经开始输出后改写这次请求的上下文。REPI 会在安全边界触发：每个 assistant turn + tool results 结束后、下一次 LLM 请求前；如果没有工具循环，则在当前回复结束后立即 compact。
+- 因此 footer 显示超过 `auto@85%` 时，若模型正在持续吐 token，不会强行中断当前 stream；一旦当前 turn 结束，REPI 会自动写 context pack、执行 compact/resume，再继续后续 autonomous loop。
+
 
 ## 6. 非交互长任务稳定性
 

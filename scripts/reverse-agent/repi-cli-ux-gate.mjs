@@ -179,6 +179,7 @@ writeFileSync(
 
 const checks = [];
 const reconProfileSource = readFileSync(join(root, "packages", "coding-agent", "src", "core", "recon-profile.ts"), "utf8");
+const agentSessionSource = readFileSync(join(root, "packages", "coding-agent", "src", "core", "agent-session.ts"), "utf8");
 const printModeSource = readFileSync(join(root, "packages", "coding-agent", "src", "modes", "print-mode.ts"), "utf8");
 const selfcheckSource = readFileSync(join(root, "scripts", "reverse-agent", "repi-selfcheck.mjs"), "utf8");
 const swarmSource = readFileSync(join(root, "scripts", "reverse-agent", "repi-swarm-llm-run.mjs"), "utf8");
@@ -194,15 +195,18 @@ checks.push(
 			/reserveTokens > 0 && reserveTokens < contextWindow/.test(
 				readFileSync(join(root, "packages", "coding-agent", "src", "core", "compaction", "compaction.ts"), "utf8"),
 			) &&
+			/_installAgentCompactionHooks/.test(agentSessionSource) &&
+			/shouldStopAfterTurn[\s\S]{0,320}_shouldStopAfterTurnForCompaction/.test(agentSessionSource) &&
+			/resumeAfterTurnBoundary[\s\S]{0,900}agent\.hasQueuedMessages/.test(agentSessionSource) &&
 			/pi-recon-auto-resume[\s\S]{0,700}deliverAs:\s*"steer"[\s\S]{0,120}triggerTurn:\s*true/.test(reconProfileSource) &&
 			/_continueQueuedMessages[\s\S]{0,260}agent\.continue/.test(
-				readFileSync(join(root, "packages", "coding-agent", "src", "core", "agent-session.ts"), "utf8"),
+				agentSessionSource,
 			) &&
-			/hasSummarizableHistory/.test(readFileSync(join(root, "packages", "coding-agent", "src", "core", "agent-session.ts"), "utf8")) &&
+			/hasSummarizableHistory/.test(agentSessionSource) &&
 			/noBody400[\s\S]{0,260}provider === "cerebras"/.test(
 				readFileSync(join(root, "packages", "ai", "src", "utils", "overflow.ts"), "utf8"),
 			),
-		{ markers: ["no tiny compact", "reserve below context", "queued auto-resume trigger", "generic 400 no-body not overflow"] },
+		{ markers: ["no tiny compact", "reserve below context", "turn-boundary compaction", "queued auto-resume trigger", "generic 400 no-body not overflow"] },
 	),
 );
 checks.push(
@@ -233,6 +237,28 @@ checks.push(
 		stdoutTail: emptyPrint.stdout.slice(-600),
 		stderrTail: emptyPrint.stderr.slice(-600),
 	}),
+);
+const versionStdout = runRepi(["--version"]);
+const helpStdout = runRepi(["--offline", "--help"]);
+const listModelsStdout = runRepi(["--offline", "--list-models"], { REPI_ALPHA_KEY: "sk-test-redacted" });
+checks.push(
+	check(
+		"cli:early-utility-output-uses-stdout",
+		versionStdout.exit === 0 &&
+			/^0\./.test(versionStdout.stdout.trim()) &&
+			versionStdout.stderr.trim() === "" &&
+			helpStdout.exit === 0 &&
+			/repi .*REPI reverse\/pentest/.test(helpStdout.stdout) &&
+			helpStdout.stderr.trim() === "" &&
+			listModelsStdout.exit === 0 &&
+			/alpha\s+alpha\/model/.test(listModelsStdout.stdout) &&
+			listModelsStdout.stderr.trim() === "",
+		{
+			version: { exit: versionStdout.exit, stdout: versionStdout.stdout.trim(), stderr: versionStdout.stderr.trim() },
+			help: { exit: helpStdout.exit, stdoutHead: helpStdout.stdout.slice(0, 120), stderrTail: helpStdout.stderr.slice(-120) },
+			listModels: { exit: listModelsStdout.exit, stdout: listModelsStdout.stdout.slice(0, 300), stderrTail: listModelsStdout.stderr.slice(-120) },
+		},
+	),
 );
 checks.push(
 	check(
@@ -513,6 +539,24 @@ checks.push(
 		exit: memoryListRedacted.exit,
 		stdoutTail: memoryListRedacted.stdout.slice(-800),
 	}),
+);
+const memoryDoctorLean = run(["scripts/reverse-agent/memory-inspect.mjs", root, "doctor", "--json"]);
+let memoryDoctorLeanReport = {};
+try {
+	memoryDoctorLeanReport = JSON.parse(memoryDoctorLean.stdout);
+} catch {
+	memoryDoctorLeanReport = {};
+}
+const pendingKeys = Object.keys(memoryDoctorLeanReport?.status?.pending?.[0] ?? {});
+checks.push(
+	check(
+		"memory:doctor-json-lean-by-default",
+		memoryDoctorLeanReport.kind === "repi-memory-doctor-report" &&
+			!pendingKeys.includes("lessons") &&
+			!pendingKeys.includes("commands") &&
+			!pendingKeys.includes("reuseRules"),
+		{ exit: memoryDoctorLean.exit, pendingKeys, stdoutBytes: memoryDoctorLean.stdout.length },
+	),
 );
 
 const purgeBlocked = run(["scripts/reverse-agent/memory-inspect.mjs", root, "purge", "--apply", "--all"]);

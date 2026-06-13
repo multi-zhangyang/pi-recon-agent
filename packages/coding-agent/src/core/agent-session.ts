@@ -267,6 +267,7 @@ export class AgentSession {
 	// Compaction state
 	private _compactionAbortController: AbortController | undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
+	private _resumeAfterTurnBoundaryCompaction = false;
 	private _overflowRecoveryAttempted = false;
 
 	// Branch summarization state
@@ -335,6 +336,7 @@ export class AgentSession {
 		// (session persistence, extensions, auto-compaction, retry logic)
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
 		this._installAgentToolHooks();
+		this._installAgentCompactionHooks();
 
 		this._buildRuntime({
 			activeToolNames: this._initialActiveToolNames,
@@ -440,6 +442,25 @@ export class AgentSession {
 				details: hookResult.details,
 				isError: hookResult.isError ?? isError,
 			};
+		};
+	}
+
+	/**
+	 * Stop long autonomous runs at safe turn boundaries once context pressure crosses
+	 * the configured auto-compaction threshold.
+	 *
+	 * A client harness cannot rewrite an in-flight provider stream mid-token. This
+	 * hook covers the important autonomous-agent case: after an assistant turn and
+	 * its tool results finish, stop before the next provider request so AgentSession
+	 * can compact and immediately continue.
+	 */
+	private _installAgentCompactionHooks(): void {
+		const previousShouldStopAfterTurn = this.agent.shouldStopAfterTurn;
+		this.agent.shouldStopAfterTurn = async (context, signal) => {
+			if (previousShouldStopAfterTurn && (await previousShouldStopAfterTurn(context, signal))) {
+				return true;
+			}
+			return this._shouldStopAfterTurnForCompaction(context.message);
 		};
 	}
 
@@ -1798,6 +1819,30 @@ export class AgentSession {
 	 * @param assistantMessage The assistant message to check
 	 * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
 	 */
+	private _shouldStopAfterTurnForCompaction(assistantMessage: AssistantMessage): boolean {
+		const settings = this.settingsManager.getCompactionSettings();
+		if (!settings.enabled) return false;
+		if (assistantMessage.stopReason === "aborted" || assistantMessage.stopReason === "error") return false;
+
+		const contextWindow = this.model?.contextWindow ?? 0;
+		if (!Number.isFinite(contextWindow) || contextWindow <= 0) return false;
+
+		const sameModel =
+			this.model && assistantMessage.provider === this.model.provider && assistantMessage.model === this.model.id;
+		if (!sameModel) return false;
+
+		const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
+		const assistantIsFromBeforeCompaction =
+			compactionEntry !== null && assistantMessage.timestamp <= new Date(compactionEntry.timestamp).getTime();
+		if (assistantIsFromBeforeCompaction) return false;
+
+		const contextTokens = calculateContextTokens(assistantMessage.usage);
+		if (!shouldCompact(contextTokens, contextWindow, settings)) return false;
+
+		this._resumeAfterTurnBoundaryCompaction = true;
+		return true;
+	}
+
 	private async _checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<boolean> {
 		const settings = this.settingsManager.getCompactionSettings();
 		if (!settings.enabled) return false;
@@ -1883,6 +1928,8 @@ export class AgentSession {
 	 */
 	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
 		const settings = this.settingsManager.getCompactionSettings();
+		const resumeAfterTurnBoundary = this._resumeAfterTurnBoundaryCompaction;
+		this._resumeAfterTurnBoundaryCompaction = false;
 
 		this._emit({ type: "compaction_start", reason });
 		this._autoCompactionAbortController = new AbortController();
@@ -2051,8 +2098,10 @@ export class AgentSession {
 			}
 
 			// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
-			// Continue once so queued messages are delivered.
-			return this.agent.hasQueuedMessages();
+			// Continue once so queued messages are delivered. If the low-level loop
+			// stopped specifically to create a compaction boundary, continue even
+			// without queued user messages; this resumes the autonomous tool loop.
+			return resumeAfterTurnBoundary || this.agent.hasQueuedMessages();
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
 			this._emit({
@@ -2068,6 +2117,7 @@ export class AgentSession {
 			});
 			return false;
 		} finally {
+			this._resumeAfterTurnBoundaryCompaction = false;
 			this._autoCompactionAbortController = undefined;
 		}
 	}
