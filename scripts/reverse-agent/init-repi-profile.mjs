@@ -74,6 +74,21 @@ for (const sub of [
 ]) {
 	mkdir(join(agentDir, "recon", "evidence", sub));
 }
+for (const dir of [
+	agentDir,
+	join(agentDir, "sessions"),
+	join(agentDir, "recon"),
+	join(agentDir, "recon", "memory"),
+	join(agentDir, "recon", "evidence"),
+	join(agentDir, "recon", "mission"),
+	join(agentDir, "recon", "tools"),
+]) {
+	try {
+		chmodSync(dir, 0o700);
+	} catch {
+		// Best-effort on non-POSIX filesystems.
+	}
+}
 
 const copiedModels = importLegacyPiProfile
 	? copyIfMissing(join(legacyPiAgentDir, "models.json"), join(agentDir, "models.json"), 0o600)
@@ -162,6 +177,11 @@ for (const [rel, body] of [
 ]) {
 	const path = join(agentDir, rel);
 	if (!existsSync(path)) writeFileSync(path, body, "utf8");
+	try {
+		chmodSync(path, 0o600);
+	} catch {
+		// Best-effort on non-POSIX filesystems.
+	}
 }
 
 const manifestPath = join(agentDir, "recon", "profile.json");

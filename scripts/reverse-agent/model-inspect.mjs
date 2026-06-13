@@ -26,7 +26,6 @@ function usage() {
   repi model add --provider <id> --api <openai-completions|openai-responses|anthropic-messages> --base-url <url> --model <id> [options]
   repi model edit --provider <id> [--model <id>] [options]
   repi model remove --provider <id> [--model <id>] [--json]
-  repi model login --provider <id> --api-key <key>
   repi model login --provider <id> --api-key-stdin
   repi model default --provider <id> --model <id>
   repi model test --provider <id> --model <id> [--timeout-ms N]
@@ -37,6 +36,7 @@ function usage() {
 model doctor is offline: it parses ~/.repi/agent/models.json, checks provider/model metadata, env-key references, context window and cost fields.
 model list hides provider base URLs by default to avoid leaking private gateway endpoints into screenshots/logs; add --show-urls for local troubleshooting.
 model add writes ~/.repi/agent/models.json with env-ref credentials by default; model login writes ~/.repi/agent/auth.json locally.
+For shell-history safety, pass API keys through --api-key-stdin. Plain --api-key is rejected unless REPI_ALLOW_INSECURE_API_KEY_ARG=1.
 model export never exports local API keys; model import preserves/creates env-ref apiKey fields and never writes auth.json.
 `;
 }
@@ -76,6 +76,10 @@ function flagValue(args, names, fallback = "") {
 		}
 	}
 	return fallback;
+}
+
+function insecureApiKeyArgAllowed() {
+	return process.env.REPI_ALLOW_INSECURE_API_KEY_ARG === "1";
 }
 
 function numberFlag(args, names, fallback = 0) {
@@ -446,6 +450,16 @@ function buildAddReport() {
 		};
 	}
 	const apiKeyEnv = flagValue(rawArgs, ["--api-key-env", "--env"], providerEnvName(providerId));
+	const apiKey = flagValue(rawArgs, "--api-key");
+	if (apiKey && !insecureApiKeyArgAllowed()) {
+		return {
+			kind: "repi-model-add-report",
+			schemaVersion: 1,
+			generatedAt: new Date().toISOString(),
+			ok: false,
+			error: "plain --api-key is disabled to avoid shell history/process-list leaks; use `repi model login --provider <id> --api-key-stdin` after add, or set REPI_ALLOW_INSECURE_API_KEY_ARG=1 explicitly",
+		};
+	}
 	if (!/^[A-Z_][A-Z0-9_]*$/.test(apiKeyEnv)) {
 		return {
 			kind: "repi-model-add-report",
@@ -486,7 +500,6 @@ function buildAddReport() {
 	};
 	writeJsonFile(modelsPath, modelsConfig, 0o600);
 	let authWritten = false;
-	const apiKey = flagValue(rawArgs, "--api-key");
 	if (apiKey) {
 		const auth = readJsonObject(authPath, {});
 		auth[providerId] = { type: "api_key", key: apiKey };
@@ -802,6 +815,15 @@ function buildLoginReport() {
 		};
 	}
 	let apiKey = flagValue(rawArgs, "--api-key");
+	if (apiKey && !insecureApiKeyArgAllowed()) {
+		return {
+			kind: "repi-model-login-report",
+			schemaVersion: 1,
+			generatedAt: new Date().toISOString(),
+			ok: false,
+			error: "plain --api-key is disabled to avoid shell history/process-list leaks; use --api-key-stdin, or set REPI_ALLOW_INSECURE_API_KEY_ARG=1 explicitly",
+		};
+	}
 	if (!apiKey && rawArgs.includes("--api-key-stdin")) {
 		apiKey = readFileSync(0, "utf8").trim();
 	}
@@ -811,7 +833,7 @@ function buildLoginReport() {
 			schemaVersion: 1,
 			generatedAt: new Date().toISOString(),
 			ok: false,
-			error: "model login requires --api-key <key> or --api-key-stdin",
+			error: "model login requires --api-key-stdin",
 		};
 	}
 	const auth = readJsonObject(authPath, {});

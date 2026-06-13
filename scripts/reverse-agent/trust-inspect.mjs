@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -38,8 +38,18 @@ function writeTrust(data) {
 		const value = data[key];
 		if (value === true || value === false || value === null) sorted[key] = value;
 	}
-	mkdirSync(dirname(trustPath), { recursive: true });
-	writeFileSync(trustPath, `${JSON.stringify(sorted, null, 2)}\n`, "utf8");
+	mkdirSync(dirname(trustPath), { recursive: true, mode: 0o700 });
+	try {
+		chmodSync(dirname(trustPath), 0o700);
+	} catch {
+		// Best-effort on non-POSIX filesystems.
+	}
+	writeFileSync(trustPath, `${JSON.stringify(sorted, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+	try {
+		chmodSync(trustPath, 0o600);
+	} catch {
+		// Best-effort on non-POSIX filesystems.
+	}
 }
 
 function nearestMarkerDir(start, markerCheck) {

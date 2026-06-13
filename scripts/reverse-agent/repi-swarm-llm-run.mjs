@@ -242,7 +242,8 @@ function promptForWorker(plan, packet, promptTemplate, mode) {
 		"Work independently. Prefer concrete evidence over narrative.",
 		`Evidence contract: ${packet.evidenceContract.join("; ")}`,
 		`Merge keys: ${packet.mergeKeys.join(", ")}`,
-		"Return concise structured JSON if possible:",
+		"Output ONLY valid JSON. Do not use Markdown fences. If evidence is missing, put the reason in blockers instead of writing prose.",
+		"Required schema:",
 		JSON.stringify({
 			workerId: packet.id,
 			role: packet.role,
@@ -427,11 +428,25 @@ function buildMergeReport(evidenceRoot) {
 		const stdoutPath = join(evidenceRoot, `worker-${worker.workerId}.stdout.txt`);
 		const stdout = existsSync(stdoutPath) ? readFileSync(stdoutPath, "utf8") : worker.stdoutTail ?? "";
 		const parsed = extractJsonObject(stdout);
-		const parsedClaims = Array.isArray(parsed?.claims) ? parsed.claims : [];
+		const parsedClaims = Array.isArray(parsed?.claims)
+			? parsed.claims
+			: Array.isArray(parsed?.findings)
+				? parsed.findings.map((finding, index) =>
+						typeof finding === "string"
+							? { id: `worker-${worker.workerId}-finding-${index + 1}`, statement: finding, evidence: parsed?.evidence ?? parsed?.artifacts ?? [] }
+							: finding,
+					)
+				: [];
 		for (let index = 0; index < parsedClaims.length; index++) {
 			const claim = parsedClaims[index] ?? {};
-			const evidence = Array.isArray(claim.evidence) ? claim.evidence.map(String).filter(Boolean) : [];
-			const confidence = Number.isFinite(Number(claim.confidence)) ? Number(claim.confidence) : 0;
+			const evidence = Array.isArray(claim.evidence)
+				? claim.evidence.map(String).filter(Boolean)
+				: Array.isArray(parsed?.evidence)
+					? parsed.evidence.map(String).filter(Boolean)
+					: Array.isArray(parsed?.artifacts)
+						? parsed.artifacts.map(String).filter(Boolean)
+						: [];
+			const confidence = Number.isFinite(Number(claim.confidence)) ? Number(claim.confidence) : evidence.length > 0 ? 0.6 : 0;
 			claimRows.push({
 				claimId: String(claim.id ?? `worker-${worker.workerId}-claim-${index + 1}`),
 				workerId: worker.workerId,
@@ -593,6 +608,7 @@ function printRun(report, merge) {
 		if (worker.status !== "pass" && worker.stdoutTail) console.log(`  stdout: ${worker.stdoutTail.replace(/\n/g, "\\n").slice(-600)}`);
 	}
 	if (merge) console.log(`merge=promoted:${merge.promotedClaims.length} observations:${merge.observations.length} narrativeOnlyBlocked=${merge.narrativeOnlyBlocked}`);
+	if (report.mergeFailureReason) console.log(`mergeFailureReason=${report.mergeFailureReason}`);
 	console.log(`evidence=${report.evidenceRoot}`);
 	console.log(`verdict=${report.ok ? "pass" : "fail"}`);
 }
@@ -684,6 +700,13 @@ const expectTemplate = flagValue(argv, "--expect");
 const { rows, tempRoot } = await runPool(plan, promptTemplate, expectTemplate, mode, keepProfiles);
 const report = buildRunReport({ plan, rows, tempRoot, mode });
 const merge = buildMergeReport(evidenceRoot);
+if (mode === "run" && !merge.finalPromotionReady) {
+	report.ok = false;
+	report.mergeFailureReason = merge.narrativeOnlyBlocked
+		? "narrative-only worker output lacked structured evidence-bearing claims"
+		: "no promoted evidence-bearing claims after structured merge";
+	writeFileSync(join(evidenceRoot, "report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
+}
 if (json) console.log(JSON.stringify({ ...report, merge }, null, 2));
 else printRun(report, merge);
 process.exit(report.ok ? 0 : 1);

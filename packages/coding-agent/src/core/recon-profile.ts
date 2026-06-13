@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Type } from "typebox";
 import { getAgentDir, getPackageDir } from "../config.ts";
@@ -6674,6 +6674,19 @@ function toolIndexPath(): string {
 	return join(reconDir(), "tools", "tool-index.md");
 }
 
+function chmodPrivate(path: string, mode: number): void {
+	try {
+		chmodSync(path, mode);
+	} catch {
+		// Best-effort on non-POSIX filesystems.
+	}
+}
+
+function writePrivateTextFile(path: string, content: string): void {
+	writeFileSync(path, content, { encoding: "utf-8", mode: 0o600 });
+	chmodPrivate(path, 0o600);
+}
+
 function ensureReconStorage(): void {
 	mkdirSync(join(reconDir(), "memory"), { recursive: true });
 	mkdirSync(memoryTransactionsDir(), { recursive: true });
@@ -6717,6 +6730,53 @@ function ensureReconStorage(): void {
 	mkdirSync(join(reconDir(), "tools"), { recursive: true });
 	mkdirSync(join(reconDir(), "builtin", "reverse-pentest-orchestrator"), { recursive: true });
 	mkdirSync(join(reconDir(), "builtin", "prompts"), { recursive: true });
+	for (const dir of [
+		reconDir(),
+		join(reconDir(), "memory"),
+		memoryTransactionsDir(),
+		memoryPlaybooksDir(),
+		memoryPlaybooksArchiveDir(),
+		reconArchiveDir(),
+		join(reconDir(), "mission"),
+		join(reconDir(), "evidence"),
+		evidenceRunsDir(),
+		evidenceMapsDir(),
+		evidenceBrowserDir(),
+		evidenceWebAuthzDir(),
+		evidenceExploitLabDir(),
+		evidenceMobileRuntimeDir(),
+		evidenceNativeRuntimeDir(),
+		evidenceKernelDir(),
+		evidenceGraphsDir(),
+		evidenceChainsDir(),
+		evidenceDecisionsDir(),
+		evidenceCampaignsDir(),
+		evidenceOperationsDir(),
+		evidenceDelegationsDir(),
+		evidenceSwarmsDir(),
+		evidenceSupervisorsDir(),
+		evidenceReflectionsDir(),
+		evidenceContextsDir(),
+		evidenceOperatorsDir(),
+		evidenceVerifiersDir(),
+		evidenceCompilersDir(),
+		evidenceReplayersDir(),
+		evidenceAutofixDir(),
+		evidenceFailuresDir(),
+		evidenceRepairsDir(),
+		evidenceClaimReleaseDir(),
+		evidenceProofLoopsDir(),
+		evidenceKnowledgeDir(),
+		evidenceHarnessDir(),
+		evidenceToolCallsDir(),
+		evidenceToolchainDir(),
+		reportDir(),
+		join(reconDir(), "tools"),
+		join(reconDir(), "builtin", "reverse-pentest-orchestrator"),
+		join(reconDir(), "builtin", "prompts"),
+	]) {
+		chmodPrivate(dir, 0o700);
+	}
 	const defaults = new Map([
 		[memoryPath("field-journal.md"), "# REPI Field Journal\n\n"],
 		[memoryPath("case-index.md"), "# REPI Case Index\n\n"],
@@ -6874,24 +6934,27 @@ function ensureReconStorage(): void {
 		[toolIndexPath(), "# REPI Tool Index\n\n"],
 	]);
 	for (const [path, content] of defaults) {
-		if (!existsSync(path)) writeFileSync(path, content, "utf-8");
+		if (!existsSync(path)) writePrivateTextFile(path, content);
+		else chmodPrivate(path, 0o600);
 	}
 	const skillFile = builtinSkillFilePath();
 	if (!existsSync(skillFile)) {
-		writeFileSync(
+		writePrivateTextFile(
 			skillFile,
 			`---\nname: reverse-pentest-orchestrator\ndescription: Built-in REPI orchestrator for reverse engineering, CTF, pwn, web/API security, JS signing, mobile, firmware, cloud/container, identity/AD, DFIR, malware-analysis, and agent-security tasks.\n---\n\n${RECON_SKILL_CONTENT}\n`,
-			"utf-8",
 		);
+	} else {
+		chmodPrivate(skillFile, 0o600);
 	}
 	for (const prompt of RECON_PROMPTS) {
 		const promptFile = builtinPromptFilePath(prompt.name);
 		if (!existsSync(promptFile)) {
-			writeFileSync(
+			writePrivateTextFile(
 				promptFile,
 				`---\ndescription: ${prompt.description}\nargument-hint: "${prompt.argumentHint ?? ""}"\n---\n${prompt.content}\n`,
-				"utf-8",
 			);
+		} else {
+			chmodPrivate(promptFile, 0o600);
 		}
 	}
 }
@@ -6906,7 +6969,7 @@ function readText(path: string, fallback = ""): string {
 
 function appendText(path: string, text: string): void {
 	const current = readText(path);
-	writeFileSync(path, `${current}${current.endsWith("\n") ? "" : "\n"}${text}`, "utf-8");
+	writePrivateTextFile(path, `${current}${current.endsWith("\n") ? "" : "\n"}${text}`);
 }
 
 function runtimeFailureLedgerPath(): string {
@@ -8995,11 +9058,18 @@ function commandContainsPoison(command?: string): boolean {
 	return Boolean(internalTarget && looksLikeNaturalLanguageTarget(internalTarget));
 }
 
+function redactMemorySensitiveText(value: string): string {
+	return toolTraceRedact(value)
+		.replace(/((?:baseUrl|baseURL|endpoint|url)"?\s*[:=]\s*"?)(https?:\/\/[^\s"',}]+)/gi, (_match, prefix, url) => `${prefix}<redacted:url:${sha256Text(url).slice(0, 16)}>`)
+		.replace(/\bhttps?:\/\/api\.[^\s"',}<)]+/gi, (url) => `<redacted:url:${sha256Text(url).slice(0, 16)}>`);
+}
+
 function sanitizeMemoryText(value?: string, fallback?: string): string | undefined {
 	const text = value?.trim();
 	if (!text) return fallback;
-	if (containsRepiPoison(text)) return fallback;
-	return truncateMiddle(text, 4000);
+	const redacted = redactMemorySensitiveText(text);
+	if (containsRepiPoison(redacted)) return fallback;
+	return truncateMiddle(redacted, 4000);
 }
 
 function sanitizeMemoryList(values?: string[], limit = 40): string[] {
@@ -9014,7 +9084,7 @@ function sanitizeMemoryList(values?: string[], limit = 40): string[] {
 function sanitizeMemoryCommands(values?: string[], limit = 40): string[] {
 	return uniqueNonEmpty(
 		(values ?? [])
-			.map((value) => normalizeHistoricalCommand(value, undefined, undefined))
+			.map((value) => normalizeHistoricalCommand(redactMemorySensitiveText(value), undefined, undefined))
 			.filter((value): value is string => Boolean(value)),
 		limit,
 	);
@@ -33078,6 +33148,7 @@ function shouldAutoDepositToolResult(
 	settings = repiMemorySettings(),
 ): boolean {
 	if (settings.autoDepositMode === "off") return false;
+	if (toolTraceHasLiteralSecret(text)) return false;
 	if (settings.autoDepositMode === "all") return true;
 	const haystack = `${event.toolName}\n${command ?? ""}\n${text}`.toLowerCase();
 	if (/^(?:re_lane|re_operator|re_verifier|re_compiler|re_replayer|re_autofix|re_proof_loop|re_swarm|re_supervisor|re_context)$/.test(event.toolName))
@@ -33099,16 +33170,27 @@ function shouldAutoDepositToolResult(
 
 function toolTraceRedact(value: string): string {
 	return value
-		.replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "<redacted:api-key>")
+		.replace(/\bsk-[A-Za-z0-9._-]{8,}\b/g, "<redacted:api-key>")
 		.replace(/\bghp_[A-Za-z0-9_]{16,}\b/g, "<redacted:github-token>")
 		.replace(/\bgithub_pat_[A-Za-z0-9_]{16,}\b/g, "<redacted:github-token>")
-		.replace(/\b(?:ANTHROPIC_AUTH_TOKEN|OPENAI_API_KEY|GITHUB_TOKEN|REPI_[A-Z0-9_]*KEY|API_KEY|TOKEN|PASSWORD|SECRET)=([^\s'"]+)/gi, (match) => `${match.split("=")[0]}=<redacted>`)
+		.replace(/\b(?:A3T|AKIA|ASIA)[A-Z0-9]{16}\b/g, "<redacted:aws-access-key>")
+		.replace(/\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g, "<redacted:slack-token>")
+		.replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, "<redacted:jwt>")
+		.replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "<redacted:private-key>")
+		.replace(/(https?:\/\/)[^/\s:@]+:[^/\s@]+@/gi, "$1<redacted:credentials>@")
+		.replace(
+			/\b(?:ANTHROPIC_AUTH_TOKEN|OPENAI_API_KEY|GITHUB_TOKEN|REPI_[A-Z0-9_]*KEY|API_KEY|TOKEN|PASSWORD|SECRET|ACCESS_KEY|SECRET_KEY|PRIVATE_KEY|CLIENT_SECRET)=([^\s'"]+)/gi,
+			(match) => `${match.split("=")[0]}=<redacted>`,
+		)
 		.replace(/(authorization|x-api-key|api-key)\s*[:=]\s*bearer\s+[A-Za-z0-9._-]+/gi, "$1: Bearer <redacted>")
-		.replace(/(authorization|x-api-key|api-key)\s*[:=]\s*[A-Za-z0-9._-]{12,}/gi, "$1: <redacted>");
+		.replace(/(authorization|x-api-key|api-key)\s*[:=]\s*[A-Za-z0-9._-]{12,}/gi, "$1: <redacted>")
+		.replace(/(cookie|set-cookie)\s*[:=]\s*[^\n\r]+/gi, "$1: <redacted>");
 }
 
 function toolTraceHasLiteralSecret(value: string): boolean {
-	return /\bsk-[A-Za-z0-9_-]{8,}\b|\bghp_[A-Za-z0-9_]{16,}\b|\bgithub_pat_[A-Za-z0-9_]{16,}\b|(?:AUTH_TOKEN|API_KEY|PASSWORD|SECRET)=(?!<redacted>)\S+/i.test(value);
+	return /\bsk-[A-Za-z0-9._-]{8,}\b|\bghp_[A-Za-z0-9_]{16,}\b|\bgithub_pat_[A-Za-z0-9_]{16,}\b|\b(?:A3T|AKIA|ASIA)[A-Z0-9]{16}\b|\bxox[abprs]-[A-Za-z0-9-]{10,}\b|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:AUTH_TOKEN|API_KEY|PASSWORD|SECRET|ACCESS_KEY|SECRET_KEY|PRIVATE_KEY|CLIENT_SECRET)=(?!<redacted>)\S+|(?:authorization|x-api-key|api-key)\s*[:=]\s*(?!<redacted>|Bearer <redacted>)(?:bearer\s+)?[A-Za-z0-9._-]{12,}|https?:\/\/[^/\s:@]+:[^/\s@]+@/i.test(
+		value,
+	);
 }
 
 function stableJson(value: unknown): string {
@@ -33435,8 +33517,9 @@ function textWithJsonlLine(current: string, line: string): string {
 
 function writeFileAtomic(path: string, body: string): void {
 	const tmp = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
-	writeFileSync(tmp, body, "utf-8");
+	writePrivateTextFile(tmp, body);
 	renameSync(tmp, path);
+	chmodPrivate(path, 0o600);
 }
 
 function memoryTransactionPath(id: string): string {
@@ -33444,7 +33527,7 @@ function memoryTransactionPath(id: string): string {
 }
 
 function writeMemoryTransaction(transaction: MemoryAppendTransactionV1): void {
-	writeFileSync(memoryTransactionPath(transaction.id), `${JSON.stringify(transaction, null, 2)}\n`, "utf-8");
+	writePrivateTextFile(memoryTransactionPath(transaction.id), `${JSON.stringify(transaction, null, 2)}\n`);
 }
 
 function isMemoryArtifactHash(value: unknown): value is MemoryArtifactHash {
@@ -34500,7 +34583,7 @@ function appendMemoryDepositionRuntimeEvent(
 			task,
 			route,
 			target,
-			command: input.command ?? commands[0],
+			command: sanitizeMemoryText(input.command) ?? commands[0],
 			stdoutSha256: input.stdoutSha256 ?? (input.stdout ? sha256Text(input.stdout) : undefined),
 			stderrSha256: input.stderrSha256 ?? (input.stderr ? sha256Text(input.stderr) : undefined),
 			exitCode: input.exitCode,

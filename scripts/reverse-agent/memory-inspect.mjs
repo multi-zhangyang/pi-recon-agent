@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
 const rawArgs = process.argv.slice(2);
-const knownCommands = new Set(["status", "list", "show", "diff", "why", "forget", "quarantine", "doctor", "export", "purge", "help"]);
+const knownCommands = new Set(["status", "list", "show", "diff", "why", "forget", "quarantine", "doctor", "export", "purge", "sanitize", "repair", "help"]);
 let root = process.cwd();
 if (rawArgs[0] && !rawArgs[0].startsWith("--") && !knownCommands.has(rawArgs[0])) {
 	root = resolve(rawArgs.shift());
@@ -44,6 +44,8 @@ function usage() {
   repi memory doctor [--json]
   repi memory export [--output <path>] [--full] [--limit N] [--json]
   repi memory purge [--dry-run|--apply --yes] [--governed|--older-than-days N|--query <text>|--id <event-id>|--all] [--json]
+  repi memory sanitize [--dry-run|--apply --yes] [--include-evidence] [--include-sessions] [--backup] [--json]
+  repi memory repair [--dry-run|--apply --yes] [--json]
 
 status  Show scoped memory posture, file sizes, pending consolidation count.
 list    List sanitized memory events. By default hides forget/quarantine rows.
@@ -55,6 +57,8 @@ quarantine Append a quarantine governance decision. It blocks future recall/inje
 doctor  Check memory pollution posture and store health.
 export  Write a sanitized memory diagnostic bundle. API keys/tokens are redacted.
 purge   Physically remove selected event rows after creating a .bak backup; default is dry-run. --apply requires --yes.
+sanitize Redact leaked API keys/tokens/private API URLs from local memory files; default is dry-run. --apply requires --yes. Raw backups are off by default; add --backup only if you accept keeping pre-redaction copies locally.
+repair  Quarantine invalid events.jsonl rows into a redacted repair file; default is dry-run. --apply requires --yes.
 `;
 }
 
@@ -79,6 +83,19 @@ function flagValue(args, names, fallback = undefined) {
 function hasFlag(args, names) {
 	const list = Array.isArray(names) ? names : [names];
 	return args.some((arg) => list.some((name) => arg === name || arg.startsWith(`${name}=`)));
+}
+
+function uniqueValues(values, limit = 2000) {
+	const out = [];
+	const seen = new Set();
+	for (const value of values) {
+		const text = String(value ?? "").trim();
+		if (!text || seen.has(text)) continue;
+		seen.add(text);
+		out.push(text);
+		if (out.length >= limit) break;
+	}
+	return out;
 }
 
 function numberFlag(args, names, fallback = 0) {
@@ -121,14 +138,26 @@ function sha256(value) {
 	return createHash("sha256").update(value).digest("hex");
 }
 
-function redact(value) {
+function redactSensitiveRaw(value) {
 	return String(value ?? "")
 		.replace(/\bsk-[A-Za-z0-9._-]{8,}\b/g, "<redacted:api-key>")
 		.replace(/\bghp_[A-Za-z0-9_]{16,}\b/g, "<redacted:github-token>")
 		.replace(/\bgithub_pat_[A-Za-z0-9_]{16,}\b/g, "<redacted:github-token>")
+		.replace(/\b(?:A3T|AKIA|ASIA)[A-Z0-9]{16}\b/g, "<redacted:aws-access-key>")
+		.replace(/\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g, "<redacted:slack-token>")
+		.replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, "<redacted:jwt>")
+		.replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "<redacted:private-key>")
+		.replace(/(https?:\/\/)[^/\s:@]+:[^/\s@]+@/gi, "$1<redacted:credentials>@")
 		.replace(/((?:baseUrl|baseURL|endpoint|url)"?\s*[:=]\s*"?)(https?:\/\/[^\s"',}]+)/gi, (_match, prefix, url) => `${prefix}<redacted:url:${sha256(url).slice(0, 16)}>`)
 		.replace(/\bhttps?:\/\/api\.[^\s"',}<)]+/gi, (url) => `<redacted:url:${sha256(url).slice(0, 16)}>`)
-		.replace(/(?:AUTH_TOKEN|API_KEY|PASSWORD|SECRET|TOKEN)=\S+/gi, (match) => `${match.split("=")[0]}=<redacted>`)
+		.replace(/(?:AUTH_TOKEN|API_KEY|PASSWORD|SECRET|TOKEN|ACCESS_KEY|SECRET_KEY|PRIVATE_KEY|CLIENT_SECRET)=\S+/gi, (match) => `${match.split("=")[0]}=<redacted>`)
+		.replace(/(authorization|x-api-key|api-key)\s*[:=]\s*bearer\s+[A-Za-z0-9._-]+/gi, "$1: Bearer <redacted>")
+		.replace(/(authorization|x-api-key|api-key)\s*[:=]\s*[A-Za-z0-9._-]{12,}/gi, "$1: <redacted>")
+		.replace(/(cookie|set-cookie)\s*[:=]\s*[^\n\r]+/gi, "$1: <redacted>");
+}
+
+function redact(value) {
+	return redactSensitiveRaw(value)
 		.replace(/\s+/g, " ")
 		.trim();
 }
@@ -499,10 +528,23 @@ function buildDoctorReport() {
 		return source && !referenced.has(source);
 	});
 	const diagnostics = [];
+	const secretScanRows = [];
+	for (const path of walkTextFiles(memoryDir, 2000)) {
+		let before = "";
+		try {
+			before = readFileSync(path, "utf8");
+		} catch {
+			continue;
+		}
+		if (redactSensitiveRaw(before) === before) continue;
+		secretScanRows.push({ path, sha256: sha256(before).slice(0, 16), bytes: before.length });
+		if (secretScanRows.length >= 24) break;
+	}
 	if (!status.pollutionGuardOk) diagnostics.push({ level: "fail", id: "pollution-guard", message: "scoped memory defaults are not pollution-safe" });
 	if (status.eventStore.invalidLines > 0) diagnostics.push({ level: "fail", id: "invalid-jsonl", message: `${status.eventStore.invalidLines} invalid events.jsonl lines` });
 	if (status.posture.rawAutoInject === true || status.posture.autoInject === true) diagnostics.push({ level: "fail", id: "raw-auto-inject", message: "raw/full memory injection is enabled" });
 	if (status.posture.contextMemoryMode === "global" || status.posture.includeGlobalMemoryInContextPack === true) diagnostics.push({ level: "fail", id: "global-context-memory", message: "global memory context injection is enabled" });
+	if (secretScanRows.length) diagnostics.push({ level: "fail", id: "memory-secret-scan", message: `${secretScanRows.length} memory files still contain redaction matches; run repi memory sanitize --dry-run` });
 	if (orphanGovernance.length) diagnostics.push({ level: "warn", id: "orphan-governance", message: `${orphanGovernance.length} governance rows reference missing events` });
 	for (const file of status.files) {
 		if (file.exists && file.bytes > 256 * 1024 && /(?:core|project|procedural)-memory\.md/.test(file.name)) {
@@ -519,6 +561,7 @@ function buildDoctorReport() {
 		status,
 		governedSourceIds: governed.size,
 		orphanGovernance: orphanGovernance.slice(0, 24).map((row) => redactJson(row)),
+		secretScanRows,
 		diagnostics,
 		ok: !diagnostics.some((item) => item.level === "fail"),
 	};
@@ -695,6 +738,179 @@ function buildPurgeReport() {
 	};
 }
 
+function walkTextFiles(rootDir, maxFiles = 2000) {
+	const out = [];
+	const stack = [rootDir];
+	while (stack.length && out.length < maxFiles) {
+		const dir = stack.pop();
+		if (!dir || !existsSync(dir)) continue;
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			const path = join(dir, entry.name);
+			if (entry.isDirectory()) {
+				if (/node_modules|\.git|transactions$/.test(path)) continue;
+				stack.push(path);
+				continue;
+			}
+			if (!entry.isFile()) continue;
+			if (!/\.(?:json|jsonl|md|txt|log)$/i.test(entry.name)) continue;
+			if (/\.bak-|\.tmp$/.test(entry.name)) continue;
+			out.push(path);
+			if (out.length >= maxFiles) break;
+		}
+	}
+	return out;
+}
+
+function buildSanitizeReport() {
+	const apply = rawArgs.includes("--apply") && !rawArgs.includes("--dry-run");
+	const confirmed = rawArgs.includes("--yes") || rawArgs.includes("-y") || process.env.REPI_MEMORY_SANITIZE_CONFIRM === "1";
+	const backup = rawArgs.includes("--backup") && !rawArgs.includes("--no-backup");
+	const roots = [memoryDir];
+	if (rawArgs.includes("--include-evidence")) roots.push(join(agentDir, "recon", "evidence"));
+	if (rawArgs.includes("--include-sessions")) roots.push(join(agentDir, "sessions"));
+	const files = uniqueValues(roots.flatMap((dir) => walkTextFiles(dir, 4000)), 8000);
+	const rows = [];
+	const ts = new Date().toISOString().replace(/[:.]/g, "-");
+	for (const path of files) {
+		let before = "";
+		try {
+			before = readFileSync(path, "utf8");
+		} catch {
+			continue;
+		}
+		const after = redactSensitiveRaw(before);
+		if (after === before) continue;
+		rows.push({
+			path,
+			bytes: before.length,
+			redactedBytes: after.length,
+			backupPath: apply && backup ? `${path}.bak-${ts}` : null,
+		});
+		if (apply && confirmed) {
+			if (backup) copyFileSync(path, `${path}.bak-${ts}`);
+			writeFileSync(path, after, { encoding: "utf8", mode: 0o600 });
+			try {
+				chmodSync(path, 0o600);
+			} catch {
+				// Best-effort on non-POSIX filesystems.
+			}
+		}
+	}
+	if (apply && !confirmed) {
+		return {
+			kind: "repi-memory-sanitize-report",
+			schemaVersion: 1,
+			generatedAt: new Date().toISOString(),
+			ok: false,
+			apply,
+			confirmed,
+			backup,
+			roots,
+			scannedFiles: files.length,
+			changedFiles: rows.length,
+			error: "memory sanitize --apply requires --yes (or REPI_MEMORY_SANITIZE_CONFIRM=1). Run without --apply first to preview changed files.",
+			rows: rows.slice(0, limit),
+			next: ["repi memory sanitize --dry-run", "repi memory sanitize --apply --yes"],
+		};
+	}
+	return {
+		kind: "repi-memory-sanitize-report",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		ok: true,
+		apply,
+		confirmed,
+		backup,
+		roots,
+		scannedFiles: files.length,
+		changedFiles: rows.length,
+		rows: rows.slice(0, limit),
+		next: apply ? ["repi memory doctor", "repi memory list"] : ["repi memory sanitize --apply --yes"],
+	};
+}
+
+function buildRepairReport() {
+	const apply = rawArgs.includes("--apply") && !rawArgs.includes("--dry-run");
+	const confirmed = rawArgs.includes("--yes") || rawArgs.includes("-y") || process.env.REPI_MEMORY_REPAIR_CONFIRM === "1";
+	const ts = new Date().toISOString().replace(/[:.]/g, "-");
+	const quarantinePath = join(memoryDir, `events.invalid-${ts}.jsonl`);
+	let text = "";
+	try {
+		text = readFileSync(eventsPath, "utf8");
+	} catch {
+		return {
+			kind: "repi-memory-repair-report",
+			schemaVersion: 1,
+			generatedAt: new Date().toISOString(),
+			ok: true,
+			apply,
+			confirmed,
+			eventsPath,
+			validLines: 0,
+			invalidLines: 0,
+			quarantinePath: null,
+			message: "events.jsonl does not exist; nothing to repair",
+		};
+	}
+	const validLines = [];
+	const invalidRows = [];
+	for (const [index, line] of text.split(/\r?\n/).entries()) {
+		if (!line.trim()) continue;
+		try {
+			JSON.parse(line);
+			validLines.push(line);
+		} catch (error) {
+			invalidRows.push({
+				line: index + 1,
+				error: error instanceof Error ? error.message : String(error),
+				sha256: sha256(line),
+				redactedPreview: redactSensitiveRaw(line).slice(0, 1200),
+			});
+		}
+	}
+	if (apply && invalidRows.length > 0 && !confirmed) {
+		return {
+			kind: "repi-memory-repair-report",
+			schemaVersion: 1,
+			generatedAt: new Date().toISOString(),
+			ok: false,
+			apply,
+			confirmed,
+			eventsPath,
+			validLines: validLines.length,
+			invalidLines: invalidRows.length,
+			quarantinePath,
+			error: "memory repair --apply requires --yes (or REPI_MEMORY_REPAIR_CONFIRM=1). Run without --apply first to preview invalid lines.",
+			invalidRows: invalidRows.slice(0, limit),
+		};
+	}
+	if (apply && invalidRows.length > 0) {
+		mkdirSync(memoryDir, { recursive: true, mode: 0o700 });
+		writeFileSync(eventsPath, `${validLines.join("\n")}${validLines.length ? "\n" : ""}`, { encoding: "utf8", mode: 0o600 });
+		writeFileSync(quarantinePath, `${invalidRows.map((row) => JSON.stringify(row)).join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
+		try {
+			chmodSync(eventsPath, 0o600);
+			chmodSync(quarantinePath, 0o600);
+		} catch {
+			// Best-effort on non-POSIX filesystems.
+		}
+	}
+	return {
+		kind: "repi-memory-repair-report",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		ok: true,
+		apply,
+		confirmed,
+		eventsPath,
+		validLines: validLines.length,
+		invalidLines: invalidRows.length,
+		quarantinePath: invalidRows.length ? quarantinePath : null,
+		invalidRows: invalidRows.slice(0, limit),
+		next: apply ? ["repi memory doctor"] : ["repi memory repair --apply --yes"],
+	};
+}
+
 function printStatus(report) {
 	console.log("REPI Memory Status");
 	console.log(`agentDir: ${report.agentDir}`);
@@ -782,6 +998,7 @@ function printDoctor(report) {
 	console.log(`agentDir=${report.agentDir}`);
 	console.log(`pollutionGuard=${report.status.pollutionGuardOk ? "pass" : "fail"} events=${report.status.eventStore.total} invalid=${report.status.eventStore.invalidLines}`);
 	for (const diagnostic of report.diagnostics) console.log(`${diagnostic.level.toUpperCase()} ${diagnostic.id}: ${diagnostic.message}`);
+	for (const item of report.secretScanRows ?? []) console.log(`secret-scan path=${item.path} bytes=${item.bytes} sha256=${item.sha256}`);
 	console.log(`verdict: ${report.ok ? "pass" : "fail"}`);
 }
 
@@ -815,6 +1032,33 @@ function printPurge(report) {
 	console.log(`verdict: ${report.ok ? "pass" : "fail"}`);
 }
 
+function printSanitize(report) {
+	if (!report.ok) {
+		console.error(report.error);
+		return;
+	}
+	console.log("REPI Memory Sanitize");
+	console.log(`apply=${report.apply} scanned=${report.scannedFiles} changed=${report.changedFiles}`);
+	for (const item of report.rows) {
+		console.log(`- path=${item.path} bytes=${item.bytes} backup=${item.backupPath ?? "<none>"}`);
+	}
+	for (const next of report.next ?? []) console.log(`next: ${next}`);
+	console.log(`verdict: ${report.ok ? "pass" : "fail"}`);
+}
+
+function printRepair(report) {
+	if (!report.ok) {
+		console.error(report.error);
+		return;
+	}
+	console.log("REPI Memory Repair");
+	console.log(`apply=${report.apply} valid=${report.validLines} invalid=${report.invalidLines}`);
+	if (report.quarantinePath) console.log(`quarantine=${report.quarantinePath}`);
+	for (const item of report.invalidRows ?? []) console.log(`- line=${item.line} sha256=${item.sha256.slice(0, 16)} error=${item.error}`);
+	for (const next of report.next ?? []) console.log(`next: ${next}`);
+	console.log(`verdict: ${report.ok ? "pass" : "fail"}`);
+}
+
 function printDiff(report) {
 	console.log("REPI Memory Diff");
 	console.log(`since: ${all ? "all high-value events" : report.consolidation.generatedAt || "never consolidated"}`);
@@ -836,7 +1080,7 @@ if (command === "help" || command === "--help" || command === "-h") {
 	console.log(usage());
 	process.exit(0);
 }
-if (!["status", "list", "show", "diff", "why", "forget", "quarantine", "doctor", "export", "purge"].includes(command)) {
+if (!["status", "list", "show", "diff", "why", "forget", "quarantine", "doctor", "export", "purge", "sanitize", "repair"].includes(command)) {
 	console.error(`Unknown memory command: ${command}`);
 	console.error(usage());
 	process.exit(2);
@@ -857,7 +1101,11 @@ const report =
 					? buildExportReport()
 					: command === "purge"
 						? buildPurgeReport()
-						: buildReport();
+						: command === "sanitize"
+							? buildSanitizeReport()
+							: command === "repair"
+								? buildRepairReport()
+								: buildReport();
 if (json) console.log(JSON.stringify(report, null, 2));
 else if (command === "status") printStatus(report);
 else if (command === "list") printList(report);
@@ -867,5 +1115,7 @@ else if (command === "forget" || command === "quarantine") printGovernance(repor
 else if (command === "doctor") printDoctor(report);
 else if (command === "export") printExport(report);
 else if (command === "purge") printPurge(report);
+else if (command === "sanitize") printSanitize(report);
+else if (command === "repair") printRepair(report);
 else printDiff(report);
 process.exit(report.ok === false ? 1 : 0);

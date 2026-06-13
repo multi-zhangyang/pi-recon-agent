@@ -104,7 +104,7 @@ Models:
   repi model doctor|test|cost|export|import
 
 Memory:
-  repi memory status|list|show|why|forget|quarantine|doctor|export|purge|diff|consolidate
+  repi memory status|list|show|why|forget|quarantine|doctor|export|purge|sanitize|diff|consolidate
 
 Swarm:
   repi swarm plan <target> --workers 5
@@ -163,7 +163,7 @@ MSG
       consolidate)
         exec node "$ROOT/scripts/reverse-agent/memory-consolidate.mjs" "$ROOT" "$@"
         ;;
-      status|list|show|diff|why|forget|quarantine|doctor|export|purge)
+      status|list|show|diff|why|forget|quarantine|doctor|export|purge|sanitize|repair)
         exec node "$ROOT/scripts/reverse-agent/memory-inspect.mjs" "$ROOT" "$sub" "$@"
         ;;
       help|--help|-h)
@@ -179,6 +179,8 @@ Usage:
   repi memory doctor [--json]
   repi memory export [--output <path>] [--full] [--json]
   repi memory purge [--dry-run|--apply --yes] [--governed|--older-than-days N|--query <text>|--id <event-id>|--all]
+  repi memory sanitize [--dry-run|--apply --yes] [--include-evidence] [--include-sessions] [--backup]
+  repi memory repair [--dry-run|--apply --yes]
   repi memory consolidate [--dry-run] [--json]
 MSG
         exit 0

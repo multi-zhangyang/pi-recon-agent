@@ -43,6 +43,31 @@ function run(args, env = {}) {
 	};
 }
 
+function runRepi(args, env = {}) {
+	const result = spawnSync(join(root, "repi"), args, {
+		cwd: root,
+		env: {
+			...process.env,
+			REPI_CODING_AGENT_DIR: agentDir,
+			REPI_AGENT_DIR: agentDir,
+			REPI_SKIP_VERSION_CHECK: "1",
+			REPI_SKIP_PACKAGE_UPDATE_CHECK: "1",
+			REPI_TELEMETRY: "0",
+			REPI_PRINT_PROGRESS: "0",
+			...env,
+		},
+		encoding: "utf8",
+		timeout: 30_000,
+		maxBuffer: 4 * 1024 * 1024,
+	});
+	return {
+		exit: result.status ?? 1,
+		stdout: result.stdout ?? "",
+		stderr: result.stderr ?? "",
+		error: result.error ? String(result.error.message || result.error) : undefined,
+	};
+}
+
 function check(id, pass, evidence = {}) {
 	return { id, status: pass ? "pass" : "fail", evidence };
 }
@@ -112,6 +137,53 @@ writeFileSync(
 );
 
 const checks = [];
+const reconProfileSource = readFileSync(join(root, "packages", "coding-agent", "src", "core", "recon-profile.ts"), "utf8");
+const printModeSource = readFileSync(join(root, "packages", "coding-agent", "src", "modes", "print-mode.ts"), "utf8");
+const selfcheckSource = readFileSync(join(root, "scripts", "reverse-agent", "repi-selfcheck.mjs"), "utf8");
+const swarmSource = readFileSync(join(root, "scripts", "reverse-agent", "repi-swarm-llm-run.mjs"), "utf8");
+checks.push(
+	check(
+		"memory:runtime-redaction-wired",
+		reconProfileSource.includes("function redactMemorySensitiveText") &&
+			/sanitizeMemoryText[\s\S]{0,240}redactMemorySensitiveText/.test(reconProfileSource) &&
+			/writeFileAtomic[\s\S]{0,220}chmodPrivate\(path, 0o600\)/.test(reconProfileSource),
+		{ markers: ["redactMemorySensitiveText", "sanitizeMemoryText", "writeFileAtomic chmodPrivate"] },
+	),
+);
+checks.push(
+	check(
+		"print:json-guard-and-timeout-wired",
+		!/function printTimeoutMs[\s\S]{0,160}mode !== "text"/.test(printModeSource) &&
+			!/function printMaxTurns[\s\S]{0,160}mode !== "text"/.test(printModeSource) &&
+			/if \(event\.type === "turn_start"\)[\s\S]{0,520}if \(mode === "json"\)/.test(printModeSource) &&
+			/activeGuardReject\?\.\(new Error/.test(printModeSource),
+		{ markers: ["json timeout", "json turn guard", "guard reject"] },
+	),
+);
+const emptyPrint = runRepi(["--provider", "alpha", "--model", "alpha/model", "--offline", "--no-session", "--no-tools", "-p"], {
+	REPI_ALPHA_KEY: "sk-test-redacted",
+});
+checks.push(
+	check("print:empty-prompt-fails", emptyPrint.exit !== 0 && /No prompt provided/.test(`${emptyPrint.stdout}\n${emptyPrint.stderr}`), {
+		exit: emptyPrint.exit,
+		stdoutTail: emptyPrint.stdout.slice(-600),
+		stderrTail: emptyPrint.stderr.slice(-600),
+	}),
+);
+checks.push(
+	check(
+		"swarm:run-requires-structured-merge",
+		/mode === "run" && !merge\.finalPromotionReady/.test(swarmSource) && /mergeFailureReason/.test(swarmSource),
+		{ markers: ["finalPromotionReady", "mergeFailureReason"] },
+	),
+);
+checks.push(
+	check(
+		"selfcheck:redaction-and-spawn-error",
+		/child\.on\("error"/.test(selfcheckSource) && /PRIVATE KEY/.test(selfcheckSource) && /https\?:\\\/\\\/api/.test(selfcheckSource),
+		{ markers: ["child error handler", "broad redaction"] },
+	),
+);
 const listFiltered = run(["scripts/reverse-agent/model-inspect.mjs", root, "list", "--provider", "alpha"]);
 checks.push(
 	check("model:list-provider-filter", listFiltered.exit === 0 && /alpha\/alpha\/model/.test(listFiltered.stdout) && !/beta\/beta\/model/.test(listFiltered.stdout), {
@@ -139,6 +211,14 @@ checks.push(
 		stdoutTail: doctorRedacted.stdout.slice(-800),
 	}),
 );
+const insecureLogin = run(["scripts/reverse-agent/model-inspect.mjs", root, "login", "--provider", "alpha", "--api-key", "sk-test-redacted"]);
+checks.push(
+	check("model:plain-api-key-arg-rejected", insecureLogin.exit !== 0 && /--api-key-stdin/.test(`${insecureLogin.stdout}\n${insecureLogin.stderr}`), {
+		exit: insecureLogin.exit,
+		stdoutTail: insecureLogin.stdout.slice(-800),
+		stderrTail: insecureLogin.stderr.slice(-400),
+	}),
+);
 
 const memoryListRedacted = run(["scripts/reverse-agent/memory-inspect.mjs", root, "list", "--all"]);
 checks.push(
@@ -164,14 +244,55 @@ checks.push(
 		stdoutTail: purgeConfirmed.stdout.slice(-800),
 	}),
 );
+writeFileSync(memoryEventsPath, `${readFileSync(memoryEventsPath, "utf8")}not-json sk-test-redacted\n`, { encoding: "utf8", mode: 0o600 });
+const repairBlocked = run(["scripts/reverse-agent/memory-inspect.mjs", root, "repair", "--apply"]);
+checks.push(
+	check("memory:repair-apply-requires-yes", repairBlocked.exit !== 0 && /requires --yes/.test(`${repairBlocked.stdout}\n${repairBlocked.stderr}`) && nonEmptyLineCount(memoryEventsPath) === 2, {
+		exit: repairBlocked.exit,
+		lines: nonEmptyLineCount(memoryEventsPath),
+		stderrTail: repairBlocked.stderr.slice(-400),
+	}),
+);
+const repairConfirmed = run(["scripts/reverse-agent/memory-inspect.mjs", root, "repair", "--apply", "--yes", "--json"]);
+let repairReport = {};
+try {
+	repairReport = JSON.parse(repairConfirmed.stdout);
+} catch {
+	repairReport = {};
+}
+checks.push(
+	check(
+		"memory:repair-quarantines-invalid-lines",
+		repairConfirmed.exit === 0 &&
+			repairReport.invalidLines === 1 &&
+			nonEmptyLineCount(memoryEventsPath) === 1 &&
+			readFileSync(memoryEventsPath, "utf8").includes("mem-beta") &&
+			existsSync(String(repairReport.quarantinePath ?? "")) &&
+			!readFileSync(String(repairReport.quarantinePath ?? ""), "utf8").includes("sk-test-redacted"),
+		{
+			exit: repairConfirmed.exit,
+			lines: nonEmptyLineCount(memoryEventsPath),
+			stdoutTail: repairConfirmed.stdout.slice(-800),
+		},
+	),
+);
 
 const initAgentDir = join(tempRoot, "profile-agent");
 const initRun = run(["scripts/reverse-agent/init-repi-profile.mjs", root], { REPI_CODING_AGENT_DIR: initAgentDir, REPI_AGENT_DIR: initAgentDir });
 checks.push(
-	check("profile:init-private-directories", initRun.exit === 0 && existsSync(join(initAgentDir, "sessions")) && mode(initAgentDir) === 0o700 && mode(join(initAgentDir, "recon", "memory")) === 0o700, {
+	check("profile:init-private-directories", initRun.exit === 0 && existsSync(join(initAgentDir, "sessions")) && mode(initAgentDir) === 0o700 && mode(join(initAgentDir, "recon", "memory")) === 0o700 && mode(join(initAgentDir, "recon", "memory", "events.jsonl")) === 0o600, {
 		exit: initRun.exit,
 		agentDirMode: `0${mode(initAgentDir).toString(8)}`,
 		memoryDirMode: `0${mode(join(initAgentDir, "recon", "memory")).toString(8)}`,
+		eventsMode: `0${mode(join(initAgentDir, "recon", "memory", "events.jsonl")).toString(8)}`,
+	}),
+);
+
+const trustRun = run(["scripts/reverse-agent/trust-inspect.mjs", root, "yes", root]);
+checks.push(
+	check("trust:file-private-mode", trustRun.exit === 0 && mode(join(agentDir, "trust.json")) === 0o600, {
+		exit: trustRun.exit,
+		trustMode: `0${mode(join(agentDir, "trust.json")).toString(8)}`,
 	}),
 );
 

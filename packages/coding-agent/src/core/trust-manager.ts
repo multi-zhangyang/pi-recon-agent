@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME } from "../config.ts";
@@ -71,21 +71,44 @@ function readTrustFile(path: string): TrustFile {
 		parsed = JSON.parse(readFileSync(path, "utf-8"));
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		throw new Error(`Failed to read trust store ${path}: ${message}`);
+		return quarantineTrustFile(path, `Failed to read trust store: ${message}`);
 	}
 
 	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-		throw new Error(`Invalid trust store ${path}: expected an object`);
+		return quarantineTrustFile(path, "Invalid trust store: expected an object");
 	}
 
 	const data: TrustFile = {};
 	for (const [key, value] of Object.entries(parsed)) {
 		if (value !== true && value !== false && value !== null) {
-			throw new Error(`Invalid trust store ${path}: value for ${JSON.stringify(key)} must be true, false, or null`);
+			return quarantineTrustFile(
+				path,
+				`Invalid trust store: value for ${JSON.stringify(key)} must be true, false, or null`,
+			);
 		}
 		data[key] = value;
 	}
 	return data;
+}
+
+function chmodPrivate(path: string, mode: number): void {
+	try {
+		chmodSync(path, mode);
+	} catch {
+		// Best-effort on non-POSIX filesystems.
+	}
+}
+
+function quarantineTrustFile(path: string, reason: string): TrustFile {
+	const suffix = new Date().toISOString().replace(/[:.]/g, "-");
+	const backupPath = `${path}.bad.${suffix}`;
+	try {
+		renameSync(path, backupPath);
+		console.error(`${reason}; moved to ${backupPath}`);
+	} catch {
+		console.error(`${reason}; using an empty in-memory trust store for this run`);
+	}
+	return {};
 }
 
 function writeTrustFile(path: string, data: TrustFile): void {
@@ -96,13 +119,16 @@ function writeTrustFile(path: string, data: TrustFile): void {
 			sorted[key] = value;
 		}
 	}
-	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(path, `${JSON.stringify(sorted, null, 2)}\n`, "utf-8");
+	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+	chmodPrivate(dirname(path), 0o700);
+	writeFileSync(path, `${JSON.stringify(sorted, null, 2)}\n`, { encoding: "utf-8", mode: 0o600 });
+	chmodPrivate(path, 0o600);
 }
 
 function acquireTrustLockSync(path: string): () => void {
 	const trustDir = dirname(path);
-	mkdirSync(trustDir, { recursive: true });
+	mkdirSync(trustDir, { recursive: true, mode: 0o700 });
+	chmodPrivate(trustDir, 0o700);
 	const maxAttempts = 10;
 	const delayMs = 20;
 	let lastError: unknown;

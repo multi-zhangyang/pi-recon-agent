@@ -46,22 +46,19 @@ function printProgressEnabled(mode: PrintModeOptions["mode"]): boolean {
 	return envFlag("REPI_PRINT_PROGRESS", isRepiProductMode());
 }
 
-function printTimeoutMs(mode: PrintModeOptions["mode"]): number | undefined {
-	if (mode !== "text") return undefined;
+function printTimeoutMs(_mode: PrintModeOptions["mode"]): number | undefined {
 	const configured = envPositiveInteger("REPI_PRINT_TIMEOUT_MS");
 	if (configured !== undefined) return configured;
 	return isRepiProductMode() ? 210_000 : undefined;
 }
 
-function printMaxTurns(mode: PrintModeOptions["mode"]): number | undefined {
-	if (mode !== "text") return undefined;
+function printMaxTurns(_mode: PrintModeOptions["mode"]): number | undefined {
 	const configured = envPositiveInteger("REPI_PRINT_MAX_TURNS");
 	if (configured !== undefined) return configured;
 	return isRepiProductMode() ? 24 : undefined;
 }
 
-function printMaxToolCalls(mode: PrintModeOptions["mode"]): number | undefined {
-	if (mode !== "text") return undefined;
+function printMaxToolCalls(_mode: PrintModeOptions["mode"]): number | undefined {
 	const configured = envPositiveInteger("REPI_PRINT_MAX_TOOL_CALLS");
 	if (configured !== undefined) return configured;
 	return isRepiProductMode() ? 80 : undefined;
@@ -119,6 +116,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	let turnCount = 0;
 	let toolCallCount = 0;
 	let guardAbortReason: string | undefined;
+	let activeGuardReject: ((error: Error) => void) | undefined;
 
 	const emitProgress = (line: string): void => {
 		if (!progressEnabled) return;
@@ -131,6 +129,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		if (guardAbortReason) return;
 		guardAbortReason = reason;
 		emitProgress(`guard_abort reason=${reason}`);
+		activeGuardReject?.(new Error(`REPI print guard aborted: ${reason}`));
 		void session.abort().catch((error) => {
 			console.error(`[repi:print] abort_error ${error instanceof Error ? error.message : String(error)}`);
 		});
@@ -143,10 +142,11 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		turnCount = 0;
 		toolCallCount = 0;
 		guardAbortReason = undefined;
+		activeGuardReject = undefined;
 		emitProgress(
 			`prompt_start chars=${message.length} timeoutMs=${timeoutMs ?? "none"} maxTurns=${maxTurns ?? "none"} maxToolCalls=${maxToolCalls ?? "none"}`,
 		);
-		if (!timeoutMs) {
+		if (!timeoutMs && maxTurns === undefined && maxToolCalls === undefined) {
 			await session.prompt(message, promptOptions);
 			emitProgress("prompt_done");
 			return;
@@ -154,22 +154,33 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 
 		let timer: NodeJS.Timeout | undefined;
 		try {
-			await Promise.race([
-				session.prompt(message, promptOptions),
-				new Promise<never>((_resolve, reject) => {
-					timer = setTimeout(() => {
-						emitProgress(`timeout timeoutMs=${timeoutMs} action=abort`);
-						void session.abort().catch((error) => {
-							console.error(
-								`[repi:print] abort_error ${error instanceof Error ? error.message : String(error)}`,
-							);
-						});
-						reject(new Error(`REPI print prompt timed out after ${timeoutMs}ms`));
-					}, timeoutMs);
-				}),
-			]);
+			const races: Array<Promise<unknown>> = [session.prompt(message, promptOptions)];
+			if (timeoutMs) {
+				races.push(
+					new Promise<never>((_resolve, reject) => {
+						timer = setTimeout(() => {
+							emitProgress(`timeout timeoutMs=${timeoutMs} action=abort`);
+							void session.abort().catch((error) => {
+								console.error(
+									`[repi:print] abort_error ${error instanceof Error ? error.message : String(error)}`,
+								);
+							});
+							reject(new Error(`REPI print prompt timed out after ${timeoutMs}ms`));
+						}, timeoutMs);
+					}),
+				);
+			}
+			if (maxTurns !== undefined || maxToolCalls !== undefined) {
+				races.push(
+					new Promise<never>((_resolve, reject) => {
+						activeGuardReject = reject;
+					}),
+				);
+			}
+			await Promise.race(races);
 			emitProgress("prompt_done");
 		} finally {
+			activeGuardReject = undefined;
 			if (timer) clearTimeout(timer);
 		}
 	};
@@ -199,7 +210,29 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		}
 	};
 
+	if (!initialMessage && messages.length === 0) {
+		console.error('No prompt provided. Use `repi -p "..."` or pass a message.');
+		await disposeRuntime();
+		return 1;
+	}
+
 	registerSignalHandlers();
+
+	const writeLastAssistantText = (): boolean => {
+		if (mode !== "text") return false;
+		const state = session.state;
+		const lastMessage = state.messages[state.messages.length - 1];
+		if (lastMessage?.role !== "assistant") return false;
+
+		let wroteText = false;
+		for (const content of (lastMessage as AssistantMessage).content) {
+			if (content.type === "text" && content.text.trim() !== "") {
+				writeRawStdout(`${content.text}\n`);
+				wroteText = true;
+			}
+		}
+		return wroteText;
+	};
 
 	runtimeHost.setRebindSession(async () => {
 		await rebindSession();
@@ -239,10 +272,6 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 
 		unsubscribe?.();
 		unsubscribe = session.subscribe((event) => {
-			if (mode === "json") {
-				writeRawStdout(`${JSON.stringify(event)}\n`);
-				return;
-			}
 			if (event.type === "turn_start") {
 				turnCount += 1;
 				if (maxTurns !== undefined && turnCount > maxTurns) {
@@ -254,6 +283,10 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 				if (maxToolCalls !== undefined && toolCallCount > maxToolCalls) {
 					abortForGuard(`max_tool_calls_exceeded:${toolCallCount}/${maxToolCalls}`);
 				}
+			}
+			if (mode === "json") {
+				writeRawStdout(`${JSON.stringify(event)}\n`);
+				return;
 			}
 			const line = eventProgressLine(event);
 			if (line) {
@@ -296,20 +329,18 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 			if (lastMessage?.role === "assistant") {
 				const assistantMsg = lastMessage as AssistantMessage;
 				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
+					writeLastAssistantText();
 					console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
 					exitCode = 1;
 				} else {
-					for (const content of assistantMsg.content) {
-						if (content.type === "text") {
-							writeRawStdout(`${content.text}\n`);
-						}
-					}
+					writeLastAssistantText();
 				}
 			}
 		}
 
 		return exitCode;
 	} catch (error: unknown) {
+		writeLastAssistantText();
 		console.error(error instanceof Error ? error.message : String(error));
 		return 1;
 	} finally {

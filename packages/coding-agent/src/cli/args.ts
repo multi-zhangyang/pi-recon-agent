@@ -276,7 +276,7 @@ ${updateCommandLine}
 ${chalk.bold("Options:")}
   --provider <name>              Provider name (default: configured provider/model)
   --model <pattern>              Model pattern or ID (supports "provider/id" and optional ":<thinking>")
-  --api-key <key>                API key (defaults to env vars)
+  --api-key <key>                Runtime API key override (prefer env/model login; shell-history risk)
   --system-prompt <text>         System prompt (default: REPI reverse/pentest kernel prompt)
   --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
   --recon, --reverse-pentest     Enable built-in REPI reverse/pentest kernel profile
