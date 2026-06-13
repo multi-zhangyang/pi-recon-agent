@@ -52,6 +52,12 @@ function printTimeoutMs(_mode: PrintModeOptions["mode"]): number | undefined {
 	return isRepiProductMode() ? 210_000 : undefined;
 }
 
+function printTimeoutGraceMs(_mode: PrintModeOptions["mode"]): number {
+	const configured = envPositiveInteger("REPI_PRINT_TIMEOUT_GRACE_MS");
+	if (configured !== undefined) return configured;
+	return isRepiProductMode() ? 30_000 : 0;
+}
+
 function printMaxTurns(_mode: PrintModeOptions["mode"]): number | undefined {
 	const configured = envPositiveInteger("REPI_PRINT_MAX_TURNS");
 	if (configured !== undefined) return configured;
@@ -108,6 +114,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	const signalCleanupHandlers: Array<() => void> = [];
 	const progressEnabled = printProgressEnabled(mode);
 	const timeoutMs = printTimeoutMs(mode);
+	const timeoutGraceMs = printTimeoutGraceMs(mode);
 	const maxTurns = printMaxTurns(mode);
 	const maxToolCalls = printMaxToolCalls(mode);
 	const startedAt = Date.now();
@@ -117,6 +124,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	let toolCallCount = 0;
 	let guardAbortReason: string | undefined;
 	let activeGuardReject: ((error: Error) => void) | undefined;
+	let assistantMessageInProgress = false;
 
 	const emitProgress = (line: string): void => {
 		if (!progressEnabled) return;
@@ -143,8 +151,9 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		toolCallCount = 0;
 		guardAbortReason = undefined;
 		activeGuardReject = undefined;
+		assistantMessageInProgress = false;
 		emitProgress(
-			`prompt_start chars=${message.length} timeoutMs=${timeoutMs ?? "none"} maxTurns=${maxTurns ?? "none"} maxToolCalls=${maxToolCalls ?? "none"}`,
+			`prompt_start chars=${message.length} timeoutMs=${timeoutMs ?? "none"} timeoutGraceMs=${timeoutGraceMs} maxTurns=${maxTurns ?? "none"} maxToolCalls=${maxToolCalls ?? "none"}`,
 		);
 		if (!timeoutMs && maxTurns === undefined && maxToolCalls === undefined) {
 			await session.prompt(message, promptOptions);
@@ -158,14 +167,28 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 			if (timeoutMs) {
 				races.push(
 					new Promise<never>((_resolve, reject) => {
-						timer = setTimeout(() => {
-							emitProgress(`timeout timeoutMs=${timeoutMs} action=abort`);
+						const abortAfterTimeout = (kind: "timeout" | "timeout_grace_exhausted") => {
+							emitProgress(`timeout timeoutMs=${timeoutMs} action=abort reason=${kind}`);
 							void session.abort().catch((error) => {
 								console.error(
 									`[repi:print] abort_error ${error instanceof Error ? error.message : String(error)}`,
 								);
 							});
-							reject(new Error(`REPI print prompt timed out after ${timeoutMs}ms`));
+							reject(
+								new Error(
+									kind === "timeout_grace_exhausted"
+										? `REPI print prompt timed out after ${timeoutMs}ms plus ${timeoutGraceMs}ms assistant grace`
+										: `REPI print prompt timed out after ${timeoutMs}ms`,
+								),
+							);
+						};
+						timer = setTimeout(() => {
+							if (assistantMessageInProgress && timeoutGraceMs > 0) {
+								emitProgress(`timeout timeoutMs=${timeoutMs} action=assistant_grace graceMs=${timeoutGraceMs}`);
+								timer = setTimeout(() => abortAfterTimeout("timeout_grace_exhausted"), timeoutGraceMs);
+								return;
+							}
+							abortAfterTimeout("timeout");
 						}, timeoutMs);
 					}),
 				);
@@ -272,6 +295,8 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 
 		unsubscribe?.();
 		unsubscribe = session.subscribe((event) => {
+			if (event.type === "message_start" && event.message.role === "assistant") assistantMessageInProgress = true;
+			if (event.type === "message_end" && event.message.role === "assistant") assistantMessageInProgress = false;
 			if (event.type === "turn_start") {
 				turnCount += 1;
 				if (maxTurns !== undefined && turnCount > maxTurns) {

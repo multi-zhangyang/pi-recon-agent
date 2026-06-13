@@ -550,6 +550,26 @@ checks.push(
 		trustMode: `0${mode(join(agentDir, "trust.json")).toString(8)}`,
 	}),
 );
+const explicitTrustTarget = join(tempRoot, "explicit-trust-target");
+const explicitTrustAgentDir = join(tempRoot, "explicit-trust-agent");
+mkdir(explicitTrustTarget);
+writeFileSync(join(explicitTrustTarget, "AGENTS.md"), "explicit trust fixture\n", { encoding: "utf8", mode: 0o600 });
+const explicitTrustRun = run(["scripts/reverse-agent/trust-inspect.mjs", root, "yes", explicitTrustTarget, "--json"], { REPI_CODING_AGENT_DIR: explicitTrustAgentDir, REPI_AGENT_DIR: explicitTrustAgentDir });
+const explicitTrustStore = (() => {
+	try {
+		return JSON.parse(readFileSync(join(explicitTrustAgentDir, "trust.json"), "utf8"));
+	} catch {
+		return {};
+	}
+})();
+checks.push(
+	check("trust:explicit-target-does-not-alias-cwd", explicitTrustRun.exit === 0 && explicitTrustStore[explicitTrustTarget] === true && explicitTrustStore[root] !== true, {
+		exit: explicitTrustRun.exit,
+		explicitTargetTrusted: explicitTrustStore[explicitTrustTarget] === true,
+		cwdTrusted: explicitTrustStore[root] === true,
+		stdoutTail: explicitTrustRun.stdout.slice(-800),
+	}),
+);
 
 const report = {
 	kind: "repi-cli-ux-gate-report",

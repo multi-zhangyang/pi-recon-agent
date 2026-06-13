@@ -74,10 +74,14 @@ function nearestContextRoot(start) {
 	});
 }
 
-function aliasesFor(path) {
+function aliasesFor(path, options = {}) {
 	const aliases = new Set();
-	aliases.add(canonical(path));
-	if (process.env.PWD) aliases.add(canonical(process.env.PWD));
+	const targetPath = canonical(path);
+	aliases.add(targetPath);
+	if (options.includePwdAlias && process.env.PWD) {
+		const pwdPath = canonical(process.env.PWD);
+		if (pwdPath === targetPath) aliases.add(pwdPath);
+	}
 	const gitRoot = nearestGitRoot(path);
 	if (gitRoot) aliases.add(gitRoot);
 	const contextRoot = nearestContextRoot(path);
@@ -100,9 +104,11 @@ function hasProjectTrustInputs(path) {
 	return Boolean(nearestContextRoot(path));
 }
 
+const targetWasExplicit = Boolean(targetArg);
 const target = canonical(targetArg ?? process.env.PWD ?? process.cwd());
 const data = readTrust();
 const current = lookup(data, target);
+const aliasOptions = { includePwdAlias: !targetWasExplicit };
 
 function finish(report, exitCode = 0) {
 	if (json) console.log(JSON.stringify(report, null, 2));
@@ -130,26 +136,26 @@ if (["status", "show", "doctor"].includes(command)) {
 		matched: current.matched,
 		effectiveTrusted: current.decision === true || (!hasProjectTrustInputs(target) && current.decision !== false),
 		projectTrustInputs: hasProjectTrustInputs(target),
-		aliases: aliasesFor(target),
+		aliases: aliasesFor(target, aliasOptions),
 	});
 }
 
 if (["yes", "trust", "trusted", "allow", "on"].includes(command)) {
-	const aliases = aliasesFor(target);
+	const aliases = aliasesFor(target, aliasOptions);
 	for (const key of aliases) data[key] = true;
 	writeTrust(data);
 	finish({ kind: "repi-trust-report", action: "saved", root, path: target, trustPath, decision: true, matched: target, effectiveTrusted: true, aliases, message: "Saved trusted decision. Restart or /reload if a session is already open." });
 }
 
 if (["no", "untrust", "deny", "off"].includes(command)) {
-	const aliases = aliasesFor(target);
+	const aliases = aliasesFor(target, aliasOptions);
 	for (const key of aliases) data[key] = false;
 	writeTrust(data);
 	finish({ kind: "repi-trust-report", action: "saved", root, path: target, trustPath, decision: false, matched: target, effectiveTrusted: false, aliases, message: "Saved untrusted decision." });
 }
 
 if (["clear", "unset", "reset"].includes(command)) {
-	const aliases = aliasesFor(target);
+	const aliases = aliasesFor(target, aliasOptions);
 	for (const key of aliases) delete data[key];
 	writeTrust(data);
 	const next = lookup(data, target);

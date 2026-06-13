@@ -423,6 +423,7 @@ ${chalk.bold("Environment Variables:")}
   REPI_SKIP_PACKAGE_UPDATE_CHECK   - Disable REPI package update checks when set (default: on)
   REPI_PRINT_PROGRESS              - Print-mode progress/heartbeat to stderr (default: 1 under repi)
   REPI_PRINT_TIMEOUT_MS            - Print-mode wall timeout before abort (default: 210000)
+  REPI_PRINT_TIMEOUT_GRACE_MS      - Extra assistant-output grace after wall timeout (default: 30000)
   REPI_PRINT_MAX_TURNS             - Print-mode assistant/tool loop cap (default: 24)
   REPI_PRINT_MAX_TOOL_CALLS        - Print-mode total tool-call cap (default: 80)
   REPI_STDIN_READ_TIMEOUT_MS       - Non-TTY stdin read guard when stdin is left open (default: 1500)

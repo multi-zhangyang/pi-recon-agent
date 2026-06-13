@@ -302,6 +302,7 @@ const bootstrapSource = existsSync(join(root, "packages/coding-agent/src/cli/rep
 const guardrailMarkers = [
 	"REPI_PRINT_PROGRESS",
 	"REPI_PRINT_TIMEOUT_MS",
+	"REPI_PRINT_TIMEOUT_GRACE_MS",
 	"REPI_PRINT_MAX_TURNS",
 	"REPI_PRINT_MAX_TOOL_CALLS",
 	"REPI_STDIN_READ_TIMEOUT_MS",

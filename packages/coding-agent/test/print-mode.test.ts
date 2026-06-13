@@ -16,9 +16,10 @@ type FakeSession = {
 	state: { messages: AssistantMessage[] };
 	extensionRunner: FakeExtensionRunner;
 	bindExtensions: ReturnType<typeof vi.fn>;
-	subscribe: ReturnType<typeof vi.fn>;
+	subscribe: ReturnType<typeof vi.fn<(listener: (event: any) => void) => () => void>>;
 	prompt: ReturnType<typeof vi.fn>;
 	reload: ReturnType<typeof vi.fn>;
+	abort?: ReturnType<typeof vi.fn>;
 };
 
 type FakeRuntimeHost = {
@@ -72,6 +73,7 @@ function createRuntimeHost(assistantMessage: AssistantMessage): FakeRuntimeHost 
 		subscribe: vi.fn(() => () => {}),
 		prompt: vi.fn(async () => {}),
 		reload: vi.fn(async () => {}),
+		abort: vi.fn(async () => {}),
 	};
 
 	return {
@@ -87,7 +89,13 @@ function createRuntimeHost(assistantMessage: AssistantMessage): FakeRuntimeHost 
 }
 
 afterEach(() => {
+	vi.useRealTimers();
 	vi.restoreAllMocks();
+	delete process.env.REPI_PRODUCT;
+	delete process.env.REPI_PRIMARY;
+	delete process.env.REPI_PRINT_PROGRESS;
+	delete process.env.REPI_PRINT_TIMEOUT_MS;
+	delete process.env.REPI_PRINT_TIMEOUT_GRACE_MS;
 });
 
 describe("runPrintMode", () => {
@@ -118,7 +126,7 @@ describe("runPrintMode", () => {
 		});
 
 		expect(exitCode).toBe(0);
-		expect(session.prompt).toHaveBeenCalledWith("hello");
+		expect(session.prompt).toHaveBeenCalledWith("hello", undefined);
 		expect(session.extensionRunner.emit).toHaveBeenCalledTimes(1);
 		expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
 	});
@@ -132,11 +140,50 @@ describe("runPrintMode", () => {
 
 		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
 			mode: "text",
+			initialMessage: "trigger provider failure",
 		});
 
 		expect(exitCode).toBe(1);
 		expect(errorSpy).toHaveBeenCalledWith("provider failure");
 		expect(session.extensionRunner.emit).toHaveBeenCalledTimes(1);
 		expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
+	});
+
+	it("allows a short assistant-output grace after print timeout", async () => {
+		vi.useFakeTimers();
+		process.env.REPI_PRODUCT = "1";
+		process.env.REPI_PRINT_PROGRESS = "1";
+		process.env.REPI_PRINT_TIMEOUT_MS = "10";
+		process.env.REPI_PRINT_TIMEOUT_GRACE_MS = "50";
+		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "" }));
+		const { session } = runtimeHost;
+		let listener: ((event: any) => void) | undefined;
+		session.subscribe.mockImplementation((fn) => {
+			listener = fn;
+			return () => {};
+		});
+		session.prompt.mockImplementation(
+			() =>
+				new Promise<void>((resolve) => {
+					listener?.({ type: "message_start", message: { role: "assistant" } });
+					setTimeout(() => {
+						session.state.messages = [createAssistantMessage({ text: "finished during grace" })];
+						listener?.({ type: "message_end", message: { role: "assistant" } });
+						resolve();
+					}, 20);
+				}),
+		);
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const run = runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+			mode: "text",
+			initialMessage: "slow final",
+		});
+		await vi.advanceTimersByTimeAsync(25);
+		const exitCode = await run;
+
+		expect(exitCode).toBe(0);
+		expect(session.abort).not.toHaveBeenCalled();
+		expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("action=assistant_grace"));
 	});
 });
