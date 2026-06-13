@@ -9,6 +9,7 @@ const PACKAGE_COMMANDS = new Set([
 	"dogfood",
 	"bugreport",
 	"trust",
+	"mission",
 	"memory",
 	"model",
 	"models",

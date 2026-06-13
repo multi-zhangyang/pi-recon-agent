@@ -142,6 +142,7 @@ const printModeSource = readFileSync(join(root, "packages", "coding-agent", "src
 const selfcheckSource = readFileSync(join(root, "scripts", "reverse-agent", "repi-selfcheck.mjs"), "utf8");
 const swarmSource = readFileSync(join(root, "scripts", "reverse-agent", "repi-swarm-llm-run.mjs"), "utf8");
 const healthSource = readFileSync(join(root, "scripts", "reverse-agent", "repi-health.mjs"), "utf8");
+const missionSource = readFileSync(join(root, "scripts", "reverse-agent", "repi-mission.mjs"), "utf8");
 checks.push(
 	check(
 		"memory:runtime-redaction-wired",
@@ -199,8 +200,42 @@ checks.push(
 			healthReport.kind === "repi-health-report" &&
 			Number.isFinite(Number(healthReport.score)) &&
 			Array.isArray(healthReport.prioritizedActions) &&
-			/doctor.*model.*memory.*swarm.*storage/s.test(healthSource),
+			/doctor.*model.*memory.*swarm.*storage/s.test(healthSource) &&
+			/mission control state/.test(healthSource),
 		{ exit: healthRun.exit, stdoutTail: healthRun.stdout.slice(-800), stderrTail: healthRun.stderr.slice(-400) },
+	),
+);
+const missionNew = runRepi(["mission", "new", "audit JWT API for IDOR sk-test-redacted", "--target", "https://mission.example.invalid", "--json"]);
+let missionNewReport = {};
+try {
+	missionNewReport = JSON.parse(missionNew.stdout);
+} catch {
+	missionNewReport = {};
+}
+const missionPack = runRepi(["mission", "pack", "--json"]);
+let missionPackReport = {};
+try {
+	missionPackReport = JSON.parse(missionPack.stdout);
+} catch {
+	missionPackReport = {};
+}
+checks.push(
+	check(
+		"mission:control-plane",
+		missionNew.exit === 0 &&
+			missionPack.exit === 0 &&
+			missionNewReport.kind === "repi-mission-report" &&
+			missionNewReport.mission?.route?.id === "web-api" &&
+			!JSON.stringify(missionNewReport).includes("sk-test-redacted") &&
+			missionPackReport.contextPack?.memoryPolicy?.scoped === true &&
+			existsSync(String(missionPackReport.output?.jsonPath ?? "")) &&
+			/forbidden.*unscoped old-memory injection/s.test(missionSource),
+		{
+			newExit: missionNew.exit,
+			packExit: missionPack.exit,
+			newTail: missionNew.stdout.slice(-800),
+			packTail: missionPack.stdout.slice(-800),
+		},
 	),
 );
 const listFiltered = run(["scripts/reverse-agent/model-inspect.mjs", root, "list", "--provider", "alpha"]);

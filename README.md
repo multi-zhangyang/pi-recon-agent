@@ -478,6 +478,8 @@ repi commands
 | `repi trust status` | 查看当前目录是否已保存 trust。 |
 | `repi trust yes` | 保存当前目录 trust，避免每次启动重复提示。 |
 | `repi trust clear` | 清除当前目录 trust 决策。 |
+| `repi mission new <task>` | 新建任务级 Mission Control，自动选择 lane、证据合同和下一步命令。 |
+| `repi mission status/next/pack/close` | 查看任务状态、取下一步、生成恢复包、关闭任务。 |
 | `repi model ...` | 维护 provider/model/auth/cost 配置。 |
 | `repi memory ...` | 查看、解释、隔离、导出长期记忆。 |
 | `repi swarm ...` | 多 worker 分工、运行、合并。 |
@@ -515,6 +517,34 @@ repi commands
 /re-toolchain show
 /re-lane-specialist-pack show
 /re-domain-proof-exit write <domain>
+```
+
+### Mission Control
+
+`repi mission` 是任务级控制面。它不替代交互式 agent，而是把一次逆向/渗透工作先落成一个可恢复的 mission：目标、领域 lane、证据合同、下一步命令、context pack 都写到 `~/.repi/agent/recon/mission/` 和 `~/.repi/agent/recon/evidence/contexts/`。这样开新任务时不会把旧任务记忆直接混进来，也方便中断后恢复。
+
+```bash
+repi mission new "审计 JWT API 的 IDOR/BOLA 风险" --target https://target.example
+repi mission status
+repi mission next
+repi mission pack
+```
+
+常见流程：
+
+```bash
+# 1) 建 mission，自动路由到 Web/API、Native/Pwn、Mobile、Firmware 等 lane
+repi mission new "reverse ./crackme 的校验逻辑" --target ./crackme
+
+# 2) 跑健康检查和 agent 任务
+repi health
+repi -p "按当前 mission 执行被动 mapping，证明一条最小路径，并给出复现命令"
+
+# 3) 中断或切机器前生成恢复包
+repi mission pack
+
+# 4) 任务结束后显式关闭；长期记忆沉淀仍然需要显式执行，避免污染
+repi mission close --summary "已定位校验函数和输入约束，复现命令见 evidence ledger"
 ```
 
 ### 多子代理控制面
@@ -862,9 +892,12 @@ repi update                         # 拉取、安装、修复并 smoke
 repi update --fast                  # 快速更新
 repi update --full                  # 更新后追加 npm run check
 repi install                        # 只刷新启动器/profile
-repi health                         # operator dashboard：doctor/model/memory/swarm/storage 汇总评分
+repi health                         # operator dashboard：doctor/model/memory/mission/swarm/storage 汇总评分
 repi health --fix                   # 执行安全修复：profile/init、memory repair、memory sanitize
 repi health --deep                  # 追加 live selfcheck 和更深的本机 sanitize scope
+repi mission new <task>             # 新建 scoped mission、lane plan、证据合同
+repi mission next                   # 输出下一步 operator commands
+repi mission pack                   # 写 context/resume pack
 repi doctor                         # 安装、runtime、模型解析、memory scoped defaults
 repi doctor --fix                   # 自动重建 runtime profile、memory repair/sanitize、重装 repi 入口
 repi smoke                          # 快速 smoke：doctor + memory/model status + memory gate + shrinkwrap + imports

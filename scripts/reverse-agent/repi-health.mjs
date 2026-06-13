@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -23,6 +24,7 @@ function usage() {
 
 Health is the operator dashboard for release/open-source readiness:
 - aggregates doctor/model/memory/swarm/storage state
+- includes task-level mission control state and next operator actions
 - shows one prioritized action list instead of scattered command output
 - --fix applies safe local repairs: profile init, memory repair, memory sanitize (no raw backup)
 - --deep additionally runs selfcheck and deep sanitize scopes
@@ -135,6 +137,10 @@ function statusRank(status) {
 	return status === "fail" ? 0 : status === "warn" ? 1 : status === "skip" ? 2 : 3;
 }
 
+function shortHash(value) {
+	return createHash("sha256").update(String(value ?? "")).digest("hex").slice(0, 16);
+}
+
 const fixActions = [];
 if (fix) {
 	fixActions.push({ id: "doctor-fix", ...runNode("scripts/reverse-agent/repi-doctor.mjs", ["--fix", "--json"], { timeout: 90_000 }) });
@@ -153,6 +159,7 @@ const sanitizeDryArgs = ["sanitize", "--dry-run", "--json"];
 if (includeEvidence) sanitizeDryArgs.push("--include-evidence");
 if (includeSessions) sanitizeDryArgs.push("--include-sessions");
 const memorySanitize = runNode("scripts/reverse-agent/memory-inspect.mjs", sanitizeDryArgs, { timeout: 120_000 });
+const missionStatus = runNode("scripts/reverse-agent/repi-mission.mjs", ["status", "--json"], { timeout: 30_000 });
 const swarmStatus = runNode("scripts/reverse-agent/repi-swarm-llm-run.mjs", ["status", "latest", "--json"], { timeout: 45_000 });
 const selfcheckReport = selfcheck
 	? runNode(
@@ -224,6 +231,26 @@ items.push(
 		["repi memory purge --dry-run --older-than-days 30", "repi memory export --output /tmp/repi-memory.json"],
 	),
 );
+
+if (missionStatus.code !== 0) {
+	items.push(item("mission-control", "fail", "mission control command failed", { exit: missionStatus.code, stderrTail: missionStatus.stderrTail }, ["repi mission status", "repi mission new <task>"]));
+} else if (missionStatus.parsed?.ok && missionStatus.parsed?.mission?.status === "active") {
+	items.push(
+		item(
+			"mission-control",
+			"pass",
+			`active mission route=${missionStatus.parsed.mission.route?.domain ?? "unknown"}`,
+			{
+				id: missionStatus.parsed.mission.id,
+				taskHash: missionStatus.parsed.mission.task ? shortHash(missionStatus.parsed.mission.task) : null,
+				nextActions: missionStatus.parsed.mission.nextActions?.slice(0, 3) ?? [],
+			},
+			["repi mission status", "repi mission pack"],
+		),
+	);
+} else {
+	items.push(item("mission-control", "skip", "no active mission; create one to bind work to a scoped plan", { missionPath: missionStatus.parsed?.missionPath ?? null }, ["repi mission new <task>", "repi mission plan <task>"]));
+}
 
 if (swarmStatus.parsed?.ok) {
 	const narrativeOnly = swarmStatus.parsed?.merge?.narrativeOnlyBlocked === true;

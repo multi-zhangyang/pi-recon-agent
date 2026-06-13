@@ -96,6 +96,8 @@ Health:
   repi bugreport --output /tmp/repi-bugreport.json   Redacted diagnostic bundle
   repi trust status                                  Show project trust decision for current folder
   repi trust yes|no|clear [path]                     Save or clear project trust
+  repi mission new <task> [--target <target>]        Start a scoped mission/control-plane
+  repi mission status|plan|next|pack|close           Mission state, lane plan, resume pack
 
 Models:
   repi model add --provider <id> --api openai-completions --base-url <url> --model <model>
@@ -143,6 +145,10 @@ MSG
   bugreport)
     shift
     exec node "$ROOT/scripts/reverse-agent/repi-bugreport.mjs" "$ROOT" "$@"
+    ;;
+  mission)
+    shift
+    exec node "$ROOT/scripts/reverse-agent/repi-mission.mjs" "$ROOT" "$@"
     ;;
   swarm)
     sub="${2:-help}"
