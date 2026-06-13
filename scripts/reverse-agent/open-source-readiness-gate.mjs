@@ -91,7 +91,7 @@ checks.push(fileCheck("SECURITY.md", ["安全政策", "GitHub Security Advisory"
 checks.push(fileCheck("CODE_OF_CONDUCT.md", ["行为准则", "不接受", "执行"]));
 checks.push(fileCheck("SUPPORT.md", ["支持与反馈", "repi doctor", "repi bugreport --stdout"]));
 checks.push(fileCheck(".github/PULL_REQUEST_TEMPLATE.md", ["变更摘要", "npm run check", "npm run gate:open-source-readiness", "安全与隐私"]));
-checks.push(fileCheck(".github/dependabot.yml", ["package-ecosystem: npm", "package-ecosystem: github-actions"]));
+checks.push(fileCheck(".github/dependabot.yml", ["package-ecosystem: npm", "package-ecosystem: github-actions", "version-update:semver-major"]));
 checks.push(fileCheck(".github/workflows/repi-harness.yml", ["REPI Independent Harness", "npm run gate:open-source-readiness", "npm run gate:repi-harness", "npm run check"]));
 checks.push(fileCheck(".github/ISSUE_TEMPLATE/bug.yml", ["Bug Report", "不要提交 API key 或 token"]));
 checks.push(fileCheck(".github/ISSUE_TEMPLATE/contribution.yml", ["Contribution Proposal", "CONTRIBUTING.md"]));
