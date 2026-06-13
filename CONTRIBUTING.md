@@ -1,93 +1,72 @@
-# Contributing to pi
+# 贡献指南
 
-This guide exists to save both sides time.
+感谢你考虑为 REPI Agent 贡献代码、文档或问题报告。这个项目的维护原则是：**每一个变更都必须可复现、可验证、可回滚**。
 
-## The One Rule
+## 提交 Issue
 
-**You must understand your code.** If you cannot explain what your changes do and how they interact with the rest of the system, your PR will be closed.
+请优先使用 GitHub Issue 模板，并提供：
 
-Using AI to write code is fine. Submitting AI-generated slop without understanding it is not.
+- REPI 版本、安装方式、操作系统和 Node.js 版本。
+- 最小复现命令、关键日志、期望行为与实际行为。
+- 是否涉及模型 provider、`~/.repi/agent/models.json`、`auth.json`、memory、swarm 或 compact。
 
-If you use an agent, run it from the `pi-mono` root directory so it picks up `AGENTS.md` automatically. Your agent must follow the rules and guidelines in that file.
+不要在 Issue、PR、日志或截图里提交 API key、GitHub token、Authorization header、私有 baseUrl、会话文件或未脱敏的 bugreport。
 
-## Contribution Gate
+## 提交 PR 前
 
-All issues and PRs from new contributors are auto-closed by default.
+1. 从最新 `main` 分支创建 feature branch。
+2. 保持变更范围清晰，避免把重构、格式化和功能修改混在一个 PR。
+3. 给出验证命令和结果；涉及 REPI harness 的变更必须说明新增或更新的 gate。
+4. 不要提交本地运行态：`~/.repi`、`.repi/`、`auth.json`、session、bugreport、provider 私钥、模型密钥。
 
-Issues submitted Friday through Sunday are not reviewed. If something is urgent, ask on Discord: https://discord.com/invite/3cU7Bz4UPx
-
-Maintainers review auto-closed issues daily and reopen worthwhile ones. Issues that do not meet the quality bar below will not be reopened or receive a reply.
-
-Approval happens through maintainer replies on issues:
-
-- `lgtmi`: your future issues will not be auto-closed
-- `lgtm`: your future issues and PRs will not be auto-closed
-
-`lgtmi` does not grant rights to submit PRs. Only `lgtm` grants rights to submit PRs.
-
-## Quality Bar For Issues
-
-If you open an issue, you must use one of the two GitHub issue templates.
-
-If you open an issue, keep it short, concrete, and worth reading.
-
-- Keep it concise. If it does not fit on one screen, it is too long.
-- Write in your own voice.
-- State the bug or request clearly.
-- Explain why it matters.
-- If you want to implement the change yourself, say so.
-
-If the issue is real and written well, a maintainer may reopen it, reply `lgtmi`, or reply `lgtm`.
-
-## Blocking
-
-If you ignore this document twice, or if you spam the tracker with agent-generated issues, your GitHub account will be permanently blocked.
-
-If you send a large volume of issues through automation, your GitHub account will be permanently blocked. No taksies backsies.
-
-## Before Submitting a PR
-
-Do not open a PR unless you have already been approved with `lgtm`.
-
-Before submitting a PR:
+推荐本地验证：
 
 ```bash
+npm install
 npm run check
-./test.sh
+npm run smoke:repi
+npm run gate:repi-harness
 ```
 
-Both must pass.
+如果改了安装、入口、发布、文档或安全边界，还需要运行：
 
-Do not edit `CHANGELOG.md`. Changelog entries are added by maintainers.
+```bash
+npm run gate:open-source-readiness
+npm run build
+```
 
-If you are adding a new provider to `packages/ai`, see `AGENTS.md` for required tests.
+## 代码规范
 
-## Philosophy
+- TypeScript / JavaScript 代码必须通过 `npm run check`。
+- 新增 runtime 行为要有可执行验证：script、gate、fixture、schema 或 smoke test。
+- 任何能力声明都要绑定证据；不要只改 README 或 prompt。
+- 面向用户的命令必须在 `README.md`、`--help`、doctor/smoke/harness 中保持一致。
+- 对 provider、memory、bugreport、session、auth 的改动必须默认脱敏并保持本地私有。
 
-pi's core is minimal. If your feature does not belong in the core, it should be an extension. PRs that bloat the core will likely be rejected.
+## 文档规范
 
-## Questions?
+文档应该回答三个问题：
 
-Ask on [Discord](https://discord.com/invite/nKXTsAcmbT).
+1. 怎么安装和更新。
+2. 怎么配置模型并验证。
+3. 出问题时怎么自检、导出脱敏诊断、恢复到可用状态。
 
-## FAQ
+新增文档要尽量给可复制命令，少写抽象口号。
 
-### Why are new issues and PRs auto-closed?
+## AI 辅助贡献
 
-pi receives more issues than the maintainers can responsibly review in real time. Many reports do not meet the quality bar in this guide or do not follow CONTRIBUTING.md. Some are slung at the repository mindlessly via an agent instead of being reviewed and shaped by the person submitting them. Auto-closing creates a buffer so maintainers can review the tracker on their own schedule and reopen the issues that meet the quality bar.
+可以使用 AI/agent 辅助开发，但提交者必须理解并负责最终代码。请在 PR 中说明：
 
-### Why are weekend issues not reviewed?
+- 变更目标。
+- 关键实现点。
+- 本地验证结果。
+- 已知风险或未覆盖项。
 
-Maintainers need uninterrupted time away from the issue tracker. Issues submitted Friday through Sunday are auto-closed and are not part of the Monday review queue. If a problem is urgent, ask on Discord and include the short version, a repro, and the relevant logs.
+## 维护者合并标准
 
-### Why do some issues get no reply?
+PR 合并前至少满足：
 
-A reply is maintenance work too. Low-signal issues, unclear reports, duplicates, and issues that do not follow this guide may be closed without discussion. This keeps time available for reproducible bugs, thoughtful requests, and contributors who have done the work to make their report actionable.
-
-### Why not let AI triage everything?
-
-AI can help group duplicates, summarize reports, and spot missing information. It is not trusted to make final maintainer decisions. Polished AI-generated issues can still be wrong, misleading, or expensive to investigate. Human review remains the final gate.
-
-### Is this hostile to contributors?
-
-No. It is a guardrail against burnout and tracker spam. Short, concrete, reproducible issues are welcome. Thoughtful contributions are welcome. Automated slop, entitlement, and large volumes of low-effort reports are not.
+- 代码和文档没有明显过期名称、私有端点或密钥。
+- CI 通过。
+- 变更有明确证据链和回滚路径。
+- 不降低 REPI 的独立产品边界、profile 隔离、memory 污染防护和 release harness 约束。

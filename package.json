@@ -1,7 +1,31 @@
 {
 	"name": "repi-monorepo",
+	"version": "0.0.3",
 	"private": true,
+	"description": "REPI Agent monorepo: reverse-engineering and penetration-testing autonomous agent harness",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/multi-zhangyang/pi-recon-agent.git"
+	},
+	"bugs": {
+		"url": "https://github.com/multi-zhangyang/pi-recon-agent/issues"
+	},
+	"homepage": "https://github.com/multi-zhangyang/pi-recon-agent#readme",
+	"packageManager": "npm@11.12.1",
+	"engines": {
+		"node": ">=22.19.0"
+	},
 	"type": "module",
+	"keywords": [
+		"repi",
+		"reverse-engineering",
+		"penetration-testing",
+		"red-team",
+		"coding-agent",
+		"llm-agent",
+		"security-research"
+	],
 	"workspaces": [
 		"packages/*",
 		"packages/coding-agent/examples/extensions/with-deps",
@@ -133,7 +157,8 @@
 		"memory:list": "node scripts/reverse-agent/memory-inspect.mjs . list",
 		"memory:doctor": "node scripts/reverse-agent/memory-inspect.mjs . doctor",
 		"model:list": "node scripts/reverse-agent/model-inspect.mjs . list",
-		"model:export": "node scripts/reverse-agent/model-inspect.mjs . export"
+		"model:export": "node scripts/reverse-agent/model-inspect.mjs . export",
+		"gate:open-source-readiness": "node scripts/reverse-agent/open-source-readiness-gate.mjs . --strict"
 	},
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "0.0.26",
@@ -147,10 +172,6 @@
 		"tsx": "4.22.1",
 		"typescript": "5.9.3"
 	},
-	"engines": {
-		"node": ">=22.19.0"
-	},
-	"version": "0.0.3",
 	"overrides": {
 		"rimraf": "6.1.2",
 		"gaxios": {

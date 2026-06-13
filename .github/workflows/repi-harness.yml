@@ -53,6 +53,9 @@ jobs:
       - name: REPI runtime adapter execution gate
         run: npm run gate:runtime-adapter-execution
 
+      - name: REPI open source readiness gate
+        run: npm run gate:open-source-readiness
+
       - name: Top-level REPI independence harness
         run: npm run gate:repi-harness
 

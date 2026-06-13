@@ -26,6 +26,7 @@ REPI 的设计目标是把复杂安全研究任务推进为可执行、可验证
 - [Harness 与测试](#harness-与测试)
 - [目录结构](#目录结构)
 - [故障排查](#故障排查)
+- [开源治理](#开源治理)
 - [Capability Gate Index](#capability-gate-index)
 - [License](#license)
 
@@ -944,6 +945,28 @@ npm run gate:repi-harness
 再针对失败项跑单独 gate。REPI 的 gate 失败通常表示 schema、fixture、runtime marker、docs 或 child harness 没有闭合。
 
 ---
+
+## 开源治理
+
+REPI 按正式开源项目维护：
+
+- 贡献指南：[CONTRIBUTING.md](CONTRIBUTING.md)
+- 安全政策：[SECURITY.md](SECURITY.md)
+- 行为准则：[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- 支持与反馈：[SUPPORT.md](SUPPORT.md)
+- PR 模板：`.github/PULL_REQUEST_TEMPLATE.md`
+- Issue 模板：`.github/ISSUE_TEMPLATE/`
+
+发布前建议执行：
+
+```bash
+npm run gate:open-source-readiness
+npm run check
+npm run smoke:repi
+npm run gate:repi-harness
+```
+
+`gate:open-source-readiness` 会检查项目元数据、公开文档、GitHub 模板、workflow、敏感信息模式和过期上游文案，避免开源前把私有配置或旧项目文本带出去。
 
 ## Capability Gate Index
 
