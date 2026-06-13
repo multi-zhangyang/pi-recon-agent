@@ -30,6 +30,7 @@ import { theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { sleep } from "../utils/sleep.ts";
+import { type AgentThreadManager, createAgentThreadManager } from "./agent-thread-manager.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import {
@@ -316,6 +317,7 @@ export class AgentSession {
 	// Base system prompt (without extension appends) - used to apply fresh appends each turn
 	private _baseSystemPrompt = "";
 	private _baseSystemPromptOptions!: BuildSystemPromptOptions;
+	private _agentThreadManager?: AgentThreadManager;
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -348,6 +350,12 @@ export class AgentSession {
 	/** Model registry for API key resolution and model discovery */
 	get modelRegistry(): ModelRegistry {
 		return this._modelRegistry;
+	}
+
+	/** First-class REPI child agent thread manager. */
+	get agentThreadManager(): AgentThreadManager {
+		this._agentThreadManager ??= createAgentThreadManager({ cwd: this._cwd });
+		return this._agentThreadManager;
 	}
 
 	private async _getRequiredRequestAuth(model: Model<any>): Promise<{

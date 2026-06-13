@@ -25,6 +25,15 @@ export {
 	createAgentSessionFromServices,
 	createAgentSessionServices,
 } from "./agent-session-services.ts";
+export {
+	AgentThreadManager,
+	type AgentThreadRunManifest,
+	type AgentThreadSpec,
+	type AgentThreadStatus,
+	BUILTIN_AGENT_THREAD_SPECS,
+	createAgentThreadManager,
+	type SpawnAgentThreadOptions,
+} from "./agent-thread-manager.ts";
 export { type BashExecutorOptions, type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 export type { CompactionResult } from "./compaction/index.ts";
 export { createEventBus, type EventBus, type EventBusController } from "./event-bus.ts";

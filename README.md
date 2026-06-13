@@ -646,6 +646,26 @@ repi swarm llm-run local-selfcheck --workers 3 \
   --expect "REPI_SWARM_WORKER_{id}_OK"
 ```
 
+交互式会话内也有一等 child agent thread 控制面，适合把噪声探索放进独立上下文，只把摘要和证据引用合并回主线程：
+
+```text
+/agents                         # 查看 explorer/planner/operator/verifier/reverser
+/spawn explorer ./target         # 启动只读 mapping worker
+/spawn reverser 分析 ./license   # 启动逆向专项 worker
+/agent latest                    # 查看最新 worker 状态、stdout/stderr/artifact 路径
+/merge latest                    # 生成合并摘要，不把 raw logs 灌进主上下文
+/agent stop latest               # 停止仍在运行的 worker
+```
+
+child agent thread 的运行记录写到：
+
+```text
+~/.repi/agent/recon/agent-threads/<run-id>/manifest.json
+~/.repi/agent/recon/agent-threads/<run-id>/stdout.txt
+~/.repi/agent/recon/agent-threads/<run-id>/stderr.txt
+~/.repi/agent/recon/agent-threads/<run-id>/merge.md
+```
+
 ---
 
 ## 专业能力

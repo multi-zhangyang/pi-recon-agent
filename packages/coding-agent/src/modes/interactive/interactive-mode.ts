@@ -2556,6 +2556,26 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
+			if (text === "/agents") {
+				this.handleAgentsCommand();
+				this.editor.setText("");
+				return;
+			}
+			if (text === "/agent" || text.startsWith("/agent ")) {
+				this.handleAgentCommand(text);
+				this.editor.setText("");
+				return;
+			}
+			if (text === "/spawn" || text.startsWith("/spawn ")) {
+				this.editor.setText("");
+				await this.handleSpawnCommand(text);
+				return;
+			}
+			if (text === "/merge" || text.startsWith("/merge ")) {
+				this.handleMergeCommand(text);
+				this.editor.setText("");
+				return;
+			}
 			if (text === "/changelog") {
 				this.handleChangelogCommand();
 				this.editor.setText("");
@@ -5341,6 +5361,65 @@ export class InteractiveMode {
 
 	private handleContextCommand(): void {
 		const info = formatContextBreakdown(this.session.getContextBreakdown());
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new Text(info, 1, 0));
+		this.ui.requestRender();
+	}
+
+	private handleAgentsCommand(): void {
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new Text(this.session.agentThreadManager.formatSpecs(), 1, 0));
+		this.ui.requestRender();
+	}
+
+	private handleAgentCommand(text: string): void {
+		const args = text.replace(/^\/agent\s*/, "").trim();
+		const manager = this.session.agentThreadManager;
+		let info: string;
+		if (!args) {
+			info = manager.formatRuns();
+		} else if (args.startsWith("stop ")) {
+			const id = args.slice(5).trim() || "latest";
+			const stopped = manager.stopRun(id);
+			info = stopped ? manager.formatRun(stopped) : `Agent thread not found: ${id}`;
+		} else {
+			const run = manager.getRun(args || "latest");
+			info = run ? manager.formatRun(run) : `Agent thread not found: ${args}`;
+		}
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new Text(info, 1, 0));
+		this.ui.requestRender();
+	}
+
+	private async handleSpawnCommand(text: string): Promise<void> {
+		const raw = text.replace(/^\/spawn\s*/, "").trim();
+		if (!raw) {
+			this.showWarning("Usage: /spawn <explorer|planner|operator|verifier|reverser> <task>");
+			return;
+		}
+		const manager = this.session.agentThreadManager;
+		const specs = new Set(manager.listSpecs().map((spec) => spec.name));
+		const [first, ...rest] = raw.split(/\s+/);
+		const specName = specs.has(first) ? first : "explorer";
+		const task = specs.has(first) ? rest.join(" ").trim() : raw;
+		if (!task) {
+			this.showWarning("Usage: /spawn <spec> <task>");
+			return;
+		}
+		try {
+			const manifest = await manager.spawnThread({ specName, task });
+			this.chatContainer.addChild(new Spacer(1));
+			this.chatContainer.addChild(new Text(manager.formatSpawned(manifest), 1, 0));
+			this.ui.requestRender();
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
+
+	private handleMergeCommand(text: string): void {
+		const id = text.replace(/^\/merge\s*/, "").trim() || "latest";
+		const merged = this.session.agentThreadManager.mergeRun(id);
+		const info = merged ? merged.text : `Agent thread not found: ${id}`;
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(info, 1, 0));
 		this.ui.requestRender();

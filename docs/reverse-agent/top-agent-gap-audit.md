@@ -89,6 +89,13 @@ REPI 已经有逆向/渗透 profile、模型配置、隔离 profile、trust、co
 - 默认 workers：`explorer`（只读快速）、`planner`（只读计划）、`operator`（执行）、`verifier`（复核/复现）、`reverser`（逆向专用）。
 - 加并发预算和深度限制，避免无限 fan-out。
 
+**当前进展（2026-06-13）**
+
+- 已新增 `packages/coding-agent/src/core/agent-thread-manager.ts`，内置 `explorer/planner/operator/verifier/reverser` 五类 worker spec。
+- 已接入交互式 `/agents`、`/spawn`、`/agent`、`/merge`。worker 使用独立 `REPI_CODING_AGENT_DIR`，默认 `--no-session`，stdout/stderr/manifest/merge 均落盘到 `~/.repi/agent/recon/agent-threads/<run-id>/`。
+- 合并阶段只输出 distilled merge artifact 和证据引用，避免 raw logs 回灌主上下文；输出路径和密钥类内容会脱敏。
+- 仍需后续补齐 steer/switch、并发组调度、深度限制、per-worker model override UI、以及与 MCP/tool approval 的统一 runtime。
+
 ### P0-4：MCP / 外部工具连接层缺失，需要一等实现
 
 **现状证据**
