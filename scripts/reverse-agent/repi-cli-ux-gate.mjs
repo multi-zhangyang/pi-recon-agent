@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -89,6 +90,32 @@ function mode(path) {
 	}
 }
 
+function sha256(value) {
+	return createHash("sha256").update(value).digest("hex");
+}
+
+function sealMemoryEvent(row, index, prevHash) {
+	const event = {
+		kind: "repi-memory-event",
+		schemaVersion: 1,
+		source: "gate",
+		task: row.task ?? `gate memory ${row.id}`,
+		domainTags: ["gate"],
+		caseSignature: row.caseSignature ?? row.id,
+		failurePatterns: [],
+		reuseRules: [],
+		artifactHashes: [],
+		quality: { confidence: 0.7, replayVerified: false, reuseCount: 0, failureCount: 0, lastUsefulAt: row.ts, decay: 0 },
+		...row,
+		seq: index + 1,
+		prevHash,
+		entryHash: "",
+	};
+	const { entryHash: _entryHash, ...withoutHash } = event;
+	event.entryHash = sha256(JSON.stringify(withoutHash));
+	return event;
+}
+
 mkdir(agentDir);
 mkdir(join(agentDir, "recon", "memory"));
 writeFileSync(
@@ -125,23 +152,28 @@ writeFileSync(
 );
 
 const memoryEventsPath = join(agentDir, "recon", "memory", "events.jsonl");
+const fixtureMemorySeed = [
+	{
+		id: "mem-alpha",
+		ts: "2026-01-01T00:00:00.000Z",
+		outcome: "success",
+		route: "test",
+		target: "alpha",
+		commands: ["alpha"],
+		lessons: ["alpha lesson baseUrl=https://api.private-alpha.example.invalid/v1"],
+	},
+	{ id: "mem-beta", ts: "2026-01-02T00:00:00.000Z", outcome: "success", route: "test", target: "beta", commands: ["beta"], lessons: ["beta lesson"] },
+];
+const fixtureMemoryEvents = [];
+let fixturePrevHash = "0".repeat(64);
+for (const [index, row] of fixtureMemorySeed.entries()) {
+	const event = sealMemoryEvent(row, index, fixturePrevHash);
+	fixtureMemoryEvents.push(event);
+	fixturePrevHash = event.entryHash;
+}
 writeFileSync(
 	memoryEventsPath,
-	[
-			{
-				kind: "repi-memory-event",
-				id: "mem-alpha",
-				ts: "2026-01-01T00:00:00.000Z",
-				outcome: "success",
-				route: "test",
-				target: "alpha",
-				commands: ["alpha"],
-				lessons: ["alpha lesson baseUrl=https://api.private-alpha.example.invalid/v1"],
-			},
-		{ kind: "repi-memory-event", id: "mem-beta", ts: "2026-01-02T00:00:00.000Z", outcome: "success", route: "test", target: "beta", commands: ["beta"], lessons: ["beta lesson"] },
-	]
-		.map((row) => JSON.stringify(row))
-		.join("\n") + "\n",
+	fixtureMemoryEvents.map((row) => JSON.stringify(row)).join("\n") + "\n",
 	{ encoding: "utf8", mode: 0o600 },
 );
 
@@ -475,7 +507,7 @@ checks.push(
 	}),
 );
 
-const memoryListRedacted = run(["scripts/reverse-agent/memory-inspect.mjs", root, "list", "--all"]);
+const memoryListRedacted = run(["scripts/reverse-agent/memory-inspect.mjs", root, "list", "--all", "--verbose"]);
 checks.push(
 	check("memory:list-redacts-provider-base-url", memoryListRedacted.exit === 0 && !/api\.private-alpha\.example\.invalid/.test(memoryListRedacted.stdout) && /<redacted:url:[a-f0-9]{16}>/.test(memoryListRedacted.stdout), {
 		exit: memoryListRedacted.exit,

@@ -188,7 +188,7 @@ MSG
         cat <<'MSG'
 Usage:
   repi memory status [--json]
-  repi memory list [--json] [--limit N] [--all] [--query <text>]
+  repi memory list [--json] [--limit N] [--all] [--query <text>] [--verbose]
   repi memory show <query-or-event-id> [--json]
   repi memory diff [--json] [--limit N] [--all]
   repi memory why <query-or-event-id> [--json]
@@ -198,7 +198,7 @@ Usage:
   repi memory export [--output <path>] [--full] [--json]
   repi memory purge [--dry-run|--apply --yes] [--governed|--older-than-days N|--query <text>|--id <event-id>|--all]
   repi memory sanitize [--dry-run|--apply --yes] [--include-evidence] [--include-sessions] [--backup]
-  repi memory repair [--dry-run|--apply --yes]
+  repi memory repair [--dry-run|--apply --yes]    # repair invalid JSONL and event hash-chain drift
   repi memory consolidate [--dry-run] [--json]
 MSG
         exit 0

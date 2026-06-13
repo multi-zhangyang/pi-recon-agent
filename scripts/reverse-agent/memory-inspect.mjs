@@ -14,10 +14,12 @@ const helpRequested = rawArgs.includes("--help") || rawArgs.includes("-h");
 const command = helpRequested ? "help" : rawArgs[0] && !rawArgs[0].startsWith("--") ? rawArgs.shift() : "status";
 const json = rawArgs.includes("--json");
 const all = rawArgs.includes("--all");
+const verbose = rawArgs.includes("--verbose") || rawArgs.includes("-v");
 const limit = parseLimit(rawArgs, 12);
 const agentDir = process.env.REPI_CODING_AGENT_DIR || process.env.REPI_AGENT_DIR || join(homedir(), ".repi", "agent");
 const memoryDir = join(agentDir, "recon", "memory");
 const eventsPath = join(memoryDir, "events.jsonl");
+const caseMemoryPath = join(memoryDir, "case-memory.jsonl");
 const reportPath = join(memoryDir, "consolidation-report.json");
 const governancePath = join(memoryDir, "governance-ledger.jsonl");
 
@@ -29,13 +31,14 @@ const memoryFiles = [
 	"case-index.md",
 	"evolution-log.md",
 	"events.jsonl",
+	"case-memory.jsonl",
 	"consolidation-report.json",
 ];
 
 function usage() {
 	return `Usage:
   repi memory status [--json]
-  repi memory list [--json] [--limit N] [--all] [--query <text>]
+  repi memory list [--json] [--limit N] [--all] [--query <text>] [--verbose]
   repi memory show <query-or-event-id> [--json]
   repi memory diff [--json] [--limit N] [--all]
   repi memory why <query-or-event-id> [--json] [--limit N]
@@ -48,7 +51,7 @@ function usage() {
   repi memory repair [--dry-run|--apply --yes] [--json]
 
 status  Show scoped memory posture, file sizes, pending consolidation count.
-list    List sanitized memory events. By default hides forget/quarantine rows.
+list    List sanitized memory events. By default hides forget/quarantine rows and long lessons; add --verbose for details.
 show    Show one sanitized memory event and its governance state.
 diff    Show high-value memory events not yet consolidated.
 why     Explain which memory rows match a query and why they would be visible.
@@ -58,7 +61,7 @@ doctor  Check memory pollution posture and store health.
 export  Write a sanitized memory diagnostic bundle. API keys/tokens are redacted.
 purge   Physically remove selected event rows after creating a .bak backup; default is dry-run. --apply requires --yes.
 sanitize Redact leaked API keys/tokens/private API URLs from local memory files; default is dry-run. --apply requires --yes. Raw backups are off by default; add --backup only if you accept keeping pre-redaction copies locally.
-repair  Quarantine invalid events.jsonl rows into a redacted repair file; default is dry-run. --apply requires --yes.
+repair  Quarantine invalid events/case-memory JSONL rows and rechain events.jsonl when seq/hash drift is detected; default is dry-run. --apply requires --yes.
 `;
 }
 
@@ -136,6 +139,40 @@ function readJsonl(path) {
 
 function sha256(value) {
 	return createHash("sha256").update(value).digest("hex");
+}
+
+function memoryEventHash(event) {
+	const copy = { ...(event ?? {}) };
+	delete copy.entryHash;
+	return sha256(JSON.stringify(copy));
+}
+
+function analyzeEventChain(events) {
+	const errors = [];
+	let prevHash = "0".repeat(64);
+	for (const [index, event] of events.entries()) {
+		const expectedSeq = index + 1;
+		if (event.seq !== expectedSeq) errors.push(`events:${event.id ?? `line-${expectedSeq}`}:seq_expected_${expectedSeq}_got_${event.seq}`);
+		if (event.prevHash !== prevHash) errors.push(`events:${event.id ?? `line-${expectedSeq}`}:prev_hash_mismatch`);
+		const expectedHash = memoryEventHash(event);
+		if (event.entryHash !== expectedHash) errors.push(`events:${event.id ?? `line-${expectedSeq}`}:entry_hash_mismatch`);
+		prevHash = event.entryHash || expectedHash;
+	}
+	return {
+		ok: errors.length === 0,
+		errors,
+		latestEventHash: events.at(-1)?.entryHash ?? "0".repeat(64),
+	};
+}
+
+function rechainMemoryEvents(events) {
+	let prevHash = "0".repeat(64);
+	return events.map((event, index) => {
+		const row = { ...event, seq: index + 1, prevHash, entryHash: "" };
+		row.entryHash = memoryEventHash(row);
+		prevHash = row.entryHash;
+		return row;
+	});
 }
 
 function redactSensitiveRaw(value) {
@@ -454,7 +491,9 @@ function buildReport() {
 	const settings = readJson(join(agentDir, "settings.json")) ?? {};
 	const memory = settings.memory ?? {};
 	const jsonl = readJsonl(eventsPath);
+	const caseJsonl = readJsonl(caseMemoryPath);
 	const events = jsonl.rows.filter((event) => event && event.kind === "repi-memory-event");
+	const eventChain = analyzeEventChain(events);
 	const scored = events
 		.filter((event) => !governedSourceIds().has(event.id))
 		.map((event) => ({ event, score: scoreEvent(event) }))
@@ -497,10 +536,18 @@ function buildReport() {
 			path: eventsPath,
 			missing: jsonl.missing,
 			invalidLines: jsonl.invalid,
+			chainOk: eventChain.ok,
+			chainErrors: eventChain.errors.slice(0, 24),
 			total: events.length,
 			highValue: highValue.length,
 			pendingHighValue: pending.length,
 			lastEvent: lastEvent ? eventSummary(lastEvent, scoreEvent(lastEvent)) : null,
+		},
+		caseStore: {
+			path: caseMemoryPath,
+			missing: caseJsonl.missing,
+			invalidLines: caseJsonl.invalid,
+			total: caseJsonl.rows.filter((row) => row && row.kind === "repi-case-memory").length,
 		},
 		consolidation: {
 			path: reportPath,
@@ -542,6 +589,8 @@ function buildDoctorReport() {
 	}
 	if (!status.pollutionGuardOk) diagnostics.push({ level: "fail", id: "pollution-guard", message: "scoped memory defaults are not pollution-safe" });
 	if (status.eventStore.invalidLines > 0) diagnostics.push({ level: "fail", id: "invalid-jsonl", message: `${status.eventStore.invalidLines} invalid events.jsonl lines` });
+	if (status.eventStore.chainOk === false) diagnostics.push({ level: "fail", id: "event-hash-chain", message: `${status.eventStore.chainErrors.length} events.jsonl seq/hash-chain errors; run repi memory repair --apply --yes` });
+	if ((status.caseStore?.invalidLines ?? 0) > 0) diagnostics.push({ level: "fail", id: "invalid-case-jsonl", message: `${status.caseStore.invalidLines} invalid case-memory.jsonl lines` });
 	if (status.posture.rawAutoInject === true || status.posture.autoInject === true) diagnostics.push({ level: "fail", id: "raw-auto-inject", message: "raw/full memory injection is enabled" });
 	if (status.posture.contextMemoryMode === "global" || status.posture.includeGlobalMemoryInContextPack === true) diagnostics.push({ level: "fail", id: "global-context-memory", message: "global memory context injection is enabled" });
 	if (secretScanRows.length) diagnostics.push({ level: "fail", id: "memory-secret-scan", message: `${secretScanRows.length} memory files still contain redaction matches; run repi memory sanitize --dry-run` });
@@ -833,42 +882,68 @@ function buildRepairReport() {
 	const apply = rawArgs.includes("--apply") && !rawArgs.includes("--dry-run");
 	const confirmed = rawArgs.includes("--yes") || rawArgs.includes("-y") || process.env.REPI_MEMORY_REPAIR_CONFIRM === "1";
 	const ts = new Date().toISOString().replace(/[:.]/g, "-");
-	const quarantinePath = join(memoryDir, `events.invalid-${ts}.jsonl`);
-	let text = "";
-	try {
-		text = readFileSync(eventsPath, "utf8");
-	} catch {
-		return {
-			kind: "repi-memory-repair-report",
-			schemaVersion: 1,
-			generatedAt: new Date().toISOString(),
-			ok: true,
-			apply,
-			confirmed,
-			eventsPath,
-			validLines: 0,
-			invalidLines: 0,
-			quarantinePath: null,
-			message: "events.jsonl does not exist; nothing to repair",
-		};
-	}
-	const validLines = [];
-	const invalidRows = [];
-	for (const [index, line] of text.split(/\r?\n/).entries()) {
-		if (!line.trim()) continue;
+	const stores = [
+		{ label: "events", path: eventsPath, quarantinePath: join(memoryDir, `events.invalid-${ts}.jsonl`) },
+		{ label: "case-memory", path: caseMemoryPath, quarantinePath: join(memoryDir, `case-memory.invalid-${ts}.jsonl`) },
+	];
+	const files = stores.map((store) => {
+		let text = "";
 		try {
-			JSON.parse(line);
-			validLines.push(line);
-		} catch (error) {
-			invalidRows.push({
-				line: index + 1,
-				error: error instanceof Error ? error.message : String(error),
-				sha256: sha256(line),
-				redactedPreview: redactSensitiveRaw(line).slice(0, 1200),
-			});
+			text = readFileSync(store.path, "utf8");
+		} catch {
+			return {
+				...store,
+				missing: true,
+				validLines: [],
+				invalidRows: [],
+			};
 		}
-	}
-	if (apply && invalidRows.length > 0 && !confirmed) {
+		const validLines = [];
+		const invalidRows = [];
+		for (const [index, line] of text.split(/\r?\n/).entries()) {
+			if (!line.trim()) continue;
+			try {
+				JSON.parse(line);
+				validLines.push(line);
+			} catch (error) {
+				invalidRows.push({
+					file: store.label,
+					path: store.path,
+					line: index + 1,
+					error: error instanceof Error ? error.message : String(error),
+					sha256: sha256(line),
+					redactedPreview: redactSensitiveRaw(line).slice(0, 1200),
+				});
+			}
+		}
+		return {
+			...store,
+			missing: false,
+			validLines,
+			invalidRows,
+		};
+	});
+	const validLines = files.reduce((sum, file) => sum + file.validLines.length, 0);
+	const invalidRows = files.flatMap((file) => file.invalidRows);
+	const firstQuarantinePath = files.find((file) => file.invalidRows.length > 0)?.quarantinePath ?? null;
+	const eventFile = files.find((file) => file.label === "events");
+	const eventRows = (eventFile?.validLines ?? [])
+		.map((line) => {
+			try {
+				return JSON.parse(line);
+			} catch {
+				return undefined;
+			}
+		})
+		.filter((row) => row && row.kind === "repi-memory-event");
+	const eventChain = analyzeEventChain(eventRows);
+	const eventChainRepair = {
+		needed: eventRows.length > 0 && !eventChain.ok,
+		errors: eventChain.errors.slice(0, limit),
+		rehashedRows: 0,
+		backupPath: null,
+	};
+	if (apply && (invalidRows.length > 0 || eventChainRepair.needed) && !confirmed) {
 		return {
 			kind: "repi-memory-repair-report",
 			schemaVersion: 1,
@@ -877,22 +952,47 @@ function buildRepairReport() {
 			apply,
 			confirmed,
 			eventsPath,
-			validLines: validLines.length,
+			caseMemoryPath,
+			validLines,
 			invalidLines: invalidRows.length,
-			quarantinePath,
-			error: "memory repair --apply requires --yes (or REPI_MEMORY_REPAIR_CONFIRM=1). Run without --apply first to preview invalid lines.",
+			quarantinePath: null,
+			files: files.map((file) => ({
+				label: file.label,
+				path: file.path,
+				missing: file.missing,
+				validLines: file.validLines.length,
+				invalidLines: file.invalidRows.length,
+				quarantinePath: file.invalidRows.length ? file.quarantinePath : null,
+			})),
+			eventChainRepair,
+			error: "memory repair --apply requires --yes (or REPI_MEMORY_REPAIR_CONFIRM=1). Run without --apply first to preview invalid lines/hash-chain drift.",
 			invalidRows: invalidRows.slice(0, limit),
 		};
 	}
-	if (apply && invalidRows.length > 0) {
+	if (apply && (invalidRows.length > 0 || eventChainRepair.needed)) {
 		mkdirSync(memoryDir, { recursive: true, mode: 0o700 });
-		writeFileSync(eventsPath, `${validLines.join("\n")}${validLines.length ? "\n" : ""}`, { encoding: "utf8", mode: 0o600 });
-		writeFileSync(quarantinePath, `${invalidRows.map((row) => JSON.stringify(row)).join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
-		try {
-			chmodSync(eventsPath, 0o600);
-			chmodSync(quarantinePath, 0o600);
-		} catch {
-			// Best-effort on non-POSIX filesystems.
+		for (const file of files) {
+			if (file.missing) continue;
+			const shouldWrite = file.invalidRows.length > 0 || (file.label === "events" && eventChainRepair.needed);
+			if (!shouldWrite) continue;
+			let nextLines = file.validLines;
+			if (file.label === "events" && eventChainRepair.needed) {
+				const backupPath = join(memoryDir, `events.repair-backup-${ts}.jsonl`);
+				copyFileSync(file.path, backupPath);
+				eventChainRepair.backupPath = backupPath;
+				const rechained = rechainMemoryEvents(eventRows);
+				eventChainRepair.rehashedRows = rechained.length;
+				nextLines = rechained.map((row) => JSON.stringify(row));
+			}
+			writeFileSync(file.path, `${nextLines.join("\n")}${nextLines.length ? "\n" : ""}`, { encoding: "utf8", mode: 0o600 });
+			if (file.invalidRows.length) writeFileSync(file.quarantinePath, `${file.invalidRows.map((row) => JSON.stringify(row)).join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
+			try {
+				chmodSync(file.path, 0o600);
+				if (file.invalidRows.length) chmodSync(file.quarantinePath, 0o600);
+				if (eventChainRepair.backupPath) chmodSync(eventChainRepair.backupPath, 0o600);
+			} catch {
+				// Best-effort on non-POSIX filesystems.
+			}
 		}
 	}
 	return {
@@ -903,11 +1003,21 @@ function buildRepairReport() {
 		apply,
 		confirmed,
 		eventsPath,
-		validLines: validLines.length,
+		caseMemoryPath,
+		validLines,
 		invalidLines: invalidRows.length,
-		quarantinePath: invalidRows.length ? quarantinePath : null,
+			quarantinePath: firstQuarantinePath,
+		files: files.map((file) => ({
+			label: file.label,
+			path: file.path,
+			missing: file.missing,
+			validLines: file.validLines.length,
+			invalidLines: file.invalidRows.length,
+			quarantinePath: file.invalidRows.length ? file.quarantinePath : null,
+		})),
+		eventChainRepair,
 		invalidRows: invalidRows.slice(0, limit),
-		next: apply ? ["repi memory doctor"] : ["repi memory repair --apply --yes"],
+		next: apply ? ["repi memory doctor", "repi memory status"] : ["repi memory repair --apply --yes"],
 	};
 }
 
@@ -921,8 +1031,9 @@ function printStatus(report) {
 		`pollutionGuard=${report.pollutionGuardOk ? "pass" : "fail"} rawAutoInject=${report.posture.rawAutoInject} autoInject=${report.posture.autoInject} globalContext=${report.posture.includeGlobalMemoryInContextPack}`,
 	);
 	console.log(
-		`events: total=${report.eventStore.total} highValue=${report.eventStore.highValue} pending=${report.eventStore.pendingHighValue} invalid=${report.eventStore.invalidLines}`,
+		`events: total=${report.eventStore.total} highValue=${report.eventStore.highValue} pending=${report.eventStore.pendingHighValue} invalid=${report.eventStore.invalidLines} chain=${report.eventStore.chainOk ? "pass" : "fail"}`,
 	);
+	if (report.caseStore) console.log(`case-memory: total=${report.caseStore.total} invalid=${report.caseStore.invalidLines}`);
 	console.log(
 		`consolidation: ${report.consolidation.present ? report.consolidation.generatedAt : "never"} selected=${report.consolidation.selectedCount ?? 0}`,
 	);
@@ -949,8 +1060,13 @@ function printList(report) {
 	for (const item of report.rows) {
 		console.log(`- id=${item.id} score=${item.score} ts=${item.ts ?? "unknown"} governance=${item.governance}`);
 		console.log(`  route=${item.route} target=${item.target} outcome=${item.outcome}`);
-		for (const lesson of item.lessons) console.log(`  lesson: ${lesson}`);
+		if (verbose) {
+			for (const command of item.commands) console.log(`  cmd: ${command}`);
+			for (const rule of item.reuseRules) console.log(`  rule: ${rule}`);
+			for (const lesson of item.lessons) console.log(`  lesson: ${lesson}`);
+		}
 	}
+	if (!verbose) console.log("hint: add --verbose to print commands, reuse rules, and lessons.");
 }
 
 function printShow(report) {
@@ -1053,8 +1169,15 @@ function printRepair(report) {
 	}
 	console.log("REPI Memory Repair");
 	console.log(`apply=${report.apply} valid=${report.validLines} invalid=${report.invalidLines}`);
-	if (report.quarantinePath) console.log(`quarantine=${report.quarantinePath}`);
-	for (const item of report.invalidRows ?? []) console.log(`- line=${item.line} sha256=${item.sha256.slice(0, 16)} error=${item.error}`);
+	for (const file of report.files ?? []) {
+		console.log(`- ${file.label}: valid=${file.validLines} invalid=${file.invalidLines} path=${file.path}`);
+		if (file.quarantinePath) console.log(`  quarantine=${file.quarantinePath}`);
+	}
+	if (report.eventChainRepair?.needed) {
+		console.log(`event-chain-repair: rehashed=${report.eventChainRepair.rehashedRows} backup=${report.eventChainRepair.backupPath ?? "<pending>"}`);
+		for (const error of report.eventChainRepair.errors ?? []) console.log(`  chain: ${error}`);
+	}
+	for (const item of report.invalidRows ?? []) console.log(`- ${item.file ?? "jsonl"}:${item.line} sha256=${item.sha256.slice(0, 16)} error=${item.error}`);
 	for (const next of report.next ?? []) console.log(`next: ${next}`);
 	console.log(`verdict: ${report.ok ? "pass" : "fail"}`);
 }

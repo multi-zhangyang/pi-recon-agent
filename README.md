@@ -806,19 +806,20 @@ case-memory.jsonl    案例索引/摘要，召回时只转成 bounded cards
 
 ```bash
 repi memory status                  # 查看当前记忆姿态、污染保护、事件数量、文件状态
-repi memory list --limit 20         # 列出脱敏 memory events，默认隐藏 forget/quarantine 行
+repi memory list --limit 20         # 列出脱敏 memory events，默认隐藏 forget/quarantine 行和长 lesson
+repi memory list --verbose --limit 20 # 排障时显示命令、复用规则、lesson（仍会脱敏）
 repi memory show <event-id>         # 查看单条脱敏 memory event
 repi memory why <query-or-event-id> # 解释某条记忆为什么会被召回/可见
 repi memory forget <event-id>       # 追加 tombstone，不重写历史
 repi memory quarantine <event-id>   # 追加 quarantine，阻断后续召回/注入
-repi memory doctor                  # 检查污染保护、raw/global 注入开关、JSONL 健康
+repi memory doctor                  # 检查污染保护、raw/global 注入开关、JSONL/事件 hash-chain 健康
 repi memory export --output /tmp/repi-memory.json  # 导出脱敏诊断包，不导出 auth/raw secret
 repi memory purge --dry-run --governed             # 预览物理清理
 repi memory purge --apply --yes --governed         # 确认后才会真正写入
 repi memory sanitize --dry-run                  # 预览本机 memory secret/url 脱敏
 repi memory sanitize --apply --yes              # 确认后重写本机 memory；默认不保留原始敏感备份
-repi memory repair --dry-run                    # 预览损坏 JSONL 行隔离
-repi memory repair --apply --yes                # 隔离损坏 memory 行并保留脱敏 quarantine
+repi memory repair --dry-run                    # 预览损坏 JSONL 行隔离和 events hash-chain 重建
+repi memory repair --apply --yes                # 隔离损坏 memory 行、重建 seq/hash 链并保留备份/quarantine
 repi memory diff                    # 查看尚未 consolidation 的高价值事件
 repi memory consolidate --dry-run   # 只看蒸馏计划
 repi memory consolidate             # 写入 project/procedural memory
@@ -959,19 +960,20 @@ repi trust yes                      # 保存当前目录及其 git/context root 
 repi trust no                       # 保存不信任决策
 repi trust clear                    # 清除当前目录及其 git/context root 的 trust 决策
 repi memory status                  # scoped memory 状态与污染保护
-repi memory list --limit 20          # 脱敏列出 memory events
+repi memory list --limit 20          # 脱敏列出 memory events，默认短输出
+repi memory list --verbose --limit 20 # 排障时显示命令/规则/lesson
 repi memory show <event-id>          # 脱敏查看单条 memory event
 repi memory why <query-or-event-id>  # 召回解释
 repi memory forget <event-id>        # 记忆 tombstone
 repi memory quarantine <event-id>    # 记忆隔离
-repi memory doctor                  # 记忆污染保护与存储健康检查
+repi memory doctor                  # 记忆污染保护、JSONL 与 hash-chain 健康检查
 repi memory export --output /tmp/repi-memory.json  # 脱敏导出
 repi memory purge --dry-run --governed             # 预览清理
 repi memory purge --apply --yes --governed         # 确认后才会真正写入
 repi memory sanitize --dry-run                  # 预览本机 memory secret/url 脱敏
 repi memory sanitize --apply --yes              # 确认后重写本机 memory；默认不保留原始敏感备份
-repi memory repair --dry-run                    # 预览损坏 JSONL 行隔离
-repi memory repair --apply --yes                # 隔离损坏 memory 行并保留脱敏 quarantine
+repi memory repair --dry-run                    # 预览损坏 JSONL 行隔离和 events hash-chain 重建
+repi memory repair --apply --yes                # 隔离损坏 memory 行、重建 seq/hash 链并保留备份/quarantine
 repi memory diff                    # 未蒸馏高价值事件差异
 repi memory consolidate --dry-run   # 查看 memory 蒸馏计划
 repi memory consolidate             # 把高价值 events 蒸馏到 project/procedural memory

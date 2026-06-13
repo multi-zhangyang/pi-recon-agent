@@ -33822,11 +33822,14 @@ function buildMemoryStoreVerificationUnlocked(options: { write?: boolean } = {})
 			errors.push(`case-memory:${row.caseSignature}:unknown_last_event_hash`);
 		}
 	}
-	const parseOk = eventScan.errors.length === 0 && caseScan.errors.length === 0;
+	const eventParseOk = eventScan.errors.length === 0;
+	const caseParseOk = caseScan.errors.length === 0;
+	const parseOk = eventParseOk && caseParseOk;
+	const eventChainOk = hashChainOk && seqOk && prevHashOk && eventParseOk;
 	const storeGrade =
-		hashChainOk && seqOk && prevHashOk && caseIndexOk && parseOk
+		eventChainOk && caseIndexOk && caseParseOk
 			? "pass"
-			: hashChainOk && seqOk && prevHashOk && parseOk
+			: eventChainOk
 				? "repairable"
 				: "blocked";
 	const report: MemoryStoreVerificationV1 = {
@@ -33888,12 +33891,13 @@ function repairMemoryStoreIndex(): MemoryStoreVerificationV1 {
 	ensureReconStorage();
 	return withMemoryStoreLock("repair-index", () => {
 		const before = buildMemoryStoreVerificationUnlocked({ write: false });
-		if (!before.hashChainOk || !before.seqOk || !before.prevHashOk || !before.parseOk) {
+		const eventScan = jsonlScan(memoryEventsPath(), isMemoryEvent, "MemoryEventV1");
+		if (!before.hashChainOk || !before.seqOk || !before.prevHashOk || eventScan.errors.length > 0) {
 			writeFileAtomic(memoryStoreReportPath(), `${JSON.stringify(before, null, 2)}\n`);
 			return before;
 		}
 		const startedAt = new Date().toISOString();
-		const events = jsonlScan(memoryEventsPath(), isMemoryEvent, "MemoryEventV1").rows;
+		const events = eventScan.rows;
 		const rows = rebuildCaseMemoryFromEvents(events);
 		const caseBefore = fileDigest(caseMemoryPath());
 		const nextBody = rows.length ? `${rows.map((row) => JSON.stringify(row)).join("\n")}\n` : "";
