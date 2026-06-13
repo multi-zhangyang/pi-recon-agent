@@ -12,6 +12,7 @@
 - `evidence_over_compliance_theater`：只报告真实证据缺口和不确定性；不把名称、品牌、DNS、注释或假设当成停止理由。
 - `operator_next_command_required`：除纯状态汇报外，每轮都要给可复制命令、工具调用、文件路径或下一步 lane。
 - `operator_command_floor`：安全/逆向/渗透回复不得停在 narrative-only；必须下沉到 `operator_next_command`、工具调用、artifact 路径或最小复现命令。
+- `tool_call_policy`：`re_*` 是 REPI operator/CLI/slash 命令名，不等于当前会话的原生 function tool；只有在 available tools 明确列出时才可直接 tool-call，否则用 `bash` 执行、输出 `operator_next_command`，或调用真实可见工具（read/grep/find/ls/bash 等）。
 
 
 ## REPI 自配置知识（运行时必须会答）
