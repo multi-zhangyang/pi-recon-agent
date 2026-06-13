@@ -1067,6 +1067,16 @@ REPI: independent product; built-in reverse/pentest kernel is enabled.
 
 如 PATH 指向旧入口，重新执行 `repi install`；如果 shell 找不到 `repi`，进入源码目录执行 `bash install.sh --user` 后打开一个新的 shell。
 
+### 启动提示旧 tools/hooks 目录
+
+旧版本可能在 `~/.repi/agent/tools/`、`~/.repi/agent/hooks/` 或旧的文件型 extension/skill 目录里留下资源。新版启动不会因此卡住；如需清理，执行：
+
+```bash
+repi doctor --fix
+```
+
+修复会把旧 hooks / 自定义 tools 归档到 `~/.repi/agent/extensions/legacy-*`，把旧文件型 profile 归档到 `~/.repi/agent/recon/archive/legacy-file-profile-*`，不会删除模型、密钥、session 或 memory。
+
 ### 已 trust 的目录仍反复提示
 
 先在目标目录确认 trust 状态：

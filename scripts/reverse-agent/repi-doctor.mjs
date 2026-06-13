@@ -1,6 +1,16 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	readlinkSync,
+	realpathSync,
+	renameSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,10 +95,163 @@ function pathEntry(path) {
 	}
 }
 
+function safeEntries(path) {
+	try {
+		return readdirSync(path);
+	} catch {
+		return [];
+	}
+}
+
+function isManagedToolEntry(name) {
+	const lower = name.toLowerCase();
+	return lower === "fd" || lower === "rg" || lower === "fd.exe" || lower === "rg.exe" || name.startsWith(".");
+}
+
+function hasLegacyRepiMarker(path) {
+	try {
+		const text = readFileSync(path, "utf8").slice(0, 80_000);
+		return /REPI|pi-recon|reverse[-_/ ]?pentest|Reverse Pentest/i.test(text);
+	} catch {
+		return false;
+	}
+}
+
+function legacyFileProfileEntries() {
+	const candidates = [
+		{ rel: "extensions/reverse-pentest-core.ts", markerPath: "extensions/reverse-pentest-core.ts" },
+		{ rel: "skills/reverse-pentest-orchestrator", markerPath: "skills/reverse-pentest-orchestrator/SKILL.md" },
+		{ rel: "prompts/websec.md", markerPath: "prompts/websec.md" },
+		{ rel: "prompts/wr.md", markerPath: "prompts/wr.md" },
+		{ rel: "prompts/audit-agent.md", markerPath: "prompts/audit-agent.md" },
+		{ rel: "prompts/memory.md", markerPath: "prompts/memory.md" },
+	];
+	const entries = [];
+	for (const candidate of candidates) {
+		const path = join(agentDir, candidate.rel);
+		if (!existsSync(path)) continue;
+		const markerPath = join(agentDir, candidate.markerPath);
+		if (hasLegacyRepiMarker(markerPath)) entries.push({ ...candidate, path });
+	}
+	return entries;
+}
+
+function legacyExtensionLayout() {
+	const hooksDir = join(agentDir, "hooks");
+	const toolsDir = join(agentDir, "tools");
+	const hooksPresent = existsSync(hooksDir);
+	const customToolEntries = existsSync(toolsDir) ? safeEntries(toolsDir).filter((name) => !isManagedToolEntry(name)) : [];
+	const legacyProfileEntries = legacyFileProfileEntries();
+	return {
+		clean: !hooksPresent && customToolEntries.length === 0 && legacyProfileEntries.length === 0,
+		hooksPresent,
+		hooksEntries: hooksPresent ? safeEntries(hooksDir).filter((name) => !name.startsWith(".")) : [],
+		customToolEntries,
+		legacyProfileEntries,
+	};
+}
+
+function timestampSuffix() {
+	return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+function uniquePath(path) {
+	if (!existsSync(path)) return path;
+	for (let index = 2; index < 1000; index++) {
+		const candidate = `${path}.${index}`;
+		if (!existsSync(candidate)) return candidate;
+	}
+	return `${path}.${process.pid}`;
+}
+
+function ensurePrivateDir(path) {
+	mkdirSync(path, { recursive: true, mode: 0o700 });
+	try {
+		chmodSync(path, 0o700);
+	} catch {
+		// Best effort on filesystems that do not support POSIX modes.
+	}
+}
+
+function repairLegacyExtensionLayout() {
+	const before = legacyExtensionLayout();
+	if (before.clean) {
+		return {
+			id: "legacy-extension-layout",
+			exit: 0,
+			stdoutTail: "legacy extension layout already clean",
+			stderrTail: "",
+		};
+	}
+
+	const extensionRoot = join(agentDir, "extensions");
+	ensurePrivateDir(extensionRoot);
+	const stamp = timestampSuffix();
+	const moved = [];
+	const errors = [];
+	const archiveRoot = join(agentDir, "recon", "archive", `legacy-file-profile-${stamp}`);
+
+	if (before.legacyProfileEntries.length > 0) {
+		ensurePrivateDir(archiveRoot);
+		for (const entry of before.legacyProfileEntries) {
+			const dest = uniquePath(join(archiveRoot, entry.rel));
+			ensurePrivateDir(dirname(dest));
+			try {
+				renameSync(entry.path, dest);
+				moved.push({ from: entry.path, to: dest });
+			} catch (error) {
+				errors.push(`${entry.rel}: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
+	}
+
+	if (before.hooksPresent) {
+		const src = join(agentDir, "hooks");
+		const dest = uniquePath(join(extensionRoot, `legacy-hooks-${stamp}`));
+		try {
+			renameSync(src, dest);
+			moved.push({ from: src, to: dest });
+		} catch (error) {
+			errors.push(`hooks: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	if (before.customToolEntries.length > 0) {
+		const toolsDir = join(agentDir, "tools");
+		const destDir = uniquePath(join(extensionRoot, `legacy-tools-${stamp}`));
+		ensurePrivateDir(destDir);
+		for (const name of before.customToolEntries) {
+			const src = join(toolsDir, name);
+			const dest = uniquePath(join(destDir, name));
+			try {
+				renameSync(src, dest);
+				moved.push({ from: src, to: dest });
+			} catch (error) {
+				errors.push(`tools/${name}: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
+	}
+
+	const after = legacyExtensionLayout();
+	return {
+		id: "legacy-extension-layout",
+		exit: errors.length === 0 ? 0 : 1,
+		stdoutTail: `moved=${moved.length} remainingHooks=${after.hooksPresent ? 1 : 0} remainingCustomTools=${after.customToolEntries.length} remainingLegacyProfile=${after.legacyProfileEntries.length}`,
+		stderrTail: errors.slice(-8).join("\n"),
+		moved,
+	};
+}
+
 const fixActions = [];
 if (fix) {
 	const installerArgs = [join(root, "scripts/reverse-agent/install-repi.sh"), root];
-	if (process.env.REPI_INSTALLED_BIN_PATH && !packageBinMode) installerArgs.push(dirname(process.env.REPI_INSTALLED_BIN_PATH));
+	if (
+		process.env.REPI_INSTALLED_BIN_PATH &&
+		!packageBinMode &&
+		resolve(process.env.REPI_INSTALLED_BIN_PATH) !== resolve(join(root, "repi"))
+	) {
+		installerArgs.push(dirname(process.env.REPI_INSTALLED_BIN_PATH));
+	}
 	const installer = run("bash", installerArgs, { timeout: 45_000 });
 	fixActions.push({
 		id: "install-repi",
@@ -113,6 +276,7 @@ if (fix) {
 		stderrTail: memorySanitize.stderr.slice(-1200),
 		error: memorySanitize.error,
 	});
+	fixActions.push(repairLegacyExtensionLayout());
 }
 
 const settings = readJson(join(agentDir, "settings.json"));
@@ -137,6 +301,7 @@ const guardrailMarkers = [
 ];
 const missingHelpGuardrails = guardrailMarkers.filter((marker) => !helpText.includes(marker));
 const missingBootstrapGuardrails = guardrailMarkers.filter((marker) => !bootstrapSource.includes(marker));
+const legacyExtensions = legacyExtensionLayout();
 
 const checks = [
 	check("repo:root", existsSync(join(root, "package.json")) && existsSync(repiBin), `root=${root}`),
@@ -161,6 +326,12 @@ const checks = [
 	check("memory:project-file", existsSync(join(runtimeMemory, "project-memory.md")), `path=${join(runtimeMemory, "project-memory.md")}`, "run npm run install:repi"),
 	check("memory:procedural-file", existsSync(join(runtimeMemory, "procedural-memory.md")), `path=${join(runtimeMemory, "procedural-memory.md")}`, "run npm run install:repi"),
 	check("memory:event-store", existsSync(join(runtimeMemory, "events.jsonl")), `events=${lineCount(join(runtimeMemory, "events.jsonl"))}`, "run repi doctor --fix"),
+	check(
+		"runtime:legacy-extension-layout",
+		legacyExtensions.clean,
+		`hooks=${legacyExtensions.hooksPresent ? 1 : 0} customTools=${legacyExtensions.customToolEntries.length} legacyProfile=${legacyExtensions.legacyProfileEntries.length}`,
+		"run repi doctor --fix",
+	),
 	check("models:parse", listModels.code === 0, `exit=${listModels.code} stdout=${listModels.stdout.slice(0, 120).replace(/\s+/g, " ")} stderr=${listModels.stderr.slice(0, 120).replace(/\s+/g, " ")}`, "fix ~/.repi/agent/models.json"),
 	check("models:config-present", Boolean(models) || listModels.code === 0, `modelsJson=${Boolean(models)} listModelsExit=${listModels.code}`, "configure ~/.repi/agent/models.json if no provider exists"),
 	check("cli:help", help.code === 0 && /REPI reverse\/pentest/.test(helpText), `exit=${help.code}`, "run npm install && npm run install:repi"),

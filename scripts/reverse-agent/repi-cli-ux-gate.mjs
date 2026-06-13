@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -263,6 +263,78 @@ checks.push(
 			exit: engageRun.exit,
 			stdoutTail: engageRun.stdout.slice(-800),
 			stderrTail: engageRun.stderr.slice(-400),
+		},
+	),
+);
+const legacyAgentDir = join(tempRoot, "legacy-agent");
+const legacyBinDir = join(tempRoot, "legacy-bin");
+mkdir(legacyAgentDir);
+mkdir(legacyBinDir);
+const legacyEnv = {
+	REPI_CODING_AGENT_DIR: legacyAgentDir,
+	REPI_AGENT_DIR: legacyAgentDir,
+	REPI_BIN_PATH: join(root, "repi"),
+	REPI_INSTALLED_BIN_PATH: join(legacyBinDir, "repi"),
+	REPI_LEGACY_KEY: "sk-test-redacted",
+};
+const legacyInit = run(["scripts/reverse-agent/init-repi-profile.mjs", root], legacyEnv);
+writeFileSync(
+	join(legacyAgentDir, "models.json"),
+	`${JSON.stringify(
+		{
+			providers: {
+				legacy: {
+					api: "openai-completions",
+					baseUrl: "https://legacy.example.invalid/v1",
+					apiKey: "$REPI_LEGACY_KEY",
+					models: [{ id: "legacy/model", contextWindow: 8192, maxTokens: 1024 }],
+				},
+			},
+		},
+		null,
+		2,
+	)}\n`,
+	{ encoding: "utf8", mode: 0o600 },
+);
+mkdir(join(legacyAgentDir, "tools"));
+mkdir(join(legacyAgentDir, "hooks"));
+mkdir(join(legacyAgentDir, "extensions"));
+mkdir(join(legacyAgentDir, "skills", "reverse-pentest-orchestrator"));
+writeFileSync(join(legacyAgentDir, "tools", "legacy-tool.md"), "# legacy tool\n", { encoding: "utf8", mode: 0o600 });
+writeFileSync(join(legacyAgentDir, "hooks", "legacy-hook.ts"), "export default {};\n", { encoding: "utf8", mode: 0o600 });
+writeFileSync(join(legacyAgentDir, "extensions", "reverse-pentest-core.ts"), "// REPI reverse-pentest legacy extension\nexport default {};\n", { encoding: "utf8", mode: 0o600 });
+writeFileSync(join(legacyAgentDir, "skills", "reverse-pentest-orchestrator", "SKILL.md"), "# Reverse Pentest legacy skill\n", { encoding: "utf8", mode: 0o600 });
+const legacyDoctor = run(["scripts/reverse-agent/repi-doctor.mjs", root, "--fix", "--json"], legacyEnv);
+let legacyDoctorReport = {};
+try {
+	legacyDoctorReport = JSON.parse(legacyDoctor.stdout);
+} catch {
+	legacyDoctorReport = {};
+}
+const legacyExtensionEntries = existsSync(join(legacyAgentDir, "extensions")) ? readdirSync(join(legacyAgentDir, "extensions")) : [];
+const legacyArchiveRoot = join(legacyAgentDir, "recon", "archive");
+const legacyArchiveEntries = existsSync(legacyArchiveRoot) ? readdirSync(legacyArchiveRoot) : [];
+checks.push(
+	check(
+		"doctor:legacy-tools-hooks-fix",
+		legacyInit.exit === 0 &&
+			legacyDoctor.exit === 0 &&
+			legacyDoctorReport.fixActions?.some((action) => action.id === "legacy-extension-layout" && action.exit === 0) &&
+			legacyDoctorReport.checks?.some((item) => item.id === "runtime:legacy-extension-layout" && item.status === "pass") &&
+			legacyExtensionEntries.some((name) => name.startsWith("legacy-tools-")) &&
+			legacyExtensionEntries.some((name) => name.startsWith("legacy-hooks-")) &&
+			legacyArchiveEntries.some((name) => name.startsWith("legacy-file-profile-")) &&
+			!existsSync(join(legacyAgentDir, "tools", "legacy-tool.md")) &&
+			!existsSync(join(legacyAgentDir, "hooks")) &&
+			!existsSync(join(legacyAgentDir, "extensions", "reverse-pentest-core.ts")) &&
+			!existsSync(join(legacyAgentDir, "skills", "reverse-pentest-orchestrator")),
+		{
+			initExit: legacyInit.exit,
+			doctorExit: legacyDoctor.exit,
+			stdoutTail: legacyDoctor.stdout.slice(-800),
+			stderrTail: legacyDoctor.stderr.slice(-400),
+			legacyExtensionEntries,
+			legacyArchiveEntries,
 		},
 	),
 );

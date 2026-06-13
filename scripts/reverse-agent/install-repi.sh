@@ -72,12 +72,22 @@ if [ ! -x "$ROOT/repi" ]; then
 fi
 mkdir -p "$BIN_DIR"
 
+absolute_path() {
+  local path="$1"
+  local dir base
+  dir="$(cd "$(dirname "$path")" && pwd)"
+  base="$(basename "$path")"
+  printf '%s/%s' "$dir" "$base"
+}
+
 cleanup_stale_recon_pi() {
   local candidate="$1"
   [ -n "$candidate" ] || return 0
   [ -e "$candidate" ] || [ -L "$candidate" ] || return 0
   [ -e "$ROOT/pi" ] || return 0
-  local resolved_candidate resolved_recon
+  local candidate_abs resolved_candidate resolved_recon
+  candidate_abs="$(absolute_path "$candidate")"
+  [ "$candidate_abs" != "$ROOT/pi" ] || return 0
   resolved_candidate="$(readlink -f "$candidate" 2>/dev/null || printf '%s' "$candidate")"
   resolved_recon="$(readlink -f "$ROOT/pi" 2>/dev/null || printf '%s' "$ROOT/pi")"
   if [ "$resolved_candidate" = "$resolved_recon" ]; then
@@ -94,7 +104,10 @@ if [ -n "$NPM_PREFIX" ]; then
   cleanup_stale_recon_pi "$NPM_PREFIX/bin/pi"
 fi
 
-ln -sfn "$ROOT/repi" "$BIN_DIR/repi"
+REPI_LINK="$BIN_DIR/repi"
+if [ "$(absolute_path "$REPI_LINK")" != "$ROOT/repi" ]; then
+  ln -sfn "$ROOT/repi" "$REPI_LINK"
+fi
 node "$ROOT/scripts/reverse-agent/init-repi-profile.mjs" "$ROOT"
 REPI_INIT_VERBOSE=1 "$ROOT/repi" --offline --help >/dev/null 2>&1
 PATH_HINT=""

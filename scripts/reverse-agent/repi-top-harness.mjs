@@ -205,6 +205,8 @@ function staticContractChecks() {
 	checks.push(markerCheck("runtime:print-mode-guardrails", "packages/coding-agent/src/modes/print-mode.ts", ["REPI_PRINT_PROGRESS", "REPI_PRINT_TIMEOUT_MS", "REPI_PRINT_MAX_TURNS", "REPI_PRINT_MAX_TOOL_CALLS", "still_running", "guard_abort", "max_tool_calls_exceeded"], []));
 	checks.push(markerCheck("runtime:stdin-noninteractive-guard", "packages/coding-agent/src/main.ts", ["REPI_READ_STDIN_WITH_PROMPT", "REPI_STDIN_READ_TIMEOUT_MS", "skipWhenExplicitPrompt", "readPipedStdin"], []));
 	checks.push(markerCheck("runtime:bash-default-timeout", "packages/coding-agent/src/core/tools/bash.ts", ["REPI_BASH_DEFAULT_TIMEOUT_SECONDS", "PI_BASH_DEFAULT_TIMEOUT_SECONDS", "effectiveTimeout", "Command timed out after"], []));
+	checks.push(markerCheck("runtime:legacy-extension-warning-nonblocking", "packages/coding-agent/src/migrations.ts", ["IS_REPI_PRODUCT", "legacy REPI extension layout detected", "Startup will continue", "repi doctor --fix"], []));
+	checks.push(markerCheck("doctor:legacy-extension-layout-fix", "scripts/reverse-agent/repi-doctor.mjs", ["legacyExtensionLayout", "legacyFileProfileEntries", "repairLegacyExtensionLayout", "legacy-extension-layout", "legacy-tools", "legacy-file-profile"], []));
 	checks.push(markerCheck("runtime:sse-idle-timeout", "packages/ai/src/providers/openai-codex-responses.ts", ["Codex SSE stream idle timeout", "readSSEChunk", "idleTimeoutMs"], []));
 	checks.push(markerCheck("runtime:anthropic-sse-idle-timeout", "packages/ai/src/providers/anthropic.ts", ["Anthropic SSE stream idle timeout", "readSseChunk", "idleTimeoutMs"], []));
 	checks.push(markerCheck("launcher:repi-swarm-llm-run", "repi", ["swarm)", "plan|run|status|merge|llm-run", "repi-swarm-llm-run.mjs"], []));
@@ -261,7 +263,7 @@ function staticContractChecks() {
 		markerCheck(
 			"installer:repi-no-pi-takeover",
 			"scripts/reverse-agent/install-repi.sh",
-			["ln -sfn \"$ROOT/repi\" \"$BIN_DIR/repi\"", "cleanup_stale_recon_pi", "Do not install or overwrite `pi`", "Installed REPI:"],
+			["ln -sfn \"$ROOT/repi\" \"$REPI_LINK\"", "absolute_path", "cleanup_stale_recon_pi", "Do not install or overwrite `pi`", "Installed REPI:"],
 			[/ln\s+-sfn\s+"\$ROOT\/pi"\s+"\$BIN_DIR\/pi"/, /rm\s+-rf\s+"\$HOME\/\.pi"/, /@earendil-works\/(?:pi|repi)-coding-agent/],
 		),
 	);

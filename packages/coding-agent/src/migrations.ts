@@ -5,7 +5,7 @@
 import chalk from "chalk";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import { CONFIG_DIR_NAME, getAgentDir, getBinDir } from "./config.ts";
+import { CONFIG_DIR_NAME, getAgentDir, getBinDir, IS_REPI_PRODUCT } from "./config.ts";
 import { migrateKeybindingsConfig } from "./core/keybindings.ts";
 import { isLegacyEnvVarNameConfigValue } from "./core/resolve-config-value.ts";
 import { stripJsonComments } from "./utils/json.ts";
@@ -403,10 +403,23 @@ function migrateExtensionSystem(cwd: string): string[] {
 }
 
 /**
- * Print deprecation warnings and wait for keypress.
+ * Print deprecation warnings.
+ *
+ * Upstream-compatible mode keeps the historical keypress pause because legacy
+ * extension layout can change behavior. REPI product mode must never block
+ * startup on an old profile artifact: report a concise repair hint and let
+ * `repi doctor --fix` do the migration.
  */
 export async function showDeprecationWarnings(warnings: string[]): Promise<void> {
 	if (warnings.length === 0) return;
+
+	if (IS_REPI_PRODUCT) {
+		console.log(chalk.yellow("Notice: legacy REPI extension layout detected. Startup will continue."));
+		console.log(chalk.dim(`Deprecated extension path count: ${warnings.length}`));
+		console.log(chalk.dim("Repair command: repi doctor --fix"));
+		console.log();
+		return;
+	}
 
 	for (const warning of warnings) {
 		console.log(chalk.yellow(`Warning: ${warning}`));
