@@ -19,7 +19,7 @@ function mkdir(path) {
 	}
 }
 
-function run(args, env = {}) {
+function run(args, env = {}, input = undefined) {
 	const result = spawnSync(process.execPath, args, {
 		cwd: root,
 		env: {
@@ -32,6 +32,7 @@ function run(args, env = {}) {
 			...env,
 		},
 		encoding: "utf8",
+		input,
 		timeout: 30_000,
 		maxBuffer: 4 * 1024 * 1024,
 	});
@@ -406,6 +407,71 @@ checks.push(
 		exit: insecureLogin.exit,
 		stdoutTail: insecureLogin.stdout.slice(-800),
 		stderrTail: insecureLogin.stderr.slice(-400),
+	}),
+);
+const addLocalAuth = run(
+	[
+		"scripts/reverse-agent/model-inspect.mjs",
+		root,
+		"add",
+		"--provider",
+		"gamma",
+		"--api",
+		"openai-completions",
+		"--base-url",
+		"https://private-gamma.example.invalid/v1",
+		"--model",
+		"gamma/model",
+		"--api-key-stdin",
+		"--set-default",
+		"--json",
+	],
+	{},
+	"fixture-gamma-key",
+);
+const addLocalAuthReport = (() => {
+	try {
+		return JSON.parse(addLocalAuth.stdout);
+	} catch {
+		return undefined;
+	}
+})();
+const authAfterAdd = (() => {
+	try {
+		return JSON.parse(readFileSync(join(agentDir, "auth.json"), "utf8"));
+	} catch {
+		return {};
+	}
+})();
+const settingsAfterAdd = (() => {
+	try {
+		return JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8"));
+	} catch {
+		return {};
+	}
+})();
+checks.push(
+	check(
+		"model:add-api-key-stdin-local-auth",
+		addLocalAuth.exit === 0 && addLocalAuthReport?.authWritten === true && authAfterAdd.gamma?.key === "fixture-gamma-key" && !/export REPI_GAMMA_API_KEY/.test(addLocalAuth.stdout),
+		{
+			exit: addLocalAuth.exit,
+			stdoutTail: addLocalAuth.stdout.slice(-1000),
+			stderrTail: addLocalAuth.stderr.slice(-400),
+		},
+	),
+);
+checks.push(
+	check("model:add-set-default-validates-runtime-default", settingsAfterAdd.defaultProvider === "gamma" && settingsAfterAdd.defaultModel === "gamma/model", {
+		settingsAfterAdd: { defaultProvider: settingsAfterAdd.defaultProvider, defaultModel: settingsAfterAdd.defaultModel },
+	}),
+);
+const invalidDefault = run(["scripts/reverse-agent/model-inspect.mjs", root, "default", "--provider", "gamma", "--model", "missing/model", "--json"]);
+checks.push(
+	check("model:default-rejects-missing-custom-model", invalidDefault.exit !== 0 && /model not found under provider gamma/.test(`${invalidDefault.stdout}\n${invalidDefault.stderr}`), {
+		exit: invalidDefault.exit,
+		stdoutTail: invalidDefault.stdout.slice(-800),
+		stderrTail: invalidDefault.stderr.slice(-400),
 	}),
 );
 

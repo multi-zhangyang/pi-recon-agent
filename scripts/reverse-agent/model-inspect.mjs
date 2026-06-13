@@ -14,16 +14,18 @@ if (rawArgs[0] && !rawArgs[0].startsWith("--") && !knownCommands.has(rawArgs[0])
 const helpRequested = rawArgs.includes("--help") || rawArgs.includes("-h");
 const command = helpRequested ? "help" : rawArgs[0] && !rawArgs[0].startsWith("--") ? rawArgs.shift() : "doctor";
 const json = rawArgs.includes("--json");
+const fix = rawArgs.includes("--fix");
 const agentDir = process.env.REPI_CODING_AGENT_DIR || process.env.REPI_AGENT_DIR || join(homedir(), ".repi", "agent");
 const modelsPath = join(agentDir, "models.json");
 const authPath = join(agentDir, "auth.json");
+const settingsPath = join(agentDir, "settings.json");
 const allowedApis = new Set(["openai-completions", "openai-responses", "anthropic-messages"]);
 
 function usage() {
 	return `Usage:
-  repi model doctor [--json]
+  repi model doctor [--fix] [--json]
   repi model list [--provider <id>] [--model <id>] [--show-urls] [--json]
-  repi model add --provider <id> --api <openai-completions|openai-responses|anthropic-messages> --base-url <url> --model <id> [options]
+  repi model add --provider <id> --api <openai-completions|openai-responses|anthropic-messages> --base-url <url> --model <id> [--api-key-stdin] [--set-default] [options]
   repi model edit --provider <id> [--model <id>] [options]
   repi model remove --provider <id> [--model <id>] [--json]
   repi model login --provider <id> --api-key-stdin
@@ -33,9 +35,9 @@ function usage() {
   repi model export [--output <path>] [--json]
   repi model import --input <path|-> [--merge|--replace] [--json]
 
-model doctor is offline: it parses ~/.repi/agent/models.json, checks provider/model metadata, env-key references, context window and cost fields.
+model doctor is offline: it parses ~/.repi/agent/models.json, checks provider/model metadata, local auth, default model, context window and cost fields; --fix repairs safe local config issues.
 model list hides provider base URLs by default to avoid leaking private gateway endpoints into screenshots/logs; add --show-urls for local troubleshooting.
-model add writes ~/.repi/agent/models.json with env-ref credentials by default; model login writes ~/.repi/agent/auth.json locally.
+model add writes ~/.repi/agent/models.json and can store a local credential immediately with --api-key-stdin; model login writes/updates ~/.repi/agent/auth.json locally.
 For shell-history safety, pass API keys through --api-key-stdin. Plain --api-key is rejected unless REPI_ALLOW_INSECURE_API_KEY_ARG=1.
 model export never exports local API keys; model import preserves/creates env-ref apiKey fields and never writes auth.json.
 `;
@@ -223,13 +225,131 @@ function listModelsProbe() {
 	};
 }
 
+function normalizeCloudflareModelId(providerId, provider, modelId) {
+	const id = String(modelId ?? "").trim();
+	if (!isCloudflareProviderConfig(providerId, provider)) return id;
+	if (/moonshotai\/kimi-@cf\/moonshotai\/kimi-k2\.7-code/.test(id)) return "@cf/moonshotai/kimi-k2.7-code";
+	if ((id.match(/@cf\//g) || []).length > 1) {
+		const last = id.lastIndexOf("@cf/");
+		if (last >= 0) return id.slice(last);
+	}
+	return id;
+}
+
+function modelExistsInProvider(provider, modelId) {
+	return Array.isArray(provider?.models) && provider.models.some((model) => model?.id === modelId);
+}
+
+function findBestLocalDefault(providers, authData) {
+	const preferred = [
+		{ providerId: "aigateway", modelId: "moonshot/kimi-k2.6" },
+		{ providerId: "2go-openai", modelId: "moonshot/kimi-k2.6" },
+		{ providerId: "2go-anthropic", modelId: "moonshot/kimi-k2.6" },
+	];
+	const candidates = [];
+	for (const [providerId, provider] of Object.entries(providers)) {
+		const key = envRef(provider?.apiKey);
+		const storedAuth = storedAuthStatus(authData, providerId);
+		const usable = storedAuth.configured || key.present;
+		for (const model of Array.isArray(provider?.models) ? provider.models : []) {
+			if (model?.id) candidates.push({ providerId, modelId: model.id, usable });
+		}
+	}
+	for (const item of preferred) {
+		const found = candidates.find((candidate) => candidate.usable && candidate.providerId === item.providerId && candidate.modelId === item.modelId);
+		if (found) return found;
+	}
+	return candidates.find((candidate) => candidate.usable) ?? candidates[0];
+}
+
+function defaultStatusFor(providers, settings, listModels) {
+	const providerId = settings?.defaultProvider;
+	const modelId = settings?.defaultModel;
+	if (!providerId && !modelId) return { configured: false, ok: true, providerId: null, modelId: null, message: "not configured" };
+	if (!providerId || !modelId) return { configured: true, ok: false, providerId: providerId ?? null, modelId: modelId ?? null, message: "defaultProvider/defaultModel must be set together" };
+	const provider = providers[providerId];
+	if (provider) {
+		return {
+			configured: true,
+			ok: modelExistsInProvider(provider, modelId),
+			providerId,
+			modelId,
+			message: modelExistsInProvider(provider, modelId) ? "configured model exists" : "default model is not present under configured provider",
+		};
+	}
+	const listText = `${listModels?.stdoutPreview ?? ""}\n${listModels?.stderrPreview ?? ""}`;
+	const visible = listText.includes(providerId) && listText.includes(modelId);
+	return {
+		configured: true,
+		ok: visible,
+		providerId,
+		modelId,
+		message: visible ? "visible in runtime model list" : "default provider/model not visible in runtime model list",
+	};
+}
+
+function repairModelConfig() {
+	const actions = [];
+	const loaded = loadProviders();
+	const modelsConfig = readJsonObject(modelsPath, { providers: {} });
+	if (!modelsConfig.providers || typeof modelsConfig.providers !== "object" || Array.isArray(modelsConfig.providers)) modelsConfig.providers = {};
+	const authData = readJsonObject(authPath, {});
+	let modelsChanged = false;
+	let authChanged = false;
+	for (const [providerId, provider] of Object.entries(modelsConfig.providers)) {
+		if (!provider || typeof provider !== "object") continue;
+		const key = envRef(provider.apiKey);
+		if (key.kind === "literal") {
+			const existing = storedAuthStatus(authData, providerId);
+			if (!existing.configured && typeof provider.apiKey === "string" && provider.apiKey.length > 0) {
+				authData[providerId] = { type: "api_key", key: provider.apiKey };
+				authChanged = true;
+			}
+			provider.apiKey = `$${providerEnvName(providerId)}`;
+			modelsChanged = true;
+			actions.push({ id: `literal-api-key:${providerId}`, status: "fixed", detail: "moved literal credential to auth.json and left an env-style fallback reference in models.json" });
+		}
+		if (Array.isArray(provider.models)) {
+			for (const model of provider.models) {
+				const before = model?.id;
+				const after = normalizeCloudflareModelId(providerId, provider, before);
+				if (after && before !== after) {
+					model.id = after;
+					modelsChanged = true;
+					actions.push({ id: `cloudflare-model-id:${providerId}`, status: "fixed", detail: "normalized duplicated @cf model id" });
+				}
+			}
+		}
+	}
+	const settings = readJsonObject(settingsPath, {});
+	const listModels = listModelsProbe();
+	const status = defaultStatusFor(modelsConfig.providers, settings, listModels);
+	if (!status.ok) {
+		const best = findBestLocalDefault(modelsConfig.providers, authData);
+		if (best) {
+			settings.defaultProvider = best.providerId;
+			settings.defaultModel = best.modelId;
+			writeJsonFile(settingsPath, settings, 0o600);
+			actions.push({ id: "default-model", status: "fixed", detail: `set default to ${best.providerId}/${best.modelId}` });
+		} else {
+			actions.push({ id: "default-model", status: "blocked", detail: "no configured model available for automatic default repair" });
+		}
+	}
+	if (modelsChanged) writeJsonFile(modelsPath, modelsConfig, 0o600);
+	if (authChanged) writeJsonFile(authPath, authData, 0o600);
+	return { actions, loadedBefore: loaded };
+}
+
 function buildDoctorReport() {
+	const fixReport = fix ? repairModelConfig() : { actions: [] };
 	const loaded = loadProviders();
 	const authData = readJson(authPath);
+	const settings = readJson(settingsPath);
 	const providerRows = [];
 	const diagnostics = [];
 	let modelCount = 0;
 	if (loaded.parseError) diagnostics.push({ level: "fail", id: "models-json-parse", message: loaded.parseError });
+	if (settings?.__error) diagnostics.push({ level: "fail", id: "settings-json-parse", message: settings.__error });
 	if (loaded.missing) diagnostics.push({ level: "warn", id: "models-json-missing", message: `${modelsPath} not found; built-in providers may still work` });
 	for (const [providerId, provider] of Object.entries(loaded.providers)) {
 		const api = provider.api;
@@ -241,7 +361,7 @@ function buildDoctorReport() {
 		const issues = [];
 		if (!allowedApis.has(api)) issues.push(`unsupported api=${api}`);
 		if (typeof provider.baseUrl !== "string" || !provider.baseUrl) issues.push("missing baseUrl");
-		if (key.kind === "literal") issues.push("apiKey is literal in models.json; prefer auth.json or $ENV_NAME");
+		if (key.kind === "literal") issues.push("apiKey is literal in models.json; run `repi model doctor --fix` to move it to auth.json");
 		if (key.kind === "missing" && !storedAuth.configured) issues.push("missing apiKey env reference or auth.json credential");
 		if (key.kind === "env" && !key.present && !storedAuth.configured) issues.push(`env ${key.env} is not set and no auth.json credential exists`);
 		if (!models.length) issues.push("provider has no models[]");
@@ -268,7 +388,7 @@ function buildDoctorReport() {
 			baseUrl: displayUrl(provider.baseUrl),
 			baseUrlHidden: !showUrls(),
 			apiKey: storedAuth.configured
-				? `${storedAuth.source} (${key.kind === "env" ? `models ref $${key.env}; env ${key.present ? "set" : "missing"}` : `models ${key.kind}`})`
+				? `${storedAuth.source} (local credential; ${key.kind === "env" ? `models fallback $${key.env} ${key.present ? "set" : "not set"}` : `models ${key.kind}`})`
 				: key.kind === "env"
 					? `$${key.env} (${key.present ? "set" : "missing"})`
 					: key.kind,
@@ -278,6 +398,8 @@ function buildDoctorReport() {
 		});
 	}
 	const listModels = listModelsProbe();
+	const defaultModel = defaultStatusFor(loaded.providers, settings, listModels);
+	if (!defaultModel.ok) diagnostics.push({ level: "fail", id: "default-model", message: defaultModel.message });
 	if (listModels.exit !== 0)
 		diagnostics.push({
 			level: "warn",
@@ -292,6 +414,10 @@ function buildDoctorReport() {
 		agentDir,
 		modelsPath,
 		authPath,
+		settingsPath,
+		fix,
+		fixActions: fixReport.actions,
+		defaultModel,
 		providerCount: providerRows.length,
 		modelCount,
 		providers: providerRows,
@@ -470,15 +596,18 @@ function buildAddReport() {
 		};
 	}
 	const apiKeyEnv = flagValue(rawArgs, ["--api-key-env", "--env"], providerEnvName(providerId));
-	const apiKey = flagValue(rawArgs, "--api-key");
+	let apiKey = flagValue(rawArgs, "--api-key");
 	if (apiKey && !insecureApiKeyArgAllowed()) {
 		return {
 			kind: "repi-model-add-report",
 			schemaVersion: 1,
 			generatedAt: new Date().toISOString(),
 			ok: false,
-			error: "plain --api-key is disabled to avoid shell history/process-list leaks; use `repi model login --provider <id> --api-key-stdin` after add, or set REPI_ALLOW_INSECURE_API_KEY_ARG=1 explicitly",
+			error: "plain --api-key is disabled to avoid shell history/process-list leaks; use --api-key-stdin, or set REPI_ALLOW_INSECURE_API_KEY_ARG=1 explicitly",
 		};
+	}
+	if (!apiKey && rawArgs.includes("--api-key-stdin")) {
+		apiKey = readFileSync(0, "utf8").trim();
 	}
 	if (!/^[A-Z_][A-Z0-9_]*$/.test(apiKeyEnv)) {
 		return {
@@ -545,7 +674,7 @@ function buildAddReport() {
 		authPath,
 		settingsPath,
 		next: [
-			...(authWritten || process.env[apiKeyEnv] ? [] : [`export ${apiKeyEnv}=...`]),
+			...(authWritten || process.env[apiKeyEnv] ? [] : [`repi model login --provider ${providerId} --api-key-stdin`]),
 			`repi model test --provider ${providerId} --model ${modelId}`,
 			`repi --provider ${providerId} --model ${modelId}`,
 		],
@@ -883,6 +1012,18 @@ function buildDefaultReport() {
 			error: "model default requires --provider <id> --model <id>",
 		};
 	}
+	const loaded = loadProviders();
+	if (loaded.providers?.[providerId] && !modelExistsInProvider(loaded.providers[providerId], modelId)) {
+		return {
+			kind: "repi-model-default-report",
+			schemaVersion: 1,
+			generatedAt: new Date().toISOString(),
+			ok: false,
+			provider: providerId,
+			model: modelId,
+			error: `model not found under provider ${providerId}; run repi model list --provider ${providerId}`,
+		};
+	}
 	const settingsPath = upsertDefaultSetting(providerId, modelId);
 	return {
 		kind: "repi-model-default-report",
@@ -961,6 +1102,9 @@ function printDoctor(report) {
 	console.log("REPI Model Doctor");
 	console.log(`modelsPath: ${report.modelsPath}`);
 	console.log(`authPath: ${report.authPath}`);
+	if (report.settingsPath) console.log(`settingsPath: ${report.settingsPath}`);
+	if (report.defaultModel) console.log(`default: ${report.defaultModel.providerId ?? "<unset>"}/${report.defaultModel.modelId ?? "<unset>"} :: ${report.defaultModel.ok ? "ok" : "bad"} (${report.defaultModel.message})`);
+	for (const action of report.fixActions ?? []) console.log(`${action.status === "fixed" ? "FIXED" : "FIX"} ${action.id}: ${action.detail}`);
 	console.log(`providers=${report.providerCount} models=${report.modelCount} listModelsExit=${report.listModels.exit}`);
 	for (const provider of report.providers) {
 		console.log(`- ${provider.id}: api=${provider.api} baseUrl=${provider.baseUrl} apiKey=${provider.apiKey}`);

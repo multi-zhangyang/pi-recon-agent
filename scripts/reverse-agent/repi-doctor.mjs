@@ -276,6 +276,14 @@ if (fix) {
 		stderrTail: memorySanitize.stderr.slice(-1200),
 		error: memorySanitize.error,
 	});
+	const modelFix = run(process.execPath, [resolveScript("model-inspect.mjs"), root, "doctor", "--fix", "--json"], { timeout: 60_000 });
+	fixActions.push({
+		id: "model-config-fix",
+		exit: modelFix.code,
+		stdoutTail: modelFix.stdout.slice(-1200),
+		stderrTail: modelFix.stderr.slice(-1200),
+		error: modelFix.error,
+	});
 	fixActions.push(repairLegacyExtensionLayout());
 }
 
