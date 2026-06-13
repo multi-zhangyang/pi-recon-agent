@@ -42,6 +42,7 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "./compaction/index.ts";
+import { buildContextBreakdown, type ContextBreakdown } from "./context-manager.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
@@ -939,6 +940,7 @@ export class AgentSession {
 			selectedTools: validToolNames,
 			toolSnippets,
 			promptGuidelines,
+			contextWindow: this.model?.contextWindow,
 		};
 		return buildSystemPrompt(this._baseSystemPromptOptions);
 	}
@@ -3027,6 +3029,22 @@ export class AgentSession {
 			cost: totalCost,
 			contextUsage: this.getContextUsage(),
 		};
+	}
+
+	getContextBreakdown(): ContextBreakdown {
+		const usage = this.getContextUsage();
+		const model = this.model;
+		return buildContextBreakdown({
+			messages: this.messages,
+			systemPrompt: this._baseSystemPrompt,
+			contextFiles: this._baseSystemPromptOptions?.contextFiles ?? this._resourceLoader.getAgentsFiles().agentsFiles,
+			skills: this._baseSystemPromptOptions?.skills ?? this._resourceLoader.getSkills().skills,
+			model: model ? `${model.provider}/${model.id}` : undefined,
+			contextWindow: model?.contextWindow,
+			currentTokens: usage?.tokens,
+			currentPercent: usage?.percent,
+			compactionSettings: this.settingsManager.getCompactionSettings(),
+		});
 	}
 
 	getContextUsage(): ContextUsage | undefined {

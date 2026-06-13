@@ -324,6 +324,47 @@ function loadSkillFromFile(
 	}
 }
 
+export interface FormatSkillsForPromptOptions {
+	/** Model context window in tokens. Used to keep the skill index below ~2% of context. */
+	contextWindow?: number;
+	/** Explicit character budget for tests or constrained runtimes. */
+	maxChars?: number;
+}
+
+const DEFAULT_SKILL_INDEX_MAX_CHARS = 8000;
+const SKILL_INDEX_CONTEXT_RATIO = 0.02;
+const MIN_SKILL_DESCRIPTION_CHARS = 96;
+const MAX_SKILL_DESCRIPTION_CHARS = 512;
+
+function resolveSkillIndexBudget(options?: FormatSkillsForPromptOptions): number {
+	if (options?.maxChars && Number.isFinite(options.maxChars) && options.maxChars > 0) {
+		return Math.floor(options.maxChars);
+	}
+
+	const contextWindow = options?.contextWindow;
+	if (contextWindow && Number.isFinite(contextWindow) && contextWindow > 0) {
+		return Math.max(1200, Math.floor(contextWindow * SKILL_INDEX_CONTEXT_RATIO * 4));
+	}
+
+	return DEFAULT_SKILL_INDEX_MAX_CHARS;
+}
+
+function truncateForSkillIndex(text: string, maxChars: number): string {
+	const normalized = text.replace(/\s+/g, " ").trim();
+	if (normalized.length <= maxChars) return normalized;
+	return `${normalized.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
+}
+
+function skillEntryLines(skill: Skill, descriptionMaxChars: number): string[] {
+	return [
+		"  <skill>",
+		`    <name>${escapeXml(skill.name)}</name>`,
+		`    <description>${escapeXml(truncateForSkillIndex(skill.description, descriptionMaxChars))}</description>`,
+		`    <location>${escapeXml(skill.filePath)}</location>`,
+		"  </skill>",
+	];
+}
+
 /**
  * Format skills for inclusion in a system prompt.
  * Uses XML format per Agent Skills standard.
@@ -331,32 +372,66 @@ function loadSkillFromFile(
  *
  * Skills with disableModelInvocation=true are excluded from the prompt
  * (they can only be invoked explicitly via /skill:name commands).
+ *
+ * Only the skill index is included. Skill bodies are loaded later through the read
+ * tool when the task matches a name/description. The index has a bounded budget
+ * (roughly 2% of the model context window when known, otherwise 8k chars) so a
+ * large skill library cannot silently consume the startup context.
  */
-export function formatSkillsForPrompt(skills: Skill[]): string {
+export function formatSkillsForPrompt(skills: Skill[], options?: FormatSkillsForPromptOptions): string {
 	const visibleSkills = skills.filter((s) => !s.disableModelInvocation);
 
 	if (visibleSkills.length === 0) {
 		return "";
 	}
 
-	const lines = [
+	const budget = resolveSkillIndexBudget(options);
+	const headerLines = [
 		"\n\nThe following skills provide specialized instructions for specific tasks.",
 		"Use the read tool to load a skill's file when the task matches its description.",
 		"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
+		"Only the skill index is loaded here; do not assume skill body instructions until you read the referenced file.",
 		"",
 		"<available_skills>",
 	];
 
+	const footerLine = "</available_skills>";
+	const fixedOverhead = headerLines.join("\n").length + footerLine.length + 64;
+	const perSkillBudget = Math.floor((budget - fixedOverhead) / Math.max(1, visibleSkills.length));
+	const descriptionMaxChars = Math.min(
+		MAX_SKILL_DESCRIPTION_CHARS,
+		Math.max(MIN_SKILL_DESCRIPTION_CHARS, perSkillBudget - 180),
+	);
+
+	const lines = [...headerLines];
+	let included = 0;
 	for (const skill of visibleSkills) {
-		lines.push("  <skill>");
-		lines.push(`    <name>${escapeXml(skill.name)}</name>`);
-		lines.push(`    <description>${escapeXml(skill.description)}</description>`);
-		lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
-		lines.push("  </skill>");
+		const entry = skillEntryLines(skill, descriptionMaxChars);
+		const candidate = [...lines, ...entry, footerLine].join("\n");
+		if (candidate.length > budget && included > 0) {
+			break;
+		}
+		if (candidate.length > budget) {
+			const tinyEntry = skillEntryLines(skill, 48);
+			if ([...lines, ...tinyEntry, footerLine].join("\n").length <= budget) {
+				lines.push(...tinyEntry);
+				included++;
+			}
+			break;
+		}
+		lines.push(...entry);
+		included++;
 	}
 
-	lines.push("</available_skills>");
+	const omitted = visibleSkills.length - included;
+	if (omitted > 0) {
+		const warning = `  <!-- skill index truncated: omitted ${omitted} skill(s) due to startup context budget; use /skills or explicit /skill:<name> when needed -->`;
+		if ([...lines, warning, footerLine].join("\n").length <= budget) {
+			lines.push(warning);
+		}
+	}
 
+	lines.push(footerLine);
 	return lines.join("\n");
 }
 
