@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -120,6 +120,14 @@ function directorySize(path, limitFiles = 20000) {
 	return { bytes, mb: Math.round(bytes / 1024 / 1024), files, truncated: files >= limitFiles };
 }
 
+function readJsonFile(path) {
+	try {
+		return JSON.parse(readFileSync(path, "utf8"));
+	} catch {
+		return undefined;
+	}
+}
+
 function item(id, status, summary, evidence = {}, next = []) {
 	return { id, status, summary, evidence, next };
 }
@@ -161,6 +169,7 @@ if (includeSessions) sanitizeDryArgs.push("--include-sessions");
 const memorySanitize = runNode("scripts/reverse-agent/memory-inspect.mjs", sanitizeDryArgs, { timeout: 120_000 });
 const missionStatus = runNode("scripts/reverse-agent/repi-mission.mjs", ["status", "--json"], { timeout: 30_000 });
 const swarmStatus = runNode("scripts/reverse-agent/repi-swarm-llm-run.mjs", ["status", "latest", "--json"], { timeout: 45_000 });
+const latestEngagement = readJsonFile(join(agentDir, "recon", "evidence", "engagements", "latest.json"));
 const selfcheckReport = selfcheck
 	? runNode(
 		"scripts/reverse-agent/repi-selfcheck.mjs",
@@ -250,6 +259,27 @@ if (missionStatus.code !== 0) {
 	);
 } else {
 	items.push(item("mission-control", "skip", "no active mission; create one to bind work to a scoped plan", { missionPath: missionStatus.parsed?.missionPath ?? null }, ["repi mission new <task>", "repi mission plan <task>"]));
+}
+
+if (latestEngagement?.kind || latestEngagement?.runId) {
+	const quality = latestEngagement.summary?.evidenceQuality ?? "unknown";
+	const missing = latestEngagement.summary?.missingCritical ?? [];
+	items.push(
+		item(
+			"active-engagement",
+			quality === "weak" || missing.length ? "warn" : "pass",
+			`latest engagement lane=${latestEngagement.target?.lane ?? "unknown"} quality=${quality}`,
+			{
+				runId: latestEngagement.runId,
+				artifactDir: latestEngagement.artifactDir,
+				target: latestEngagement.target?.redacted ?? null,
+				missingCritical: missing,
+			},
+			["repi engage <target>", "cat ~/.repi/agent/recon/evidence/engagements/latest.json", "repi mission pack"],
+		),
+	);
+} else {
+	items.push(item("active-engagement", "skip", "no active engagement run yet", {}, ["repi engage <target>"]));
 }
 
 if (swarmStatus.parsed?.ok) {

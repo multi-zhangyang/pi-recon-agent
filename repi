@@ -98,6 +98,8 @@ Health:
   repi trust yes|no|clear [path]                     Save or clear project trust
   repi mission new <task> [--target <target>]        Start a scoped mission/control-plane
   repi mission status|plan|next|pack|close           Mission state, lane plan, resume pack
+  repi engage <target> [--full] [--swarm]            Active reverse/pentest execution entry
+  repi attack|reverse|web <target>                   Aliases for repi engage
 
 Models:
   repi model add --provider <id> --api openai-completions --base-url <url> --model <model>
@@ -149,6 +151,10 @@ MSG
   mission)
     shift
     exec node "$ROOT/scripts/reverse-agent/repi-mission.mjs" "$ROOT" "$@"
+    ;;
+  engage|attack|reverse|web)
+    shift
+    exec node "$ROOT/scripts/reverse-agent/repi-engage.mjs" "$ROOT" "$@"
     ;;
   swarm)
     sub="${2:-help}"

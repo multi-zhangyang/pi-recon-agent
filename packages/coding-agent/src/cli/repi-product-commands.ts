@@ -18,6 +18,10 @@ const PRODUCT_COMMANDS = new Set([
 	"bugreport",
 	"trust",
 	"mission",
+	"engage",
+	"attack",
+	"reverse",
+	"web",
 	"memory",
 	"model",
 	"models",
@@ -76,6 +80,11 @@ function commandSpec(command: string, args: string[]): ProductCommandSpec | unde
 			return { script: "trust-inspect.mjs", normalizeArgs: (rest) => rest };
 		case "mission":
 			return { script: "repi-mission.mjs", normalizeArgs: (rest) => rest };
+		case "engage":
+		case "attack":
+		case "reverse":
+		case "web":
+			return { script: "repi-engage.mjs", normalizeArgs: (rest) => rest };
 		case "memory": {
 			const sub = args[0] ?? "status";
 			if (sub === "consolidate") return { script: "memory-consolidate.mjs", normalizeArgs: (rest) => rest.slice(1) };

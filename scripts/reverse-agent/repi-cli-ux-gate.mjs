@@ -143,6 +143,7 @@ const selfcheckSource = readFileSync(join(root, "scripts", "reverse-agent", "rep
 const swarmSource = readFileSync(join(root, "scripts", "reverse-agent", "repi-swarm-llm-run.mjs"), "utf8");
 const healthSource = readFileSync(join(root, "scripts", "reverse-agent", "repi-health.mjs"), "utf8");
 const missionSource = readFileSync(join(root, "scripts", "reverse-agent", "repi-mission.mjs"), "utf8");
+const engageSource = readFileSync(join(root, "scripts", "reverse-agent", "repi-engage.mjs"), "utf8");
 checks.push(
 	check(
 		"memory:runtime-redaction-wired",
@@ -201,7 +202,8 @@ checks.push(
 			Number.isFinite(Number(healthReport.score)) &&
 			Array.isArray(healthReport.prioritizedActions) &&
 			/doctor.*model.*memory.*swarm.*storage/s.test(healthSource) &&
-			/mission control state/.test(healthSource),
+			/mission control state/.test(healthSource) &&
+			/active-engagement/.test(healthSource),
 		{ exit: healthRun.exit, stdoutTail: healthRun.stdout.slice(-800), stderrTail: healthRun.stderr.slice(-400) },
 	),
 );
@@ -235,6 +237,32 @@ checks.push(
 			packExit: missionPack.exit,
 			newTail: missionNew.stdout.slice(-800),
 			packTail: missionPack.stdout.slice(-800),
+		},
+	),
+);
+const engageTarget = join(tempRoot, "engage-target.txt");
+writeFileSync(engageTarget, "REPI engage probe auth token signature route\\n", { encoding: "utf8", mode: 0o600 });
+const engageRun = runRepi(["engage", engageTarget, "--json"]);
+let engageReport = {};
+try {
+	engageReport = JSON.parse(engageRun.stdout);
+} catch {
+	engageReport = {};
+}
+checks.push(
+	check(
+		"engage:active-execution",
+		engageRun.exit === 0 &&
+			engageReport.kind === "repi-active-engagement-report" &&
+			engageReport.summary?.commandCount > 0 &&
+			existsSync(join(engageReport.artifactDir ?? "", "commands.jsonl")) &&
+			existsSync(join(engageReport.artifactDir ?? "", "next-commands.sh")) &&
+			/Active Engagement Engine/.test(engageSource) &&
+			/engageFile/.test(engageSource),
+		{
+			exit: engageRun.exit,
+			stdoutTail: engageRun.stdout.slice(-800),
+			stderrTail: engageRun.stderr.slice(-400),
 		},
 	),
 );

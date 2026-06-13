@@ -439,6 +439,16 @@ repi
 repi -p "对当前目录做被动 mapping，找二进制入口、网络接口和证据缺口"
 ```
 
+### 主动逆向 / 渗透入口
+
+```bash
+repi engage ./target
+repi engage https://target.example --full
+repi attack https://target.example --swarm --provider openai-compatible --model provider/model-id
+```
+
+`engage` 会立即识别目标类型，执行有界工具探测，写入证据 artifact 和下一步队列。
+
 ### 指定模型
 
 ```bash
@@ -480,6 +490,8 @@ repi commands
 | `repi trust clear` | 清除当前目录 trust 决策。 |
 | `repi mission new <task>` | 新建任务级 Mission Control，自动选择 lane、证据合同和下一步命令。 |
 | `repi mission status/next/pack/close` | 查看任务状态、取下一步、生成恢复包、关闭任务。 |
+| `repi engage <target>` | 主动执行入口：识别目标、跑工具、写证据、生成下一步队列。 |
+| `repi attack/reverse/web <target>` | `engage` 的战术别名，适合红队、二进制逆向和 Web/API 任务。 |
 | `repi model ...` | 维护 provider/model/auth/cost 配置。 |
 | `repi memory ...` | 查看、解释、隔离、导出长期记忆。 |
 | `repi swarm ...` | 多 worker 分工、运行、合并。 |
@@ -546,6 +558,42 @@ repi mission pack
 # 4) 任务结束后显式关闭；长期记忆沉淀仍然需要显式执行，避免污染
 repi mission close --summary "已定位校验函数和输入约束，复现命令见 evidence ledger"
 ```
+
+### Active Engagement Engine
+
+`repi engage` 是 REPI 的主动执行入口。它面向“给我一个目标，先动起来”的逆向/渗透场景：自动判断 URL、目录、二进制、APK、PCAP、固件、JS/WASM 等目标类型，立即运行一组有界工具探测，并把结果写成可恢复的 engagement artifact。
+
+输出位置：
+
+```text
+~/.repi/agent/recon/evidence/engagements/<run-id>/report.json
+~/.repi/agent/recon/evidence/engagements/<run-id>/summary.md
+~/.repi/agent/recon/evidence/engagements/<run-id>/commands.jsonl
+~/.repi/agent/recon/evidence/engagements/<run-id>/next-commands.sh
+```
+
+示例：
+
+```bash
+# 本地二进制 / SO / EXE / Mach-O
+repi engage ./crackme --full
+
+# Web/API 目标：抓 header、body sample、资产链接，并生成 auth/session/replay 下一步
+repi engage https://target.example --full
+
+# 目录目标：枚举 manifest、route/auth/signature/sink 搜索，生成 workspace 攻击面队列
+repi engage ./src
+
+# 需要多 worker 时再显式接 swarm
+repi engage ./target --swarm --provider openai-compatible --model provider/model-id --workers 5
+```
+
+和 `mission` 的关系：
+
+- `engage` 会默认创建/更新当前 mission；
+- `mission` 管任务状态和恢复包；
+- `engage` 管第一轮真实工具执行和证据落盘；
+- `swarm` 负责把后续专项 worker 并行化。
 
 ### 多子代理控制面
 
@@ -898,6 +946,8 @@ repi health --deep                  # 追加 live selfcheck 和更深的本机 s
 repi mission new <task>             # 新建 scoped mission、lane plan、证据合同
 repi mission next                   # 输出下一步 operator commands
 repi mission pack                   # 写 context/resume pack
+repi engage <target>                # 主动识别目标、跑工具、写 engagement artifact
+repi attack|reverse|web <target>    # engage 战术别名
 repi doctor                         # 安装、runtime、模型解析、memory scoped defaults
 repi doctor --fix                   # 自动重建 runtime profile、memory repair/sanitize、重装 repi 入口
 repi smoke                          # 快速 smoke：doctor + memory/model status + memory gate + shrinkwrap + imports
