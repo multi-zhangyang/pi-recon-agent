@@ -543,11 +543,17 @@ async function processStream(
 	model: Model<"openai-codex-responses">,
 	options?: OpenAICodexResponsesOptions,
 ): Promise<void> {
-	await processResponsesStream(mapCodexEvents(parseSSE(response, options?.signal)), output, stream, model, {
-		serviceTier: options?.serviceTier,
-		resolveServiceTier: resolveCodexServiceTier,
-		applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model),
-	});
+	await processResponsesStream(
+		mapCodexEvents(parseSSE(response, options?.signal, normalizeTimeoutMs(options?.timeoutMs))),
+		output,
+		stream,
+		model,
+		{
+			serviceTier: options?.serviceTier,
+			resolveServiceTier: resolveCodexServiceTier,
+			applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model),
+		},
+	);
 }
 
 class CodexApiError extends Error {
@@ -621,7 +627,44 @@ function normalizeCodexStatus(status: unknown): CodexResponseStatus | undefined 
 // SSE Parsing
 // ============================================================================
 
-async function* parseSSE(response: Response, signal?: AbortSignal): AsyncGenerator<Record<string, unknown>> {
+type SseReadResult = Awaited<ReturnType<ReadableStreamDefaultReader<Uint8Array>["read"]>>;
+
+async function readSSEChunk(
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+	signal?: AbortSignal,
+	idleTimeoutMs?: number,
+): Promise<SseReadResult> {
+	if (idleTimeoutMs === undefined || idleTimeoutMs <= 0) return reader.read();
+	if (signal?.aborted) throw new Error("Request was aborted");
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let abortHandler: (() => void) | undefined;
+	try {
+		return await Promise.race([
+			reader.read(),
+			new Promise<never>((_resolve, reject) => {
+				abortHandler = () => {
+					if (timer) clearTimeout(timer);
+					reject(new Error("Request was aborted"));
+				};
+				timer = setTimeout(() => {
+					void reader.cancel().catch(() => {});
+					reject(new Error(`Codex SSE stream idle timeout after ${idleTimeoutMs}ms`));
+				}, idleTimeoutMs);
+				timer.unref?.();
+				signal?.addEventListener("abort", abortHandler, { once: true });
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+		if (abortHandler) signal?.removeEventListener("abort", abortHandler);
+	}
+}
+
+async function* parseSSE(
+	response: Response,
+	signal?: AbortSignal,
+	idleTimeoutMs?: number,
+): AsyncGenerator<Record<string, unknown>> {
 	if (!response.body) return;
 
 	const reader = response.body.getReader();
@@ -637,7 +680,7 @@ async function* parseSSE(response: Response, signal?: AbortSignal): AsyncGenerat
 			if (signal?.aborted) {
 				throw new Error("Request was aborted");
 			}
-			const { done, value } = await reader.read();
+			const { done, value } = await readSSEChunk(reader, signal, idleTimeoutMs);
 			if (signal?.aborted) {
 				throw new Error("Request was aborted");
 			}

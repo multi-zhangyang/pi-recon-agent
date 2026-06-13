@@ -919,6 +919,19 @@ repi bugreport --output /tmp/repi-bugreport.json
 
 `bugreport` 会汇总 `doctor`、`model doctor`、`memory doctor`、最新 swarm 状态、git/node/npm 基本信息，并严格脱敏 API key、GitHub token、Authorization header、baseUrl 和 URL；不会导出 `auth.json` 或原始 memory events。
 
+
+### 非交互长任务 guardrails
+
+`repi -p` 默认向 stderr 输出进度和 heartbeat，并启用 wall timeout、turn/tool-call 上限、bash 默认超时和 stdin 读取保护：
+
+```bash
+REPI_PRINT_TIMEOUT_MS=300000 repi -p "长任务"
+REPI_PRINT_MAX_TOOL_CALLS=120 repi --tools bash,read,grep -p "工具密集任务"
+REPI_BASH_DEFAULT_TIMEOUT_SECONDS=30 repi --tools bash -p "本地检查"
+```
+
+常用变量：`REPI_PRINT_PROGRESS`、`REPI_PRINT_TIMEOUT_MS`、`REPI_PRINT_MAX_TURNS`、`REPI_PRINT_MAX_TOOL_CALLS`、`REPI_BASH_DEFAULT_TIMEOUT_SECONDS`、`REPI_STDIN_READ_TIMEOUT_MS`、`REPI_READ_STDIN_WITH_PROMPT`。这些 guardrails 只影响稳定性，最终答案仍写 stdout。
+
 ### Gate 失败
 
 先跑：

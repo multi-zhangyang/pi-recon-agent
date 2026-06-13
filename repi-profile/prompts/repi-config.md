@@ -15,4 +15,5 @@ REPI configuration help: $ARGUMENTS
 6. 给验证命令：`repi model doctor`、`repi --offline --list-models` 和 `repi --offline --list-models <provider-or-model>` 做离线解析；真实调用再用 `repi model test --provider <provider-id> --model <model-id>` 或 `repi --provider <provider-id> --model <model-id> --thinking off --no-tools --no-session -p "Reply exactly: PROVIDER_OK"`。
 7. 如果问价格/缓存，说明 `models[].cost.input/output/cacheRead/cacheWrite` 单位是美元 / 百万 tokens，并给 `repi model cost --provider <id> --model <id> --input-tokens N --output-tokens N --cache-read-tokens N --cache-write-tokens N`。
 8. 说明 auto compact：`triggerPercent=85`、`warningPercent=80`、`reserveTokens=16384`、`keepRecentTokens=36000`，触发阈值 `min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)`。
-9. 指向 `docs/reverse-agent/repi-runtime-configuration.md` 和 `docs/reverse-agent/model-provider-formats.md`。
+9. 如果问非交互卡住/长任务，说明 `REPI_PRINT_PROGRESS=1`、`REPI_PRINT_TIMEOUT_MS=210000`、`REPI_PRINT_MAX_TURNS=24`、`REPI_PRINT_MAX_TOOL_CALLS=80`、`REPI_BASH_DEFAULT_TIMEOUT_SECONDS=120`、`REPI_STDIN_READ_TIMEOUT_MS=1500`，以及 `REPI_READ_STDIN_WITH_PROMPT=1` 的用途。
+10. 指向 `docs/reverse-agent/repi-runtime-configuration.md` 和 `docs/reverse-agent/model-provider-formats.md`。

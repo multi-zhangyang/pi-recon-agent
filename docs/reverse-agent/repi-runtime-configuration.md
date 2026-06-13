@@ -213,7 +213,31 @@ min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)
 
 如果上下文贵或任务很长，可以把 `triggerPercent` 改成 `80`；如果模型输出很长，增大 `reserveTokens`。
 
-## 6. 常见故障
+
+## 6. 非交互长任务稳定性
+
+`repi -p` / `repi --mode text` 默认启用长任务 guardrails，避免模型工具循环、慢 provider、stdin 未关闭或 bash 无超时导致“看起来卡死”。这些输出走 stderr，不污染最终 stdout。
+
+| 变量 | 默认值 | 作用 |
+|---|---:|---|
+| `REPI_PRINT_PROGRESS` | `1` | 非交互 text 模式输出 `prompt_start`、tool start/end、compaction、retry 和 heartbeat。 |
+| `REPI_PRINT_TIMEOUT_MS` | `210000` | 单个 prompt 的 wall timeout，超时后 abort 当前 agent run。 |
+| `REPI_PRINT_MAX_TURNS` | `24` | 单个 prompt 的 turn 上限，防止无限 tool loop。 |
+| `REPI_PRINT_MAX_TOOL_CALLS` | `80` | 单个 prompt 的 tool call 总量上限。 |
+| `REPI_BASH_DEFAULT_TIMEOUT_SECONDS` | `120` | 模型调用 bash 但未显式传 `timeout` 时的默认超时。 |
+| `REPI_STDIN_READ_TIMEOUT_MS` | `1500` | 非 TTY stdin 未关闭时的读取保护。 |
+| `REPI_READ_STDIN_WITH_PROMPT` | unset | 设为 `1` 时，允许把 stdin 与显式 `-p`/message prompt 拼接。 |
+
+示例：
+
+```bash
+REPI_PRINT_TIMEOUT_MS=300000 REPI_PRINT_MAX_TOOL_CALLS=120 repi -p "长任务"
+REPI_BASH_DEFAULT_TIMEOUT_SECONDS=30 repi --tools bash -p "跑一个有边界的本地检查"
+```
+
+Provider stream idle timeout 使用同一套 provider timeout：`settings.retry.provider.timeoutMs` 或 HTTP idle timeout 设置；OpenAI Codex Responses SSE fallback 和 Anthropic-compatible SSE body read 都会在 idle 超时后取消 reader。
+
+## 7. 常见故障
 
 | 现象 | 处理 |
 |---|---|

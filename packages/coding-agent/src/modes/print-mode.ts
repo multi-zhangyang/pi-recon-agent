@@ -53,6 +53,20 @@ function printTimeoutMs(mode: PrintModeOptions["mode"]): number | undefined {
 	return isRepiProductMode() ? 210_000 : undefined;
 }
 
+function printMaxTurns(mode: PrintModeOptions["mode"]): number | undefined {
+	if (mode !== "text") return undefined;
+	const configured = envPositiveInteger("REPI_PRINT_MAX_TURNS");
+	if (configured !== undefined) return configured;
+	return isRepiProductMode() ? 24 : undefined;
+}
+
+function printMaxToolCalls(mode: PrintModeOptions["mode"]): number | undefined {
+	if (mode !== "text") return undefined;
+	const configured = envPositiveInteger("REPI_PRINT_MAX_TOOL_CALLS");
+	if (configured !== undefined) return configured;
+	return isRepiProductMode() ? 80 : undefined;
+}
+
 function eventProgressLine(event: AgentSessionEvent): string | undefined {
 	switch (event.type) {
 		case "agent_start":
@@ -97,9 +111,14 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	const signalCleanupHandlers: Array<() => void> = [];
 	const progressEnabled = printProgressEnabled(mode);
 	const timeoutMs = printTimeoutMs(mode);
+	const maxTurns = printMaxTurns(mode);
+	const maxToolCalls = printMaxToolCalls(mode);
 	const startedAt = Date.now();
 	let lastProgress = "startup";
 	let heartbeat: NodeJS.Timeout | undefined;
+	let turnCount = 0;
+	let toolCallCount = 0;
+	let guardAbortReason: string | undefined;
 
 	const emitProgress = (line: string): void => {
 		if (!progressEnabled) return;
@@ -108,11 +127,25 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		console.error(`[repi:print] +${elapsed}s ${line}`);
 	};
 
+	const abortForGuard = (reason: string): void => {
+		if (guardAbortReason) return;
+		guardAbortReason = reason;
+		emitProgress(`guard_abort reason=${reason}`);
+		void session.abort().catch((error) => {
+			console.error(`[repi:print] abort_error ${error instanceof Error ? error.message : String(error)}`);
+		});
+	};
+
 	const runPromptWithTimeout = async (
 		message: string,
 		promptOptions?: Parameters<typeof session.prompt>[1],
 	): Promise<void> => {
-		emitProgress(`prompt_start chars=${message.length} timeoutMs=${timeoutMs ?? "none"}`);
+		turnCount = 0;
+		toolCallCount = 0;
+		guardAbortReason = undefined;
+		emitProgress(
+			`prompt_start chars=${message.length} timeoutMs=${timeoutMs ?? "none"} maxTurns=${maxTurns ?? "none"} maxToolCalls=${maxToolCalls ?? "none"}`,
+		);
 		if (!timeoutMs) {
 			await session.prompt(message, promptOptions);
 			emitProgress("prompt_done");
@@ -209,6 +242,18 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 			if (mode === "json") {
 				writeRawStdout(`${JSON.stringify(event)}\n`);
 				return;
+			}
+			if (event.type === "turn_start") {
+				turnCount += 1;
+				if (maxTurns !== undefined && turnCount > maxTurns) {
+					abortForGuard(`max_turns_exceeded:${turnCount}/${maxTurns}`);
+				}
+			}
+			if (event.type === "tool_execution_start") {
+				toolCallCount += 1;
+				if (maxToolCalls !== undefined && toolCallCount > maxToolCalls) {
+					abortForGuard(`max_tool_calls_exceeded:${toolCallCount}/${maxToolCalls}`);
+				}
 			}
 			const line = eventProgressLine(event);
 			if (line) {

@@ -68,21 +68,59 @@ import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.
  * Read all content from piped stdin.
  * Returns undefined if stdin is a TTY (interactive terminal).
  */
-async function readPipedStdin(): Promise<string | undefined> {
+function envPositiveInteger(name: string): number | undefined {
+	const value = Number(process.env[name]);
+	return Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+}
+
+function isRepiProductMode(): boolean {
+	return process.env.REPI_PRODUCT === "1" || process.env.REPI_PRIMARY === "1";
+}
+
+async function readPipedStdin(options: { skipWhenExplicitPrompt?: boolean } = {}): Promise<string | undefined> {
 	// If stdin is a TTY, we're running interactively - don't read stdin
 	if (process.stdin.isTTY) {
 		return undefined;
 	}
 
+	// REPI print mode should not hang forever when an explicit -p/message prompt is supplied
+	// and the parent process leaves stdin open. Operators can still opt in to stdin+prompt
+	// composition with REPI_READ_STDIN_WITH_PROMPT=1.
+	if (
+		options.skipWhenExplicitPrompt &&
+		isRepiProductMode() &&
+		!isTruthyEnvFlag(process.env.REPI_READ_STDIN_WITH_PROMPT)
+	) {
+		return undefined;
+	}
+
+	const timeoutMs = isRepiProductMode() ? (envPositiveInteger("REPI_STDIN_READ_TIMEOUT_MS") ?? 1500) : undefined;
 	return new Promise((resolve) => {
 		let data = "";
+		let resolved = false;
+		let timer: NodeJS.Timeout | undefined;
+		const finish = (value: string | undefined) => {
+			if (resolved) return;
+			resolved = true;
+			if (timer) clearTimeout(timer);
+			resolve(value);
+		};
 		process.stdin.setEncoding("utf8");
 		process.stdin.on("data", (chunk) => {
 			data += chunk;
 		});
 		process.stdin.on("end", () => {
-			resolve(data.trim() || undefined);
+			finish(data.trim() || undefined);
 		});
+		process.stdin.on("error", () => {
+			finish(data.trim() || undefined);
+		});
+		if (timeoutMs !== undefined) {
+			timer = setTimeout(() => {
+				finish(data.trim() || undefined);
+			}, timeoutMs);
+			timer.unref?.();
+		}
 		process.stdin.resume();
 	});
 }
@@ -819,7 +857,9 @@ export async function main(args: string[], options?: MainOptions) {
 	// Read piped stdin content (if any) - skip for RPC mode which uses stdin for JSON-RPC
 	let stdinContent: string | undefined;
 	if (appMode !== "rpc") {
-		stdinContent = await readPipedStdin();
+		stdinContent = await readPipedStdin({
+			skipWhenExplicitPrompt: parsed.print && (parsed.messages.length > 0 || parsed.fileArgs.length > 0),
+		});
 		if (stdinContent !== undefined && appMode === "interactive") {
 			appMode = "print";
 		}

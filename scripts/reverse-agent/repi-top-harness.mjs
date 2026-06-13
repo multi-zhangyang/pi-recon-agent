@@ -191,12 +191,22 @@ function staticContractChecks() {
 			"REPI_SKIP_PACKAGE_UPDATE_CHECK",
 			"REPI_TELEMETRY",
 			"REPI_OFFLINE",
+			"REPI_PRINT_TIMEOUT_MS",
+			"REPI_PRINT_MAX_TURNS",
+			"REPI_PRINT_MAX_TOOL_CALLS",
+			"REPI_STDIN_READ_TIMEOUT_MS",
+			"REPI_BASH_DEFAULT_TIMEOUT_SECONDS",
 			"PI_SKIP_VERSION_CHECK",
 			"PI_SKIP_PACKAGE_UPDATE_CHECK",
 			"PI_TELEMETRY",
 			"packages/coding-agent/src/cli.ts",
 		], ["ARGS=(--recon"]),
 	);
+	checks.push(markerCheck("runtime:print-mode-guardrails", "packages/coding-agent/src/modes/print-mode.ts", ["REPI_PRINT_PROGRESS", "REPI_PRINT_TIMEOUT_MS", "REPI_PRINT_MAX_TURNS", "REPI_PRINT_MAX_TOOL_CALLS", "still_running", "guard_abort", "max_tool_calls_exceeded"], []));
+	checks.push(markerCheck("runtime:stdin-noninteractive-guard", "packages/coding-agent/src/main.ts", ["REPI_READ_STDIN_WITH_PROMPT", "REPI_STDIN_READ_TIMEOUT_MS", "skipWhenExplicitPrompt", "readPipedStdin"], []));
+	checks.push(markerCheck("runtime:bash-default-timeout", "packages/coding-agent/src/core/tools/bash.ts", ["REPI_BASH_DEFAULT_TIMEOUT_SECONDS", "PI_BASH_DEFAULT_TIMEOUT_SECONDS", "effectiveTimeout", "Command timed out after"], []));
+	checks.push(markerCheck("runtime:sse-idle-timeout", "packages/ai/src/providers/openai-codex-responses.ts", ["Codex SSE stream idle timeout", "readSSEChunk", "idleTimeoutMs"], []));
+	checks.push(markerCheck("runtime:anthropic-sse-idle-timeout", "packages/ai/src/providers/anthropic.ts", ["Anthropic SSE stream idle timeout", "readSseChunk", "idleTimeoutMs"], []));
 	checks.push(markerCheck("launcher:repi-swarm-llm-run", "repi", ["swarm)", "plan|run|status|merge|llm-run", "repi-swarm-llm-run.mjs"], []));
 	checks.push(markerCheck("swarm:llm-worker-pool-cli", "scripts/reverse-agent/repi-swarm-llm-run.mjs", ["repi-llm-worker-pool-report", "LLMWorkerPoolV1", "SwarmPlannerV1", "StructuredSubagentMergeV1", "repi swarm plan", "repi swarm run", "REPI_CODING_AGENT_DIR", "--no-session", "stdoutSha256", "evidenceRoot"], []));
 	checks.push(markerCheck("model:cli-control-plane", "scripts/reverse-agent/model-inspect.mjs", ["repi model list", "repi model add", "repi model edit", "repi model remove", "repi model export", "repi model import", "repi model login", "repi model test", "repi model default", "auth.json", "settings.json", "apiKeyEnvPresent"], []));

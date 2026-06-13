@@ -348,6 +348,7 @@ function consumeLine(text: string): { line: string; rest: string } | null {
 async function* iterateSseMessages(
 	body: ReadableStream<Uint8Array>,
 	signal?: AbortSignal,
+	idleTimeoutMs?: number,
 ): AsyncGenerator<ServerSentEvent> {
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
@@ -360,7 +361,7 @@ async function* iterateSseMessages(
 				throw new Error("Request was aborted");
 			}
 
-			const { value, done } = await reader.read();
+			const { value, done } = await readSseChunk(reader, signal, idleTimeoutMs);
 			if (done) {
 				break;
 			}
@@ -404,9 +405,43 @@ async function* iterateSseMessages(
 	}
 }
 
+type SseReadResult = Awaited<ReturnType<ReadableStreamDefaultReader<Uint8Array>["read"]>>;
+
+async function readSseChunk(
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+	signal?: AbortSignal,
+	idleTimeoutMs?: number,
+): Promise<SseReadResult> {
+	if (idleTimeoutMs === undefined || idleTimeoutMs <= 0) return reader.read();
+	if (signal?.aborted) throw new Error("Request was aborted");
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let abortHandler: (() => void) | undefined;
+	try {
+		return await Promise.race([
+			reader.read(),
+			new Promise<never>((_resolve, reject) => {
+				abortHandler = () => {
+					if (timer) clearTimeout(timer);
+					reject(new Error("Request was aborted"));
+				};
+				timer = setTimeout(() => {
+					void reader.cancel().catch(() => {});
+					reject(new Error(`Anthropic SSE stream idle timeout after ${idleTimeoutMs}ms`));
+				}, idleTimeoutMs);
+				timer.unref?.();
+				signal?.addEventListener("abort", abortHandler, { once: true });
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+		if (abortHandler) signal?.removeEventListener("abort", abortHandler);
+	}
+}
+
 async function* iterateAnthropicEvents(
 	response: Response,
 	signal?: AbortSignal,
+	idleTimeoutMs?: number,
 ): AsyncGenerator<RawMessageStreamEvent> {
 	if (!response.body) {
 		throw new Error("Attempted to iterate over an Anthropic response with no body");
@@ -415,7 +450,7 @@ async function* iterateAnthropicEvents(
 	let sawMessageStart = false;
 	let sawMessageEnd = false;
 
-	for await (const sse of iterateSseMessages(response.body, signal)) {
+	for await (const sse of iterateSseMessages(response.body, signal, idleTimeoutMs)) {
 		if (sse.event === "error") {
 			throw new Error(sse.data);
 		}
@@ -525,7 +560,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			type Block = (ThinkingContent | TextContent | (ToolCall & { partialJson: string })) & { index: number };
 			const blocks = output.content as Block[];
 
-			for await (const event of iterateAnthropicEvents(response, options?.signal)) {
+			for await (const event of iterateAnthropicEvents(response, options?.signal, options?.timeoutMs)) {
 				if (event.type === "message_start") {
 					output.responseId = event.message.id;
 					// Capture initial token usage from message_start event

@@ -23,7 +23,12 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult
 
 const bashSchema = Type.Object({
 	command: Type.String({ description: "Bash command to execute" }),
-	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
+	timeout: Type.Optional(
+		Type.Number({
+			description:
+				"Timeout in seconds. Optional; REPI applies REPI_BASH_DEFAULT_TIMEOUT_SECONDS/PI_BASH_DEFAULT_TIMEOUT_SECONDS when unset.",
+		}),
+	),
 });
 
 function envPositiveTimeoutSeconds(name: string): number | undefined {
