@@ -100,7 +100,8 @@ Models:
   repi model add --provider <id> --api openai-completions --base-url <url> --model <model>
   repi model login --provider <id> --api-key-stdin
   repi model default --provider <id> --model <model>
-  repi model list|doctor|test|cost|export|import
+  repi model list [--provider <id>] [--model <id>] [--show-urls]
+  repi model doctor|test|cost|export|import
 
 Memory:
   repi memory status|list|show|why|forget|quarantine|doctor|export|purge|diff|consolidate
@@ -177,7 +178,7 @@ Usage:
   repi memory quarantine <query-or-event-id> [--reason <text>]
   repi memory doctor [--json]
   repi memory export [--output <path>] [--full] [--json]
-  repi memory purge [--dry-run|--apply] [--governed|--older-than-days N|--query <text>|--id <event-id>|--all]
+  repi memory purge [--dry-run|--apply --yes] [--governed|--older-than-days N|--query <text>|--id <event-id>|--all]
   repi memory consolidate [--dry-run] [--json]
 MSG
         exit 0

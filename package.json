@@ -160,7 +160,8 @@
 		"model:export": "node scripts/reverse-agent/model-inspect.mjs . export",
 		"gate:open-source-readiness": "node scripts/reverse-agent/open-source-readiness-gate.mjs . --strict",
 		"setup:repi": "bash install.sh",
-		"update:repi": "bash scripts/reverse-agent/update-repi.sh ."
+		"update:repi": "bash scripts/reverse-agent/update-repi.sh .",
+		"gate:repi-cli-ux": "node scripts/reverse-agent/repi-cli-ux-gate.mjs . --strict"
 	},
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "0.0.26",

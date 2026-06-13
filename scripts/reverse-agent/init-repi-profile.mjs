@@ -13,7 +13,14 @@ const importLegacyPiProfile =
 	process.env.REPI_IMPORT_PI_AUTH === "1" ||
 	process.env.REPI_IMPORT_PI_AUTH === "true";
 
-const mkdir = (path) => mkdirSync(path, { recursive: true });
+const mkdir = (path) => {
+	mkdirSync(path, { recursive: true, mode: 0o700 });
+	try {
+		chmodSync(path, 0o700);
+	} catch {
+		// Best-effort on non-POSIX filesystems.
+	}
+};
 const readJson = (path) => {
 	try {
 		return JSON.parse(readFileSync(path, "utf8"));

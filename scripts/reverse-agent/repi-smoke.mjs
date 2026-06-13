@@ -1,19 +1,33 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const root = resolve(process.argv[2] && !process.argv[2].startsWith("--") ? process.argv[2] : process.cwd());
 const full = process.argv.includes("--full");
 const json = process.argv.includes("--json");
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+
+function script(name) {
+	const sourcePath = join(root, "scripts", "reverse-agent", name);
+	if (existsSync(sourcePath)) return sourcePath;
+	return join(scriptDir, name);
+}
 
 const steps = [
-	{ id: "doctor", cmd: "node", args: ["scripts/reverse-agent/repi-doctor.mjs", root] },
-	{ id: "memory-status", cmd: "node", args: ["scripts/reverse-agent/memory-inspect.mjs", root, "status", "--json"] },
-	{ id: "model-doctor", cmd: "node", args: ["scripts/reverse-agent/model-inspect.mjs", root, "doctor", "--json"] },
-	{ id: "memory-scoped-gate", cmd: "npm", args: ["run", "gate:memory-isolation-default"] },
-	{ id: "shrinkwrap", cmd: "npm", args: ["run", "check:shrinkwrap"] },
-	{ id: "ts-imports", cmd: "npm", args: ["run", "check:ts-imports"] },
+	{ id: "doctor", cmd: "node", args: [script("repi-doctor.mjs"), root] },
+	{ id: "memory-status", cmd: "node", args: [script("memory-inspect.mjs"), root, "status", "--json"] },
+	{ id: "model-doctor", cmd: "node", args: [script("model-inspect.mjs"), root, "doctor", "--json"] },
+	{ id: "cli-ux-gate", cmd: "node", args: [script("repi-cli-ux-gate.mjs"), root, "--strict"] },
 ];
+if (existsSync(join(root, "scripts", "reverse-agent", "memory-isolation-gate.mjs"))) {
+	steps.push(
+		{ id: "memory-scoped-gate", cmd: "npm", args: ["run", "gate:memory-isolation-default"] },
+		{ id: "shrinkwrap", cmd: "npm", args: ["run", "check:shrinkwrap"] },
+		{ id: "ts-imports", cmd: "npm", args: ["run", "check:ts-imports"] },
+	);
+}
 if (full) steps.push({ id: "full-check", cmd: "npm", args: ["run", "check"] });
 
 function runStep(step) {

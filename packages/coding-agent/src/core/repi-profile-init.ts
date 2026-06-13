@@ -12,7 +12,12 @@ export interface RepiProfileInitResult {
 }
 
 function mkdir(path: string): void {
-	mkdirSync(path, { recursive: true });
+	mkdirSync(path, { recursive: true, mode: 0o700 });
+	try {
+		chmodSync(path, 0o700);
+	} catch {
+		// Best-effort on non-POSIX filesystems.
+	}
 }
 
 function readJson(path: string): Record<string, unknown> | undefined {

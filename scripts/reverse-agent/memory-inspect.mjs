@@ -43,7 +43,7 @@ function usage() {
   repi memory quarantine <query-or-event-id> [--reason <text>] [--json]
   repi memory doctor [--json]
   repi memory export [--output <path>] [--full] [--limit N] [--json]
-  repi memory purge [--dry-run|--apply] [--governed|--older-than-days N|--query <text>|--id <event-id>|--all] [--json]
+  repi memory purge [--dry-run|--apply --yes] [--governed|--older-than-days N|--query <text>|--id <event-id>|--all] [--json]
 
 status  Show scoped memory posture, file sizes, pending consolidation count.
 list    List sanitized memory events. By default hides forget/quarantine rows.
@@ -54,7 +54,7 @@ forget  Append a tombstone governance decision. It does not rewrite history.
 quarantine Append a quarantine governance decision. It blocks future recall/injection.
 doctor  Check memory pollution posture and store health.
 export  Write a sanitized memory diagnostic bundle. API keys/tokens are redacted.
-purge   Physically remove selected event rows after creating a .bak backup; default is dry-run.
+purge   Physically remove selected event rows after creating a .bak backup; default is dry-run. --apply requires --yes.
 `;
 }
 
@@ -126,6 +126,8 @@ function redact(value) {
 		.replace(/\bsk-[A-Za-z0-9._-]{8,}\b/g, "<redacted:api-key>")
 		.replace(/\bghp_[A-Za-z0-9_]{16,}\b/g, "<redacted:github-token>")
 		.replace(/\bgithub_pat_[A-Za-z0-9_]{16,}\b/g, "<redacted:github-token>")
+		.replace(/((?:baseUrl|baseURL|endpoint|url)"?\s*[:=]\s*"?)(https?:\/\/[^\s"',}]+)/gi, (_match, prefix, url) => `${prefix}<redacted:url:${sha256(url).slice(0, 16)}>`)
+		.replace(/\bhttps?:\/\/api\.[^\s"',}<)]+/gi, (url) => `<redacted:url:${sha256(url).slice(0, 16)}>`)
 		.replace(/(?:AUTH_TOKEN|API_KEY|PASSWORD|SECRET|TOKEN)=\S+/gi, (match) => `${match.split("=")[0]}=<redacted>`)
 		.replace(/\s+/g, " ")
 		.trim();
@@ -601,6 +603,7 @@ function buildPurgeReport() {
 	const { jsonl, events } = loadMemoryEvents();
 	const { selected, filters } = selectPurgeCandidates(events);
 	const apply = rawArgs.includes("--apply") && !rawArgs.includes("--dry-run");
+	const confirmed = rawArgs.includes("--yes") || rawArgs.includes("-y") || process.env.REPI_MEMORY_PURGE_CONFIRM === "1";
 	const hasFilter = Boolean(filters.id || filters.query || filters.olderThanDays > 0 || filters.purgeGoverned || filters.purgeAll);
 	if (!hasFilter) {
 		return {
@@ -609,6 +612,24 @@ function buildPurgeReport() {
 			generatedAt: new Date().toISOString(),
 			ok: false,
 			error: "memory purge requires at least one selector: --governed, --older-than-days N, --query <text>, --id <event-id>, or --all",
+		};
+	}
+	if (apply && !confirmed) {
+		return {
+			kind: "repi-memory-purge-report",
+			schemaVersion: 1,
+			generatedAt: new Date().toISOString(),
+			ok: false,
+			apply,
+			confirmed,
+			eventsPath,
+			totalEvents: events.length,
+			invalidLines: jsonl.invalid,
+			candidateCount: selected.size,
+			removedCount: 0,
+			filters,
+			error: "memory purge --apply requires --yes (or REPI_MEMORY_PURGE_CONFIRM=1). Run without --apply first to preview candidates.",
+			next: ["repi memory purge --dry-run <same selectors>", "repi memory purge --apply --yes <same selectors>"],
 		};
 	}
 	const candidateRows = events
@@ -661,6 +682,7 @@ function buildPurgeReport() {
 		generatedAt: new Date().toISOString(),
 		ok: true,
 		apply,
+		confirmed,
 		eventsPath,
 		backupPath: apply && selected.size > 0 ? backupPath : null,
 		totalEvents: events.length,
@@ -669,7 +691,7 @@ function buildPurgeReport() {
 		removedCount: removed,
 		filters,
 		candidates: candidateRows,
-		next: apply ? ["repi memory doctor", "repi memory list"] : ["repi memory purge --apply <same selectors>", "repi memory show <event-id>"],
+		next: apply ? ["repi memory doctor", "repi memory list"] : ["repi memory purge --apply --yes <same selectors>", "repi memory show <event-id>"],
 	};
 }
 

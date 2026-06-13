@@ -405,6 +405,7 @@ repi model add --provider openai-compatible --api openai-completions --base-url 
 repi model login --provider openai-compatible --api-key-stdin
 repi model default --provider openai-compatible --model provider/model-id
 repi model list
+repi model list --provider openai-compatible
 repi model test --provider openai-compatible --model provider/model-id
 repi model doctor
 repi model cost --provider openai-compatible --model provider/model-id --input-tokens 100000 --output-tokens 10000
@@ -414,9 +415,9 @@ npm run gate:provider-endpoint-doctor
 npm run gate:provider-runtime-matrix
 ```
 
-`repi model doctor` 是离线检查：解析 `~/.repi/agent/models.json`、检查 provider/model 元数据、环境变量引用、context window、max tokens 和 cost/cache 字段，不会输出真实 key。
+`repi model doctor` 是离线检查：解析 `~/.repi/agent/models.json`、检查 provider/model 元数据、环境变量引用、context window、max tokens 和 cost/cache 字段，不会输出真实 key；provider `baseUrl` 默认也会脱敏，只有本机排障时显式加 `--show-urls` 才显示。
 
-`repi model list/edit/remove/export/import` 用于本机 provider 配置维护；`export` 不导出 `auth.json`，会把 literal key 归一化成 `$REPI_<PROVIDER>_API_KEY` 引用。
+`repi model list/edit/remove/export/import` 用于本机 provider 配置维护；`list` 支持 `--provider <id>` / `--model <id>` 过滤，默认隐藏真实 `baseUrl`；`export` 不导出 `auth.json`，会把 literal key 归一化成 `$REPI_<PROVIDER>_API_KEY` 引用。
 
 `repi model cost` 按 `cost.input/output/cacheRead/cacheWrite` 估算费用，单位是美元 / 百万 tokens。
 
@@ -734,7 +735,8 @@ repi memory forget <event-id>       # 追加 tombstone，不重写历史
 repi memory quarantine <event-id>   # 追加 quarantine，阻断后续召回/注入
 repi memory doctor                  # 检查污染保护、raw/global 注入开关、JSONL 健康
 repi memory export --output /tmp/repi-memory.json  # 导出脱敏诊断包，不导出 auth/raw secret
-repi memory purge --dry-run --governed             # 预览物理清理；加 --apply 才写入
+repi memory purge --dry-run --governed             # 预览物理清理
+repi memory purge --apply --yes --governed         # 确认后才会真正写入
 repi memory diff                    # 查看尚未 consolidation 的高价值事件
 repi memory consolidate --dry-run   # 只看蒸馏计划
 repi memory consolidate             # 写入 project/procedural memory
@@ -866,7 +868,8 @@ repi memory forget <event-id>        # 记忆 tombstone
 repi memory quarantine <event-id>    # 记忆隔离
 repi memory doctor                  # 记忆污染保护与存储健康检查
 repi memory export --output /tmp/repi-memory.json  # 脱敏导出
-repi memory purge --dry-run --governed             # 预览清理；--apply 才写
+repi memory purge --dry-run --governed             # 预览清理
+repi memory purge --apply --yes --governed         # 确认后才会真正写入
 repi memory diff                    # 未蒸馏高价值事件差异
 repi memory consolidate --dry-run   # 查看 memory 蒸馏计划
 repi memory consolidate             # 把高价值 events 蒸馏到 project/procedural memory
@@ -875,7 +878,8 @@ repi swarm run <target> --workers 5 --provider <provider> --model <model>
 repi swarm status latest
 repi swarm merge latest
 repi swarm llm-run <target> --workers 3 --provider <provider> --model <model>
-repi model list                     # 列出本机 provider/model
+repi model list                     # 列出本机 provider/model，默认隐藏 baseUrl
+repi model list --provider <id>     # 只看一个 provider；本机排障可加 --show-urls
 repi model doctor                   # 离线检查 provider/model 配置
 repi model add --provider <id> --api openai-completions --base-url <url> --model <id>
 repi model edit --provider <id> --model <id> --context-window 262144 --max-tokens 16384

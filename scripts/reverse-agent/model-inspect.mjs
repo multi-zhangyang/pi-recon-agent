@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -21,7 +22,7 @@ const allowedApis = new Set(["openai-completions", "openai-responses", "anthropi
 function usage() {
 	return `Usage:
   repi model doctor [--json]
-  repi model list [--json]
+  repi model list [--provider <id>] [--model <id>] [--show-urls] [--json]
   repi model add --provider <id> --api <openai-completions|openai-responses|anthropic-messages> --base-url <url> --model <id> [options]
   repi model edit --provider <id> [--model <id>] [options]
   repi model remove --provider <id> [--model <id>] [--json]
@@ -34,6 +35,7 @@ function usage() {
   repi model import --input <path|-> [--merge|--replace] [--json]
 
 model doctor is offline: it parses ~/.repi/agent/models.json, checks provider/model metadata, env-key references, context window and cost fields.
+model list hides provider base URLs by default to avoid leaking private gateway endpoints into screenshots/logs; add --show-urls for local troubleshooting.
 model add writes ~/.repi/agent/models.json with env-ref credentials by default; model login writes ~/.repi/agent/auth.json locally.
 model export never exports local API keys; model import preserves/creates env-ref apiKey fields and never writes auth.json.
 `;
@@ -102,6 +104,10 @@ function hasFlag(args, names) {
 	return args.some((arg) => list.some((name) => arg === name || arg.startsWith(`${name}=`)));
 }
 
+function hash(value) {
+	return createHash("sha256").update(String(value ?? "")).digest("hex").slice(0, 16);
+}
+
 function maybeNumberFlag(args, names) {
 	if (!hasFlag(args, names)) return undefined;
 	return numberFlag(args, names, 0);
@@ -125,6 +131,16 @@ function redact(value) {
 		.replace(/\bghp_[A-Za-z0-9_]{16,}\b/g, "<redacted:github-token>")
 		.replace(/\bgithub_pat_[A-Za-z0-9_]{16,}\b/g, "<redacted:github-token>")
 		.trim();
+}
+
+function showUrls() {
+	return rawArgs.includes("--show-urls") || rawArgs.includes("--show-base-url") || rawArgs.includes("--show-base-urls");
+}
+
+function displayUrl(value) {
+	const text = redact(value);
+	if (!text) return "";
+	return showUrls() ? text : `<redacted:url:${hash(text)}>`;
 }
 
 function envRef(apiKey) {
@@ -225,7 +241,8 @@ function buildDoctorReport() {
 		providerRows.push({
 			id: providerId,
 			api,
-			baseUrl: redact(provider.baseUrl),
+			baseUrl: displayUrl(provider.baseUrl),
+			baseUrlHidden: !showUrls(),
 			apiKey: storedAuth.configured
 				? `${storedAuth.source} (${key.kind === "env" ? `models ref $${key.env}; env ${key.present ? "set" : "missing"}` : `models ${key.kind}`})`
 				: key.kind === "env"
@@ -309,15 +326,19 @@ function buildCostReport() {
 	};
 }
 
-function modelRowsForList(providers, authData) {
+function modelRowsForList(providers, authData, providerFilter, modelFilter) {
 	return Object.entries(providers).flatMap(([providerId, provider]) => {
+		if (providerFilter && providerId !== providerFilter) return [];
 		const storedAuth = storedAuthStatus(authData, providerId);
 		const key = envRef(provider.apiKey);
-		return (Array.isArray(provider.models) ? provider.models : []).map((model) => ({
+		return (Array.isArray(provider.models) ? provider.models : [])
+			.filter((model) => !modelFilter || model?.id === modelFilter)
+			.map((model) => ({
 			provider: providerId,
 			model: redact(model.id),
 			api: provider.api,
-			baseUrl: redact(provider.baseUrl),
+			baseUrl: displayUrl(provider.baseUrl),
+			baseUrlHidden: !showUrls(),
 			auth: storedAuth.configured ? storedAuth.source : key.kind === "env" ? `$${key.env}:${key.present ? "set" : "missing"}` : key.kind,
 			contextWindow: Number(model.contextWindow ?? 0),
 			maxTokens: Number(model.maxTokens ?? 0),
@@ -331,19 +352,26 @@ function modelRowsForList(providers, authData) {
 function buildListReport() {
 	const loaded = loadProviders();
 	const authData = readJson(authPath);
-	const rows = modelRowsForList(loaded.providers, authData);
+	const providerFilter = flagValue(rawArgs, "--provider") || undefined;
+	const modelFilter = flagValue(rawArgs, "--model") || undefined;
+	const rows = modelRowsForList(loaded.providers, authData, providerFilter, modelFilter);
+	const providerMissing = Boolean(providerFilter && !Object.prototype.hasOwnProperty.call(loaded.providers, providerFilter));
+	const filterMissing = !loaded.parseError && (providerMissing || Boolean(modelFilter && rows.length === 0));
 	return {
 		kind: "repi-model-list-report",
 		schemaVersion: 1,
 		generatedAt: new Date().toISOString(),
-		ok: !loaded.parseError,
+		ok: !loaded.parseError && !filterMissing,
 		agentDir,
 		modelsPath,
 		authPath,
-		providerCount: Object.keys(loaded.providers).length,
+		provider: providerFilter ?? null,
+		model: modelFilter ?? null,
+		baseUrlHidden: !showUrls(),
+		providerCount: providerFilter ? (Object.prototype.hasOwnProperty.call(loaded.providers, providerFilter) ? 1 : 0) : Object.keys(loaded.providers).length,
 		modelCount: rows.length,
 		rows,
-		error: loaded.parseError ?? undefined,
+		error: loaded.parseError ?? (filterMissing ? `model list found no rows for provider=${providerFilter ?? "<any>"} model=${modelFilter ?? "<any>"}` : undefined),
 	};
 }
 
@@ -475,7 +503,8 @@ function buildAddReport() {
 		provider: providerId,
 		model: modelId,
 		api,
-		baseUrl: redact(baseUrl),
+		baseUrl: displayUrl(baseUrl),
+		baseUrlHidden: !showUrls(),
 		apiKey: `$${apiKeyEnv}`,
 		apiKeyEnvPresent: Boolean(process.env[apiKeyEnv]),
 		authWritten,
