@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { AgentToolResult } from "@pi-recon/repi-agent-core";
 import { Type } from "typebox";
@@ -58,11 +58,19 @@ export interface McpProbeResult {
 	error?: string;
 }
 
+export interface McpToolArtifact {
+	path: string;
+	sha256: string;
+	bytes: number;
+	previewChars: number;
+}
+
 export interface McpToolCallDetails {
 	serverId: string;
 	toolName: string;
 	isError: boolean;
 	contentItems: number;
+	artifacts?: McpToolArtifact[];
 	stderrTail?: string;
 }
 
@@ -78,7 +86,9 @@ export interface McpManagerOptions {
 }
 
 const DEFAULT_MCP_TIMEOUT_MS = 10000;
-const MAX_MCP_TOOL_TEXT_CHARS = 64000;
+const MCP_TOOL_ARTIFACT_THRESHOLD_CHARS = 20000;
+const MCP_TOOL_INLINE_PREVIEW_CHARS = 12000;
+const MCP_TOOL_FALLBACK_TRUNCATE_CHARS = 64000;
 
 const mcpProxyToolSchema = Type.Object({
 	tool: Type.String({ description: "Original MCP tool name to call on this server" }),
@@ -186,29 +196,17 @@ function textFromContent(content: McpToolCallResult["content"]): string {
 		.trim();
 }
 
-function truncateMcpText(text: string): string {
-	const redacted = redact(text);
-	if (redacted.length <= MAX_MCP_TOOL_TEXT_CHARS) return redacted;
-	return `${redacted.slice(0, MAX_MCP_TOOL_TEXT_CHARS)}\n\n[truncated MCP tool output at ${MAX_MCP_TOOL_TEXT_CHARS} chars]`;
+interface NormalizedMcpContent {
+	content: McpToolCallResult["content"];
+	artifacts: McpToolArtifact[];
 }
 
-function normalizeMcpContent(result: unknown): McpToolCallResult["content"] {
-	const content = isRecord(result) && Array.isArray(result.content) ? result.content : [];
-	const normalized: McpToolCallResult["content"] = [];
-	for (const item of content) {
-		if (!isRecord(item)) continue;
-		if (item.type === "text" && typeof item.text === "string") {
-			normalized.push({ type: "text", text: truncateMcpText(item.text) });
-			continue;
-		}
-		if (item.type === "image" && typeof item.data === "string" && typeof item.mimeType === "string") {
-			normalized.push({ type: "image", data: item.data, mimeType: item.mimeType });
-			continue;
-		}
-		normalized.push({ type: "text", text: truncateMcpText(JSON.stringify(item)) });
-	}
-	if (normalized.length === 0) normalized.push({ type: "text", text: "MCP tool returned no content." });
-	return normalized;
+function inlineMcpText(text: string): string {
+	const redacted = redact(text);
+	if (redacted.length <= MCP_TOOL_FALLBACK_TRUNCATE_CHARS) return redacted;
+	return `${redacted.slice(0, MCP_TOOL_FALLBACK_TRUNCATE_CHARS)}
+
+[truncated MCP tool output at ${MCP_TOOL_FALLBACK_TRUNCATE_CHARS} chars]`;
 }
 
 function toAgentToolResult(result: McpToolCallResult): AgentToolResult<McpToolCallDetails> {
@@ -430,15 +428,16 @@ export class McpManager {
 					signal,
 				);
 				const isError = isRecord(result) && result.isError === true;
-				const content = normalizeMcpContent(result);
+				const normalized = this.normalizeMcpContent(entry.id, toolName, result);
 				return {
-					content,
+					content: normalized.content,
 					isError,
 					details: {
 						serverId: entry.id,
 						toolName,
 						isError,
-						contentItems: content.length,
+						contentItems: normalized.content.length,
+						artifacts: normalized.artifacts.length > 0 ? normalized.artifacts : undefined,
 						stderrTail: client.stderrTail || undefined,
 					},
 				};
@@ -547,6 +546,53 @@ export class McpManager {
 				return toAgentToolResult(result);
 			},
 		};
+	}
+
+	private normalizeMcpContent(serverId: string, toolName: string, result: unknown): NormalizedMcpContent {
+		const content = isRecord(result) && Array.isArray(result.content) ? result.content : [];
+		const normalized: McpToolCallResult["content"] = [];
+		const artifacts: McpToolArtifact[] = [];
+		for (const [index, item] of content.entries()) {
+			if (!isRecord(item)) continue;
+			if (item.type === "text" && typeof item.text === "string") {
+				const redactedText = redact(item.text);
+				if (redactedText.length > MCP_TOOL_ARTIFACT_THRESHOLD_CHARS) {
+					const artifact = this.writeTextArtifact(serverId, toolName, index, redactedText);
+					artifacts.push(artifact);
+					normalized.push({
+						type: "text",
+						text: `${redactedText.slice(0, MCP_TOOL_INLINE_PREVIEW_CHARS)}
+
+[MCP output stored as artifact]
+path=${artifact.path}
+sha256=${artifact.sha256}
+bytes=${artifact.bytes}
+preview_chars=${artifact.previewChars}`,
+					});
+				} else {
+					normalized.push({ type: "text", text: inlineMcpText(redactedText) });
+				}
+				continue;
+			}
+			if (item.type === "image" && typeof item.data === "string" && typeof item.mimeType === "string") {
+				normalized.push({ type: "image", data: item.data, mimeType: item.mimeType });
+				continue;
+			}
+			normalized.push({ type: "text", text: inlineMcpText(JSON.stringify(item)) });
+		}
+		if (normalized.length === 0) normalized.push({ type: "text", text: "MCP tool returned no content." });
+		return { content: normalized, artifacts };
+	}
+
+	private writeTextArtifact(serverId: string, toolName: string, itemIndex: number, text: string): McpToolArtifact {
+		const bytes = Buffer.byteLength(text, "utf8");
+		const sha256 = createHash("sha256").update(text).digest("hex");
+		const dir = join(this.agentDir, "recon", "mcp-artifacts", sanitizeToolNamePart(serverId, "server"));
+		mkdirSync(dir, { recursive: true, mode: 0o700 });
+		const fileName = `${Date.now()}-${sanitizeToolNamePart(toolName, "tool")}-${itemIndex}-${sha256.slice(0, 12)}.txt`;
+		const path = join(dir, fileName);
+		writeFileSync(path, text, { encoding: "utf8", mode: 0o600 });
+		return { path, sha256, bytes, previewChars: Math.min(MCP_TOOL_INLINE_PREVIEW_CHARS, text.length) };
 	}
 
 	private shouldExposeTools(entry: McpServerEntry): boolean {

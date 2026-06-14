@@ -723,7 +723,13 @@ repi mcp probe demo
 - `mcp__demo__call`：轻量 proxy，参数是 `{ "tool": "search", "arguments": { ... } }`。
 - `mcp__demo__search` / `mcp__demo__fetch`：执行 `/mcp list` 或 `/mcp demo` 探测成功后，按 MCP `inputSchema` 生成的直连工具。
 
-`allowedTools` / `blockedTools` 会同时作用于探测、直连工具和 proxy 调用；stdout/stderr 与返回文本会做默认脱敏，过长工具输出会截断，后续再接 artifact 落盘。
+`allowedTools` / `blockedTools` 会同时作用于探测、直连工具和 proxy 调用。stdout/stderr 与返回文本会做默认脱敏；超过阈值的大文本不会整段塞回上下文，而是写入：
+
+```text
+~/.repi/agent/recon/mcp-artifacts/<server>/<timestamp>-<tool>-<sha>.txt
+```
+
+模型侧只收到 preview、artifact path、sha256 和 bytes，方便后续用 `read`/`bash` 精确取证。
 
 ---
 

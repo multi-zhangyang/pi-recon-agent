@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -66,7 +66,10 @@ rl.on("line", (line) => {
  const msg = JSON.parse(line);
  if (msg.method === "initialize") console.log(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2025-11-25", serverInfo: { name: "fake" }, capabilities: { tools: {} } } }));
  if (msg.method === "tools/list") console.log(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "echo", description: "Echo text", inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } }, { name: "blocked", description: "Blocked", inputSchema: { type: "object" } }] } }));
- if (msg.method === "tools/call") console.log(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "echo:" + msg.params.arguments.text }], isError: false } }));
+ if (msg.method === "tools/call") {
+  const text = msg.params.arguments.text === "large" ? "x".repeat(21050) + " token=sk-secret-1234567890" : "echo:" + msg.params.arguments.text;
+  console.log(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text }], isError: false } }));
+ }
 });
 `,
 		);
@@ -112,6 +115,17 @@ rl.on("line", (line) => {
 			{} as any,
 		);
 		expect(directResult.content).toEqual([{ type: "text", text: "echo:direct" }]);
+
+		const largeResult = await manager.callTool("fake", "echo", { text: "large" });
+		expect(largeResult.details.artifacts).toHaveLength(1);
+		const artifact = largeResult.details.artifacts?.[0];
+		expect(artifact?.bytes).toBeGreaterThan(20000);
+		expect(String(largeResult.content[0].type === "text" ? largeResult.content[0].text : "")).toContain(
+			"MCP output stored as artifact",
+		);
+		const artifactText = readFileSync(String(artifact?.path), "utf8");
+		expect(artifactText).toContain("<redacted>");
+		expect(artifactText).not.toContain("sk-secret-1234567890");
 		await expect(manager.callTool("fake", "blocked", {})).rejects.toThrow("not allowed");
 	});
 });
