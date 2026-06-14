@@ -101,36 +101,32 @@ repi model cost --provider openai-compatible --model provider/model-id --input-t
 
 OpenAI Responses-compatible provider 使用 `api: "openai-responses"`，运行时必须能接收 `POST /v1/responses`。如果 smoke 显示 `/v1/responses` 404，而 `/v1/chat/completions` 可用，就说明该网关当前按 Chat Completions 暴露，应改用 `api: "openai-completions"`，不要依赖自动降级。
 
-### 自动诊断网关格式
+### 判断网关格式
 
-不确定网关到底支持 OpenAI Chat Completions、OpenAI Responses 还是 Anthropic Messages 时，先让 REPI 诊断 endpoint：
+不确定网关到底支持 OpenAI Chat Completions、OpenAI Responses 还是 Anthropic Messages 时，按下面顺序处理：
+
+1. 先用最常见的 `openai-completions` 写入配置。
+2. 运行 `repi model doctor` 做离线解析验证。
+3. 运行 `repi model test --provider <id> --model <model-id>` 做最小真实调用。
+4. 如果返回 `/v1/chat/completions` 不存在，但上游文档要求 `/v1/responses`，把 provider 改成 `openai-responses`。
+5. 如果服务只暴露 Anthropic Messages，把 provider 改成 `anthropic-messages`，`baseUrl` 填服务根地址。
+
+示例：
 
 ```bash
-export REPI_PROVIDER_DOCTOR_API_KEY=<your-token>
-repi provider-doctor \
+repi model add \
+  --provider openai-compatible \
+  --api openai-completions \
   --base-url https://api.example.com/v1 \
   --model provider/model-id \
-  --api auto
+  --context-window 128000 \
+  --max-tokens 16384 \
+  --set-default
+
+printf '%s' "$API_KEY" | repi model login --provider openai-compatible --api-key-stdin
+repi model doctor
+repi model test --provider openai-compatible --model provider/model-id
 ```
-
-`provider-doctor` 会输出 `ProviderEndpointDoctorV1` 诊断结果和可复制到 `~/.repi/agent/models.json` 的 template。密钥只从 `--api-key-env` 指定的环境变量读取，template 只写 `$REPI_PROVIDER_DOCTOR_API_KEY`，不会写明文 key。若 `openai-responses` 探测结果是 `endpoint_not_found`，应优先按通过的 `openai-completions` 或 `anthropic-messages` 配；需要机器可读输出时加 `--json`。
-
-### 可选远程 provider 长跑回归
-
-REPI 的默认 CI 不要求真实密钥；需要验证某个真实网关/模型时，用 opt-in live gate：
-
-```bash
-export REPI_REMOTE_PROVIDER_LIVE=1
-export REPI_REMOTE_PROVIDER_API=openai-completions   # 也可用 openai-responses / anthropic-messages
-export REPI_REMOTE_PROVIDER_BASE_URL=https://api.example.com/v1
-export REPI_REMOTE_PROVIDER_MODEL=provider/model-id
-export REPI_REMOTE_PROVIDER_API_KEY_ENV=REPI_REMOTE_PROVIDER_API_KEY
-export REPI_REMOTE_PROVIDER_API_KEY=<your-token>
-
-npm run gate:remote-provider-longrun -- --live --no-write
-```
-
-OpenAI Responses-compatible endpoint 把 `REPI_REMOTE_PROVIDER_API` 改成 `openai-responses`，并确认 endpoint 支持 `POST /v1/responses`；Anthropic-compatible endpoint 把 `REPI_REMOTE_PROVIDER_API` 改成 `anthropic-messages`，`REPI_REMOTE_PROVIDER_BASE_URL` 填服务根地址。gate 会临时写 isolated `~/.repi/agent/models.json`，只保存 `$REPI_REMOTE_PROVIDER_API_KEY` 这种环境变量引用；输出 artifact 只保存 hash 和脱敏状态，不保存明文 key。
 
 ## 3. Anthropic-compatible provider
 

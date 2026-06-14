@@ -9,7 +9,7 @@ Programmatic usage via `createAgentSession()`. Shows how to customize models, pr
 
 ### [extensions/](extensions/)
 Example extensions demonstrating:
-- Lifecycle event handlers (tool interception, safety gates, context modifications)
+- Lifecycle event handlers (tool interception, safety confirmations, context modifications)
 - Custom tools (todo lists, questions, subagents, output truncation)
 - Commands and keyboard shortcuts
 - Custom UI (footers, headers, editors, overlays)

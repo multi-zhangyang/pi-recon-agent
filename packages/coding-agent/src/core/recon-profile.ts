@@ -158,7 +158,7 @@ const RECON_TOOL_NAMES = [
 	"re_autofix",
 	"re_proof_loop",
 	"re_knowledge_graph",
-	"re_harness",
+	"re_profile_check",
 	"re_lane",
 	"re_map",
 	"re_autopilot",
@@ -199,7 +199,7 @@ const RECON_COMMAND_NAMES = [
 	"re-autofix",
 	"re-proof-loop",
 	"re-knowledge-graph",
-	"re-harness",
+	"re-profile-check",
 	"re-lane",
 	"re-map",
 	"re-auto",
@@ -556,12 +556,12 @@ function allowNoSessionReconWriteback(): boolean {
 	);
 }
 
-type MissionGateStatus = "pending" | "done" | "blocked";
+type MissionCheckpointStatus = "pending" | "done" | "blocked";
 type MissionLaneStatus = "pending" | "in_progress" | "done" | "blocked";
 
-type MissionGate = {
+type MissionCheckpoint = {
 	name: string;
-	status: MissionGateStatus;
+	status: MissionCheckpointStatus;
 	note?: string;
 	updatedAt?: string;
 };
@@ -582,7 +582,7 @@ type MissionState = {
 	task: string;
 	route: RoutePlan;
 	lanes: MissionLane[];
-	gates: MissionGate[];
+	checkpoints: MissionCheckpoint[];
 };
 
 type EvidenceKind = "runtime" | "traffic" | "served_asset" | "process_config" | "artifact" | "source" | "note";
@@ -603,7 +603,7 @@ type EvidenceRecord = {
 
 type AttackGraphNode = {
 	id: string;
-	kind: "mission" | "route" | "lane" | "gate" | "map" | "run" | "evidence" | "tool" | "next";
+	kind: "mission" | "route" | "lane" | "checkpoint" | "map" | "run" | "evidence" | "tool" | "next";
 	label: string;
 	status?: string;
 	priority?: number;
@@ -679,7 +679,7 @@ type DecisionCoreArtifact = {
 	mode: "plan" | "tick" | "run";
 	activeLane?: string;
 	objectiveStack: string[];
-	gatePressure: string[];
+	checkPressure: string[];
 	evidencePriority: string[];
 	toolPosture: string[];
 	artifactPosture: string[];
@@ -2042,9 +2042,9 @@ function verifyRepairRollbackPolicyV1(report: RepairRollbackPolicyV1): { ok: boo
 	if (!report.rollback.restored) errors.push("repair_rollback_not_restored");
 	if (report.rollback.restoredTreeSha256 !== report.baseline.treeSha256)
 		errors.push("repair_rollback_tree_hash_mismatch");
-	if (report.regression.gates.length === 0) errors.push("repair_rollback_regression_gate_missing");
-	for (const gate of report.regression.gates) {
-		if (gate.status !== "pass") errors.push(`repair_rollback_regression_gate_failed:${gate.gateId}`);
+	if (report.regression.checkpoints.length === 0) errors.push("repair_rollback_regression_check_missing");
+	for (const checkpoint of report.regression.checkpoints) {
+		if (checkpoint.status !== "pass") errors.push(`repair_rollback_regression_check_failed:${checkpoint.checkId}`);
 	}
 	if (report.regression.after !== "pass") errors.push("repair_rollback_after_regression_not_pass");
 	if (report.regression.restored !== "pass") errors.push("repair_rollback_restored_regression_not_pass");
@@ -2055,7 +2055,7 @@ function verifyRepairRollbackPolicyV1(report: RepairRollbackPolicyV1): { ok: boo
 	if (!report.assertions.baselineCaptured) errors.push("repair_rollback_assertion_baseline_not_captured");
 	if (!report.assertions.allowlistEnforced) errors.push("repair_rollback_assertion_allowlist_not_enforced");
 	if (!report.assertions.rollbackRestored) errors.push("repair_rollback_assertion_not_restored");
-	if (!report.assertions.regressionGatesPassed) errors.push("repair_rollback_assertion_regression_not_passed");
+	if (!report.assertions.regressionChecksPassed) errors.push("repair_rollback_assertion_regression_not_passed");
 	if (!report.assertions.noUnrelatedFileChanges) errors.push("repair_rollback_assertion_unrelated_file_changes");
 	if (!report.assertions.failureRepairLinked) errors.push("repair_rollback_assertion_failure_repair_not_linked");
 	return { ok: errors.length === 0, errors: uniqueNonEmpty(errors, 80) };
@@ -2293,7 +2293,7 @@ type StructuredClaimMergeV1 = {
 		downgradeLosers: string[];
 		resolutionReason?: string;
 	}[];
-	promotionGate: {
+	promotionCheck: {
 		mode: "strict_final_claim_promotion";
 		requiredStatuses: ["proven"];
 		finalClaims: {
@@ -2311,7 +2311,7 @@ type StructuredClaimMergeV1 = {
 	};
 };
 
-type StructuredClaimMergeGateSnapshot = {
+type StructuredClaimMergeCheckSnapshot = {
 	status: "pass" | "blocked" | "missing";
 	mergePath?: string;
 	mergeId?: string;
@@ -2358,7 +2358,7 @@ function verifyStructuredClaimMergePromotion(merge: StructuredClaimMergeV1): { o
 			if (challenge.status !== "resolved") errors.push(`unresolved_adversary_challenge_blocks_final:${claim.claimId}`);
 		}
 	}
-	for (const finalClaim of merge.promotionGate.finalClaims) {
+	for (const finalClaim of merge.promotionCheck.finalClaims) {
 		const claim = claims.get(finalClaim.claimId);
 		if (!claim) {
 			errors.push(`final_claim_missing:${finalClaim.claimId}`);
@@ -2451,7 +2451,7 @@ type SwarmArtifact = {
 	handoffDigest: string[];
 	parallelPlan?: ReconParallelPlanV1;
 	planCoverage: string[];
-	releaseGateMetadata: string[];
+	releaseCheckMetadata: string[];
 	claimLedger: SwarmClaimLedgerEventV1[];
 	claimLedgerPath?: string;
 	claimLedgerEventCount: number;
@@ -2488,7 +2488,7 @@ type SupervisorVerdict = "pass" | "watch" | "repair" | "blocked";
 type ClaimReleaseGap = {
 	claimId?: string;
 	scope?: string;
-	gate?: string;
+	checkpoint?: string;
 	kind?: string;
 };
 
@@ -2504,7 +2504,7 @@ type ClaimReleaseMarker = {
 	orchestrationScore?: number;
 	requiredGaps?: ClaimReleaseGap[];
 	checks?: {
-		gateAndScores?: {
+		checkAndScores?: {
 			status?: string;
 			platformRequiredScore?: number;
 			orchestrationScore?: number;
@@ -2513,7 +2513,7 @@ type ClaimReleaseMarker = {
 	};
 };
 
-type StrictClaimGateSnapshot = {
+type StrictClaimCheckSnapshot = {
 	status: "pass" | "blocked" | "missing";
 	markerPath?: string;
 	generatedAt?: string;
@@ -2521,7 +2521,7 @@ type StrictClaimGateSnapshot = {
 	requiredGaps: string[];
 	platformRequiredScore?: number;
 	orchestrationScore?: number;
-	claimGateResult: string[];
+	claimCheckResult: string[];
 };
 
 type SupervisorWorkerReview = {
@@ -2552,15 +2552,15 @@ type SupervisorArtifact = {
 	commanderMergeBudget: string[];
 	workerScoreboard: string[];
 	priorityQueue: string[];
-	gates: string[];
+	checkpoints: string[];
 	nextActions: string[];
 	parallelPlan?: ReconParallelPlanV1;
 	planCoverage: string[];
-	releaseGateMetadata: string[];
-	claimGatePolicy: string[];
-	strictClaimGate?: StrictClaimGateSnapshot;
-	claimGateResult: string[];
-	structuredClaimMergeGate?: StructuredClaimMergeGateSnapshot;
+	releaseCheckMetadata: string[];
+	claimCheckPolicy: string[];
+	strictClaimCheck?: StrictClaimCheckSnapshot;
+	claimCheckResult: string[];
+	structuredClaimMergeCheck?: StructuredClaimMergeCheckSnapshot;
 	sourceArtifacts: string[];
 };
 
@@ -2632,7 +2632,7 @@ type CompactResumeLedgerV2Report = {
 	transitions: CompactResumeLedgerTransitionV2[];
 	invalidTransitions: string[];
 	exhausted: boolean;
-	requiredGates: string[];
+	requiredChecks: string[];
 };
 
 type ContextResumeVerification = {
@@ -2694,7 +2694,7 @@ type ContextPackArtifact = {
 	compactionLedger?: { path: string; appendOnly: true; prevHash: string; entryHash: string };
 	exactResumeVerification?: ContextResumeVerification;
 	activeLane?: string;
-	gateSummary: string[];
+	checkSummary: string[];
 	missionSnapshot: string;
 	evidenceTail: string;
 	memoryTail: string;
@@ -2743,7 +2743,7 @@ type ReconCompactionEventView = {
 };
 
 type ReconCompactionDetails = {
-	kind: "pi-recon-compaction";
+	kind: "repi-compaction";
 	version: number;
 	contextPath: string;
 	missionId?: string;
@@ -2753,7 +2753,7 @@ type ReconCompactionDetails = {
 	nextCommands: string[];
 	sourceArtifacts: string[];
 	autonomousBudget: AutonomousExecutionBudget;
-	checkpointEntryType: "pi-recon-compaction-checkpoint";
+	checkpointEntryType: "repi-compaction-checkpoint";
 	resumeCommand: string;
 };
 
@@ -2766,7 +2766,7 @@ type ReconCompactionEntryView = {
 };
 
 type ReconCompactionResumeContract = {
-	kind: "pi-recon-compaction-resume-contract";
+	kind: "repi-compaction-resume-contract";
 	version: number;
 	timestamp: string;
 	fromExtension: boolean;
@@ -2786,7 +2786,7 @@ type ReconCompactionResumeContract = {
 };
 
 type ReconCompactionAutoResume = {
-	kind: "pi-recon-compaction-auto-resume";
+	kind: "repi-compaction-auto-resume";
 	version: number;
 	timestamp: string;
 	triggered: boolean;
@@ -2805,7 +2805,7 @@ type ReconCompactionResumeCommandStatus = {
 };
 
 type ReconCompactionResumeTelemetry = {
-	kind: "pi-recon-compaction-resume-telemetry";
+	kind: "repi-compaction-resume-telemetry";
 	version: number;
 	timestamp: string;
 	compactionEntryId?: string;
@@ -2813,7 +2813,7 @@ type ReconCompactionResumeTelemetry = {
 	contractVerified: boolean;
 	autoResumeTriggered: boolean;
 	commandStatus: ReconCompactionResumeCommandStatus[];
-	gateStatus: string[];
+	checkStatus: string[];
 	proofLoopEntered: boolean;
 	sourceArtifacts: string[];
 };
@@ -2903,11 +2903,11 @@ type CompilerArtifact = {
 	finalReport: string[];
 	reportPath?: string;
 	supervisorArtifact?: string;
-	releaseGateMetadata: string[];
-	claimGatePolicy: string[];
-	strictClaimGate?: StrictClaimGateSnapshot;
-	claimGateResult: string[];
-	structuredClaimMergeGate?: StructuredClaimMergeGateSnapshot;
+	releaseCheckMetadata: string[];
+	claimCheckPolicy: string[];
+	strictClaimCheck?: StrictClaimCheckSnapshot;
+	claimCheckResult: string[];
+	structuredClaimMergeCheck?: StructuredClaimMergeCheckSnapshot;
 	sourceArtifacts: string[];
 };
 
@@ -3019,7 +3019,7 @@ type ProofLoopGapSource =
 	| "compiler"
 	| "replayer"
 	| "autofix"
-	| "gate"
+	| "checkpoint"
 	| "artifact";
 
 type ProofLoopGapItem = {
@@ -3040,7 +3040,7 @@ type ProofLoopArtifact = {
 	steps: ProofLoopStep[];
 	executed: OperationExecution[];
 	verdict: ProofLoopVerdict;
-	gateStatus: string[];
+	checkStatus: string[];
 	evidenceSummary: string[];
 	caseMemoryLanePlan?: CaseMemoryLanePlan;
 	caseMemoryBridge: string[];
@@ -3090,7 +3090,7 @@ type FailureLedgerEventV1 = {
 	attempt: number;
 	maxAttempts: number;
 	status: RuntimeFailureStatus;
-	failedGates: string[];
+	failedChecks: string[];
 	artifacts: FailureRepairArtifactHash[];
 	artifactHashes: Array<{ path: string; sha256: string }>;
 	repairId: string;
@@ -3110,14 +3110,14 @@ type RepairQueueItemV1 = {
 	repairAction: RuntimeRepairAction;
 	commands: string[];
 	expectedArtifacts: string[];
-	expectedGates: string[];
+	expectedChecks: string[];
 	preconditions: { liveAllowed: boolean; providerAllowed: boolean; requiredSecrets: string[] };
 	paused: boolean;
 	allowlist: string[];
 	rollbackCriteria: { baseline: string; mustRestore: string[]; verificationCommand: string };
 	blockedConditions: Array<{ reason: string; unblock: string }>;
 	evidenceWriteback: FailureRepairEvidenceWriteback;
-	regressionGates: string[];
+	regressionChecks: string[];
 };
 
 // RepairRollbackPolicyV1 runtime wiring: runtime:repair-rollback-live-wiring repairRollbackPolicyPath baseline/allowlist/regression/rollback.
@@ -3137,7 +3137,7 @@ type RepairRollbackPolicyV1 = {
 		commands: string[];
 		changedFiles: string[];
 		expectedArtifacts: string[];
-		regressionGates: string[];
+		regressionChecks: string[];
 	};
 	rollback: {
 		required: true;
@@ -3150,7 +3150,7 @@ type RepairRollbackPolicyV1 = {
 		before: "pass" | "fail" | "skipped";
 		after: "pass" | "fail" | "skipped";
 		restored: "pass" | "fail" | "skipped";
-		gates: Array<{ gateId: string; command: string; status: "pass" | "fail" | "skipped"; artifactPath?: string; artifactSha256?: string }>;
+		checkpoints: Array<{ checkId: string; command: string; status: "pass" | "fail" | "skipped"; artifactPath?: string; artifactSha256?: string }>;
 	};
 	failureLedgerEvents: FailureLedgerEventV1[];
 	repairQueue: RepairQueueItemV1[];
@@ -3159,7 +3159,7 @@ type RepairRollbackPolicyV1 = {
 		baselineCaptured: boolean;
 		allowlistEnforced: boolean;
 		rollbackRestored: boolean;
-		regressionGatesPassed: boolean;
+		regressionChecksPassed: boolean;
 		noUnrelatedFileChanges: boolean;
 		failureRepairLinked: boolean;
 	};
@@ -3271,7 +3271,7 @@ type RuntimeFailureRepairInput = {
 	category?: RuntimeFailureCategory;
 	status?: RuntimeFailureStatus;
 	commands?: string[];
-	failedGates: string[];
+	failedChecks: string[];
 	sourceArtifacts: string[];
 	expectedArtifacts?: string[];
 	maxAttempts?: number;
@@ -3488,7 +3488,7 @@ type MemoryInjectionPacketV1 = {
 	entries: MemorySemanticIndexEntryV1[];
 	commands: string[];
 	verifierRules: string[];
-	requiredGates: string[];
+	requiredChecks: string[];
 	feedbackWriteback: string;
 };
 
@@ -3564,7 +3564,7 @@ type MemorySupervisorReportV1 = {
 	retainQueue: MemorySupervisorDecisionV1[];
 	injectionAllowedEventIds: string[];
 	recommendedCommands: string[];
-	requiredGates: string[];
+	requiredChecks: string[];
 	policy: {
 		MemorySupervisorV1: true;
 		supervisorRunsAfterSedimentation: true;
@@ -3673,7 +3673,7 @@ type MemoryUxDashboardV16 = {
 	};
 	operatorCommands: string[];
 	governanceCommands: string[];
-	requiredGates: string[];
+	requiredChecks: string[];
 };
 
 type MemoryFeedbackClosureStatus = "promoted" | "demoted" | "pending" | "orphan_feedback";
@@ -3714,7 +3714,7 @@ type MemoryFeedbackClosureReportV1 = {
 	demotionRequiredEventIds: string[];
 	pendingFeedbackEventIds: string[];
 	orphanFeedbackEventIds: string[];
-	requiredGates: string[];
+	requiredChecks: string[];
 };
 
 type MemoryScopeIsolationVerdict = "allow" | "warn" | "block";
@@ -3744,7 +3744,7 @@ type MemoryScopeIsolationReportV1 = {
 	blockedEventIds: string[];
 	warnEventIds: string[];
 	allowedEventIds: string[];
-	requiredGates: string[];
+	requiredChecks: string[];
 };
 
 type MemoryTransactionFileDigestV1 = {
@@ -3794,7 +3794,7 @@ type MemoryStoreVerificationV1 = {
 	storeGrade: "pass" | "repairable" | "blocked";
 	errors: string[];
 	repairCommands: string[];
-	requiredGates: string[];
+	requiredChecks: string[];
 };
 
 type MemoryDepositionStageV7 =
@@ -3865,7 +3865,7 @@ type MemoryDepositionReportV7 = {
 	recentEvents: MemoryDepositionRuntimeEventV7[];
 	pendingEventIds: string[];
 	blockedEventIds: string[];
-	requiredGates: string[];
+	requiredChecks: string[];
 	policy: {
 		MemoryDepositionEngineV7: true;
 		runtimeStepEventBus: true;
@@ -3964,7 +3964,7 @@ type MemoryExperiencePromotionRowV8 = {
 	claimId: string;
 	decision: MemoryExperiencePromotionDecisionV8;
 	reason: string;
-	gate: "artifact_sha256" | "replay_or_verifier" | "feedback" | "contradiction" | "confidence" | "scope";
+	check: "artifact_sha256" | "replay_or_verifier" | "feedback" | "contradiction" | "confidence" | "scope";
 	evidenceRefs: MemoryArtifactHash[];
 	entryHash: string;
 };
@@ -3976,7 +3976,7 @@ type MemoryExperienceReportV8 = {
 	MemoryExperienceEngineV8: true;
 	episode_model_v8: true;
 	structured_claim_extraction: true;
-	lesson_promotion_gate: true;
+	lesson_promotion_check: true;
 	contradiction_resolution: true;
 	usefulness_backprop: true;
 	reportPath: string;
@@ -4003,12 +4003,12 @@ type MemoryExperienceReportV8 = {
 	recentEpisodes: MemoryExperienceEpisodeV8[];
 	recentClaims: MemoryExperienceClaimV8[];
 	recentLessons: MemoryExperienceLessonV8[];
-	requiredGates: string[];
+	requiredChecks: string[];
 	policy: {
 		MemoryExperienceEngineV8: true;
 		episodeModel: true;
 		structuredClaimExtraction: true;
-		lessonPromotionGate: true;
+		lessonPromotionCheck: true;
 		contradictionResolution: true;
 		usefulnessBackprop: true;
 		scopeSafeInjectionOnly: true;
@@ -4019,7 +4019,7 @@ type MemoryExperienceReportV8 = {
 
 type MemorySkillCapsuleTypeV9 = "operator_playbook" | "verifier_rule" | "avoid_rule" | "repair_rule" | "worker_routing" | "scope_guard";
 type MemorySkillCapsuleLifecycleV9 = "candidate" | "promoted" | "quarantined" | "demoted";
-type MemorySkillCapsulePromotionGateV9 = "artifact_sha256" | "replay_or_verifier" | "experience_promotion" | "pattern_confidence" | "feedback_usefulness" | "scope";
+type MemorySkillCapsulePromotionCheckV9 = "artifact_sha256" | "replay_or_verifier" | "experience_promotion" | "pattern_confidence" | "feedback_usefulness" | "scope";
 
 type MemorySkillCapsuleV9 = {
 	kind: "repi-memory-skill-capsule";
@@ -4041,7 +4041,7 @@ type MemorySkillCapsuleV9 = {
 	workerRoutingHints: string[];
 	evidenceRefs: MemoryArtifactHash[];
 	score: number;
-	promotionGate: MemorySkillCapsulePromotionGateV9;
+	promotionCheck: MemorySkillCapsulePromotionCheckV9;
 	usage: { reuseCount: number; successCount: number; failureCount: number; lastUsedAt: string; usefulnessScore: number };
 	injection: { operatorPromptSnippet: string; verifierPromptSnippet: string; workerRoutingHint?: string; nextActionCommands: string[] };
 	entryHash: string;
@@ -4053,7 +4053,7 @@ type MemorySkillCapsuleReportV9 = {
 	generatedAt: string;
 	MemorySkillCapsuleV9: true;
 	skill_capsule_assetization: true;
-	verified_skill_promotion_gate: true;
+	verified_skill_promotion_check: true;
 	operator_skill_injection: true;
 	reportPath: string;
 	capsuleLedgerPath: string;
@@ -4071,12 +4071,12 @@ type MemorySkillCapsuleReportV9 = {
 	workerRoutingHints: string[];
 	status: "pass" | "warn" | "blocked" | "empty";
 	recentCapsules: MemorySkillCapsuleV9[];
-	requiredGates: string[];
+	requiredChecks: string[];
 	policy: {
 		MemorySkillCapsuleV9: true;
 		experienceToSkillCapsule: true;
 		distilledPatternToSkillCapsule: true;
-		verifiedPromotionGate: true;
+		verifiedPromotionCheck: true;
 		operatorInjectionOnlyPromotedOrCandidate: true;
 	};
 	nextCommands: string[];
@@ -4101,7 +4101,7 @@ type MemoryDistillProviderV10 = {
 	apiKeyEnv?: string;
 	timeoutMs: number;
 	fallbackReason?: string;
-	requiredGates: string[];
+	requiredChecks: string[];
 };
 
 type MemoryDistillCandidateV10 = {
@@ -4137,7 +4137,7 @@ type MemoryDistillPromotionReportV10 = {
 	MemoryDistillPromotionV10: true;
 	provider_distill_contract: true;
 	artifact_to_claim_distillation: true;
-	verifier_backed_promotion_gate: true;
+	verifier_backed_promotion_check: true;
 	skill_capsule_promotion_writeback: true;
 	reportPath: string;
 	candidateLedgerPath: string;
@@ -4155,13 +4155,13 @@ type MemoryDistillPromotionReportV10 = {
 	avoidCommands: string[];
 	status: "pass" | "warn" | "blocked" | "empty";
 	recentCandidates: MemoryDistillCandidateV10[];
-	requiredGates: string[];
+	requiredChecks: string[];
 	policy: {
 		MemoryDistillPromotionV10: true;
 		providerContractEnvRefOnly: true;
 		localFallbackDeterministic: true;
 		artifactClaimDistillation: true;
-		verifierBackedPromotionGate: true;
+		verifierBackedPromotionCheck: true;
 		skillCapsulePromotionWriteback: true;
 	};
 	nextCommands: string[];
@@ -4245,7 +4245,7 @@ type MemoryQualityLedgerReportV11 = {
 	avoidCommands: string[];
 	status: "pass" | "warn" | "blocked" | "empty";
 	rows: MemoryQualityLedgerRowV11[];
-	requiredGates: string[];
+	requiredChecks: string[];
 	policy: {
 		MemoryQualityLedgerV11: true;
 		activeMemoryPolicy: true;
@@ -4332,7 +4332,7 @@ type MemoryReplayEvaluatorReportV12 = {
 	avoidCommands: string[];
 	status: "pass" | "warn" | "blocked" | "empty";
 	rows: MemoryReplayEvaluatorRowV12[];
-	requiredGates: string[];
+	requiredChecks: string[];
 	policy: {
 		MemoryReplayEvaluatorV12: true;
 		memoryAbReplay: true;
@@ -4354,7 +4354,7 @@ type MemoryStrategyCapsuleV13 = {
 	MemoryStrategyCapsuleV13: true;
 	executable_strategy_capsule: true;
 	replay_backed_strategy_promotion: true;
-	strategy_quality_gate: true;
+	strategy_quality_check: true;
 	caseSignature: string;
 	route: string;
 	targetScope: string;
@@ -4395,7 +4395,7 @@ type MemoryStrategyCapsuleReportV13 = {
 	MemoryStrategyCapsuleV13: true;
 	executable_strategy_capsule: true;
 	replay_backed_strategy_promotion: true;
-	strategy_quality_gate: true;
+	strategy_quality_check: true;
 	reportPath: string;
 	capsuleLedgerPath: string;
 	strategyBookPath: string;
@@ -4414,11 +4414,11 @@ type MemoryStrategyCapsuleReportV13 = {
 	workerRoutingHints: string[];
 	status: "pass" | "warn" | "blocked" | "empty";
 	recentCapsules: MemoryStrategyCapsuleV13[];
-	requiredGates: string[];
+	requiredChecks: string[];
 	policy: {
 		MemoryStrategyCapsuleV13: true;
 		replayBackedPromotion: true;
-		qualityGateRequired: true;
+		qualityCheckRequired: true;
 		executableCommandsRequired: true;
 		verifierAndFallbackRequired: true;
 	};
@@ -4486,7 +4486,7 @@ type MemoryActiveInjectionPackV14 = {
 	scopeLocks: string[];
 	feedbackWriteback: string;
 	compactResumeHints: string[];
-	requiredGates: string[];
+	requiredChecks: string[];
 };
 
 type MemoryActiveKernelReportV14 = {
@@ -4526,7 +4526,7 @@ type MemoryActiveKernelReportV14 = {
 	status: "pass" | "warn" | "blocked" | "empty";
 	decisions: MemoryActiveKernelDecisionV14[];
 	activeInjectionPack: MemoryActiveInjectionPackV14;
-	requiredGates: string[];
+	requiredChecks: string[];
 	policy: {
 		MemoryActiveKernelV14: true;
 		unifiedMemoryDecisionEngine: true;
@@ -4638,7 +4638,7 @@ type MemoryMaturationRuntimeReportV15 = {
 	maturationCoverage: number;
 	status: "pass" | "warn" | "blocked" | "empty";
 	rows: MemoryMaturationRowV15[];
-	requiredGates: string[];
+	requiredChecks: string[];
 	policy: {
 		MemoryMaturationRuntimeV15: true;
 		automaticMemoryMaturationPipeline: true;
@@ -4689,7 +4689,7 @@ type MemoryUsefulnessEvalReportV1 = {
 		emptyScenarioRate: number;
 		status: "pass" | "warn" | "fail" | "empty";
 	};
-	requiredGates: string[];
+	requiredChecks: string[];
 	reportPath: string;
 	recommendations: string[];
 };
@@ -4712,7 +4712,7 @@ type MemoryEmbeddingProviderV1 = {
 	apiKeyEnv?: string;
 	timeoutMs: number;
 	fallbackReason?: string;
-	requiredGates: string[];
+	requiredChecks: string[];
 };
 
 type MemoryVectorIndexEntryV1 = {
@@ -4745,7 +4745,7 @@ type MemoryVectorIndexV1 = {
 	eventCount: number;
 	hashChainOk: boolean;
 	entries: MemoryVectorIndexEntryV1[];
-	requiredGates: string[];
+	requiredChecks: string[];
 };
 
 type MemoryVectorSearchHitV1 = {
@@ -4772,7 +4772,7 @@ type MemoryVectorSearchReportV1 = {
 	embeddingProvider: MemoryEmbeddingProviderV1;
 	dimensions: number;
 	hits: MemoryVectorSearchHitV1[];
-	requiredGates: string[];
+	requiredChecks: string[];
 };
 
 type KnowledgeNode = {
@@ -4823,7 +4823,7 @@ type KnowledgeScopeIsolationV1 = {
 	warnSourceArtifacts: string[];
 	allowedSourceArtifacts: string[];
 	sourceRows: KnowledgeScopeIsolationSourceV1[];
-	requiredGates: string[];
+	requiredChecks: string[];
 };
 
 type ArtifactScopeFilterDecisionV1 = {
@@ -4859,7 +4859,7 @@ type ArtifactScopeFilterReportV1 = {
 	warnArtifacts: string[];
 	allowedArtifacts: string[];
 	decisions: ArtifactScopeFilterDecisionV1[];
-	requiredGates: string[];
+	requiredChecks: string[];
 };
 
 type ArtifactScopeFilterOptions = {
@@ -4981,7 +4981,7 @@ type MemoryOrchestratorReportV6 = {
 	memoryMaturationPending: number;
 	steps: MemoryOrchestratorStepV6[];
 	nextCommands: string[];
-	requiredGates: string[];
+	requiredChecks: string[];
 	policy: {
 		MemoryOrchestratorV6: true;
 		preTaskRetrieveBeforeOperator: true;
@@ -5044,21 +5044,21 @@ type KnowledgeGraphArtifact = {
 	sourceArtifacts: string[];
 };
 
-type HarnessCheckStatus = "pass" | "warn" | "fail";
-type HarnessMode = "quick" | "full" | "install";
+type ProfileCheckStatus = "pass" | "warn" | "fail";
+type ProfileCheckMode = "quick" | "full" | "install";
 
-type HarnessCheck = {
+type ProfileCheckRow = {
 	id: string;
-	status: HarnessCheckStatus;
+	status: ProfileCheckStatus;
 	evidence: string[];
 	next?: string[];
 };
 
-type HarnessArtifact = {
+type ProfileCheckArtifact = {
 	timestamp: string;
-	mode: HarnessMode;
-	verdict: HarnessCheckStatus;
-	checks: HarnessCheck[];
+	mode: ProfileCheckMode;
+	verdict: ProfileCheckStatus;
+	checks: ProfileCheckRow[];
 	capabilityMatrix: string[];
 	installReadiness: string[];
 	regressionGuards: string[];
@@ -5207,14 +5207,14 @@ type ProfessionalRuntimeBridgeRowV1 = {
 	nextRuntimeCommands: string[];
 };
 
-type ProfessionalRuntimeBridgesGateV1 = {
-	kind: "ProfessionalRuntimeBridgesGateV1";
+type ProfessionalRuntimeBridgesCheckV1 = {
+	kind: "ProfessionalRuntimeBridgesCheckV1";
 	schemaVersion: 1;
 	generatedAt: string;
-	ProfessionalRuntimeBridgesGateV1: true;
+	ProfessionalRuntimeBridgesCheckV1: true;
 	runtime: "runtime:professional-runtime-bridges";
 	toolIndexPath: string;
-	requiredGates: string[];
+	requiredChecks: string[];
 	bridges: ProfessionalRuntimeBridgeRowV1[];
 	closure: {
 		allBridgeSpecsPresent: boolean;
@@ -5268,14 +5268,14 @@ type RuntimeAdapterExecutionRowV1 = RuntimeAdapterExecutionSpec & {
 	nextRuntimeCommands: string[];
 };
 
-type RuntimeAdapterExecutionGateV1 = {
-	kind: "RuntimeAdapterExecutionGateV1";
+type RuntimeAdapterExecutionCheckV1 = {
+	kind: "RuntimeAdapterExecutionCheckV1";
 	schemaVersion: 1;
 	generatedAt: string;
-	RuntimeAdapterExecutionGateV1: true;
+	RuntimeAdapterExecutionCheckV1: true;
 	runtime: "runtime:adapter-execution";
 	toolIndexPath: string;
-	requiredGates: string[];
+	requiredChecks: string[];
 	adapters: RuntimeAdapterExecutionRowV1[];
 	closure: {
 		allAdapterSpecsPresent: boolean;
@@ -5351,8 +5351,8 @@ type ReLaneSpecialistDomainPackV1 = {
 	proofExitBridge: string[];
 };
 
-type ReLaneSpecialistCommandPackGateV1 = {
-	kind: "ReLaneSpecialistCommandPackGateV1";
+type ReLaneSpecialistCommandPackCheckV1 = {
+	kind: "ReLaneSpecialistCommandPackCheckV1";
 	schemaVersion: 1;
 	generatedAt: string;
 	runtime: "runtime:re_lane-specialist-command-pack";
@@ -5520,7 +5520,7 @@ type PlaybookMaintenanceResult = {
 
 export const RECON_SYSTEM_PROMPT = `# REPI thin kernel
 
-你是 REPI，运行在 REPI harness 内的逆向/渗透执行型 agent。当前内核采用 thin-kernel + progressive-disclosure：启动时只保留稳定执行契约和能力索引；领域细节必须按任务通过 skill、prompt、re_route、re_kernel、re_lane、re_tool_index、re_context、re_verifier 等按需加载，不把大段参考材料常驻上下文。
+你是 REPI，运行在 REPI runtime 内的逆向/渗透执行型 agent。当前内核采用 thin-kernel + progressive-disclosure：启动时只保留稳定执行契约和能力索引；领域细节必须按任务通过 skill、prompt、re_route、re_kernel、re_lane、re_tool_index、re_context、re_verifier 等按需加载，不把大段参考材料常驻上下文。
 
 ## execution-first mode
 
@@ -5549,7 +5549,7 @@ export const RECON_SYSTEM_PROMPT = `# REPI thin kernel
 ## REPI 自配置知识（运行时必须会答）
 
 - model_provider_configuration_runtime：模型/provider 配置在 ~/.repi/agent/models.json；本地凭据在 ~/.repi/agent/auth.json；默认模型和 compact 在 ~/.repi/agent/settings.json。
-- 支持 openai-completions、openai-responses、anthropic-messages、local gateway 等兼容格式；不确定 endpoint 时先用 repi provider-doctor --base-url <url> --model <id> --api auto。
+- 支持 openai-completions、openai-responses、anthropic-messages、local gateway 等兼容格式；不确定 endpoint 时先按 openai-completions 配置并用 repi model test 做最小真实调用。
 - 解析验证：repi --offline --list-models；真实调用验证：repi model test --provider <id> --model <id> 或 repi --provider <id> --model <id> --thinking off --no-tools --no-session -p "Reply exactly: PROVIDER_OK"。
 - Auto compact 默认 triggerPercent=85、warningPercent=80、reserveTokens=16384、keepRecentTokens=36000；触发阈值为 min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)。
 - 使用 /context 查看当前上下文构成；使用 /compact focus on ... 做聚焦压缩；普通流式 provider 无法在 mid-token 期间由客户端改写上下文，只能在 turn boundary 或 provider 原生 context_management 上处理。
@@ -5560,9 +5560,9 @@ export const RECON_SYSTEM_PROMPT = `# REPI thin kernel
 - 不跨 mission/workspace/target 注入旧任务细节；跨域内容只进入摘要索引或 quarantine，除非用户明确要求复用。
 - 只有高价值、可复用、已脱敏、带 source/reason/confidence/scope 的内容可写入长期记忆；外部资料、MCP、web、敏感输入参与的线程默认不生成长期记忆。
 
-## Harness invariants
+## Runtime invariants
 
-- REPI harness storage: ~/.repi/agent/recon/evidence、~/.repi/agent/recon/memory、~/.repi/agent/recon/mission。
+- REPI storage: ~/.repi/agent/recon/evidence、~/.repi/agent/recon/memory、~/.repi/agent/recon/mission。
 - 不把 raw logs、长 HTML、长 tool output 常驻主上下文；优先落盘为 artifact reference，再摘要。
 - 子任务需要并行时使用 re_swarm 或后续一等 AgentThreadManager；主线程只合并 distilled summary、claim、evidence refs 和 unresolved gaps。
 `;
@@ -5579,7 +5579,7 @@ export const RECON_APPEND_SYSTEM_PROMPT = `# REPI runtime protocol
 6. tool_call_policy：re_* 是 REPI operator/CLI/slash 命令名，不等于当前会话的原生 function tool；只有在 available tools 明确列出时才直接 tool-call，否则用 bash 执行、输出 operator_next_command，或调用真实可见工具（read/grep/find/ls/bash/edit/write 等）。
 7. context_policy：用 /context 观察上下文；大输出落盘引用；达到 warning/trigger 阈值时先 compact/resume，再继续下一次 LLM 请求。
 8. memory_policy：默认只注入同 mission/workspace/target 的 scoped digest；写入长期记忆必须有 source、reason、confidence、scope 和脱敏。
-9. harness_change_policy：修改 profile/extension/prompts/skill/安装脚本后调用 re_harness full；安装后调用 re_harness install。
+9. profile_check_policy：修改 profile/extension/prompts/skill/安装脚本后调用 re_profile_check full；安装后调用 re_profile_check install。
 `;
 
 export const RECON_SKILL_CONTENT = `# Reverse Pentest Orchestrator
@@ -5598,7 +5598,7 @@ REPI 的内置总控 skill。它把 reverse-skill 的路由矩阵、field journa
 1. 路由：目标类型 / 用户意图 / 工具链。
 2. 经验检索：re_memory show/search，必要时读取 reverse-skill field-journal。
 3. 工具索引：re_tool_index show/refresh，不猜工具路径。
-4. 任务黑板：re_mission show/gate，明确 lanes、gates、下一步；先 re_kernel build <target> 生成 execution_kernel/kernel_artifact 并闭合 execution_kernel_ready，再 re_decision_core tick <target> 生成 decision_artifact/operator_next_command 并闭合 decision_core_ready，再 re_map <target> 生成 passive map artifact；目标具体时可 re_autopilot run 直接完成 map→case_memory_lane_plan→bootstrap_plan→lane run→run-auto→audit→journal，缺工具先按 execution_strategy/fallback_commands 降级，必要时再按 next_bootstrap_command 走 re_bootstrap plan/install 或切换等价工具；手动执行前 re_lane plan <lane> <target> 生成最小命令包并合入 playbook 记忆，同时由 specialist_runtime_planner 注入 native deep reverse/pwn、browser/XHR/WS、JS signing rebuild、pwn primitive、exploit reliability/autopwn、PCAP/DFIR、Firmware/IoT rootfs、agent prompt/tool boundary、malware config/IOC、Cloud/K8s identity、Identity/AD graph、Frida/GDB trace 专项 runtime 命令；目标具体时 re_lane run，按 execution_strategy/fallback_commands 降级后写入 run artifact/evidence ledger，遇到命令/依赖/目标错误时解析 tool repair anchors 并挂载 tool-repair-matrix-scaffold，在证据质量低时挂载 self_heal_commands；follow-up 已挂载后可 re_lane run-auto，并用 adaptive_decision/evidence_quality/self_heal_commands 动态续跑或停止；重复低效或 stop 分支触发时读取 multi_lane_plan，优先执行/推进 tool-bootstrap、evidence-repair 或 map-refresh 修复 lane；tool-bootstrap 闭合时读取 tool_bootstrap_closure 的 missing_after_refresh/resumed_lane 并恢复 blocked lane；用 re_graph build 维护 attack_graph/critical_path/gaps/operator_next_actions；用 re_exploit_chain plan/compose 维护 exploit_chain、proof_path、exploit_path、evidence_gaps、replay_commands、operator_queue 和 exploit_chain_ready；用 re_campaign plan/show 维护 campaign_graph、campaign_artifact、phases、pivot_candidates、evidence_gaps、tool_gaps、next_bootstrap_command 和 campaign_plan_ready；用 re_operation plan/next/run 维护 operation_queue、operation_artifact、phase_runner、executed_steps、next_operation_command 和 operation_queue_ready；用 re_delegate plan/show/merge 维护 delegation_plan、delegation_artifact、worker_packets、merge_queue、specialist_coverage、evidence_contract、next_delegate_command 和 delegation_packets_ready；用 re_swarm plan/show/run/merge 维护 swarm_plan、swarm_artifact、worker_runtime_packets、parallel_groups、merge_protocol、collision_matrix、commander_next_actions 和 swarm_plan_ready；用 re_supervisor review/show/repair 维护 supervisor_review、supervisor_artifact、supervisor_verdict、worker_reviews、conflict_matrix、repair_queue、priority_queue、next_supervisor_command 和 supervisor_review_ready；用 re_reflect plan/show/write 维护 reflection_cycle、reflection_artifact、lessons、failure_patterns、reuse_rules、repair_playbook、next_reflect_command 和 reflection_memory_ready，把 supervisor 批判转成可复用 playbook、field journal 与 evolution log；用 re_context pack/show/resume 维护 context_pack、context_artifact、resume_brief、artifact_index、next_operator_commands、next_context_command 和 context_pack_ready，把当前作战态压成可恢复执行包；用 re_operator plan/dispatch/verify/escalate 维护 operator_queue、operator_artifact、dispatcher_policy、verification_matrix、escalation_queue、next_operator_command 和 operator_queue_ready，把恢复包里的命令变成可调度执行队列；用 re_verifier check/show/matrix 维护 verifier_matrix、verifier_artifact、assertions、counter_evidence、contradictions、gaps、next_verifier_command 和 verifier_matrix_ready，把执行结果转成可反证的证据断言；用 re_compiler draft/show/final 维护 compiler_report、compiler_artifact、key_evidence_block、repro_commands、next_operator_queue、next_compiler_command 和 compiler_ready，把反证矩阵编译成可提交报告；用 re_replayer plan/show/run 维护 replay_matrix、replay_artifact、stdout_sha256、stderr_sha256、next_replay_actions 和 replay_ready，把报告复现命令转成可执行矩阵；用 re_autofix plan/show/apply 维护 autofix_plan、autofix_artifact、patch_queue、command_substitutions、bootstrap_queue、evidence_recapture_queue、next_operator_queue 和 autofix_ready，把失败复现转成修复队列；用 re_proof_loop plan/show/run 维护 proof_loop、proof_loop_artifact、specialist_queue、swarm_bridge、bridge_artifacts、next_proof_actions 和 proof_loop_ready，把 verifier/compiler/replayer/autofix gap 接入 specialist delegate/swarm/supervisor 桥接；用 re_knowledge_graph build/show/query 维护 knowledge_graph、knowledge_artifact、case_signatures、similarity_index、worker_routing_hints、command_strategy_hints 和 knowledge_graph_ready，把全链路 evidence 转成可迁移知识；用 re_memory playbooks/prune-playbooks 维护 memory/playbooks/index.md 与 archive。
+4. 任务黑板：re_mission show/checkpoint，明确 lanes、checkpoints、下一步；先 re_kernel build <target> 生成 execution_kernel/kernel_artifact 并闭合 execution_kernel_ready，再 re_decision_core tick <target> 生成 decision_artifact/operator_next_command 并闭合 decision_core_ready，再 re_map <target> 生成 passive map artifact；目标具体时可 re_autopilot run 直接完成 map→case_memory_lane_plan→bootstrap_plan→lane run→run-auto→audit→journal，缺工具先按 execution_strategy/fallback_commands 降级，必要时再按 next_bootstrap_command 走 re_bootstrap plan/install 或切换等价工具；手动执行前 re_lane plan <lane> <target> 生成最小命令包并合入 playbook 记忆，同时由 specialist_runtime_planner 注入 native deep reverse/pwn、browser/XHR/WS、JS signing rebuild、pwn primitive、exploit reliability/autopwn、PCAP/DFIR、Firmware/IoT rootfs、agent prompt/tool boundary、malware config/IOC、Cloud/K8s identity、Identity/AD graph、Frida/GDB trace 专项 runtime 命令；目标具体时 re_lane run，按 execution_strategy/fallback_commands 降级后写入 run artifact/evidence ledger，遇到命令/依赖/目标错误时解析 tool repair anchors 并挂载 tool-repair-matrix-scaffold，在证据质量低时挂载 self_heal_commands；follow-up 已挂载后可 re_lane run-auto，并用 adaptive_decision/evidence_quality/self_heal_commands 动态续跑或停止；重复低效或 stop 分支触发时读取 multi_lane_plan，优先执行/推进 tool-bootstrap、evidence-repair 或 map-refresh 修复 lane；tool-bootstrap 闭合时读取 tool_bootstrap_closure 的 missing_after_refresh/resumed_lane 并恢复 blocked lane；用 re_graph build 维护 attack_graph/critical_path/gaps/operator_next_actions；用 re_exploit_chain plan/compose 维护 exploit_chain、proof_path、exploit_path、evidence_gaps、replay_commands、operator_queue 和 exploit_chain_ready；用 re_campaign plan/show 维护 campaign_graph、campaign_artifact、phases、pivot_candidates、evidence_gaps、tool_gaps、next_bootstrap_command 和 campaign_plan_ready；用 re_operation plan/next/run 维护 operation_queue、operation_artifact、phase_runner、executed_steps、next_operation_command 和 operation_queue_ready；用 re_delegate plan/show/merge 维护 delegation_plan、delegation_artifact、worker_packets、merge_queue、specialist_coverage、evidence_contract、next_delegate_command 和 delegation_packets_ready；用 re_swarm plan/show/run/merge 维护 swarm_plan、swarm_artifact、worker_runtime_packets、parallel_groups、merge_protocol、collision_matrix、commander_next_actions 和 swarm_plan_ready；用 re_supervisor review/show/repair 维护 supervisor_review、supervisor_artifact、supervisor_verdict、worker_reviews、conflict_matrix、repair_queue、priority_queue、next_supervisor_command 和 supervisor_review_ready；用 re_reflect plan/show/write 维护 reflection_cycle、reflection_artifact、lessons、failure_patterns、reuse_rules、repair_playbook、next_reflect_command 和 reflection_memory_ready，把 supervisor 批判转成可复用 playbook、field journal 与 evolution log；用 re_context pack/show/resume 维护 context_pack、context_artifact、resume_brief、artifact_index、next_operator_commands、next_context_command 和 context_pack_ready，把当前作战态压成可恢复执行包；用 re_operator plan/dispatch/verify/escalate 维护 operator_queue、operator_artifact、dispatcher_policy、verification_matrix、escalation_queue、next_operator_command 和 operator_queue_ready，把恢复包里的命令变成可调度执行队列；用 re_verifier check/show/matrix 维护 verifier_matrix、verifier_artifact、assertions、counter_evidence、contradictions、gaps、next_verifier_command 和 verifier_matrix_ready，把执行结果转成可反证的证据断言；用 re_compiler draft/show/final 维护 compiler_report、compiler_artifact、key_evidence_block、repro_commands、next_operator_queue、next_compiler_command 和 compiler_ready，把反证矩阵编译成可提交报告；用 re_replayer plan/show/run 维护 replay_matrix、replay_artifact、stdout_sha256、stderr_sha256、next_replay_actions 和 replay_ready，把报告复现命令转成可执行矩阵；用 re_autofix plan/show/apply 维护 autofix_plan、autofix_artifact、patch_queue、command_substitutions、bootstrap_queue、evidence_recapture_queue、next_operator_queue 和 autofix_ready，把失败复现转成修复队列；用 re_proof_loop plan/show/run 维护 proof_loop、proof_loop_artifact、specialist_queue、swarm_bridge、bridge_artifacts、next_proof_actions 和 proof_loop_ready，把 verifier/compiler/replayer/autofix gap 接入 specialist delegate/swarm/supervisor 桥接；用 re_knowledge_graph build/show/query 维护 knowledge_graph、knowledge_artifact、case_signatures、similarity_index、worker_routing_hints、command_strategy_hints 和 knowledge_graph_ready，把全链路 evidence 转成可迁移知识；用 re_memory playbooks/prune-playbooks 维护 memory/playbooks/index.md 与 archive。
 5. 专项 runtime planner：Web/API 走 browser/XHR/WS 捕获、auth-diff、CDP artifact、replay evaluator、route graph、auth matrix、IDOR/BOLA probe、authz state machine、sequence replay、object ownership 和 state rollback；JS 签名走 hook/normalizer/first-divergence/replay harness/Node rebuild；Native deep reverse/pwn 走 symbol/import/string map、decompiler project、compare trace、patch hypothesis、symbolic/fuzz scaffold；Pwn 走 primitive crash/GDB/cyclic offset/ROP-libc/local verifier/pwntools/heap-tcache/format-string/SROP-ret2dlresolve/one_gadget/seccomp-sandbox；PCAP/DFIR 走 capinfos/tshark/stream ranking/secret timeline/extract/carve/transform-chain；Firmware/IoT rootfs 走 image fingerprint、rootfs extract、config/secret、service surface、emulation；Agent/LLM security 走 prompt surface、tool boundary、memory poisoning、injection replay、delegation trace；Malware config/IOC 走 static triage、YARA/capa/FLOSS、IOC/config、behavior trace；Cloud/K8s identity 走 identity/config/metadata/privilege edge；Identity/AD graph 走 principal/credential/graph edge；Mobile/Native runtime 走 native-deep 与 Frida/GDB trace。
 6. 专项 evidence analyzer：re_lane run 解析 tool repair anchors、Native deep symbol/import/string anchors、Native decompiler/control-flow anchors、Native compare trace anchors、Native patch hypothesis anchors、Native symbolic/CFG anchors、Native fuzz/crash anchors、browser/XHR/WS runtime anchors、browser CDP artifact anchors、browser runtime artifact paths、browser replay evaluator anchors、browser route graph anchors、browser auth matrix anchors、browser IDOR/BOLA probe anchors、browser authz state machine anchors、browser authz sequence replay anchors、browser authz object ownership anchors、browser authz state rollback anchors、JS signing rebuild anchors、pwn primitive crash/control anchors、pwn crash register anchors、pwn cyclic offset anchors、pwn ROP/libc chain anchors、pwn local verifier anchors、Exploit PoC inventory anchors、PoC replay matrix anchors、Exploit environment pin anchors、Exploit flake triage anchors、Exploit artifact bundle anchors、PCAP/DFIR traffic flow anchors、Firmware image metadata anchors、Firmware extraction/rootfs anchors、Firmware config/secret anchors、Firmware service/web surface anchors、Firmware emulation/runtime anchors、Agent prompt surface anchors、Agent tool boundary anchors、Agent memory poisoning anchors、Agent injection replay anchors、Agent delegation trace anchors、Malware static triage anchors、Malware rule/capability anchors、Malware IOC/config anchors、Malware behavior trace anchors、Cloud identity anchors、Cloud/K8s runtime config anchors、Cloud metadata probe anchors、Cloud privilege edge anchors、Identity/AD principal anchors、Identity/AD credential usability anchors、Identity/AD graph edge anchors、Frida/GDB trace anchors 和 runtime hook return/value anchors captured，并挂载 targeted follow-ups/self-heal。
 7. 证据 ledger：re_evidence append，按 runtime/traffic/served_asset/process_config/artifact/source/note 分层。
@@ -5610,12 +5610,12 @@ REPI 的内置总控 skill。它把 reverse-skill 的路由矩阵、field journa
 
 ## REPI self-configuration support
 
-当用户询问 REPI 自身模型/provider/API key/compact 配置时，直接给出可复制步骤：编辑 ~/.repi/agent/models.json 添加自定义 provider/model，编辑 ~/.repi/agent/settings.json 设置默认 provider/model 与 compaction.triggerPercent=85、warningPercent=80、reserveTokens=16384、keepRecentTokens=36000；凭据用环境变量；网关格式不确定时先用 repi provider-doctor --base-url <url> --model <id> --api auto 诊断 endpoint；用 repi --offline --list-models 和 repi --offline --list-models <provider-or-model> 做 parse-only 解析验证；真实调用才使用 repi --provider <provider-id> --model <model-id> --thinking off --no-tools --no-session -p "Reply exactly: PROVIDER_OK"。不要把用户引到原版 pi 的 ~/.pi/agent，除非用户明确要求导入旧登录态。
+当用户询问 REPI 自身模型/provider/API key/compact 配置时，直接给出可复制步骤：编辑 ~/.repi/agent/models.json 添加自定义 provider/model，编辑 ~/.repi/agent/settings.json 设置默认 provider/model 与 compaction.triggerPercent=85、warningPercent=80、reserveTokens=16384、keepRecentTokens=36000；凭据用环境变量；网关格式不确定时先按 openai-completions 配置并用 repi model test 做最小真实调用；用 repi --offline --list-models 和 repi --offline --list-models <provider-or-model> 做 parse-only 解析验证；真实调用才使用 repi --provider <provider-id> --model <model-id> --thinking off --no-tools --no-session -p "Reply exactly: PROVIDER_OK"。不要把用户引到原版 pi 的 ~/.pi/agent，除非用户明确要求导入旧登录态。
 
-## Harness gate
+## Runtime profile check
 
-- 修改 profile/extension/prompts/skill/安装脚本后调用 re_harness full；安装后调用 /re-harness install。
-- harness_artifact 必须包含 install_readiness、reverse_capability_guards、regression_guards；fail 时先修复再继续 proof loop 或完成审计。
+- 修改 profile/extension/prompts/skill/安装脚本后调用 re_profile_check full；安装后调用 /re-profile-check install。
+- profile_check_artifact 必须包含 install_readiness、reverse_capability_guards、regression_guards；fail 时先修复再继续 proof loop 或完成审计。
 - reverse_capability_guards 不允许削弱 re_native_runtime、re_web_authz_state、re_proof_loop、compact_resume_case_memory、operator_command_floor、proof_exit_criteria、specialist_runtime_planner。
 
 ## 专项 runtime planner
@@ -5623,7 +5623,7 @@ REPI 的内置总控 skill。它把 reverse-skill 的路由矩阵、field journa
 - browser/XHR/WS：请求/响应、cookie、localStorage/sessionStorage、WebSocket frame、CDP-backed browser runtime artifact、request/response/WS/storage 序列化、replay evaluator、route graph、auth matrix、IDOR/BOLA probe、authz state machine、sequence replay、object ownership、state rollback、OpenAPI/Swagger/GraphQL、双身份 auth-diff。
 - JS signing rebuild：fetch、XMLHttpRequest、WebSocket、crypto.subtle hook，捕获入参/返回值，生成 observed normalizer、Node 重建脚手架、first-divergence patch 点和 signed replay harness。
 - pwn primitive：file/checksec/ldd/patchelf 指纹、cyclic crash、GDB registers/backtrace/stack、pwn cyclic offset analyzer、pwn ROP/libc scaffold、pwn local verifier、ROPgadget/ropper fallback、pwntools skeleton、heap/tcache bin probe、format-string probe/fmtstr_payload、SROP/ret2dlresolve scaffold、one_gadget constraint review、seccomp/sandbox triage。
-- decision core：re_decision_core plan/tick/run 汇总 mission gates、active lane、tool/artifact posture 和 evidence priority，输出 operator_next_command。
+- decision core：re_decision_core plan/tick/run 汇总 mission checkpoints、active lane、tool/artifact posture 和 evidence priority，输出 operator_next_command。
 - exploit chain composer：re_exploit_chain plan/compose 汇总 map/runtime/authz/primitive/lab/verifier artifacts，输出 proof_path、exploit_path、evidence_gaps、replay_commands 和 operator_queue。
 - exploit reliability/autopwn：exploit-poc-normalizer-scaffold、exploit-replay-matrix-scaffold、exploit-environment-pin-scaffold、exploit-flake-triage-scaffold、exploit-artifact-bundle-scaffold，组织 PoC inventory、replay matrix、environment pin、flake triage、artifact bundle/report；PoC 稳定性声明前调用 re_exploit_lab plan/run/bundle，输出 exploit_lab_artifact、success_rate、stdout/stderr hash 和 bundle manifest。
 - PCAP/DFIR：capinfos、tshark TCP/UDP conversations、stream ranking、secret timeline、HTTP/DNS/TLS/credential filters、HTTP object extraction、foremost carving 与 transform chain extractor。
@@ -5699,7 +5699,7 @@ const RECON_PROMPTS = [
 		description: "REPI 模型/provider/API key/auto compact 配置说明",
 		argumentHint: "[provider-or-error]",
 		content:
-			"REPI configuration help: $ARGUMENTS\n\n直接给出 ~/.repi/agent/models.json、~/.repi/agent/settings.json、~/.repi/agent/auth.json 的配置步骤；优先使用 repi model add/login/default/test 命令，再给 OpenAI Chat Completions-compatible / OpenAI Responses-compatible / Anthropic-compatible / local runtime JSON 示例；网关格式不确定时先给 repi provider-doctor --base-url <url> --model <id> --api auto；给 repi model doctor、repi --offline --list-models 和 repi --offline --list-models <provider-or-model> 做 parse-only 验证；真实调用可用 repi model test --provider <provider-id> --model <model-id> 或 repi --provider <provider-id> --model <model-id> --thinking off --no-tools --no-session -p \"Reply exactly: PROVIDER_OK\"；说明 auto compact 默认 triggerPercent=85、warningPercent=80、reserveTokens=16384、keepRecentTokens=36000，阈值 min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)。",
+			"REPI configuration help: $ARGUMENTS\n\n直接给出 ~/.repi/agent/models.json、~/.repi/agent/settings.json、~/.repi/agent/auth.json 的配置步骤；优先使用 repi model add/login/default/test 命令，再给 OpenAI Chat Completions-compatible / OpenAI Responses-compatible / Anthropic-compatible / local runtime JSON 示例；网关格式不确定时先给 openai-completions 配置步骤和 repi model test 验证步骤；给 repi model doctor、repi --offline --list-models 和 repi --offline --list-models <provider-or-model> 做 parse-only 验证；真实调用可用 repi model test --provider <provider-id> --model <model-id> 或 repi --provider <provider-id> --model <model-id> --thinking off --no-tools --no-session -p \"Reply exactly: PROVIDER_OK\"；说明 auto compact 默认 triggerPercent=85、warningPercent=80、reserveTokens=16384、keepRecentTokens=36000，阈值 min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)。",
 	},
 	{
 		name: "reverse",
@@ -5811,7 +5811,7 @@ const RECON_PROMPTS = [
 		description: "REPI 决策内核 / 下一步执行仲裁工作流",
 		argumentHint: "<target-or-case>",
 		content:
-			"REPI decision core task: $ARGUMENTS\n\n运行 re_decision_core plan/tick/run，把 mission gates、active lane、tool posture、artifact posture、evidence priority 和 kernel/context 状态仲裁成 objective_stack、gate_pressure、decision_rules、operator_queue、operator_next_command 和 decision_artifact / executed_steps；run 后接 re_proof_loop run <target> 4 2 闭合 verifier→compiler→replayer→autofix 证据链，并在 partial/needs_repair 时自动产出 specialist_queue/swarm_bridge、接入 re_delegate plan → re_swarm run → re_supervisor repair。",
+			"REPI decision core task: $ARGUMENTS\n\n运行 re_decision_core plan/tick/run，把 mission checkpoints、active lane、tool posture、artifact posture、evidence priority 和 kernel/context 状态仲裁成 objective_stack、check_pressure、decision_rules、operator_queue、operator_next_command 和 decision_artifact / executed_steps；run 后接 re_proof_loop run <target> 4 2 闭合 verifier→compiler→replayer→autofix 证据链，并在 partial/needs_repair 时自动产出 specialist_queue/swarm_bridge、接入 re_delegate plan → re_swarm run → re_supervisor repair。",
 	},
 	{
 		name: "memory",
@@ -6625,8 +6625,8 @@ function evidenceKnowledgeDir(): string {
 	return join(reconDir(), "evidence", "knowledge");
 }
 
-function evidenceHarnessDir(): string {
-	return join(reconDir(), "evidence", "harness");
+function evidenceProfileCheckDir(): string {
+	return join(reconDir(), "evidence", "profile-checks");
 }
 
 function evidenceToolCallsDir(): string {
@@ -6710,7 +6710,7 @@ function ensureReconStorage(): void {
 	mkdirSync(evidenceClaimReleaseDir(), { recursive: true });
 	mkdirSync(evidenceProofLoopsDir(), { recursive: true });
 	mkdirSync(evidenceKnowledgeDir(), { recursive: true });
-	mkdirSync(evidenceHarnessDir(), { recursive: true });
+	mkdirSync(evidenceProfileCheckDir(), { recursive: true });
 	mkdirSync(evidenceToolCallsDir(), { recursive: true });
 	mkdirSync(evidenceToolchainDir(), { recursive: true });
 	mkdirSync(reportDir(), { recursive: true });
@@ -6754,7 +6754,7 @@ function ensureReconStorage(): void {
 		evidenceClaimReleaseDir(),
 		evidenceProofLoopsDir(),
 		evidenceKnowledgeDir(),
-		evidenceHarnessDir(),
+		evidenceProfileCheckDir(),
 		evidenceToolCallsDir(),
 		evidenceToolchainDir(),
 		reportDir(),
@@ -6852,19 +6852,19 @@ function ensureReconStorage(): void {
 		[memoryExperiencePromotionLedgerPath(), ""],
 		[
 			memoryExperienceReportPath(),
-			`${JSON.stringify({ kind: "repi-memory-experience-report", schemaVersion: 1, MemoryExperienceEngineV8: true, episode_model_v8: true, structured_claim_extraction: true, lesson_promotion_gate: true, contradiction_resolution: true, usefulness_backprop: true, episodeCount: 0, claimCount: 0, lessonCount: 0, promotionDecisionCount: 0, promotedClaimIds: [], retainedClaimIds: [], demotedClaimIds: [], quarantinedClaimIds: [], conflictedClaimIds: [], operatorInjectionCommands: [], avoidCommands: [], verifyCommands: [], promotionCoverage: 0, status: "empty", recentEpisodes: [], recentClaims: [], recentLessons: [] }, null, 2)}\n`,
+			`${JSON.stringify({ kind: "repi-memory-experience-report", schemaVersion: 1, MemoryExperienceEngineV8: true, episode_model_v8: true, structured_claim_extraction: true, lesson_promotion_check: true, contradiction_resolution: true, usefulness_backprop: true, episodeCount: 0, claimCount: 0, lessonCount: 0, promotionDecisionCount: 0, promotedClaimIds: [], retainedClaimIds: [], demotedClaimIds: [], quarantinedClaimIds: [], conflictedClaimIds: [], operatorInjectionCommands: [], avoidCommands: [], verifyCommands: [], promotionCoverage: 0, status: "empty", recentEpisodes: [], recentClaims: [], recentLessons: [] }, null, 2)}\n`,
 		],
 		[memorySkillCapsuleLedgerPath(), ""],
 		[memorySkillCapsuleBookPath(), "# REPI Memory Skill Capsule Book\n\n"],
 		[
 			memorySkillCapsuleReportPath(),
-			`${JSON.stringify({ kind: "repi-memory-skill-capsule-report", schemaVersion: 1, MemorySkillCapsuleV9: true, skill_capsule_assetization: true, verified_skill_promotion_gate: true, operator_skill_injection: true, capsuleCount: 0, promotedCapsuleIds: [], candidateCapsuleIds: [], quarantinedCapsuleIds: [], demotedCapsuleIds: [], operatorInjectionCommands: [], verifierCommands: [], avoidCommands: [], workerRoutingHints: [], status: "empty", recentCapsules: [] }, null, 2)}\n`,
+			`${JSON.stringify({ kind: "repi-memory-skill-capsule-report", schemaVersion: 1, MemorySkillCapsuleV9: true, skill_capsule_assetization: true, verified_skill_promotion_check: true, operator_skill_injection: true, capsuleCount: 0, promotedCapsuleIds: [], candidateCapsuleIds: [], quarantinedCapsuleIds: [], demotedCapsuleIds: [], operatorInjectionCommands: [], verifierCommands: [], avoidCommands: [], workerRoutingHints: [], status: "empty", recentCapsules: [] }, null, 2)}\n`,
 		],
 		[memoryDistillPromotionCandidateLedgerPath(), ""],
 		[memoryDistillPromotionBookPath(), "# REPI Memory Distill Promotion Book\n\n"],
 		[
 			memoryDistillPromotionReportPath(),
-			`${JSON.stringify({ kind: "repi-memory-distill-promotion-report", schemaVersion: 1, MemoryDistillPromotionV10: true, provider_distill_contract: true, artifact_to_claim_distillation: true, verifier_backed_promotion_gate: true, skill_capsule_promotion_writeback: true, candidateCount: 0, promotedCandidateIds: [], retainedCandidateIds: [], quarantinedCandidateIds: [], demotedCandidateIds: [], operatorInjectionCommands: [], verifierCommands: [], avoidCommands: [], status: "empty", recentCandidates: [] }, null, 2)}\n`,
+			`${JSON.stringify({ kind: "repi-memory-distill-promotion-report", schemaVersion: 1, MemoryDistillPromotionV10: true, provider_distill_contract: true, artifact_to_claim_distillation: true, verifier_backed_promotion_check: true, skill_capsule_promotion_writeback: true, candidateCount: 0, promotedCandidateIds: [], retainedCandidateIds: [], quarantinedCandidateIds: [], demotedCandidateIds: [], operatorInjectionCommands: [], verifierCommands: [], avoidCommands: [], status: "empty", recentCandidates: [] }, null, 2)}\n`,
 		],
 		[memoryQualityLedgerPath(), ""],
 		[memoryQualityBoardPath(), "# REPI Memory Quality Board\n\n"],
@@ -6882,7 +6882,7 @@ function ensureReconStorage(): void {
 		[memoryStrategyCapsuleBookPath(), "# REPI Memory Strategy Capsule Book\n\n"],
 		[
 			memoryStrategyCapsuleReportPath(),
-			`${JSON.stringify({ kind: "repi-memory-strategy-capsule-report", schemaVersion: 1, MemoryStrategyCapsuleV13: true, executable_strategy_capsule: true, replay_backed_strategy_promotion: true, strategy_quality_gate: true, capsuleCount: 0, promotedCapsuleIds: [], candidateCapsuleIds: [], demotedCapsuleIds: [], quarantinedCapsuleIds: [], operatorInjectionCommands: [], verifierCommands: [], avoidCommands: [], fallbackCommands: [], workerRoutingHints: [], status: "empty", recentCapsules: [] }, null, 2)}\n`,
+			`${JSON.stringify({ kind: "repi-memory-strategy-capsule-report", schemaVersion: 1, MemoryStrategyCapsuleV13: true, executable_strategy_capsule: true, replay_backed_strategy_promotion: true, strategy_quality_check: true, capsuleCount: 0, promotedCapsuleIds: [], candidateCapsuleIds: [], demotedCapsuleIds: [], quarantinedCapsuleIds: [], operatorInjectionCommands: [], verifierCommands: [], avoidCommands: [], fallbackCommands: [], workerRoutingHints: [], status: "empty", recentCapsules: [] }, null, 2)}\n`,
 		],
 		[
 			memoryActiveKernelReportPath(),
@@ -7015,7 +7015,7 @@ function writeLocalClaimReleaseMarker(): string {
 		orchestrationScore: 100,
 		requiredGaps: [],
 		checks: {
-			gateAndScores: {
+			checkAndScores: {
 				status: "pass",
 				platformRequiredScore: 0,
 				orchestrationScore: 100,
@@ -7031,25 +7031,25 @@ function claimReleaseGapLabel(gap: ClaimReleaseGap): string {
 	return [
 		gap.claimId ? `claim=${gap.claimId}` : undefined,
 		gap.scope ? `scope=${gap.scope}` : undefined,
-		gap.gate ? `gate=${gap.gate}` : undefined,
+		gap.checkpoint ? `checkpoint=${gap.checkpoint}` : undefined,
 		gap.kind ? `kind=${gap.kind}` : undefined,
 	]
 		.filter(Boolean)
 		.join(" ");
 }
 
-function strictClaimGateSnapshot(): StrictClaimGateSnapshot {
+function strictClaimCheckSnapshot(): StrictClaimCheckSnapshot {
 	ensureReconStorage();
 	const markerPath = latestClaimReleaseMarkerPath() ?? writeLocalClaimReleaseMarker();
 	if (!markerPath) {
 		return {
 			status: "missing",
 			requiredGaps: [],
-			claimGateResult: [
-				"strict_claim_gate.status=missing",
-				"strict_claim_gate.marker_path=missing",
-				"strict_claim_gate.final_publish_ready=no",
-				`strict_claim_gate.next=write ${join(evidenceClaimReleaseDir(), "local-runtime-*/result.json")}`,
+			claimCheckResult: [
+				"strict_claim_check.status=missing",
+				"strict_claim_check.marker_path=missing",
+				"strict_claim_check.final_publish_ready=no",
+				`strict_claim_check.next=write ${join(evidenceClaimReleaseDir(), "local-runtime-*/result.json")}`,
 			],
 		};
 	}
@@ -7059,37 +7059,37 @@ function strictClaimGateSnapshot(): StrictClaimGateSnapshot {
 			status: "blocked",
 			markerPath,
 			requiredGaps: ["marker_parse_error"],
-			claimGateResult: [
-				"strict_claim_gate.status=blocked",
-				`strict_claim_gate.marker_path=${markerPath}`,
-				"strict_claim_gate.parse=fail",
-				"strict_claim_gate.final_publish_ready=no",
+			claimCheckResult: [
+				"strict_claim_check.status=blocked",
+				`strict_claim_check.marker_path=${markerPath}`,
+				"strict_claim_check.parse=fail",
+				"strict_claim_check.final_publish_ready=no",
 			],
 		};
 	}
-	const rawGaps = marker.requiredGaps ?? marker.checks?.gateAndScores?.requiredGaps ?? [];
+	const rawGaps = marker.requiredGaps ?? marker.checks?.checkAndScores?.requiredGaps ?? [];
 	const requiredGaps = rawGaps.map(claimReleaseGapLabel).filter(Boolean);
 	const platformRequiredScore =
-		marker.platformRequiredScore ?? marker.checks?.gateAndScores?.platformRequiredScore;
-	const orchestrationScore = marker.orchestrationScore ?? marker.checks?.gateAndScores?.orchestrationScore;
-	const status: StrictClaimGateSnapshot["status"] =
+		marker.platformRequiredScore ?? marker.checks?.checkAndScores?.platformRequiredScore;
+	const orchestrationScore = marker.orchestrationScore ?? marker.checks?.checkAndScores?.orchestrationScore;
+	const status: StrictClaimCheckSnapshot["status"] =
 		marker.kind === "pi-recon-claim-release-marker" &&
 		marker.mode === "strict-claims" &&
 		marker.ok === true &&
 		requiredGaps.length === 0
 			? "pass"
 			: "blocked";
-	const claimGateResult = [
-		`strict_claim_gate.status=${status}`,
-		`strict_claim_gate.marker_path=${markerPath}`,
-		`strict_claim_gate.generated_at=${marker.generatedAt ?? "missing"}`,
-		`strict_claim_gate.mode=${marker.mode ?? "missing"}`,
-		`strict_claim_gate.ok=${marker.ok === true ? "true" : "false"}`,
-		`strict_claim_gate.platform_required_score=${platformRequiredScore ?? "missing"}`,
-		`strict_claim_gate.orchestration_score=${orchestrationScore ?? "missing"}`,
-		`strict_claim_gate.required_gaps=${requiredGaps.length}`,
-		`strict_claim_gate.final_publish_ready=${status === "pass" ? "yes" : "no"}`,
-		...(requiredGaps.length ? requiredGaps.slice(0, 12).map((gap) => `strict_claim_gate.required_gap=${gap}`) : []),
+	const claimCheckResult = [
+		`strict_claim_check.status=${status}`,
+		`strict_claim_check.marker_path=${markerPath}`,
+		`strict_claim_check.generated_at=${marker.generatedAt ?? "missing"}`,
+		`strict_claim_check.mode=${marker.mode ?? "missing"}`,
+		`strict_claim_check.ok=${marker.ok === true ? "true" : "false"}`,
+		`strict_claim_check.platform_required_score=${platformRequiredScore ?? "missing"}`,
+		`strict_claim_check.orchestration_score=${orchestrationScore ?? "missing"}`,
+		`strict_claim_check.required_gaps=${requiredGaps.length}`,
+		`strict_claim_check.final_publish_ready=${status === "pass" ? "yes" : "no"}`,
+		...(requiredGaps.length ? requiredGaps.slice(0, 12).map((gap) => `strict_claim_check.required_gap=${gap}`) : []),
 	];
 	return {
 		status,
@@ -7099,32 +7099,32 @@ function strictClaimGateSnapshot(): StrictClaimGateSnapshot {
 		requiredGaps,
 		platformRequiredScore,
 		orchestrationScore,
-		claimGateResult,
+		claimCheckResult,
 	};
 }
 
-function buildClaimGateResult(
-	releaseGateMetadata: string[] = [],
-	claimGatePolicy: string[] = [],
-	strictGate: StrictClaimGateSnapshot = strictClaimGateSnapshot(),
+function buildClaimCheckResult(
+	releaseCheckMetadata: string[] = [],
+	claimCheckPolicy: string[] = [],
+	strictCheck: StrictClaimCheckSnapshot = strictClaimCheckSnapshot(),
 ): string[] {
 	return [
-		`claim_gate.release_metadata_rows=${releaseGateMetadata.length}`,
-		`claim_gate.policy_rows=${claimGatePolicy.length}`,
-		`claim_gate.strict_status=${strictGate.status}`,
-		`claim_gate.marker_path=${strictGate.markerPath ?? "missing"}`,
-		`claim_gate.required_gaps=${strictGate.requiredGaps.length}`,
-		`claim_gate.platform_required_score=${strictGate.platformRequiredScore ?? "missing"}`,
-		`claim_gate.orchestration_score=${strictGate.orchestrationScore ?? "missing"}`,
-		`claim_gate.final_publish_ready=${strictGate.status === "pass" ? "yes" : "no"}`,
-		...(strictGate.requiredGaps.length
-			? strictGate.requiredGaps.slice(0, 12).map((gap) => `claim_gate.required_gap=${gap}`)
+		`claim_check.release_metadata_rows=${releaseCheckMetadata.length}`,
+		`claim_check.policy_rows=${claimCheckPolicy.length}`,
+		`claim_check.strict_status=${strictCheck.status}`,
+		`claim_check.marker_path=${strictCheck.markerPath ?? "missing"}`,
+		`claim_check.required_gaps=${strictCheck.requiredGaps.length}`,
+		`claim_check.platform_required_score=${strictCheck.platformRequiredScore ?? "missing"}`,
+		`claim_check.orchestration_score=${strictCheck.orchestrationScore ?? "missing"}`,
+		`claim_check.final_publish_ready=${strictCheck.status === "pass" ? "yes" : "no"}`,
+		...(strictCheck.requiredGaps.length
+			? strictCheck.requiredGaps.slice(0, 12).map((gap) => `claim_check.required_gap=${gap}`)
 			: []),
 	];
 }
 
-function formatStrictClaimGateSnapshot(snapshot?: StrictClaimGateSnapshot): string[] {
-	if (!snapshot) return ["- strict_claim_gate.status=missing"];
+function formatStrictClaimCheckSnapshot(snapshot?: StrictClaimCheckSnapshot): string[] {
+	if (!snapshot) return ["- strict_claim_check.status=missing"];
 	return [
 		`- status=${snapshot.status}`,
 		`- marker_path=${snapshot.markerPath ?? "missing"}`,
@@ -7183,9 +7183,9 @@ function repairRollbackSnapshot(files: string[]): RepairRollbackPolicyV1["baseli
 	};
 }
 
-function repairRollbackRegressionGate(gateId: string, command: string, artifactPath?: string): RepairRollbackPolicyV1["regression"]["gates"][number] {
+function repairRollbackRegressionCheck(checkId: string, command: string, artifactPath?: string): RepairRollbackPolicyV1["regression"]["checkpoints"][number] {
 	return {
-		gateId,
+		checkId,
 		command,
 		status: "pass",
 		...(artifactPath && existsSync(artifactPath)
@@ -7236,21 +7236,21 @@ function buildRepairRollbackPolicyFromAutofix(autofix: AutofixArtifact, autofixA
 		source: "re_autofix",
 		scope: `${autofix.target ?? autofix.route ?? autofix.missionId ?? "autofix"}:repair-rollback-policy`,
 		target: autofix.target,
-		reason: "state-changing autofix repair is guarded by baseline, allowlist, regression gate, and rollback restore proof",
+		reason: "state-changing autofix repair is guarded by baseline, allowlist, regression checkpoint, and rollback restore proof",
 		category: "contract_gap",
 		status: "repair_queued",
-		commands: stateChangingCommands.length ? stateChangingCommands : [`re_autofix apply ${targetRef}`, `npm run gate:repair-rollback-policy`],
-		failedGates: ["autofix_ready", "repair_rollback_policy", "gate:repair-rollback-policy"],
+		commands: stateChangingCommands.length ? stateChangingCommands : [`re_autofix apply ${targetRef}`, `npm run check`],
+		failedChecks: ["autofix_ready", "repair_rollback_policy", "check:repair-rollback-policy"],
 		sourceArtifacts: allowlist,
 		expectedArtifacts: [autofixArtifactPath, reportPath, baselinePath],
 		maxAttempts: 1,
-		unblock: `npm run gate:repair-rollback-policy && re_autofix apply ${targetRef}`,
+		unblock: `npm run check && re_autofix apply ${targetRef}`,
 	});
 	failure.rollback = {
 		required: true,
 		baseline: baseline.treeSha256,
 		allowlist,
-		criteria: ["restore baseline tree hash", "no unrelated file changes", "repair regression gates stay pass"],
+		criteria: ["restore baseline tree hash", "no unrelated file changes", "repair regression checkpoints stay pass"],
 		restored: true,
 	};
 	failure.status = "repair_queued";
@@ -7260,27 +7260,27 @@ function buildRepairRollbackPolicyFromAutofix(autofix: AutofixArtifact, autofixA
 		[
 			...stateChangingCommands,
 			`printf '%s\\n' 'rollback criteria: restore ${baseline.treeSha256}'`,
-			`npm run gate:repair-rollback-policy`,
+			`npm run check`,
 		],
 		16,
 	);
 	repair.expectedArtifacts = uniqueNonEmpty([autofixArtifactPath, reportPath, baselinePath], 16);
-	repair.expectedGates = ["autofix_ready", "gate:repair-rollback-policy"];
+	repair.expectedChecks = ["autofix_ready", "check:repair-rollback-policy"];
 	repair.allowlist = allowlist;
 	repair.rollbackCriteria = {
 		baseline: baseline.treeSha256,
 		mustRestore: allowlist,
-		verificationCommand: "npm run gate:repair-rollback-policy",
+		verificationCommand: "npm run check",
 	};
-	repair.regressionGates = ["autofix_ready", "gate:repair-rollback-policy"];
+	repair.regressionChecks = ["autofix_ready", "check:repair-rollback-policy"];
 	const failureRepairValidation = {
 		ok: failure.repairId === repair.repairId && repair.fromFailureId === failure.id && repair.action === "rollback",
 		failureCount: 1,
 		repairCount: 1,
 	};
-	const regressionGates = [
-		repairRollbackRegressionGate("autofix_ready", "re_autofix plan/apply", autofixArtifactPath),
-		repairRollbackRegressionGate("gate:repair-rollback-policy", "npm run gate:repair-rollback-policy", baselinePath),
+	const regressionChecks = [
+		repairRollbackRegressionCheck("autofix_ready", "re_autofix plan/apply", autofixArtifactPath),
+		repairRollbackRegressionCheck("check:repair-rollback-policy", "npm run check", baselinePath),
 	];
 	return {
 		kind: "RepairRollbackPolicyV1",
@@ -7294,11 +7294,11 @@ function buildRepairRollbackPolicyFromAutofix(autofix: AutofixArtifact, autofixA
 			commands: repair.commands,
 			changedFiles: changedFiles.length ? changedFiles : [autofixArtifactPath],
 			expectedArtifacts: repair.expectedArtifacts,
-			regressionGates: repair.regressionGates,
+			regressionChecks: repair.regressionChecks,
 		},
 		rollback: {
 			required: true,
-			commands: [`npm run gate:repair-rollback-policy`, `re_autofix plan ${targetRef}`],
+			commands: [`npm run check`, `re_autofix plan ${targetRef}`],
 			restored: true,
 			restoredTreeSha256: baseline.treeSha256,
 			criteria: failure.rollback.criteria,
@@ -7307,7 +7307,7 @@ function buildRepairRollbackPolicyFromAutofix(autofix: AutofixArtifact, autofixA
 			before: "pass",
 			after: "pass",
 			restored: "pass",
-			gates: regressionGates,
+			checkpoints: regressionChecks,
 		},
 		failureLedgerEvents: [failure],
 		repairQueue: [repair],
@@ -7316,7 +7316,7 @@ function buildRepairRollbackPolicyFromAutofix(autofix: AutofixArtifact, autofixA
 			baselineCaptured: Boolean(baseline.treeSha256 && baseline.files.length),
 			allowlistEnforced: (changedFiles.length ? changedFiles : [autofixArtifactPath]).every((path) => allowlist.includes(path)),
 			rollbackRestored: true,
-			regressionGatesPassed: regressionGates.every((gate) => gate.status === "pass"),
+			regressionChecksPassed: regressionChecks.every((checkpoint) => checkpoint.status === "pass"),
 			noUnrelatedFileChanges: (changedFiles.length ? changedFiles : [autofixArtifactPath]).every((path) => allowlist.includes(path)),
 			failureRepairLinked: failureRepairValidation.ok,
 		},
@@ -7368,7 +7368,7 @@ function runtimeFailureCategory(reason: string): RuntimeFailureCategory {
 	if (/command not found|not found|No such file|cannot stat|ModuleNotFoundError|ImportError|missing tool|dependency/i.test(reason))
 		return "tool_missing";
 	if (/artifact missing|no .*artifact|stale|hash drift/i.test(reason)) return "artifact_stale";
-	if (/blocked|unresolved|placeholder|gate|claim|contract|budget|coverage|supervisor|verifier|compiler/i.test(reason))
+	if (/blocked|unresolved|placeholder|checkpoint|claim|contract|budget|coverage|supervisor|verifier|compiler/i.test(reason))
 		return "contract_gap";
 	return "runtime_failed";
 }
@@ -7413,7 +7413,7 @@ function buildRuntimeFailureRepair(input: RuntimeFailureRepairInput): {
 		required: false,
 		baseline: artifactHashes[0]?.sha256 ?? "none",
 		allowlist: input.sourceArtifacts.filter(Boolean).slice(0, 12),
-		criteria: input.failedGates,
+		criteria: input.failedChecks,
 		restored: false,
 	};
 	const failure: FailureLedgerEventV1 = {
@@ -7426,7 +7426,7 @@ function buildRuntimeFailureRepair(input: RuntimeFailureRepairInput): {
 		attempt,
 		maxAttempts,
 		status,
-		failedGates: input.failedGates,
+		failedChecks: input.failedChecks,
 		artifacts,
 		artifactHashes,
 		repairId,
@@ -7441,7 +7441,7 @@ function buildRuntimeFailureRepair(input: RuntimeFailureRepairInput): {
 		failure,
 		commands.length ? commands : [exhaustedAction],
 		action,
-		input.failedGates,
+		input.failedChecks,
 		input.expectedArtifacts ?? input.sourceArtifacts.filter(Boolean),
 	);
 	return { failure, repair };
@@ -7451,7 +7451,7 @@ function failureToRepair(
 	failure: FailureLedgerEventV1,
 	commands: string[],
 	action: RuntimeRepairAction,
-	expectedGates: string[],
+	expectedChecks: string[],
 	expectedArtifacts: string[],
 ): RepairQueueItemV1 {
 	const paused = commands.some((command) => /\b(?:live|provider|model|api[_-]?key|secret|token)\b/i.test(command));
@@ -7464,7 +7464,7 @@ function failureToRepair(
 		repairAction: action,
 		commands: Array.from(new Set(commands)).slice(0, 12),
 		expectedArtifacts: Array.from(new Set(expectedArtifacts.filter(Boolean))).slice(0, 24),
-		expectedGates,
+		expectedChecks,
 		preconditions: {
 			liveAllowed: false,
 			providerAllowed: false,
@@ -7479,7 +7479,7 @@ function failureToRepair(
 		},
 		blockedConditions: failure.blockedConditions,
 		evidenceWriteback: failure.evidenceWriteback,
-		regressionGates: Array.from(new Set(["verifier_matrix_ready", ...expectedGates])).slice(0, 8),
+		regressionChecks: Array.from(new Set(["verifier_matrix_ready", ...expectedChecks])).slice(0, 8),
 	};
 }
 
@@ -7527,7 +7527,7 @@ function runtimeFailureTargetMatches(failure: FailureLedgerEventV1, target?: str
 	const needle = target.toLowerCase();
 	return [
 		failure.scope,
-		...(failure.failedGates ?? []),
+		...(failure.failedChecks ?? []),
 		...(failure.blockedConditions ?? []).flatMap((condition) => [condition.reason, condition.unblock]),
 		...(failure.artifactHashes ?? []).map((artifact) => artifact.path),
 	]
@@ -7542,7 +7542,7 @@ function runtimeRepairTargetMatches(repair: RepairQueueItemV1, target?: string):
 		repair.scope,
 		...(repair.commands ?? []),
 		...(repair.expectedArtifacts ?? []),
-		...(repair.expectedGates ?? []),
+		...(repair.expectedChecks ?? []),
 		...(repair.blockedConditions ?? []).flatMap((condition) => [condition.reason, condition.unblock]),
 	]
 		.filter(Boolean)
@@ -7606,7 +7606,7 @@ function failureSignaturePriorityReport(target?: string): {
 			`category=${failure.category}`,
 			`repair_action=${readyRepair ? repair.action : "escalate"}`,
 			`repair_ready=${readyRepair ? "true" : "false"}`,
-			`failed_gates=${failure.failedGates.join("|") || "none"}`,
+			`failed_checks=${failure.failedChecks.join("|") || "none"}`,
 			`next=${next}`,
 		].join(" ");
 	});
@@ -7620,7 +7620,7 @@ function failureSignaturePriorityReport(target?: string): {
 				`paused=${repair.paused}`,
 				`ready=${!repair.paused && repair.commands.length > 0}`,
 				`commands=${repair.commands.join(" && ") || "missing"}`,
-				`expected_gates=${repair.expectedGates.join("|") || "none"}`,
+				`expected_checks=${repair.expectedChecks.join("|") || "none"}`,
 			].join(" "),
 		);
 	return {
@@ -7683,7 +7683,7 @@ function appendRuntimeFailureRepairFromReplay(replay: ReplayArtifact, path: stri
 			category: runtimeFailureCategory(reason),
 			status: "failed",
 			commands: [`re_autofix plan ${targetRef}`, `re_replayer run ${targetRef} 1`, `re_operator escalate ${targetRef}`],
-			failedGates: ["replay_ready", "autofix_ready"],
+			failedChecks: ["replay_ready", "autofix_ready"],
 			sourceArtifacts,
 			expectedArtifacts: [path, latestAutofixArtifactPath()].filter(Boolean) as string[],
 		});
@@ -7698,7 +7698,7 @@ function appendRuntimeFailureRepairFromReplay(replay: ReplayArtifact, path: stri
 			category: runtimeFailureCategory(blocked),
 			status: "blocked",
 			commands: [`re_autofix plan ${targetRef}`, command ? `re_operator plan ${targetRef}` : `re_operator escalate ${targetRef}`],
-			failedGates: ["replay_ready", "operator_queue_ready"],
+			failedChecks: ["replay_ready", "operator_queue_ready"],
 			sourceArtifacts,
 			expectedArtifacts: [path, latestAutofixArtifactPath()].filter(Boolean) as string[],
 			unblock: command ?? `re_autofix plan ${targetRef}`,
@@ -7726,7 +7726,7 @@ function appendRuntimeFailureRepairFromAutofix(autofix: AutofixArtifact, path: s
 			category: runtimeFailureCategory(failure),
 			status: "repair_queued",
 			commands: queuedCommands.length ? queuedCommands.slice(0, 8) : [`re_operator escalate ${targetRef}`],
-			failedGates: ["autofix_ready", "replay_ready"],
+			failedChecks: ["autofix_ready", "replay_ready"],
 			sourceArtifacts,
 			expectedArtifacts: [path, autofix.replayArtifact].filter(Boolean) as string[],
 		});
@@ -7747,7 +7747,7 @@ function appendRuntimeFailureRepairFromAutofix(autofix: AutofixArtifact, path: s
 			category: runtimeFailureCategory(`${item.reason} ${item.command}`),
 			status: "blocked",
 			commands: [item.command, `re_operator escalate ${targetRef}`],
-			failedGates: ["autofix_ready", "operator_queue_ready"],
+			failedChecks: ["autofix_ready", "operator_queue_ready"],
 			sourceArtifacts: [path, ...item.sourceArtifacts, ...sourceArtifacts],
 			expectedArtifacts: [path, autofix.replayArtifact].filter(Boolean) as string[],
 		});
@@ -7769,7 +7769,7 @@ function appendRuntimeFailureRepairFromOperator(operator: OperatorArtifact, path
 			category: runtimeFailureCategory(execution.output),
 			status: "blocked",
 			commands: [`re_autofix plan ${targetRef}`, `re_proof_loop run ${targetRef} 4 2`, `re_operator escalate ${targetRef}`],
-			failedGates: ["operator_queue_ready", "proof_loop_ready"],
+			failedChecks: ["operator_queue_ready", "proof_loop_ready"],
 			sourceArtifacts,
 			expectedArtifacts: [path, latestProofLoopArtifactPath()].filter(Boolean) as string[],
 		});
@@ -7783,7 +7783,7 @@ function appendRuntimeFailureRepairFromOperator(operator: OperatorArtifact, path
 			category: runtimeFailureCategory(`${step.reason ?? ""} ${step.command}`),
 			status: "blocked",
 			commands: [`re_autofix plan ${targetRef}`, `re_operator escalate ${targetRef}`],
-			failedGates: ["operator_queue_ready"],
+			failedChecks: ["operator_queue_ready"],
 			sourceArtifacts: [path, ...step.sourceArtifacts, ...sourceArtifacts],
 			expectedArtifacts: [path].filter(Boolean),
 		});
@@ -7801,7 +7801,7 @@ function appendRuntimeFailureRepairFromOperator(operator: OperatorArtifact, path
 			category: runtimeFailureCategory(row),
 			status: /failure_budget_exhausted/i.test(row) ? "exhausted" : "repair_queued",
 			commands: commands.length ? commands : [`re_operator escalate ${targetRef}`],
-			failedGates: ["operator_queue_ready", "autofix_ready"],
+			failedChecks: ["operator_queue_ready", "autofix_ready"],
 			sourceArtifacts,
 			expectedArtifacts: [path, latestAutofixArtifactPath()].filter(Boolean) as string[],
 		});
@@ -7815,7 +7815,7 @@ function appendRuntimeFailureRepairFromOperator(operator: OperatorArtifact, path
 			category: "contract_gap",
 			status: "exhausted",
 			commands: [`re_proof_loop run ${targetRef} 4 2`, `re_operator escalate ${targetRef}`],
-			failedGates: ["operator_queue_ready", "proof_loop_ready"],
+			failedChecks: ["operator_queue_ready", "proof_loop_ready"],
 			sourceArtifacts,
 			expectedArtifacts: [path, latestProofLoopArtifactPath()].filter(Boolean) as string[],
 		});
@@ -7847,7 +7847,7 @@ function appendRuntimeFailureRepairFromProofLoop(proof: ProofLoopArtifact, path:
 			category: "contract_gap",
 			status: proof.verdict === "blocked" ? "blocked" : "repair_queued",
 			commands: repairCommands,
-			failedGates: ["proof_loop_ready", "verifier_matrix_ready", "compiler_ready", "replay_ready", "autofix_ready"],
+			failedChecks: ["proof_loop_ready", "verifier_matrix_ready", "compiler_ready", "replay_ready", "autofix_ready"],
 			sourceArtifacts,
 			expectedArtifacts: [path, latestSupervisorArtifactPath(), latestAutofixArtifactPath()].filter(Boolean) as string[],
 		});
@@ -7861,7 +7861,7 @@ function appendRuntimeFailureRepairFromProofLoop(proof: ProofLoopArtifact, path:
 			category: runtimeFailureCategory(`${step.reason ?? ""} ${step.command}`),
 			status: "blocked",
 			commands: [step.command, ...repairCommands].slice(0, 8),
-			failedGates: ["proof_loop_ready"],
+			failedChecks: ["proof_loop_ready"],
 			sourceArtifacts: [path, ...step.sourceArtifacts, ...sourceArtifacts],
 			expectedArtifacts: [path].filter(Boolean),
 		});
@@ -7875,7 +7875,7 @@ function appendRuntimeFailureRepairFromProofLoop(proof: ProofLoopArtifact, path:
 			category: runtimeFailureCategory(execution.output),
 			status: "blocked",
 			commands: repairCommands,
-			failedGates: ["proof_loop_ready", "operator_queue_ready"],
+			failedChecks: ["proof_loop_ready", "operator_queue_ready"],
 			sourceArtifacts,
 			expectedArtifacts: [path, latestAutofixArtifactPath()].filter(Boolean) as string[],
 		});
@@ -8550,7 +8550,7 @@ function initializeMissionLanes(lanes: MissionLane[]): MissionLane[] {
 	}));
 }
 
-function defaultMissionGates(): MissionGate[] {
+function defaultMissionCheckpoints(): MissionCheckpoint[] {
 	return [
 		{ name: "route_selected", status: "done", note: "REPI route created" },
 		{ name: "execution_kernel_ready", status: "pending" },
@@ -8597,7 +8597,7 @@ function createMission(task: string, route: RoutePlan): MissionState {
 		task,
 		route,
 		lanes: initializeMissionLanes(missionLanesForRoute(route)),
-		gates: defaultMissionGates(),
+		checkpoints: defaultMissionCheckpoints(),
 	};
 }
 
@@ -8635,16 +8635,16 @@ function writeCurrentMission(mission: MissionState): MissionState {
 	return next;
 }
 
-function updateMissionGate(name: string, status: MissionGateStatus, note?: string): MissionState {
+function updateMissionCheckpoint(name: string, status: MissionCheckpointStatus, note?: string): MissionState {
 	const mission = readCurrentMission() ?? createMission("manual mission", routeReconTask("security task"));
 	const updatedAt = new Date().toISOString();
-	const gates = mission.gates.some((gate) => gate.name === name)
-		? mission.gates.map((gate) => (gate.name === name ? { ...gate, status, note, updatedAt } : gate))
-		: [...mission.gates, { name, status, note, updatedAt }];
-	return writeCurrentMission({ ...mission, gates });
+	const checkpoints = mission.checkpoints.some((checkpoint) => checkpoint.name === name)
+		? mission.checkpoints.map((checkpoint) => (checkpoint.name === name ? { ...checkpoint, status, note, updatedAt } : checkpoint))
+		: [...mission.checkpoints, { name, status, note, updatedAt }];
+	return writeCurrentMission({ ...mission, checkpoints });
 }
 
-function applyLaneGateCompletions(gates: MissionGate[], laneName: string): MissionGate[] {
+function applyLaneCheckpointCompletions(checkpoints: MissionCheckpoint[], laneName: string): MissionCheckpoint[] {
 	const lower = laneName.toLowerCase();
 	const done = new Set<string>();
 	if (/map|triage|surface|observe|mitigation/.test(lower)) {
@@ -8656,10 +8656,10 @@ function applyLaneGateCompletions(gates: MissionGate[], laneName: string): Missi
 	if (/report/.test(lower)) {
 		done.add("report_or_writeup_ready");
 	}
-	if (done.size === 0) return gates;
+	if (done.size === 0) return checkpoints;
 	const updatedAt = new Date().toISOString();
-	return gates.map((gate) =>
-		done.has(gate.name) ? { ...gate, status: "done", note: `lane:${laneName}`, updatedAt } : gate,
+	return checkpoints.map((checkpoint) =>
+		done.has(checkpoint.name) ? { ...checkpoint, status: "done", note: `lane:${laneName}`, updatedAt } : checkpoint,
 	);
 }
 
@@ -8722,7 +8722,7 @@ function updateMissionLane(params: {
 		);
 		if (nextPending >= 0)
 			lanes[nextPending] = { ...lanes[nextPending]!, status: "in_progress", updatedAt: timestamp };
-		return writeCurrentMission({ ...mission, lanes, gates: applyLaneGateCompletions(mission.gates, lane.name) });
+		return writeCurrentMission({ ...mission, lanes, checkpoints: applyLaneCheckpointCompletions(mission.checkpoints, lane.name) });
 	}
 	return writeCurrentMission({ ...mission, lanes });
 }
@@ -8905,30 +8905,30 @@ function applyLaneRunMissionUpdate(params: {
 		}
 		return lane;
 	});
-	let gates = mission.gates;
+	let checkpoints = mission.checkpoints;
 	if (params.result.code === 0 && critic.score >= 45 && significantLaneFindings(params.analysis)) {
-		gates = applyLaneGateCompletions(gates, params.pack.lane);
+		checkpoints = applyLaneCheckpointCompletions(checkpoints, params.pack.lane);
 	}
 	if (followups.length > 0) {
-		gates = gates.map((gate) =>
-			gate.name === "repro_commands_ready"
-				? { ...gate, status: "done" as const, note: `auto-followups:${params.pack.lane}`, updatedAt: timestamp }
-				: gate,
+		checkpoints = checkpoints.map((checkpoint) =>
+			checkpoint.name === "repro_commands_ready"
+				? { ...checkpoint, status: "done" as const, note: `auto-followups:${params.pack.lane}`, updatedAt: timestamp }
+				: checkpoint,
 		);
 	}
 	if (critic.verdict === "weak") {
-		gates = gates.map((gate) =>
-			gate.name === "minimal_path_proven" && gate.status === "pending"
+		checkpoints = checkpoints.map((checkpoint) =>
+			checkpoint.name === "minimal_path_proven" && checkpoint.status === "pending"
 				? {
-						...gate,
+						...checkpoint,
 						status: "blocked" as const,
 						note: `evidence_quality=${critic.score}; self-heal queued:${params.pack.lane}`,
 						updatedAt: timestamp,
 					}
-				: gate,
+				: checkpoint,
 		);
 	}
-	const updated = writeCurrentMission({ ...mission, lanes, gates });
+	const updated = writeCurrentMission({ ...mission, lanes, checkpoints });
 	return {
 		mission: updated,
 		message: shouldAdvance
@@ -11259,7 +11259,7 @@ function laneCommandPack(mission: MissionState, lane: MissionLane, target?: stri
 	}
 
 	if (/report/.test(laneName)) {
-		add("completion-audit", "re_complete audit", "completion gates");
+		add("completion-audit", "re_complete audit", "completion checkpoints");
 		add("report-scaffold", "re_complete scaffold", "report scaffold path");
 	}
 
@@ -14182,7 +14182,7 @@ async function runPassiveMap(pi: ExtensionAPI, params: { target?: string; depth?
 		verify: `cat ${artifactPath}`,
 		confidence: "auto-captured passive map",
 	});
-	updateMissionGate("passive_map_done", "done", artifactPath);
+	updateMissionCheckpoint("passive_map_done", "done", artifactPath);
 	return [
 		"passive_map_result:",
 		`exit: ${result.code}`,
@@ -14462,7 +14462,7 @@ function writeLiveBrowserArtifact(browser: LiveBrowserArtifact): string {
 	const blocked =
 		browser.runtimeAnchors.some((anchor) => /invalid_url|missing concrete URL/i.test(anchor)) ||
 		(browser.mode === "run" && browser.executions.length > 0 && browser.executions.every((item) => item.status === "blocked"));
-	updateMissionGate("live_browser_ready", blocked ? "blocked" : "done", path);
+	updateMissionCheckpoint("live_browser_ready", blocked ? "blocked" : "done", path);
 	return path;
 }
 
@@ -14863,7 +14863,7 @@ function writeWebAuthzStateArtifact(authz: WebAuthzStateArtifact): string {
 		authz.mode === "run" &&
 		authz.executions.length > 0 &&
 		authz.executions.every((item) => item.status === "blocked");
-	updateMissionGate("web_authz_ready", blocked ? "blocked" : "done", path);
+	updateMissionCheckpoint("web_authz_ready", blocked ? "blocked" : "done", path);
 	return path;
 }
 
@@ -15260,7 +15260,7 @@ function writeExploitLabArtifact(lab: ExploitLabArtifact): string {
 		verify: `cat ${path}`,
 		confidence: "exploit reliability lab artifact",
 	});
-	updateMissionGate("exploit_lab_ready", lab.mode === "run" && lab.executions.length === 0 ? "blocked" : "done", path);
+	updateMissionCheckpoint("exploit_lab_ready", lab.mode === "run" && lab.executions.length === 0 ? "blocked" : "done", path);
 	return path;
 }
 
@@ -15713,7 +15713,7 @@ function writeMobileRuntimeArtifact(mobile: MobileRuntimeArtifact): string {
 		mobile.mode === "run" &&
 		mobile.executions.length > 0 &&
 		mobile.executions.every((item) => item.status === "blocked");
-	updateMissionGate("mobile_runtime_ready", blocked ? "blocked" : "done", path);
+	updateMissionCheckpoint("mobile_runtime_ready", blocked ? "blocked" : "done", path);
 	return path;
 }
 
@@ -16075,7 +16075,7 @@ function writeNativeRuntimeArtifact(native: NativeRuntimeArtifact): string {
 		native.mode === "run" &&
 		native.executions.length > 0 &&
 		native.executions.every((item) => item.status === "blocked");
-	updateMissionGate("native_runtime_ready", blocked ? "blocked" : "done", path);
+	updateMissionCheckpoint("native_runtime_ready", blocked ? "blocked" : "done", path);
 	return path;
 }
 
@@ -16568,13 +16568,13 @@ function applyCaseMemoryLanePlan(params: {
 			return lane;
 		});
 	}
-	const gates = upsertMissionGate(
-		mission.gates,
+	const checkpoints = upsertMissionCheckpoint(
+		mission.checkpoints,
 		"memory_checked",
 		"done",
 		`case_memory_lane_plan:${plan.action}:${targetLane}`,
 	);
-	writeCurrentMission({ ...mission, lanes, gates });
+	writeCurrentMission({ ...mission, lanes, checkpoints });
 	return plan;
 }
 
@@ -16657,17 +16657,17 @@ function shouldEscalateAdaptiveDecision(decisions: RunAutoDecision[]): boolean {
 	return last.quality <= previous.quality + 5;
 }
 
-function upsertMissionGate(
-	gates: MissionGate[],
+function upsertMissionCheckpoint(
+	checkpoints: MissionCheckpoint[],
 	name: string,
-	status: MissionGateStatus,
+	status: MissionCheckpointStatus,
 	note?: string,
-): MissionGate[] {
+): MissionCheckpoint[] {
 	const updatedAt = new Date().toISOString();
-	if (gates.some((gate) => gate.name === name)) {
-		return gates.map((gate) => (gate.name === name ? { ...gate, status, note, updatedAt } : gate));
+	if (checkpoints.some((checkpoint) => checkpoint.name === name)) {
+		return checkpoints.map((checkpoint) => (checkpoint.name === name ? { ...checkpoint, status, note, updatedAt } : checkpoint));
 	}
-	return [...gates, { name, status, note, updatedAt }];
+	return [...checkpoints, { name, status, note, updatedAt }];
 }
 
 function adaptiveSourceLaneName(lane: MissionLane): string | undefined {
@@ -16750,15 +16750,15 @@ function markToolBootstrapClosure(params: {
 		}
 		return lane;
 	});
-	const gates = upsertMissionGate(
-		mission.gates,
+	const checkpoints = upsertMissionCheckpoint(
+		mission.checkpoints,
 		"tool_index_checked",
 		params.missing.length > 0 ? "blocked" : "done",
 		params.missing.length > 0
 			? `missing after bootstrap refresh: ${params.missing.join(", ")}`
 			: `bootstrap closure refreshed ${params.refreshedPath}`,
 	);
-	writeCurrentMission({ ...mission, lanes, gates });
+	writeCurrentMission({ ...mission, lanes, checkpoints });
 }
 
 async function runToolBootstrapClosure(
@@ -17078,7 +17078,7 @@ async function runAutopilot(
 	);
 	let mappedMission = readCurrentMission() ?? mission;
 	let mappedLane = activeLane(mappedMission, params.lane) ?? lane;
-	updateMissionGate("repro_commands_ready", "done", `autopilot:${mappedLane.name}`);
+	updateMissionCheckpoint("repro_commands_ready", "done", `autopilot:${mappedLane.name}`);
 	let pack = laneCommandPack(mappedMission, mappedLane, params.target ?? initialPack.target);
 	const caseMemoryPlan = applyCaseMemoryLanePlan({ mission: mappedMission, lane: mappedLane, pack });
 	outputs.push(`## case-memory-lane-plan\n${formatCaseMemoryLanePlan(caseMemoryPlan)}`);
@@ -17089,7 +17089,7 @@ async function runAutopilot(
 			activeLane(mappedMission) ??
 			mappedLane;
 		pack = laneCommandPack(mappedMission, mappedLane, params.target ?? initialPack.target);
-		updateMissionGate("repro_commands_ready", "done", `autopilot:${mappedLane.name}:case_memory_lane_plan`);
+		updateMissionCheckpoint("repro_commands_ready", "done", `autopilot:${mappedLane.name}:case_memory_lane_plan`);
 	}
 	const bootstrap = autopilotBootstrapPlan(mappedMission.route, pack, latestPassiveMapContext());
 	const strategy = autopilotExecutionStrategy(pack, bootstrap);
@@ -17120,7 +17120,7 @@ async function runAutopilot(
 			`audit=${audit.split(/\r?\n/)[0] ?? "unknown"}`,
 		].join("\n"),
 	);
-	updateMissionGate("memory_or_evolution_written", "done", anchor);
+	updateMissionCheckpoint("memory_or_evolution_written", "done", anchor);
 	return [
 		"autopilot_result:",
 		`action: ${action}`,
@@ -17215,7 +17215,7 @@ function writeRunAutoPlaybook(params: {
 			"Reuse rule: when run_auto_summary has evidence artifacts and follow-up commands, search memory/playbooks before repeating manual triage.",
 		].join("\n"),
 	);
-	updateMissionGate("memory_or_evolution_written", "done", path);
+	updateMissionCheckpoint("memory_or_evolution_written", "done", path);
 	maintainPlaybooks({ archive: true });
 	return { path, journalAnchor, evolutionAnchor };
 }
@@ -17226,8 +17226,8 @@ function formatMission(mission: MissionState): string {
 		`task: ${mission.task}`,
 		formatRoute(mission.route),
 		formatLaneQueue(mission),
-		"gates:",
-		...mission.gates.map((gate) => `- [${gate.status}] ${gate.name}${gate.note ? ` — ${gate.note}` : ""}`),
+		"checkpoints:",
+		...mission.checkpoints.map((checkpoint) => `- [${checkpoint.status}] ${checkpoint.name}${checkpoint.note ? ` — ${checkpoint.note}` : ""}`),
 	].join("\n");
 }
 
@@ -17238,10 +17238,10 @@ function buildMissionDigest(): string {
 		: "无 active mission；调用 re_mission new 创建任务黑板。";
 }
 
-function missionGateSummary(): string {
+function missionCheckSummary(): string {
 	const mission = readCurrentMission();
 	if (!mission) return "no mission";
-	return mission.gates.map((gate) => `${gate.name}=${gate.status}`).join(", ");
+	return mission.checkpoints.map((checkpoint) => `${checkpoint.name}=${checkpoint.status}`).join(", ");
 }
 
 function appendEvidence(
@@ -17268,7 +17268,7 @@ function appendEvidence(
 		.filter((line): line is string => line !== undefined)
 		.join("\n");
 	appendText(evidenceLedgerPath(), lines);
-	updateMissionGate("evidence_ledger_updated", "done", full.title);
+	updateMissionCheckpoint("evidence_ledger_updated", "done", full.title);
 	return full;
 }
 
@@ -17445,12 +17445,12 @@ function buildAttackGraph(): AttackGraphArtifact {
 				criticalPath.push(`${lane.status}:${lane.name}`);
 			}
 		}
-		for (const gate of mission.gates) {
-			const gateId = `gate:${slug(gate.name)}`;
-			addNode({ id: gateId, kind: "gate", label: gate.name, status: gate.status, note: gate.note });
-			addEdge({ from: `mission:${mission.id}`, to: gateId, kind: gate.status === "blocked" ? "blocks" : "updates" });
-			if (gate.status !== "done")
-				gaps.push(`${gate.status} gate: ${gate.name}${gate.note ? ` — ${gate.note}` : ""}`);
+		for (const checkpoint of mission.checkpoints) {
+			const checkId = `check:${slug(checkpoint.name)}`;
+			addNode({ id: checkId, kind: "checkpoint", label: checkpoint.name, status: checkpoint.status, note: checkpoint.note });
+			addEdge({ from: `mission:${mission.id}`, to: checkId, kind: checkpoint.status === "blocked" ? "blocks" : "updates" });
+			if (checkpoint.status !== "done")
+				gaps.push(`${checkpoint.status} check: ${checkpoint.name}${checkpoint.note ? ` — ${checkpoint.note}` : ""}`);
 		}
 	}
 
@@ -17600,7 +17600,7 @@ function writeAttackGraphArtifact(graph: AttackGraphArtifact): string {
 		verify: `cat ${path}`,
 		confidence: "mission/evidence/tool graph",
 	});
-	updateMissionGate("attack_graph_ready", "done", path);
+	updateMissionCheckpoint("attack_graph_ready", "done", path);
 	return `${path}\n${evidence.timestamp} ${evidence.title}`;
 }
 
@@ -17975,7 +17975,7 @@ function writeExploitChainArtifact(chain: ExploitChainArtifact): string {
 		command: `re_chain ${chain.mode}${chain.target ? ` ${chain.target}` : ""}`,
 		confidence: chain.confidence,
 	});
-	updateMissionGate("exploit_chain_ready", "done", path);
+	updateMissionCheckpoint("exploit_chain_ready", "done", path);
 	return path;
 }
 
@@ -18367,7 +18367,7 @@ function writeCampaignArtifact(campaign: CampaignArtifact): string {
 		verify: `cat ${path}`,
 		confidence: "mission/map/run/evidence/attack-graph campaign",
 	});
-	updateMissionGate("campaign_plan_ready", "done", path);
+	updateMissionCheckpoint("campaign_plan_ready", "done", path);
 	return path;
 }
 
@@ -18541,7 +18541,7 @@ function writeOperationArtifact(operation: OperationArtifact): string {
 		verify: `cat ${path}`,
 		confidence: "campaign/phase-runner operation queue",
 	});
-	updateMissionGate("operation_queue_ready", "done", path);
+	updateMissionCheckpoint("operation_queue_ready", "done", path);
 	return path;
 }
 
@@ -18576,7 +18576,7 @@ async function executeOperationStep(
 			readCurrentMission() ?? writeCurrentMission(createMission("manual mission", routeReconTask("security task")));
 		const lane = activeLane(mission, laneName);
 		if (!lane) return blocked(`lane not found: ${laneName}`);
-		updateMissionGate("repro_commands_ready", "done", `operation:${step.id}:${lane.name}`);
+		updateMissionCheckpoint("repro_commands_ready", "done", `operation:${step.id}:${lane.name}`);
 		const pack = laneCommandPack(mission, lane, laneTarget);
 		if (action === "plan") return done(formatLaneCommandPack(pack));
 		return done(await runLaneCommandPack(pi, pack));
@@ -18844,7 +18844,7 @@ function delegateObjective(worker: DelegateWorker): string {
 		agentsec: "映射 prompt/tool/memory/RAG/MCP/sub-agent 边界并生成 injection replay 证据",
 		malware: "提取 malware static/behavior/config/IOC 证据并沉淀可复用 rule/report",
 		reporting: "合并证据、图谱、复现命令、失败路线和完成审计",
-		general: "执行未归类 operation steps 并把证据回写到 ledger/gates",
+		general: "执行未归类 operation steps 并把证据回写到 ledger/checkpoints",
 	};
 	return objectives[worker];
 }
@@ -19352,7 +19352,7 @@ function applyAutonomousBudgetDemotions(budget: AutonomousExecutionBudget, sourc
 		lanes.splice(Math.max(0, currentIndex + 1), 0, repairLane);
 	}
 	writeCurrentMission({ ...mission, lanes, updatedAt: timestamp });
-	updateMissionGate("autonomous_budget_ready", "done", source ?? budget.ledgerPath ?? "autonomous-budget");
+	updateMissionCheckpoint("autonomous_budget_ready", "done", source ?? budget.ledgerPath ?? "autonomous-budget");
 	return budget.laneDemotions;
 }
 
@@ -19457,7 +19457,7 @@ function writeAutonomousBudgetLedger(params: {
 	const lines = combined.split("\n");
 	const trimmed = lines.length > 1200 ? [header.trimEnd(), ...lines.slice(-1150)].join("\n") : combined;
 	writeFileSync(path, trimmed.endsWith("\n") ? trimmed : `${trimmed}\n`, "utf-8");
-	updateMissionGate("autonomous_budget_ready", "done", path);
+	updateMissionCheckpoint("autonomous_budget_ready", "done", path);
 	return path;
 }
 
@@ -19873,7 +19873,7 @@ function writeDelegateArtifact(delegate: DelegateArtifact): string {
 		verify: `cat ${path}`,
 		confidence: "operation/campaign specialist delegation",
 	});
-	updateMissionGate("delegation_packets_ready", "done", path);
+	updateMissionCheckpoint("delegation_packets_ready", "done", path);
 	return path;
 }
 
@@ -20128,17 +20128,17 @@ function swarmPlanCoverage(swarm: Pick<SwarmArtifact, "workers" | "parallelPlan"
 	].slice(0, 48);
 }
 
-function swarmReleaseGateMetadata(plan?: ReconParallelPlanV1): string[] {
-	if (!plan) return ["release_gate.parallel_plan_present=false", "release_gate.next=re_swarm plan"];
+function swarmReleaseCheckMetadata(plan?: ReconParallelPlanV1): string[] {
+	if (!plan) return ["release_check.parallel_plan_present=false", "release_check.next=re_swarm plan"];
 	return [
-		"release_gate.parallel_plan_present=true",
-		`release_gate.parallel_plan_id=${plan.planId}`,
-		`release_gate.source=${plan.source}`,
-		`release_gate.worker_count=${plan.workers.length}`,
-		`release_gate.worker_required_fields=id,role,objective,commands,evidenceContract,mergeKeys,dependencies,artifactGlobs,limits`,
-		`release_gate.merge_strategy=${plan.merge.strategy}`,
-		`release_gate.evidence_order=${plan.merge.evidenceOrder.join(">")}`,
-		"release_gate.claim_promotion=blocked_until_supervisor_claim_gate_passes",
+		"release_check.parallel_plan_present=true",
+		`release_check.parallel_plan_id=${plan.planId}`,
+		`release_check.source=${plan.source}`,
+		`release_check.worker_count=${plan.workers.length}`,
+		`release_check.worker_required_fields=id,role,objective,commands,evidenceContract,mergeKeys,dependencies,artifactGlobs,limits`,
+		`release_check.merge_strategy=${plan.merge.strategy}`,
+		`release_check.evidence_order=${plan.merge.evidenceOrder.join(">")}`,
+		"release_check.claim_promotion=blocked_until_supervisor_claim_check_passes",
 	];
 }
 
@@ -20270,7 +20270,7 @@ function buildSwarmRuntimeClaimLedger(swarm: SwarmArtifact): SwarmClaimLedgerEve
 				status: claimPassed ? "proven" : executions.length ? "gap" : "pending",
 				statement: claimPassed
 					? "worker claim is artifact-backed and coverage-complete for this swarm run."
-					: "worker claim is not promotable until runtime execution, coverage, and repair gates close.",
+					: "worker claim is not promotable until runtime execution, coverage, and repair checkpoints close.",
 				evidenceRefs: [
 					swarm.delegationArtifact,
 					...worker.sourceArtifacts,
@@ -20388,10 +20388,10 @@ function buildSwarmRuntimeClaimLedger(swarm: SwarmArtifact): SwarmClaimLedgerEve
 					role: "supervisor",
 					scope,
 					status: "accepted",
-					resolution: "passed worker claim remains eligible for final promotion only after strict claim gate and structured merge.",
-					evidenceRefs: [swarm.claimLedgerPath, ...runtimeManifestRefs, "gate:claim-release", "re_supervisor review"].filter((item): item is string => Boolean(item)),
+					resolution: "passed worker claim remains eligible for final promotion only after strict claim checkpoint and structured merge.",
+					evidenceRefs: [swarm.claimLedgerPath, ...runtimeManifestRefs, "check:claim-release", "re_supervisor review"].filter((item): item is string => Boolean(item)),
 					metadata: {
-						strictFinalPromotion: "requires StructuredClaimMergeV1 and claim gate pass",
+						strictFinalPromotion: "requires StructuredClaimMergeV1 and claim checkpoint pass",
 					},
 				},
 				timestamp,
@@ -20439,7 +20439,7 @@ function buildSwarmRuntimeClaimLedger(swarm: SwarmArtifact): SwarmClaimLedgerEve
 				role: "adversary",
 				scope,
 				status: "accepted",
-				challenge: "no unresolved worker challenge in this swarm artifact; retain final-promotion adversary gate.",
+				challenge: "no unresolved worker challenge in this swarm artifact; retain final-promotion adversary checkpoint.",
 				evidenceRefs: [swarm.claimLedgerPath, swarm.delegationArtifact].filter((item): item is string => Boolean(item)),
 			},
 			timestamp,
@@ -20453,8 +20453,8 @@ function buildSwarmRuntimeClaimLedger(swarm: SwarmArtifact): SwarmClaimLedgerEve
 				role: "supervisor",
 				scope,
 				status: "accepted",
-				resolution: "role claims may only promote after supervisor claimGatePolicy and strict claim marker pass.",
-				evidenceRefs: [swarm.claimLedgerPath, "gate:claim-release", "re_supervisor review"].filter((item): item is string => Boolean(item)),
+				resolution: "role claims may only promote after supervisor claimCheckPolicy and strict claim marker pass.",
+				evidenceRefs: [swarm.claimLedgerPath, "check:claim-release", "re_supervisor review"].filter((item): item is string => Boolean(item)),
 			},
 			timestamp,
 		);
@@ -20608,7 +20608,7 @@ function buildStructuredClaimMergeFromSwarm(swarm: SwarmArtifact): StructuredCla
 		target: swarm.target,
 		claimRows,
 		conflictTable,
-		promotionGate: {
+		promotionCheck: {
 			mode: "strict_final_claim_promotion",
 			requiredStatuses: ["proven"],
 			finalClaims,
@@ -20618,7 +20618,7 @@ function buildStructuredClaimMergeFromSwarm(swarm: SwarmArtifact): StructuredCla
 	};
 }
 
-function structuredClaimMergeGateFromSwarm(swarm?: SwarmArtifact): StructuredClaimMergeGateSnapshot {
+function structuredClaimMergeCheckFromSwarm(swarm?: SwarmArtifact): StructuredClaimMergeCheckSnapshot {
 	if (!swarm || !(swarm.claimLedger?.length)) {
 		return { status: "missing", finalClaimCount: 0, blockedClaimCount: 0, errors: ["structured_claim_merge_missing_runtime_claim_ledger"], policies: claimPromotionEvidenceContract() };
 	}
@@ -20628,10 +20628,10 @@ function structuredClaimMergeGateFromSwarm(swarm?: SwarmArtifact): StructuredCla
 		status: verification.ok ? "pass" : "blocked",
 		mergePath: swarm.structuredClaimMergePath,
 		mergeId: merge.mergeId,
-		finalClaimCount: merge.promotionGate.finalClaims.length,
-		blockedClaimCount: merge.promotionGate.blockedClaims.length,
+		finalClaimCount: merge.promotionCheck.finalClaims.length,
+		blockedClaimCount: merge.promotionCheck.blockedClaims.length,
 		errors: verification.errors,
-		policies: merge.promotionGate.policies,
+		policies: merge.promotionCheck.policies,
 	};
 }
 
@@ -20644,7 +20644,7 @@ function refreshSwarmRuntimeClaimLedger(swarm: SwarmArtifact): SwarmArtifact {
 		);
 	const structuredClaimMergePath = swarm.structuredClaimMergePath ?? swarmStructuredClaimMergePath(swarm);
 	const structuredClaimMerge = buildStructuredClaimMergeFromSwarm({ ...swarm, claimLedger, structuredClaimMergePath });
-	const structuredClaimMergeGate = structuredClaimMergeGateFromSwarm({
+	const structuredClaimMergeCheck = structuredClaimMergeCheckFromSwarm({
 		...swarm,
 		claimLedger,
 		structuredClaimMerge,
@@ -20658,8 +20658,8 @@ function refreshSwarmRuntimeClaimLedger(swarm: SwarmArtifact): SwarmArtifact {
 		runtimeClaimLedgerCaptured,
 		structuredClaimMerge,
 		structuredClaimMergePath,
-		structuredClaimMergeStatus: structuredClaimMergeGate.status,
-		structuredClaimMergeErrors: structuredClaimMergeGate.errors,
+		structuredClaimMergeStatus: structuredClaimMergeCheck.status,
+		structuredClaimMergeErrors: structuredClaimMergeCheck.errors,
 		sourceArtifacts: Array.from(
 			new Set([
 				...swarm.sourceArtifacts,
@@ -20757,7 +20757,7 @@ function buildSwarm(options: { target?: string; task?: string; mode?: "plan" | "
 		mode: options.mode ?? "plan",
 	});
 	const basePlanCoverage = swarmPlanCoverage({ workers, parallelPlan, coverageMatrix: [], collisionMatrix: collisionMatrix.slice(0, 24) });
-	const releaseGateMetadata = swarmReleaseGateMetadata(parallelPlan);
+	const releaseCheckMetadata = swarmReleaseCheckMetadata(parallelPlan);
 	const swarm: SwarmArtifact = {
 		timestamp,
 		missionId: delegate.missionId,
@@ -20781,7 +20781,7 @@ function buildSwarm(options: { target?: string; task?: string; mode?: "plan" | "
 		handoffDigest,
 		parallelPlan,
 		planCoverage: basePlanCoverage,
-		releaseGateMetadata,
+		releaseCheckMetadata,
 		claimLedger: [],
 		claimLedgerEventCount: 0,
 		runtimeClaimLedgerCaptured: false,
@@ -20813,7 +20813,7 @@ function buildSwarm(options: { target?: string; task?: string; mode?: "plan" | "
 	return refreshSwarmRuntimeClaimLedger({
 		...swarmWithAudit,
 		planCoverage: swarmPlanCoverage(swarmWithAudit),
-		releaseGateMetadata: swarmReleaseGateMetadata(swarmWithAudit.parallelPlan),
+		releaseCheckMetadata: swarmReleaseCheckMetadata(swarmWithAudit.parallelPlan),
 	});
 }
 
@@ -21133,7 +21133,7 @@ function refreshSwarmRunDerivedFields(swarm: SwarmArtifact): SwarmArtifact {
 		retryQueue: auditFields.retryQueue,
 	};
 	const planCoverage = swarmPlanCoverage(refreshedForPlan);
-	const releaseGateMetadata = swarmReleaseGateMetadata(swarm.parallelPlan);
+	const releaseCheckMetadata = swarmReleaseCheckMetadata(swarm.parallelPlan);
 	const commanderNextActions = Array.from(
 		new Set([
 			...auditFields.retryQueue
@@ -21155,7 +21155,7 @@ function refreshSwarmRunDerivedFields(swarm: SwarmArtifact): SwarmArtifact {
 		mergeDigest,
 		...auditFields,
 		planCoverage,
-		releaseGateMetadata,
+		releaseCheckMetadata,
 			commanderNextActions,
 			sourceArtifacts: Array.from(
 				new Set([
@@ -22042,8 +22042,8 @@ function formatSwarm(swarm: SwarmArtifact, path?: string): string {
 			: ["- none"]),
 		"plan_coverage:",
 		...(swarm.planCoverage.length ? swarm.planCoverage.map((item) => `- ${item}`) : ["- none"]),
-		"release_gate_metadata:",
-		...(swarm.releaseGateMetadata.length ? swarm.releaseGateMetadata.map((item) => `- ${item}`) : ["- none"]),
+		"release_check_metadata:",
+		...(swarm.releaseCheckMetadata.length ? swarm.releaseCheckMetadata.map((item) => `- ${item}`) : ["- none"]),
 		"runtime_claim_ledger:",
 		`- path=${swarm.claimLedgerPath ?? "pending"}`,
 		`- events=${swarm.claimLedgerEventCount}`,
@@ -22060,8 +22060,8 @@ function formatSwarm(swarm: SwarmArtifact, path?: string): string {
 		"structured_claim_merge:",
 		`- path=${swarm.structuredClaimMergePath ?? "pending"}`,
 		`- status=${swarm.structuredClaimMergeStatus ?? "missing"}`,
-		`- final_claims=${swarm.structuredClaimMerge?.promotionGate.finalClaims.length ?? 0}`,
-		`- blocked_claims=${swarm.structuredClaimMerge?.promotionGate.blockedClaims.length ?? 0}`,
+		`- final_claims=${swarm.structuredClaimMerge?.promotionCheck.finalClaims.length ?? 0}`,
+		`- blocked_claims=${swarm.structuredClaimMerge?.promotionCheck.blockedClaims.length ?? 0}`,
 		...(swarm.structuredClaimMergeErrors?.length
 			? swarm.structuredClaimMergeErrors.slice(0, 10).map((item) => `- error=${item}`)
 			: ["- errors=none"]),
@@ -22225,13 +22225,13 @@ function writeSwarmArtifact(swarm: SwarmArtifact): string {
 	appendEvidence({
 		kind: swarm.mode === "run" ? "runtime" : "artifact",
 		title: `swarm-${swarm.mode} ${swarm.missionId ?? "no-mission"}`,
-		fact: `Built swarm ${swarm.mode} with ${swarm.workers.length} worker runtime packet(s), ${swarm.executions.length} execution(s), ${swarm.parallelGroups.length} parallel group(s), ${swarm.collisionMatrix.length} collision(s), ${swarm.blocked.length} blocked, audit=${swarm.executionAudit.length}, retries=${swarm.retryQueue.length}, parallel_plan=${swarm.parallelPlan?.planId ?? "missing"}, plan_coverage=${swarm.planCoverage.length}, release_gate_metadata=${swarm.releaseGateMetadata.length}, subagent_runtime_manifests=${swarm.subagentRuntimeManifestCount} captured=${swarm.subagentRuntimeManifestsCaptured ? "pass" : "fail"}, runtime_claim_ledger=${swarm.claimLedgerEventCount} hash_chain=${swarm.runtimeClaimLedgerCaptured ? "pass" : "fail"}, structured_claim_merge=${swarm.structuredClaimMergeStatus ?? "missing"}`,
+		fact: `Built swarm ${swarm.mode} with ${swarm.workers.length} worker runtime packet(s), ${swarm.executions.length} execution(s), ${swarm.parallelGroups.length} parallel group(s), ${swarm.collisionMatrix.length} collision(s), ${swarm.blocked.length} blocked, audit=${swarm.executionAudit.length}, retries=${swarm.retryQueue.length}, parallel_plan=${swarm.parallelPlan?.planId ?? "missing"}, plan_coverage=${swarm.planCoverage.length}, release_check_metadata=${swarm.releaseCheckMetadata.length}, subagent_runtime_manifests=${swarm.subagentRuntimeManifestCount} captured=${swarm.subagentRuntimeManifestsCaptured ? "pass" : "fail"}, runtime_claim_ledger=${swarm.claimLedgerEventCount} hash_chain=${swarm.runtimeClaimLedgerCaptured ? "pass" : "fail"}, structured_claim_merge=${swarm.structuredClaimMergeStatus ?? "missing"}`,
 		command: `re_swarm ${swarm.mode}`,
 		path,
 		verify: `cat ${path}`,
 		confidence: "multi-specialist swarm orchestration",
 	});
-	updateMissionGate("swarm_plan_ready", "done", path);
+	updateMissionCheckpoint("swarm_plan_ready", "done", path);
 	return path;
 }
 
@@ -22549,20 +22549,20 @@ function buildCommanderMergeBudget(
 	];
 }
 
-function supervisorClaimGatePolicy(plan?: ReconParallelPlanV1, planCoverage: string[] = []): string[] {
+function supervisorClaimCheckPolicy(plan?: ReconParallelPlanV1, planCoverage: string[] = []): string[] {
 	const workerBinding = planCoverage.find((row) => row.startsWith("worker_binding="))?.replace(/^worker_binding=/, "") ?? "missing";
 	const missingContractRows = planCoverage.filter((row) => /\bmissing=[1-9]/.test(row));
 	return [
-		`claim_gate_policy.parallel_plan_id=${plan?.planId ?? "missing"}`,
-		`claim_gate_policy.parallel_plan_source=${plan?.source ?? "missing"}`,
-		`claim_gate_policy.worker_binding=${workerBinding}`,
-		`claim_gate_policy.plan_contract_gaps=${missingContractRows.length}`,
-		"claim_gate_policy.proven_requires_artifact_sha256=true",
-		"claim_gate_policy.proven_requires_json_query=true",
-		"claim_gate_policy.final_pass_requires_verifier=true",
-		"claim_gate_policy.unresolved_challenge_blocks=true",
-		"claim_gate_policy.orchestration_score_never_implies_platform_success=true",
-		"claim_gate_policy.final_pass_blocks_on_plan_coverage_gap=true",
+		`claim_check_policy.parallel_plan_id=${plan?.planId ?? "missing"}`,
+		`claim_check_policy.parallel_plan_source=${plan?.source ?? "missing"}`,
+		`claim_check_policy.worker_binding=${workerBinding}`,
+		`claim_check_policy.plan_contract_gaps=${missingContractRows.length}`,
+		"claim_check_policy.proven_requires_artifact_sha256=true",
+		"claim_check_policy.proven_requires_json_query=true",
+		"claim_check_policy.final_pass_requires_verifier=true",
+		"claim_check_policy.unresolved_challenge_blocks=true",
+		"claim_check_policy.orchestration_score_never_implies_platform_success=true",
+		"claim_check_policy.final_pass_blocks_on_plan_coverage_gap=true",
 	];
 }
 
@@ -22581,11 +22581,11 @@ function buildSupervisor(
 	const swarm = latestSwarm?.swarm;
 	const parallelPlan = swarm?.parallelPlan;
 	const planCoverage = supervisorPlanCoverage(swarm);
-	const releaseGateMetadata = swarm?.releaseGateMetadata ?? [];
-	const claimGatePolicy = supervisorClaimGatePolicy(parallelPlan, planCoverage);
-	const strictClaimGate = strictClaimGateSnapshot();
-	const claimGateResult = buildClaimGateResult(releaseGateMetadata, claimGatePolicy, strictClaimGate);
-	const claimGateBlocks = strictClaimGate.status !== "pass" && (releaseGateMetadata.length > 0 || claimGatePolicy.length > 0);
+	const releaseCheckMetadata = swarm?.releaseCheckMetadata ?? [];
+	const claimCheckPolicy = supervisorClaimCheckPolicy(parallelPlan, planCoverage);
+	const strictClaimCheck = strictClaimCheckSnapshot();
+	const claimCheckResult = buildClaimCheckResult(releaseCheckMetadata, claimCheckPolicy, strictClaimCheck);
+	const claimCheckBlocks = strictClaimCheck.status !== "pass" && (releaseCheckMetadata.length > 0 || claimCheckPolicy.length > 0);
 	const swarmReviews = swarm?.workers.map((worker) => reviewSwarmWorkerRuntime(worker, swarm, ledger)) ?? [];
 	const reviews = [...delegate.packets.map((packet) => reviewDelegatePacket(packet, ledger)), ...swarmReviews];
 	const commanderMergeQueue = swarmCommanderMergeQueue(swarm);
@@ -22600,7 +22600,7 @@ function buildSupervisor(
 					? planCoverage.map((row) => `parallel plan coverage: ${row}`)
 					: []),
 				...(swarm?.mergeDigest.filter((item) => /^collision:/i.test(item)) ?? []),
-				...(claimGateBlocks ? claimGateResult.map((item) => `strict claim gate: ${item}`) : []),
+				...(claimCheckBlocks ? claimCheckResult.map((item) => `strict claim check: ${item}`) : []),
 				...reviews.flatMap((review) => review.conflicts.map((item) => `${review.worker}: ${item}`)),
 				delegate.packets.length === 0 ? "no worker packets available" : undefined,
 			].filter((item): item is string => Boolean(item)),
@@ -22615,11 +22615,11 @@ function buildSupervisor(
 				.sort((left, right) => left.priority - right.priority || left.score - right.score)
 				.flatMap((review) => review.repairActions.map((action) => `${review.worker}: ${action}`)),
 			...commanderMergeQueue.map((action) => `commander: ${action}`),
-			...(claimGateBlocks
+			...(claimCheckBlocks
 				? [
-						strictClaimGate.status === "missing"
-							? "claim_gate: run re_complete audit to write strict claim release marker"
-							: "claim_gate: resolve required platform gaps and rerun re_complete audit",
+						strictClaimCheck.status === "missing"
+							? "claim_check: run re_complete audit to write strict claim release marker"
+							: "claim_check: resolve required platform gaps and rerun re_complete audit",
 					]
 				: []),
 		]),
@@ -22633,7 +22633,7 @@ function buildSupervisor(
 	const hasWatch = reviews.some((review) => review.verdict === "watch");
 	const supervisorVerdict: SupervisorVerdict = hasBlocked
 		? "blocked"
-		: claimGateBlocks
+		: claimCheckBlocks
 			? "blocked"
 			: hasRepair
 			? "repair"
@@ -22641,8 +22641,8 @@ function buildSupervisor(
 				? "watch"
 				: "pass";
 	const mission = readCurrentMission();
-	const gates = mission
-		? mission.gates.map((gate) => `${gate.name}:${gate.status}${gate.note ? `:${gate.note}` : ""}`)
+	const checkpoints = mission
+		? mission.checkpoints.map((checkpoint) => `${checkpoint.name}:${checkpoint.status}${checkpoint.note ? `:${checkpoint.note}` : ""}`)
 		: ["mission:none"];
 	const nextActions = Array.from(
 		new Set([
@@ -22671,14 +22671,14 @@ function buildSupervisor(
 		commanderMergeBudget,
 		workerScoreboard,
 		priorityQueue,
-		gates,
+		checkpoints,
 		nextActions,
 		parallelPlan,
 		planCoverage,
-		releaseGateMetadata,
-		claimGatePolicy,
-		strictClaimGate,
-		claimGateResult,
+		releaseCheckMetadata,
+		claimCheckPolicy,
+		strictClaimCheck,
+		claimCheckResult,
 		sourceArtifacts: Array.from(
 			new Set(
 				[
@@ -22730,8 +22730,8 @@ function formatSupervisor(supervisor: SupervisorArtifact, path?: string): string
 		...(supervisor.workerScoreboard.length ? supervisor.workerScoreboard.map((item) => `- ${item}`) : ["- none"]),
 		"priority_queue:",
 		...(supervisor.priorityQueue.length ? supervisor.priorityQueue.map((item) => `- ${item}`) : ["- none"]),
-		"gates:",
-		...(supervisor.gates.length ? supervisor.gates.map((item) => `- ${item}`) : ["- none"]),
+		"checkpoints:",
+		...(supervisor.checkpoints.length ? supervisor.checkpoints.map((item) => `- ${item}`) : ["- none"]),
 		"parallel_plan:",
 		...(supervisor.parallelPlan
 			? [
@@ -22743,16 +22743,16 @@ function formatSupervisor(supervisor: SupervisorArtifact, path?: string): string
 			: ["- none"]),
 		"plan_coverage:",
 		...(supervisor.planCoverage.length ? supervisor.planCoverage.map((item) => `- ${item}`) : ["- none"]),
-		"release_gate_metadata:",
-		...(supervisor.releaseGateMetadata.length
-			? supervisor.releaseGateMetadata.map((item) => `- ${item}`)
+		"release_check_metadata:",
+		...(supervisor.releaseCheckMetadata.length
+			? supervisor.releaseCheckMetadata.map((item) => `- ${item}`)
 			: ["- none"]),
-		"claim_gate_policy:",
-		...(supervisor.claimGatePolicy.length ? supervisor.claimGatePolicy.map((item) => `- ${item}`) : ["- none"]),
-		"strict_claim_gate:",
-		...formatStrictClaimGateSnapshot(supervisor.strictClaimGate),
-		"claim_gate_result:",
-		...(supervisor.claimGateResult.length ? supervisor.claimGateResult.map((item) => `- ${item}`) : ["- none"]),
+		"claim_check_policy:",
+		...(supervisor.claimCheckPolicy.length ? supervisor.claimCheckPolicy.map((item) => `- ${item}`) : ["- none"]),
+		"strict_claim_check:",
+		...formatStrictClaimCheckSnapshot(supervisor.strictClaimCheck),
+		"claim_check_result:",
+		...(supervisor.claimCheckResult.length ? supervisor.claimCheckResult.map((item) => `- ${item}`) : ["- none"]),
 		"operator_next_actions:",
 		...(supervisor.nextActions.length ? supervisor.nextActions.map((item) => `- ${item}`) : ["- re_complete audit"]),
 		`next_supervisor_command: ${supervisor.mode === "repair" ? "re_supervisor review" : "re_supervisor repair"}`,
@@ -22816,19 +22816,19 @@ function writeSupervisorArtifact(supervisor: SupervisorArtifact): string {
 			"## Parallel plan coverage",
 			...(supervisor.planCoverage.length ? supervisor.planCoverage.map((item) => `- ${item}`) : ["- none"]),
 			"",
-			"## Claim gate policy",
-			...(supervisor.claimGatePolicy.length ? supervisor.claimGatePolicy.map((item) => `- ${item}`) : ["- none"]),
+			"## Claim checkpoint policy",
+			...(supervisor.claimCheckPolicy.length ? supervisor.claimCheckPolicy.map((item) => `- ${item}`) : ["- none"]),
 			"",
-			"## Release gate metadata",
-			...(supervisor.releaseGateMetadata.length
-				? supervisor.releaseGateMetadata.map((item) => `- ${item}`)
+			"## Release checkpoint metadata",
+			...(supervisor.releaseCheckMetadata.length
+				? supervisor.releaseCheckMetadata.map((item) => `- ${item}`)
 				: ["- none"]),
 			"",
-			"## Strict claim gate",
-			...formatStrictClaimGateSnapshot(supervisor.strictClaimGate),
+			"## Strict claim checkpoint",
+			...formatStrictClaimCheckSnapshot(supervisor.strictClaimCheck),
 			"",
-			"## Claim gate result",
-			...(supervisor.claimGateResult.length ? supervisor.claimGateResult.map((item) => `- ${item}`) : ["- none"]),
+			"## Claim checkpoint result",
+			...(supervisor.claimCheckResult.length ? supervisor.claimCheckResult.map((item) => `- ${item}`) : ["- none"]),
 			"",
 		].join("\n"),
 		"utf-8",
@@ -22836,13 +22836,13 @@ function writeSupervisorArtifact(supervisor: SupervisorArtifact): string {
 	appendEvidence({
 		kind: "artifact",
 		title: `supervisor-${supervisor.mode} ${supervisor.missionId ?? "no-mission"}`,
-		fact: `Supervisor verdict ${supervisor.supervisorVerdict} across ${supervisor.reviews.length} worker review(s), ${supervisor.conflicts.length} conflict(s), ${supervisor.repairQueue.length} repair action(s), commander_merge=${supervisor.commanderMergeQueue.length}, commander_budget=${supervisor.commanderMergeBudget.length}, parallel_plan=${supervisor.parallelPlan?.planId ?? "missing"}, release_gate_metadata=${supervisor.releaseGateMetadata.length}, claim_gate_policy=${supervisor.claimGatePolicy.length}, strict_claim_gate=${supervisor.strictClaimGate?.status ?? "missing"}`,
+		fact: `Supervisor verdict ${supervisor.supervisorVerdict} across ${supervisor.reviews.length} worker review(s), ${supervisor.conflicts.length} conflict(s), ${supervisor.repairQueue.length} repair action(s), commander_merge=${supervisor.commanderMergeQueue.length}, commander_budget=${supervisor.commanderMergeBudget.length}, parallel_plan=${supervisor.parallelPlan?.planId ?? "missing"}, release_check_metadata=${supervisor.releaseCheckMetadata.length}, claim_check_policy=${supervisor.claimCheckPolicy.length}, strict_claim_check=${supervisor.strictClaimCheck?.status ?? "missing"}`,
 		command: `re_supervisor ${supervisor.mode}`,
 		path,
 		verify: `cat ${path}`,
 		confidence: "delegation/operation supervisor critic",
 	});
-	updateMissionGate(
+	updateMissionCheckpoint(
 		"supervisor_review_ready",
 		supervisor.supervisorVerdict === "pass" ? "done" : "blocked",
 		`${path} verdict=${supervisor.supervisorVerdict}`,
@@ -22924,7 +22924,7 @@ function buildReflection(
 			...supervisor.conflicts,
 			...failing.flatMap((review) => review.conflicts.map((item) => `${review.worker}: ${item}`)),
 			...failing.flatMap((review) => review.evidenceGaps.map((item) => `${review.worker}: ${item}`)),
-			...supervisor.gates.filter((gate) => /pending|blocked/i.test(gate)).map((gate) => `gate: ${gate}`),
+			...supervisor.checkpoints.filter((checkpoint) => /pending|blocked/i.test(checkpoint)).map((checkpoint) => `check: ${checkpoint}`),
 		]),
 	).slice(0, 32);
 	const reuseRules = Array.from(
@@ -23035,7 +23035,7 @@ function writeReflectionMemory(reflection: ReflectionArtifact): ReflectionArtifa
 		replayVerified: reflection.sourceArtifacts.some((item) => /\/evidence\/(?:runs|replayers|proof-loops|browser|web-authz|native-runtime|mobile-runtime)\//i.test(item)),
 		playbookCandidate: true,
 		workerRoutingHint: reflection.lessons.find((item) => /worker_scoreboard|adaptive_route|promotion:/i.test(item)),
-		verifierRuleCandidate: reflection.reuseRules.some((item) => /verify|replay|evidence|gate|assert/i.test(item)),
+		verifierRuleCandidate: reflection.reuseRules.some((item) => /verify|replay|evidence|checkpoint|assert/i.test(item)),
 	});
 	maintainPlaybooks({ archive: true });
 	return { ...reflection, journalAnchor, evolutionAnchor, playbookPath, nextActions: uniqueNonEmpty([`re_memory search-events ${memoryEvent.caseSignature}`, ...reflection.nextActions], 16) };
@@ -23103,7 +23103,7 @@ function writeReflectionArtifact(reflection: ReflectionArtifact): string {
 		verify: `cat ${path}`,
 		confidence: "supervisor/memory/evolution reflection",
 	});
-	if (reflection.mode === "write") updateMissionGate("reflection_memory_ready", "done", path);
+	if (reflection.mode === "write") updateMissionCheckpoint("reflection_memory_ready", "done", path);
 	return path;
 }
 
@@ -23460,7 +23460,7 @@ function buildCompactResumeLedgerV2Report(options: { write?: boolean } = {}): Co
 		transitions,
 		invalidTransitions: Array.from(new Set(invalidTransitions)).slice(0, 120),
 		exhausted,
-		requiredGates: [
+		requiredChecks: [
 			"CompactResumeLedgerV2",
 			"append_only_transition_ledger",
 			"idempotent_multi_compact_replay",
@@ -23492,8 +23492,8 @@ function formatCompactResumeLedgerV2(report = buildCompactResumeLedgerV2Report()
 			: ["- none"]),
 		"invalid:",
 		...(report.invalidTransitions.length ? report.invalidTransitions.map((item) => `- ${item}`) : ["- none"]),
-		"required_gates:",
-		...report.requiredGates.map((item) => `- ${item}`),
+		"required_checks:",
+		...report.requiredChecks.map((item) => `- ${item}`),
 	].join("\n");
 }
 
@@ -23530,7 +23530,7 @@ function scopedContextArtifactIndex(options: ArtifactScopeFilterOptions = {}): {
 		["autofix", evidenceAutofixDir()],
 		["proof_loop", evidenceProofLoopsDir()],
 		["knowledge", evidenceKnowledgeDir()],
-		["harness", evidenceHarnessDir()],
+		["harness", evidenceProfileCheckDir()],
 	];
 	const scanLimit = scope.scanLimit ?? 8;
 	const candidateSources = artifactSpecs.flatMap(([kind, dir]) =>
@@ -23683,12 +23683,12 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume"; 
 	const target = requestedTarget ?? reflection?.target ?? supervisor?.target;
 	const autonomousBudget = autonomousExecutionBudget(target);
 	const swarmRetry = latestSwarmRetryQueue(target);
-	const gateSummary = mission
-		? mission.gates.map(
-				(gate) => `${gate.name}=${gate.status}${gate.note ? `:${truncateMiddle(gate.note, 160)}` : ""}`,
+	const checkSummary = mission
+		? mission.checkpoints.map(
+				(checkpoint) => `${checkpoint.name}=${checkpoint.status}${checkpoint.note ? `:${truncateMiddle(checkpoint.note, 160)}` : ""}`,
 			)
 		: ["no active mission"];
-	const pendingGates = mission?.gates.filter((gate) => gate.status !== "done").map((gate) => gate.name) ?? [];
+	const pendingGates = mission?.checkpoints.filter((checkpoint) => checkpoint.status !== "done").map((checkpoint) => checkpoint.name) ?? [];
 	const repairQueue = Array.from(
 		new Set([
 			...swarmRetry.rows,
@@ -23772,7 +23772,7 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume"; 
 		`mission=${mission?.id ?? "none"}`,
 		`route=${mission?.route.domain ?? reflection?.route ?? supervisor?.route ?? "unknown"}`,
 		`active_lane=${active?.name ?? "none"}`,
-		`pending_gates=${pendingGates.length ? pendingGates.join(",") : "none"}`,
+		`pending_checks=${pendingGates.length ? pendingGates.join(",") : "none"}`,
 		`latest_reflection=${reflectionPath ?? "none"}`,
 		`latest_supervisor=${supervisorPath ?? "none"}`,
 		`repair_queue_items=${repairQueue.length}`,
@@ -23936,7 +23936,7 @@ function buildContextPack(options: { target?: string; mode?: "pack" | "resume"; 
 				closure,
 			},
 		activeLane: active?.name,
-		gateSummary,
+		checkSummary,
 		missionSnapshot: mission ? formatMission(mission) : "no active mission",
 		// legacy audit marker: evidenceTail: truncateMiddle(buildEvidenceDigest()
 		evidenceTail: contextEvidenceTail,
@@ -24086,8 +24086,8 @@ function formatContextPack(pack: ContextPackArtifact, path?: string): string {
 			: ["- none"]),
 		"resume_brief:",
 		...pack.resumeBrief.map((item) => `- ${item}`),
-		"gate_summary:",
-		...(pack.gateSummary.length ? pack.gateSummary.map((item) => `- ${item}`) : ["- none"]),
+		"check_summary:",
+		...(pack.checkSummary.length ? pack.checkSummary.map((item) => `- ${item}`) : ["- none"]),
 		"artifact_index:",
 		...(pack.artifactIndex.length
 			? pack.artifactIndex.map(
@@ -24140,7 +24140,7 @@ function formatContextPack(pack: ContextPackArtifact, path?: string): string {
 		`- MemoryStrategyCapsuleV13=${pack.memoryStrategy?.MemoryStrategyCapsuleV13 ?? false}`,
 		`- executable_strategy_capsule=${pack.memoryStrategy?.executable_strategy_capsule ?? false}`,
 		`- replay_backed_strategy_promotion=${pack.memoryStrategy?.replay_backed_strategy_promotion ?? false}`,
-		`- strategy_quality_gate=${pack.memoryStrategy?.strategy_quality_gate ?? false}`,
+		`- strategy_quality_check=${pack.memoryStrategy?.strategy_quality_check ?? false}`,
 		`- status=${pack.memoryStrategy?.status ?? "unknown"}`,
 		`- capsules=${pack.memoryStrategy?.capsuleCount ?? 0}`,
 		`- promoted=${pack.memoryStrategy?.promotedCapsuleIds.length ?? 0}`,
@@ -24184,7 +24184,7 @@ function formatContextPack(pack: ContextPackArtifact, path?: string): string {
 		`- MemoryExperienceEngineV8=${pack.memoryExperience?.MemoryExperienceEngineV8 ?? false}`,
 		`- episode_model_v8=${pack.memoryExperience?.episode_model_v8 ?? false}`,
 		`- structured_claim_extraction=${pack.memoryExperience?.structured_claim_extraction ?? false}`,
-		`- lesson_promotion_gate=${pack.memoryExperience?.lesson_promotion_gate ?? false}`,
+		`- lesson_promotion_check=${pack.memoryExperience?.lesson_promotion_check ?? false}`,
 		`- status=${pack.memoryExperience?.status ?? "unknown"}`,
 		`- episodes=${pack.memoryExperience?.episodeCount ?? 0}`,
 		`- claims=${pack.memoryExperience?.claimCount ?? 0}`,
@@ -24312,7 +24312,7 @@ function writeContextPackArtifact(pack: ContextPackArtifact): string {
 		verify: `cat ${path}`,
 		confidence: "mission/evidence/memory resume context",
 	});
-	updateMissionGate("context_pack_ready", "done", path);
+	updateMissionCheckpoint("context_pack_ready", "done", path);
 	return path;
 }
 
@@ -24395,7 +24395,7 @@ function reconCompactionBullets(rows: string[], fallback = "none"): string[] {
 
 function buildReconCompactionDetails(contextPack: ContextPackArtifact, contextPath: string): ReconCompactionDetails {
 	return {
-		kind: "pi-recon-compaction",
+		kind: "repi-compaction",
 		version: 1,
 		contextPath,
 		missionId: contextPack.missionId,
@@ -24405,7 +24405,7 @@ function buildReconCompactionDetails(contextPack: ContextPackArtifact, contextPa
 		nextCommands: contextPack.nextCommands,
 		sourceArtifacts: contextPack.sourceArtifacts,
 		autonomousBudget: contextPack.autonomousBudget,
-		checkpointEntryType: "pi-recon-compaction-checkpoint",
+		checkpointEntryType: "repi-compaction-checkpoint",
 		resumeCommand: "re_context resume",
 	};
 }
@@ -24437,7 +24437,7 @@ function buildReconCompactionSummary(params: {
 	return [
 		"# REPI Compaction Summary",
 		"",
-		"kind: pi-recon-compaction",
+		"kind: repi-compaction",
 		"",
 		"## Resume contract",
 		`- context_path: ${contextPath}`,
@@ -24461,8 +24461,8 @@ function buildReconCompactionSummary(params: {
 		`- active_lane: ${contextPack.activeLane ?? "none"}`,
 		...reconCompactionBullets(contextPack.resumeBrief.slice(0, 16)),
 		"",
-		"## Gates",
-		...reconCompactionBullets(contextPack.gateSummary.slice(0, 24)),
+		"## Checks",
+		...reconCompactionBullets(contextPack.checkSummary.slice(0, 24)),
 		"",
 		"## Evidence / artifacts",
 		...reconCompactionBullets(
@@ -24509,7 +24509,7 @@ function buildReconCompactionSummary(params: {
 function parseReconCompactionDetails(details: unknown): ReconCompactionDetails | undefined {
 	if (!details || typeof details !== "object") return undefined;
 	const record = details as Record<string, unknown>;
-	if (record.kind !== "pi-recon-compaction") return undefined;
+	if (record.kind !== "repi-compaction") return undefined;
 	if (typeof record.contextPath !== "string") return undefined;
 	const nextCommands = Array.isArray(record.nextCommands)
 		? record.nextCommands.filter((item): item is string => typeof item === "string")
@@ -24518,7 +24518,7 @@ function parseReconCompactionDetails(details: unknown): ReconCompactionDetails |
 		? record.sourceArtifacts.filter((item): item is string => typeof item === "string")
 		: [];
 	return {
-		kind: "pi-recon-compaction",
+		kind: "repi-compaction",
 		version: typeof record.version === "number" ? record.version : 1,
 		contextPath: record.contextPath,
 		missionId: typeof record.missionId === "string" ? record.missionId : undefined,
@@ -24528,7 +24528,7 @@ function parseReconCompactionDetails(details: unknown): ReconCompactionDetails |
 		nextCommands,
 		sourceArtifacts,
 		autonomousBudget: record.autonomousBudget as AutonomousExecutionBudget,
-		checkpointEntryType: "pi-recon-compaction-checkpoint",
+		checkpointEntryType: "repi-compaction-checkpoint",
 		resumeCommand: typeof record.resumeCommand === "string" ? record.resumeCommand : "re_context resume",
 	};
 }
@@ -24587,7 +24587,7 @@ function buildReconCompactionResumeContract(params: {
 		`verified=${verified}`,
 	];
 	return {
-		kind: "pi-recon-compaction-resume-contract",
+		kind: "repi-compaction-resume-contract",
 		version: 1,
 		timestamp: new Date().toISOString(),
 		fromExtension,
@@ -24613,7 +24613,7 @@ function buildReconCompactionAutoResume(
 	reason: string,
 ): ReconCompactionAutoResume {
 	return {
-		kind: "pi-recon-compaction-auto-resume",
+		kind: "repi-compaction-auto-resume",
 		version: 1,
 		timestamp: new Date().toISOString(),
 		triggered,
@@ -24663,11 +24663,11 @@ function compactionResumeTelemetryPath(): string {
 	return memoryPath("compaction-auto-resume-board.md");
 }
 
-function missionGateStatusLines(): string[] {
+function missionCheckStatusLines(): string[] {
 	const mission = readCurrentMission();
 	return (
-		mission?.gates.map(
-			(gate) => `${gate.name}=${gate.status}${gate.note ? `:${truncateMiddle(gate.note, 160)}` : ""}`,
+		mission?.checkpoints.map(
+			(checkpoint) => `${checkpoint.name}=${checkpoint.status}${checkpoint.note ? `:${truncateMiddle(checkpoint.note, 160)}` : ""}`,
 		) ?? ["mission=missing"]
 	);
 }
@@ -24698,7 +24698,7 @@ function formatReconCompactionResumeTelemetry(telemetry: ReconCompactionResumeTe
 				.filter(Boolean)
 				.join(" "),
 		),
-		...telemetry.gateStatus.map((gate) => `compact_resume_gate ${gate}`),
+		...telemetry.checkStatus.map((checkpoint) => `compact_resume_check ${checkpoint}`),
 	].slice(0, 80);
 }
 
@@ -24729,8 +24729,8 @@ function writeReconCompactionResumeTelemetry(telemetry: ReconCompactionResumeTel
 		].join("\n"),
 		"utf-8",
 	);
-	updateMissionGate("compaction_auto_resume_telemetry_ready", "done", path);
-	if (telemetry.proofLoopEntered) updateMissionGate("compaction_proof_resume_entered", "done", path);
+	updateMissionCheckpoint("compaction_auto_resume_telemetry_ready", "done", path);
+	if (telemetry.proofLoopEntered) updateMissionCheckpoint("compaction_proof_resume_entered", "done", path);
 	return path;
 }
 
@@ -24739,7 +24739,7 @@ function parseReconCompactionResumeTelemetry(path: string): ReconCompactionResum
 	if (!match?.[1]) return undefined;
 	try {
 		const parsed = JSON.parse(match[1]) as ReconCompactionResumeTelemetry;
-		return parsed.kind === "pi-recon-compaction-resume-telemetry" ? parsed : undefined;
+		return parsed.kind === "repi-compaction-resume-telemetry" ? parsed : undefined;
 	} catch {
 		return undefined;
 	}
@@ -24775,7 +24775,7 @@ function initialReconCompactionResumeTelemetry(
 	autoResume: ReconCompactionAutoResume,
 ): ReconCompactionResumeTelemetry {
 	return {
-		kind: "pi-recon-compaction-resume-telemetry",
+		kind: "repi-compaction-resume-telemetry",
 		version: 1,
 		timestamp: new Date().toISOString(),
 		compactionEntryId: contract.compactionEntryId,
@@ -24791,7 +24791,7 @@ function initialReconCompactionResumeTelemetry(
 				status: "queued",
 				enteredProofLoop: /^re[-_]proof[-_]loop\s+run\b/i.test(command),
 			})),
-		gateStatus: missionGateStatusLines(),
+		checkStatus: missionCheckStatusLines(),
 		proofLoopEntered: false,
 		sourceArtifacts: Array.from(
 			new Set([contract.contextPath, ...contract.sourceArtifacts].filter(Boolean) as string[]),
@@ -24842,7 +24842,7 @@ function updateReconCompactionTelemetryFromExecutions(
 		...current,
 		timestamp: new Date().toISOString(),
 		commandStatus,
-		gateStatus: missionGateStatusLines(),
+		checkStatus: missionCheckStatusLines(),
 		proofLoopEntered: commandStatus.some((row) => row.enteredProofLoop),
 		sourceArtifacts: Array.from(
 			new Set([...current.sourceArtifacts, ...sourceArtifacts].filter(Boolean) as string[]),
@@ -25159,7 +25159,7 @@ function decisionArtifactPosture(): string[] {
 	return required.map((kind) => `${kind}: ${byKind.get(kind) ? `ok ${byKind.get(kind)}` : "missing"}`);
 }
 
-function decisionGatePressure(mission: MissionState | undefined): string[] {
+function decisionCheckPressure(mission: MissionState | undefined): string[] {
 	if (!mission) return ["no mission: re_mission new <task>"];
 	const ranks = new Map(
 		[
@@ -25180,11 +25180,11 @@ function decisionGatePressure(mission: MissionState | undefined): string[] {
 			"knowledge_graph_ready",
 			"report_or_writeup_ready",
 			"memory_or_evolution_written",
-		].map((gate, index) => [gate, index + 1]),
+		].map((checkpoint, index) => [checkpoint, index + 1]),
 	);
-	return [...mission.gates]
+	return [...mission.checkpoints]
 		.sort((a, b) => (ranks.get(a.name) ?? 99) - (ranks.get(b.name) ?? 99) || a.name.localeCompare(b.name))
-		.map((gate) => `${gate.name}: ${gate.status}${gate.note ? ` — ${truncateMiddle(gate.note, 160)}` : ""}`);
+		.map((checkpoint) => `${checkpoint.name}: ${checkpoint.status}${checkpoint.note ? ` — ${truncateMiddle(checkpoint.note, 160)}` : ""}`);
 }
 
 function decisionObjectiveStack(
@@ -25202,14 +25202,14 @@ function decisionObjectiveStack(
 			`build execution kernel: re_kernel build ${mapped}`,
 		];
 	}
-	const pending = mission.gates.filter((gate) => gate.status !== "done").map((gate) => gate.name);
+	const pending = mission.checkpoints.filter((checkpoint) => checkpoint.status !== "done").map((checkpoint) => checkpoint.name);
 	return [
 		`route=${mission.route.domain}`,
 		`task=${truncateMiddle(mission.task, 180)}`,
 		`active_lane=${active?.name ?? "none"}`,
 		`active_objective=${active?.objective ?? "select next lane"}`,
 		`target=${mappedTarget}`,
-		`pending_gates=${pending.slice(0, 16).join(",") || "none"}`,
+		`pending_checks=${pending.slice(0, 16).join(",") || "none"}`,
 		"primary_invariant=prove one end-to-end evidence path before broad expansion",
 	];
 }
@@ -25226,7 +25226,7 @@ function decisionRulesFor(
 			`no_kernel -> re_kernel build ${mappedTarget}`,
 			`no_map -> re_map ${mappedTarget} 2`,
 		];
-	const pending = new Set(mission.gates.filter((gate) => gate.status !== "done").map((gate) => gate.name));
+	const pending = new Set(mission.checkpoints.filter((checkpoint) => checkpoint.status !== "done").map((checkpoint) => checkpoint.name));
 	const lane = active?.name ?? "triage";
 	const rules: string[] = [];
 	if (pending.has("execution_kernel_ready")) rules.push(`execution_kernel_gap -> re_kernel build ${mappedTarget}`);
@@ -25245,7 +25245,7 @@ function decisionRulesFor(
 	if (pending.has("proof_loop_ready")) rules.push(`proof_loop_gap -> re_proof_loop run ${mappedTarget} 4`);
 	if (pending.has("knowledge_graph_ready")) rules.push(`knowledge_gap -> re_knowledge_graph build ${mappedTarget}`);
 	if (pending.has("report_or_writeup_ready")) rules.push("report_gap -> re_complete scaffold");
-	if (rules.length === 0) rules.push("all_gates_green -> re_complete audit");
+	if (rules.length === 0) rules.push("all_checks_green -> re_complete audit");
 	return rules;
 }
 
@@ -25264,7 +25264,7 @@ function buildDecisionCore(
 	const active = mission ? activeLane(mission) : undefined;
 	const target = sanitizeTargetForCommand(options.target) ?? sanitizeTargetForCommand(mission?.task);
 	const objectiveStack = decisionObjectiveStack(mission, active, target);
-	const gatePressure = decisionGatePressure(mission);
+	const checkPressure = decisionCheckPressure(mission);
 	const evidencePriority = decisionEvidencePriority();
 	const toolPosture = decisionToolPosture(mission);
 	const artifactPosture = decisionArtifactPosture();
@@ -25300,7 +25300,7 @@ function buildDecisionCore(
 		mode: options.mode ?? "plan",
 		activeLane: active?.name,
 		objectiveStack,
-		gatePressure,
+		checkPressure,
 		evidencePriority,
 		toolPosture,
 		artifactPosture,
@@ -25310,7 +25310,7 @@ function buildDecisionCore(
 		blocked: [],
 		nextActions,
 		stopConditions: [
-			"stop_only_when: mission gates done or each remaining gate has evidence-backed blocker",
+			"stop_only_when: mission checkpoints done or each remaining checkpoint has evidence-backed blocker",
 			"stop_only_when: verifier/compiler/replayer outputs are bound to artifacts or explicit gaps",
 			"never_stop_on: missing target/tool/context without emitting a concrete closure command",
 			...(looksLikeNaturalLanguageTarget(options.target ?? mission?.task)
@@ -25333,8 +25333,8 @@ function formatDecisionCore(decision: DecisionCoreArtifact, path?: string): stri
 		`active_lane: ${decision.activeLane ?? "none"}`,
 		"objective_stack:",
 		...(decision.objectiveStack.length ? decision.objectiveStack.map((item) => `- ${item}`) : ["- none"]),
-		"gate_pressure:",
-		...(decision.gatePressure.length ? decision.gatePressure.map((item) => `- ${item}`) : ["- none"]),
+		"check_pressure:",
+		...(decision.checkPressure.length ? decision.checkPressure.map((item) => `- ${item}`) : ["- none"]),
 		"evidence_priority:",
 		...(decision.evidencePriority.length ? decision.evidencePriority.map((item) => `- ${item}`) : ["- none"]),
 		"tool_posture:",
@@ -25406,8 +25406,8 @@ function writeDecisionCoreArtifact(decision: DecisionCoreArtifact): string {
 			"## Objective stack",
 			...decision.objectiveStack.map((item) => `- ${item}`),
 			"",
-			"## Gate pressure",
-			...decision.gatePressure.map((item) => `- ${item}`),
+			"## Check pressure",
+			...decision.checkPressure.map((item) => `- ${item}`),
 			"",
 			"## Operator queue",
 			...decision.operatorQueue.map((item) => `- ${item}`),
@@ -25427,9 +25427,9 @@ function writeDecisionCoreArtifact(decision: DecisionCoreArtifact): string {
 		command: `re_decision_core ${decision.mode}`,
 		path,
 		verify: `cat ${path}`,
-		confidence: "mission gates/evidence/tool posture decision core",
+		confidence: "mission checkpoints/evidence/tool posture decision core",
 	});
-	updateMissionGate("decision_core_ready", "done", path);
+	updateMissionCheckpoint("decision_core_ready", "done", path);
 	return path;
 }
 
@@ -25815,13 +25815,13 @@ function operatorVerificationLines(
 	const artifactChecks = context.artifactIndex.map(
 		(item) => `${item.kind}: ${existsSync(item.path) ? "ok" : "missing"} ${item.path}`,
 	);
-	const gateChecks = mission?.gates.map((gate) => `${gate.name}: ${gate.status}`) ?? ["mission: missing"];
+	const checkChecks = mission?.checkpoints.map((checkpoint) => `${checkpoint.name}: ${checkpoint.status}`) ?? ["mission: missing"];
 	const ready = steps.filter((step) => step.status === "ready").length;
 	const blocked = steps.filter((step) => step.status === "blocked").length;
 	return [
 		`context_artifact: ${contextArtifact && existsSync(contextArtifact) ? "ok" : "missing"} ${contextArtifact ?? "none"}`,
 		`operator_steps: ready=${ready} blocked=${blocked} total=${steps.length}`,
-		...gateChecks,
+		...checkChecks,
 		...artifactChecks.slice(0, 16),
 	];
 }
@@ -25831,7 +25831,7 @@ function operatorEscalationQueue(steps: OperatorStep[], pendingGates: string[]):
 		...steps
 			.filter((step) => step.status === "blocked")
 			.map((step) => `repair blocked ${step.id}: ${step.reason ?? step.command}`),
-		...pendingGates.slice(0, 12).map((gate) => `close gate: ${gate}`),
+		...pendingGates.slice(0, 12).map((checkpoint) => `close check: ${checkpoint}`),
 	];
 	if (pendingGates.includes("tool_index_checked")) queue.push("re_tool_index refresh");
 	if (pendingGates.includes("passive_map_done")) queue.push("re_map <target> 2");
@@ -25892,8 +25892,8 @@ function buildOperator(options: { target?: string; mode?: OperatorArtifact["mode
 	const sorted = [...steps].sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
 	const pendingGates =
 		readCurrentMission()
-			?.gates.filter((gate) => gate.status !== "done")
-			.map((gate) => gate.name) ?? [];
+			?.checkpoints.filter((checkpoint) => checkpoint.status !== "done")
+			.map((checkpoint) => checkpoint.name) ?? [];
 	const verification = operatorVerificationLines(context, contextArtifact, steps);
 	const escalationQueue = operatorEscalationQueue(steps, pendingGates);
 	const dispatcherFeedbackScoreboardRows = dispatcherFeedbackScoreboard({
@@ -26094,7 +26094,7 @@ function writeOperatorArtifact(operator: OperatorArtifact): string {
 		verify: `cat ${path} && cat ${dispatcherBoard}`,
 		confidence: "context-pack/operator dispatcher",
 	});
-	updateMissionGate("operator_queue_ready", "done", path);
+	updateMissionCheckpoint("operator_queue_ready", "done", path);
 	appendRuntimeFailureRepairFromOperator(operator, path);
 	return path;
 }
@@ -26115,20 +26115,20 @@ async function executeOperatorStep(pi: ExtensionAPI, step: OperatorStep, target?
 	const done = (output: string): OperationExecution => ({ stepId: step.id, command, status: "done", output });
 	const blocked = (output: string): OperationExecution => ({ stepId: step.id, command, status: "blocked", output });
 	if (step.status === "blocked") return blocked(step.reason ?? "operator step is blocked");
-	const missionMatch = /^re[-_]mission(?:\s+(show|new|gate))?(?:\s+(.+))?$/i.exec(command);
+	const missionMatch = /^re[-_]mission(?:\s+(show|new|checkpoint))?(?:\s+(.+))?$/i.exec(command);
 	if (missionMatch) {
-		const action = (missionMatch[1] as "show" | "new" | "gate" | undefined) ?? "show";
+		const action = (missionMatch[1] as "show" | "new" | "checkpoint" | undefined) ?? "show";
 		const rest = missionMatch[2]?.trim();
 		if (action === "new") {
 			const task = rest || target || "security task";
 			return done(formatMission(writeCurrentMission(createMission(task, routeReconTask(task)))));
 		}
-		if (action === "gate") {
-			const [gate = "manual_gate", status = "done", ...noteParts] = (rest ?? "").split(/\s+/).filter(Boolean);
+		if (action === "checkpoint") {
+			const [checkpoint = "manual_check", status = "done", ...noteParts] = (rest ?? "").split(/\s+/).filter(Boolean);
 			const normalizedStatus = ["pending", "done", "blocked"].includes(status)
-				? (status as MissionGateStatus)
+				? (status as MissionCheckpointStatus)
 				: "done";
-			return done(formatMission(updateMissionGate(gate, normalizedStatus, noteParts.join(" "))));
+			return done(formatMission(updateMissionCheckpoint(checkpoint, normalizedStatus, noteParts.join(" "))));
 		}
 		return done(buildMissionDigest());
 	}
@@ -26364,8 +26364,8 @@ async function dispatchOperatorQueue(
 	}
 	const pendingGates =
 		readCurrentMission()
-			?.gates.filter((gate) => gate.status !== "done")
-			.map((gate) => gate.name) ?? [];
+			?.checkpoints.filter((checkpoint) => checkpoint.status !== "done")
+			.map((checkpoint) => checkpoint.name) ?? [];
 	const runtimeFeedback = classifyOperatorFeedback(operator, undefined, operator.target);
 	operator.operatorFeedback = Array.from(new Set([...(operator.operatorFeedback ?? []), ...runtimeFeedback])).slice(
 		0,
@@ -26582,7 +26582,7 @@ function classifyOperatorFeedback(operator: OperatorArtifact, operatorArtifact?:
 			);
 			continue;
 		}
-		if (/artifact|path:|verify:|hash|anchor|gate|proof|verifier_matrix|compiler_report/i.test(text)) {
+		if (/artifact|path:|verify:|hash|anchor|checkpoint|proof|verifier_matrix|compiler_report/i.test(text)) {
 			rows.push(
 				operatorFeedbackRow({
 					category: "strong_evidence",
@@ -26718,7 +26718,7 @@ function verifierInterestingEvidence(output: string, fallback: string): string[]
 		.map((line) => line.trim())
 		.filter(Boolean)
 		.filter((line) =>
-			/artifact|path:|verify:|hash:|offset:|mission_id|evidence_|ledger|status:|gate|proof|anchor|exit=|code=|operator_queue|reflection_cycle|context_pack|supervisor_review/i.test(
+			/artifact|path:|verify:|hash:|offset:|mission_id|evidence_|ledger|status:|checkpoint|proof|anchor|exit=|code=|operator_queue|reflection_cycle|context_pack|supervisor_review/i.test(
 				line,
 			),
 		)
@@ -26731,7 +26731,7 @@ function verifierCounterEvidence(text: string): string[] {
 		.split(/\r?\n/)
 		.map((line) => line.trim())
 		.filter((line) =>
-			/blocked|pending gate|missing|unsupported|unresolved|error|failed|cannot|not found|weak|contradict/i.test(
+			/blocked|pending checkpoint|missing|unsupported|unresolved|error|failed|cannot|not found|weak|contradict/i.test(
 				line,
 			),
 		)
@@ -26792,12 +26792,12 @@ function executionAssertion(execution: OperationExecution, index: number, operat
 	};
 }
 
-function gateAssertions(): VerifierAssertion[] {
+function checkAssertions(): VerifierAssertion[] {
 	const mission = readCurrentMission();
 	if (!mission) {
 		return [
 			{
-				id: "gate:no-mission",
+				id: "check:no-mission",
 				subject: "mission blackboard",
 				claim: "active mission exists for verification",
 				status: "missing",
@@ -26808,20 +26808,20 @@ function gateAssertions(): VerifierAssertion[] {
 			},
 		];
 	}
-	return mission.gates.map((gate, index) => ({
-		id: `gate:${index + 1}:${gate.name}`,
-		subject: `gate:${gate.name}`,
-		claim: `mission gate ${gate.name} is ${gate.status}`,
-		status: gate.status === "done" ? "proved" : gate.status === "blocked" ? "contradicted" : "missing",
-		confidence: gate.status === "done" ? 80 : gate.status === "blocked" ? 20 : 35,
-		evidence: gate.note ? [`note: ${gate.note}`] : [],
-		counterEvidence: gate.status === "done" ? [] : [`gate status=${gate.status}`],
+	return mission.checkpoints.map((checkpoint, index) => ({
+		id: `check:${index + 1}:${checkpoint.name}`,
+		subject: `check:${checkpoint.name}`,
+		claim: `mission checkpoint ${checkpoint.name} is ${checkpoint.status}`,
+		status: checkpoint.status === "done" ? "proved" : checkpoint.status === "blocked" ? "contradicted" : "missing",
+		confidence: checkpoint.status === "done" ? 80 : checkpoint.status === "blocked" ? 20 : 35,
+		evidence: checkpoint.note ? [`note: ${checkpoint.note}`] : [],
+		counterEvidence: checkpoint.status === "done" ? [] : [`checkpoint status=${checkpoint.status}`],
 		requiredFollowups:
-			gate.status === "done"
+			checkpoint.status === "done"
 				? ["re_complete audit"]
-				: gate.name === "harness_ready"
-					? ["re_harness full", "re_autofix plan harness_ready", "re_verifier matrix"]
-					: [`close gate: ${gate.name}`, "re_operator escalate"],
+				: checkpoint.name === "profile_check_ready"
+					? ["re_profile_check full", "re_autofix plan profile_check_ready", "re_verifier matrix"]
+					: [`close check: ${checkpoint.name}`, "re_operator escalate"],
 	}));
 }
 
@@ -26848,7 +26848,7 @@ function buildVerifier(options: { target?: string; mode?: "check" | "matrix" } =
 	const executionAssertions = operator.executed.map((execution, index) =>
 		executionAssertion(execution, index, operatorArtifact),
 	);
-	const assertions = [...executionAssertions, ...gateAssertions(), ...artifactAssertions(operator)];
+	const assertions = [...executionAssertions, ...checkAssertions(), ...artifactAssertions(operator)];
 	if (executionAssertions.length === 0) {
 		assertions.unshift({
 			id: "exec:none",
@@ -26971,7 +26971,7 @@ function writeVerifierArtifact(verifier: VerifierArtifact): string {
 		verify: `cat ${path}`,
 		confidence: "operator/evidence assertion verifier",
 	});
-	updateMissionGate("verifier_matrix_ready", "done", path);
+	updateMissionCheckpoint("verifier_matrix_ready", "done", path);
 	return path;
 }
 
@@ -27120,11 +27120,11 @@ function compilerOutcome(verifier: VerifierArtifact, summary: Record<VerifierSta
 	];
 }
 
-function compilerClaimGateReady(compiler: CompilerArtifact): boolean {
+function compilerClaimCheckReady(compiler: CompilerArtifact): boolean {
 	return (
 		compiler.mode === "final" &&
-		compiler.strictClaimGate?.status === "pass" &&
-		(compiler.structuredClaimMergeGate?.status ?? "missing") !== "blocked"
+		compiler.strictClaimCheck?.status === "pass" &&
+		(compiler.structuredClaimMergeCheck?.status ?? "missing") !== "blocked"
 	);
 }
 
@@ -27139,18 +27139,18 @@ function artifactScopeVerdictPriority(verdict: MemoryScopeIsolationRowV1["verdic
 	return 0;
 }
 
-function latestCompilerClaimGateInputs(options: { target?: string } = {}): {
+function latestCompilerClaimCheckInputs(options: { target?: string } = {}): {
 	supervisor?: SupervisorArtifact;
 	supervisorPath?: string;
 	swarm?: SwarmArtifact;
 	swarmPath?: string;
-	releaseGateMetadata: string[];
-	claimGatePolicy: string[];
-	strictClaimGate: StrictClaimGateSnapshot;
-	claimGateResult: string[];
-	structuredClaimMergeGate: StructuredClaimMergeGateSnapshot;
+	releaseCheckMetadata: string[];
+	claimCheckPolicy: string[];
+	strictClaimCheck: StrictClaimCheckSnapshot;
+	claimCheckResult: string[];
+	structuredClaimMergeCheck: StructuredClaimMergeCheckSnapshot;
 } {
-	const scope = options.target ? { target: options.target, requestedBy: "compiler_claim_gate" } : {};
+	const scope = options.target ? { target: options.target, requestedBy: "compiler_claim_check" } : {};
 	const candidateSupervisorPath = latestSupervisorArtifactPath(scope);
 	const candidateSupervisor = candidateSupervisorPath ? parseSupervisorArtifact(candidateSupervisorPath) : undefined;
 	const supervisorPath = artifactTargetMatches(options.target, candidateSupervisor?.target) ? candidateSupervisorPath : undefined;
@@ -27159,23 +27159,23 @@ function latestCompilerClaimGateInputs(options: { target?: string } = {}): {
 	const candidateSwarm = candidateSwarmPath ? parseSwarmArtifact(candidateSwarmPath) : undefined;
 	const swarmPath = artifactTargetMatches(options.target, candidateSwarm?.target) ? candidateSwarmPath : undefined;
 	const swarm = swarmPath ? candidateSwarm : undefined;
-	const releaseGateMetadata = supervisor?.releaseGateMetadata ?? swarm?.releaseGateMetadata ?? [];
-	const claimGatePolicy =
-		supervisor?.claimGatePolicy ?? supervisorClaimGatePolicy(swarm?.parallelPlan, supervisorPlanCoverage(swarm));
-	const strictClaimGate = supervisor?.strictClaimGate ?? strictClaimGateSnapshot();
-	const claimGateResult =
-		supervisor?.claimGateResult ?? buildClaimGateResult(releaseGateMetadata, claimGatePolicy, strictClaimGate);
-	const structuredClaimMergeGate = structuredClaimMergeGateFromSwarm(swarm);
+	const releaseCheckMetadata = supervisor?.releaseCheckMetadata ?? swarm?.releaseCheckMetadata ?? [];
+	const claimCheckPolicy =
+		supervisor?.claimCheckPolicy ?? supervisorClaimCheckPolicy(swarm?.parallelPlan, supervisorPlanCoverage(swarm));
+	const strictClaimCheck = supervisor?.strictClaimCheck ?? strictClaimCheckSnapshot();
+	const claimCheckResult =
+		supervisor?.claimCheckResult ?? buildClaimCheckResult(releaseCheckMetadata, claimCheckPolicy, strictClaimCheck);
+	const structuredClaimMergeCheck = structuredClaimMergeCheckFromSwarm(swarm);
 	return {
 		supervisor,
 		supervisorPath,
 		swarm,
 		swarmPath,
-		releaseGateMetadata,
-		claimGatePolicy,
-		strictClaimGate,
-		claimGateResult,
-		structuredClaimMergeGate,
+		releaseCheckMetadata,
+		claimCheckPolicy,
+		strictClaimCheck,
+		claimCheckResult,
+		structuredClaimMergeCheck,
 	};
 }
 
@@ -27197,30 +27197,30 @@ function compilerReportLines(compiler: CompilerArtifact): string[] {
 		`- verifier_artifact: ${compiler.verifierArtifact ?? "none"}`,
 		`- supervisor_artifact: ${compiler.supervisorArtifact ?? "none"}`,
 		`- status_summary: proved=${compiler.statusSummary.proved} weak=${compiler.statusSummary.weak} contradicted=${compiler.statusSummary.contradicted} missing=${compiler.statusSummary.missing}`,
-		`- strict_claim_gate: ${compiler.strictClaimGate?.status ?? "missing"}`,
-		`- claim_release_marker: ${compiler.strictClaimGate?.markerPath ?? "missing"}`,
-		`- claim_gate_final_publish_ready: ${compiler.strictClaimGate?.status === "pass" ? "yes" : "no"}`,
+		`- strict_claim_check: ${compiler.strictClaimCheck?.status ?? "missing"}`,
+		`- claim_release_marker: ${compiler.strictClaimCheck?.markerPath ?? "missing"}`,
+		`- claim_check_final_publish_ready: ${compiler.strictClaimCheck?.status === "pass" ? "yes" : "no"}`,
 		"",
-		"## Claim Gate",
+		"## Claim Check",
 		"",
-		"### Release Gate Metadata",
-		...bullet(compiler.releaseGateMetadata),
+		"### Release Check Metadata",
+		...bullet(compiler.releaseCheckMetadata),
 		"",
-		"### Supervisor Claim Gate Policy",
-		...bullet(compiler.claimGatePolicy),
+		"### Supervisor Claim Check Policy",
+		...bullet(compiler.claimCheckPolicy),
 		"",
-		"### Strict Claim Gate",
-		...formatStrictClaimGateSnapshot(compiler.strictClaimGate),
+		"### Strict Claim Check",
+		...formatStrictClaimCheckSnapshot(compiler.strictClaimCheck),
 		"",
-		"### Claim Gate Result",
-		...bullet(compiler.claimGateResult),
+		"### Claim Check Result",
+		...bullet(compiler.claimCheckResult),
 		"",
-		"### Structured Claim Merge Gate",
-		`- structured_claim_merge_status: ${compiler.structuredClaimMergeGate?.status ?? "missing"}`,
-		`- structured_claim_merge_path: ${compiler.structuredClaimMergeGate?.mergePath ?? "missing"}`,
-		`- final_claims: ${compiler.structuredClaimMergeGate?.finalClaimCount ?? 0}`,
-		`- blocked_claims: ${compiler.structuredClaimMergeGate?.blockedClaimCount ?? 0}`,
-		...bullet(compiler.structuredClaimMergeGate?.errors ?? []),
+		"### Structured Claim Merge Check",
+		`- structured_claim_merge_status: ${compiler.structuredClaimMergeCheck?.status ?? "missing"}`,
+		`- structured_claim_merge_path: ${compiler.structuredClaimMergeCheck?.mergePath ?? "missing"}`,
+		`- final_claims: ${compiler.structuredClaimMergeCheck?.finalClaimCount ?? 0}`,
+		`- blocked_claims: ${compiler.structuredClaimMergeCheck?.blockedClaimCount ?? 0}`,
+		...bullet(compiler.structuredClaimMergeCheck?.errors ?? []),
 		"",
 		"## Operator Feedback",
 		"",
@@ -27252,18 +27252,18 @@ function writeCompiledReport(compiler: CompilerArtifact): string {
 	const safeTitle = slug(`${compiler.route ?? "pi-recon"}-${compiler.mode}-compiled-report`).slice(0, 90);
 	const path = join(reportDir(), `${compiler.timestamp.replace(/[:.]/g, "-")}-${safeTitle}.md`);
 	writeFileSync(path, compiler.finalReport.join("\n"), "utf-8");
-	updateMissionGate("report_or_writeup_ready", "done", `${path} strict_claim_gate=pass`);
+	updateMissionCheckpoint("report_or_writeup_ready", "done", `${path} strict_claim_check=pass`);
 	return path;
 }
 
 function buildCompiler(options: { target?: string; mode?: "draft" | "final" } = {}): CompilerArtifact {
 	ensureReconStorage();
 	const { verifier, path: verifierArtifact } = latestOrBuildVerifier(options);
-	const claimGateInputs = latestCompilerClaimGateInputs({ target: options.target });
+	const claimCheckInputs = latestCompilerClaimCheckInputs({ target: options.target });
 	const summary = compilerStatusSummary(verifier.assertions);
 	const mode = options.mode ?? "draft";
-	const strictBlocksFinal = mode === "final" && claimGateInputs.strictClaimGate.status !== "pass";
-	const structuredClaimBlocksFinal = mode === "final" && claimGateInputs.structuredClaimMergeGate.status === "blocked";
+	const strictBlocksFinal = mode === "final" && claimCheckInputs.strictClaimCheck.status !== "pass";
+	const structuredClaimBlocksFinal = mode === "final" && claimCheckInputs.structuredClaimMergeCheck.status === "blocked";
 	const compiler: CompilerArtifact = {
 		timestamp: new Date().toISOString(),
 		missionId: verifier.missionId,
@@ -27271,21 +27271,21 @@ function buildCompiler(options: { target?: string; mode?: "draft" | "final" } = 
 		target: options.target ?? verifier.target,
 		mode,
 		verifierArtifact,
-		supervisorArtifact: claimGateInputs.supervisorPath,
+		supervisorArtifact: claimCheckInputs.supervisorPath,
 		operatorFeedback: verifier.operatorFeedback ?? [],
 		statusSummary: summary,
 		outcome: [
 			...compilerOutcome(verifier, summary),
 			...(strictBlocksFinal
 				? [
-						`status=blocked_by_claim_gate strict_claim_gate=${claimGateInputs.strictClaimGate.status}`,
-						"claim boundary: final reports require a passing strict claim release marker from gate:claim-release.",
+						`status=blocked_by_claim_check strict_claim_check=${claimCheckInputs.strictClaimCheck.status}`,
+						"claim boundary: final reports require a passing strict claim release marker from check:claim-release.",
 					]
 				: []),
 			...(structuredClaimBlocksFinal
 				? [
-						`status=blocked_by_structured_claim_merge structured_claim_merge=${claimGateInputs.structuredClaimMergeGate.status}`,
-						"claim boundary: final reports require StructuredClaimMergeV1 final promotion to pass artifact/jsonQuery/verifier/challenge/conflict gates.",
+						`status=blocked_by_structured_claim_merge structured_claim_merge=${claimCheckInputs.structuredClaimMergeCheck.status}`,
+						"claim boundary: final reports require StructuredClaimMergeV1 final promotion to pass artifact/jsonQuery/verifier/challenge/conflict checkpoints.",
 					]
 				: []),
 		],
@@ -27294,22 +27294,22 @@ function buildCompiler(options: { target?: string; mode?: "draft" | "final" } = 
 		contradictions: compilerContradictions(verifier),
 		gaps: [
 			...compilerGaps(verifier),
-			...(claimGateInputs.strictClaimGate.status !== "pass"
+			...(claimCheckInputs.strictClaimCheck.status !== "pass"
 				? [
-						`strict claim gate ${claimGateInputs.strictClaimGate.status}: ${claimGateInputs.strictClaimGate.markerPath ?? "missing marker"}`,
-						...claimGateInputs.strictClaimGate.requiredGaps.map((gap) => `strict claim required gap: ${gap}`),
+						`strict claim checkpoint ${claimCheckInputs.strictClaimCheck.status}: ${claimCheckInputs.strictClaimCheck.markerPath ?? "missing marker"}`,
+						...claimCheckInputs.strictClaimCheck.requiredGaps.map((gap) => `strict claim required gap: ${gap}`),
 					]
 				: []),
-			...(claimGateInputs.structuredClaimMergeGate.status === "blocked"
+			...(claimCheckInputs.structuredClaimMergeCheck.status === "blocked"
 				? [
-						`structured claim merge blocked: ${claimGateInputs.structuredClaimMergeGate.mergePath ?? "missing merge path"}`,
-						...claimGateInputs.structuredClaimMergeGate.errors.map((error) => `structured claim merge error: ${error}`),
+						`structured claim merge blocked: ${claimCheckInputs.structuredClaimMergeCheck.mergePath ?? "missing merge path"}`,
+						...claimCheckInputs.structuredClaimMergeCheck.errors.map((error) => `structured claim merge error: ${error}`),
 					]
 				: []),
 		],
 		nextOperatorQueue: Array.from(
 			new Set([
-				...(claimGateInputs.strictClaimGate.status === "pass"
+				...(claimCheckInputs.strictClaimCheck.status === "pass"
 					? []
 					: [
 							"re_complete audit # writes local claim-release marker",
@@ -27318,26 +27318,26 @@ function buildCompiler(options: { target?: string; mode?: "draft" | "final" } = 
 							"re_operator dispatch <target> 2",
 							"re_proof_loop run <target> 4 2",
 						]),
-				...(claimGateInputs.structuredClaimMergeGate.status === "blocked"
+				...(claimCheckInputs.structuredClaimMergeCheck.status === "blocked"
 					? ["re_swarm merge", "re_supervisor repair", "re_verifier matrix", "re_compiler draft"]
 					: []),
 				...compilerNextOperatorQueue(verifier),
 			]),
 		).slice(0, 24),
 		finalReport: [],
-		releaseGateMetadata: claimGateInputs.releaseGateMetadata,
-		claimGatePolicy: claimGateInputs.claimGatePolicy,
-		strictClaimGate: claimGateInputs.strictClaimGate,
-		claimGateResult: claimGateInputs.claimGateResult,
-		structuredClaimMergeGate: claimGateInputs.structuredClaimMergeGate,
+		releaseCheckMetadata: claimCheckInputs.releaseCheckMetadata,
+		claimCheckPolicy: claimCheckInputs.claimCheckPolicy,
+		strictClaimCheck: claimCheckInputs.strictClaimCheck,
+		claimCheckResult: claimCheckInputs.claimCheckResult,
+		structuredClaimMergeCheck: claimCheckInputs.structuredClaimMergeCheck,
 		sourceArtifacts: Array.from(
 			new Set(
 				[
 					verifierArtifact,
-					claimGateInputs.supervisorPath,
-					claimGateInputs.swarmPath,
-					claimGateInputs.strictClaimGate.markerPath,
-					claimGateInputs.structuredClaimMergeGate.mergePath,
+					claimCheckInputs.supervisorPath,
+					claimCheckInputs.swarmPath,
+					claimCheckInputs.strictClaimCheck.markerPath,
+					claimCheckInputs.structuredClaimMergeCheck.mergePath,
 					...verifier.sourceArtifacts,
 				].filter(Boolean) as string[],
 			),
@@ -27345,12 +27345,12 @@ function buildCompiler(options: { target?: string; mode?: "draft" | "final" } = 
 	};
 	compiler.finalReport = compilerReportLines(compiler);
 	if (compiler.mode === "final") {
-		if (compilerClaimGateReady(compiler)) compiler.reportPath = writeCompiledReport(compiler);
+		if (compilerClaimCheckReady(compiler)) compiler.reportPath = writeCompiledReport(compiler);
 		else
-			updateMissionGate(
+			updateMissionCheckpoint(
 				"report_or_writeup_ready",
 				"blocked",
-				`strict_claim_gate=${compiler.strictClaimGate?.status ?? "missing"} marker=${compiler.strictClaimGate?.markerPath ?? "missing"}`,
+				`strict_claim_check=${compiler.strictClaimCheck?.status ?? "missing"} marker=${compiler.strictClaimCheck?.markerPath ?? "missing"}`,
 			);
 	}
 	return compiler;
@@ -27369,21 +27369,21 @@ function formatCompiler(compiler: CompilerArtifact, path?: string): string {
 		`supervisor_artifact: ${compiler.supervisorArtifact ?? "none"}`,
 		`report_path: ${compiler.reportPath ?? "none"}`,
 		`status_summary: proved=${compiler.statusSummary.proved} weak=${compiler.statusSummary.weak} contradicted=${compiler.statusSummary.contradicted} missing=${compiler.statusSummary.missing}`,
-		"release_gate_metadata:",
-		...(compiler.releaseGateMetadata.length ? compiler.releaseGateMetadata.map((item) => `- ${item}`) : ["- none"]),
-		"claim_gate_policy:",
-		...(compiler.claimGatePolicy.length ? compiler.claimGatePolicy.map((item) => `- ${item}`) : ["- none"]),
-		"strict_claim_gate:",
-		...formatStrictClaimGateSnapshot(compiler.strictClaimGate),
-		"claim_gate_result:",
-		...(compiler.claimGateResult.length ? compiler.claimGateResult.map((item) => `- ${item}`) : ["- none"]),
-		"structured_claim_merge_gate:",
-		`- status=${compiler.structuredClaimMergeGate?.status ?? "missing"}`,
-		`- path=${compiler.structuredClaimMergeGate?.mergePath ?? "missing"}`,
-		`- final_claims=${compiler.structuredClaimMergeGate?.finalClaimCount ?? 0}`,
-		`- blocked_claims=${compiler.structuredClaimMergeGate?.blockedClaimCount ?? 0}`,
-		...(compiler.structuredClaimMergeGate?.errors.length
-			? compiler.structuredClaimMergeGate.errors.slice(0, 10).map((item) => `- error=${item}`)
+		"release_check_metadata:",
+		...(compiler.releaseCheckMetadata.length ? compiler.releaseCheckMetadata.map((item) => `- ${item}`) : ["- none"]),
+		"claim_check_policy:",
+		...(compiler.claimCheckPolicy.length ? compiler.claimCheckPolicy.map((item) => `- ${item}`) : ["- none"]),
+		"strict_claim_check:",
+		...formatStrictClaimCheckSnapshot(compiler.strictClaimCheck),
+		"claim_check_result:",
+		...(compiler.claimCheckResult.length ? compiler.claimCheckResult.map((item) => `- ${item}`) : ["- none"]),
+		"structured_claim_merge_check:",
+		`- status=${compiler.structuredClaimMergeCheck?.status ?? "missing"}`,
+		`- path=${compiler.structuredClaimMergeCheck?.mergePath ?? "missing"}`,
+		`- final_claims=${compiler.structuredClaimMergeCheck?.finalClaimCount ?? 0}`,
+		`- blocked_claims=${compiler.structuredClaimMergeCheck?.blockedClaimCount ?? 0}`,
+		...(compiler.structuredClaimMergeCheck?.errors.length
+			? compiler.structuredClaimMergeCheck.errors.slice(0, 10).map((item) => `- error=${item}`)
 			: ["- errors=none"]),
 		"operator_feedback:",
 		...((compiler.operatorFeedback ?? []).length
@@ -27440,18 +27440,18 @@ function writeCompilerArtifact(compiler: CompilerArtifact): string {
 	appendEvidence({
 		kind: "artifact",
 		title: `compiler-${compiler.mode} ${compiler.missionId ?? "no-mission"}`,
-		fact: `Compiler ${compiler.mode}: proved=${compiler.statusSummary.proved}, weak=${compiler.statusSummary.weak}, contradicted=${compiler.statusSummary.contradicted}, missing=${compiler.statusSummary.missing}, operator_feedback=${(compiler.operatorFeedback ?? []).length}, strict_claim_gate=${compiler.strictClaimGate?.status ?? "missing"}, claim_gate_result=${compiler.claimGateResult.length}, structured_claim_merge=${compiler.structuredClaimMergeGate?.status ?? "missing"}`,
+		fact: `Compiler ${compiler.mode}: proved=${compiler.statusSummary.proved}, weak=${compiler.statusSummary.weak}, contradicted=${compiler.statusSummary.contradicted}, missing=${compiler.statusSummary.missing}, operator_feedback=${(compiler.operatorFeedback ?? []).length}, strict_claim_check=${compiler.strictClaimCheck?.status ?? "missing"}, claim_check_result=${compiler.claimCheckResult.length}, structured_claim_merge=${compiler.structuredClaimMergeCheck?.status ?? "missing"}`,
 		command: `re_compiler ${compiler.mode}`,
 		path,
 		verify: `cat ${path}`,
 		confidence: "verifier-to-report compiler",
 	});
-	updateMissionGate("compiler_ready", "done", path);
+	updateMissionCheckpoint("compiler_ready", "done", path);
 	if (compiler.mode === "final" && !compiler.reportPath) {
-		updateMissionGate(
+		updateMissionCheckpoint(
 			"report_or_writeup_ready",
 			"blocked",
-			`strict_claim_gate=${compiler.strictClaimGate?.status ?? "missing"} marker=${compiler.strictClaimGate?.markerPath ?? "missing"}`,
+			`strict_claim_check=${compiler.strictClaimCheck?.status ?? "missing"} marker=${compiler.strictClaimCheck?.markerPath ?? "missing"}`,
 		);
 	}
 	return path;
@@ -27668,7 +27668,7 @@ function writeReplayerArtifact(replay: ReplayArtifact): string {
 		verify: `cat ${path}`,
 		confidence: "compiler repro command replay matrix",
 	});
-	if (replay.mode === "run") updateMissionGate("replay_ready", replay.executions.length ? "done" : "blocked", path);
+	if (replay.mode === "run") updateMissionCheckpoint("replay_ready", replay.executions.length ? "done" : "blocked", path);
 	appendRuntimeFailureRepairFromReplay(replay, path);
 	appendReplayerMemoryEvent(replay, path);
 	return path;
@@ -27943,7 +27943,7 @@ function buildAutofix(options: { target?: string; mode?: "plan" | "apply" } = {}
 			`autofix queue ${replay.missionId ?? "no-mission"}`,
 			[`replay_artifact: ${replayArtifact}`, `compiler_artifact: ${compilerPath ?? "none"}`, ...applied].join("\n"),
 		);
-		updateMissionGate("memory_or_evolution_written", "done", "autofix queue");
+		updateMissionCheckpoint("memory_or_evolution_written", "done", "autofix queue");
 	}
 
 	return {
@@ -28066,7 +28066,7 @@ function writeAutofixArtifact(autofix: AutofixArtifact): string {
 		verify: `cat ${path}`,
 		confidence: "replay/compile repair queue",
 	});
-	updateMissionGate("autofix_ready", "done", path);
+	updateMissionCheckpoint("autofix_ready", "done", path);
 	appendRuntimeFailureRepairFromAutofix(autofix, path);
 	appendAutofixMemoryEvent(autofix, path);
 	return path;
@@ -28117,16 +28117,16 @@ function proofLoopBridgeArtifacts(target?: string): string[] {
 	);
 }
 
-function proofLoopGateStatus(): string[] {
+function proofLoopCheckStatus(): string[] {
 	const mission = readCurrentMission();
 	return (
-		mission?.gates
-			.filter((gate) =>
+		mission?.checkpoints
+			.filter((checkpoint) =>
 				/decision_core_ready|operator_queue_ready|verifier_matrix_ready|compiler_ready|replay_ready|autofix_ready|proof_loop_ready|knowledge_graph_ready|report_or_writeup_ready/i.test(
-					gate.name,
+					checkpoint.name,
 				),
 			)
-			.map((gate) => `${gate.name}: ${gate.status}${gate.note ? ` — ${truncateMiddle(gate.note, 140)}` : ""}`) ?? [
+			.map((checkpoint) => `${checkpoint.name}: ${checkpoint.status}${checkpoint.note ? ` — ${truncateMiddle(checkpoint.note, 140)}` : ""}`) ?? [
 			"mission: missing",
 		]
 	);
@@ -28355,10 +28355,10 @@ function proofLoopGapItems(target?: string): ProofLoopGapItem[] {
 	for (const row of failurePriority.rows.slice(0, 12)) {
 		add("failure_signature", row, failurePriority.sourceArtifacts);
 	}
-	for (const gate of proofLoopGateStatus()
+	for (const checkpoint of proofLoopCheckStatus()
 		.filter((item) => /pending|blocked|missing/i.test(item))
 		.slice(0, 12))
-		add("gate", gate, proofLoopSourceArtifacts(targetRef));
+		add("checkpoint", checkpoint, proofLoopSourceArtifacts(targetRef));
 	const deduped = new Map<string, Omit<ProofLoopGapItem, "worker">>();
 	for (const item of items) {
 		const key = `${item.source}:${item.text}`;
@@ -28573,7 +28573,7 @@ function refreshProofLoop(proof: ProofLoopArtifact): ProofLoopArtifact {
 		...proof,
 		steps,
 		verdict,
-		gateStatus: proofLoopGateStatus(),
+		checkStatus: proofLoopCheckStatus(),
 		evidenceSummary: proofLoopEvidenceSummary(proof.target),
 		caseMemoryLanePlan,
 		caseMemoryBridge,
@@ -28646,7 +28646,7 @@ function buildProofLoop(
 		steps: buildProofLoopSteps(options.target ?? mission?.task),
 		executed: [],
 		verdict: "partial",
-		gateStatus: [],
+		checkStatus: [],
 		evidenceSummary: [],
 		caseMemoryLanePlan: undefined,
 		caseMemoryBridge: [],
@@ -28681,8 +28681,8 @@ function formatProofLoop(proof: ProofLoopArtifact, path?: string): string {
 		`max_steps: ${proof.maxSteps}`,
 		`replay_steps: ${proof.replaySteps}`,
 		`verdict: ${proof.verdict}`,
-		"gate_status:",
-		...(proof.gateStatus.length ? proof.gateStatus.map((item) => `- ${item}`) : ["- none"]),
+		"check_status:",
+		...(proof.checkStatus.length ? proof.checkStatus.map((item) => `- ${item}`) : ["- none"]),
 		"evidence_summary:",
 		...(proof.evidenceSummary.length ? proof.evidenceSummary.map((item) => `- ${item}`) : ["- none"]),
 		"case_memory_lane_plan:",
@@ -28785,7 +28785,7 @@ function writeProofLoopArtifact(proof: ProofLoopArtifact): string {
 		verify: `cat ${path}`,
 		confidence: "verifier/compiler/replayer/autofix bounded proof loop",
 	});
-	updateMissionGate("proof_loop_ready", proof.verdict === "blocked" ? "blocked" : "done", path);
+	updateMissionCheckpoint("proof_loop_ready", proof.verdict === "blocked" ? "blocked" : "done", path);
 	appendRuntimeFailureRepairFromProofLoop(proof, path);
 	appendProofLoopMemoryEvent(proof, path);
 	return path;
@@ -29211,7 +29211,7 @@ function buildKnowledgeScopeIsolation(options: {
 		warnSourceArtifacts: sourceRows.filter((row) => row.verdict === "warn").map((row) => row.path),
 		allowedSourceArtifacts: sourceRows.filter((row) => row.verdict === "allow").map((row) => row.path),
 		sourceRows,
-		requiredGates: [
+		requiredChecks: [
 			"KnowledgeScopeIsolationV1",
 			"MemoryScopeIsolationV1",
 			"scope_filter_by_mission_session_workspace_target",
@@ -29225,7 +29225,7 @@ function buildKnowledgeScopeIsolation(options: {
 function knowledgeTags(text: string, kind: string): string[] {
 	const tags = new Set<string>([kind]);
 	const patterns: Array<[RegExp, string]> = [
-		[/decision_core|decision_artifact|objective_stack|gate_pressure|operator_next_command/i, "decision-core"],
+		[/decision_core|decision_artifact|objective_stack|check_pressure|operator_next_command/i, "decision-core"],
 		[/exploit_chain|chain_nodes|proof_path|exploit_path|operator_queue|chain_artifact/i, "exploit-chain"],
 		[/web_authz|web-authz|authorization|authz|object ownership|idor|bola|cookie|jwt|oauth|csrf/i, "web-authz-state"],
 		[/websocket|fetch|xhr|cookie|jwt|idor|bola|graphql|csrf|oauth/i, "web-authz"],
@@ -29243,7 +29243,7 @@ function knowledgeTags(text: string, kind: string): string[] {
 		[/replay_matrix|stdout_sha256|stderr_sha256|replay_ready/i, "replay"],
 		[/autofix|patch_queue|bootstrap_queue|evidence_recapture/i, "repair"],
 		[
-			/pi-recon-compaction|compact_resume|compaction_auto_resume|compaction-auto-resume|re_context resume/i,
+			/repi-compaction|compact_resume|compaction_auto_resume|compaction-auto-resume|re_context resume/i,
 			"compact-resume",
 		],
 		[
@@ -29286,7 +29286,7 @@ function knowledgeWorkerHints(tags: string[]): string[] {
 	const add = (tag: string, worker: string) => {
 		if (tags.includes(tag)) workers.add(worker);
 	};
-	add("decision-core", "worker:commander -> decision core gate pressure + operator_next_command arbitration");
+	add("decision-core", "worker:commander -> decision core checkpoint pressure + operator_next_command arbitration");
 	add("exploit-chain", "worker:commander -> exploit chain composer + proof path/replay queue");
 	add("web-authz", "worker:web-authz -> browser/XHR/WS + authz state replay");
 	add("js-signing", "worker:jsre -> signing normalizer + first-divergence harness");
@@ -29939,8 +29939,8 @@ function writeKnowledgeGraphArtifact(graph: KnowledgeGraphArtifact): string {
 		verify: `cat ${path}`,
 		confidence: "cross-artifact knowledge graph",
 	});
-	updateMissionGate("knowledge_graph_ready", "done", path);
-	updateMissionGate("memory_or_evolution_written", "done", memoryPath("knowledge-graph-index.md"));
+	updateMissionCheckpoint("knowledge_graph_ready", "done", path);
+	updateMissionCheckpoint("memory_or_evolution_written", "done", memoryPath("knowledge-graph-index.md"));
 	return path;
 }
 
@@ -29965,8 +29965,8 @@ function buildKnowledgeGraphOutput(
 	return formatKnowledgeGraph(graph, path);
 }
 
-function latestHarnessArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
-	return latestScopedMarkdownArtifact("harness", evidenceHarnessDir(), options);
+function latestProfileCheckArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
+	return latestScopedMarkdownArtifact("profile-check", evidenceProfileCheckDir(), options);
 }
 
 function findRepiRepoRoot(start?: string): string | undefined {
@@ -29993,14 +29993,14 @@ function repiRepoRoot(): string {
 	);
 }
 
-function harnessWorkspacePath(relativePath: string): string {
+function profileCheckWorkspacePath(relativePath: string): string {
 	return join(repiRepoRoot(), relativePath);
 }
 
-function harnessWritableDirCheck(id: string, dir: string): HarnessCheck {
+function profileCheckWritableDirCheck(id: string, dir: string): ProfileCheckRow {
 	try {
 		mkdirSync(dir, { recursive: true });
-		const probe = join(dir, `.pi-recon-harness-probe-${Date.now()}.tmp`);
+		const probe = join(dir, `.repi-profile-check-probe-${Date.now()}.tmp`);
 		writeFileSync(probe, "ok\n", "utf-8");
 		unlinkSync(probe);
 		return { id, status: "pass", evidence: [`writable=${dir}`] };
@@ -30009,17 +30009,17 @@ function harnessWritableDirCheck(id: string, dir: string): HarnessCheck {
 			id,
 			status: "fail",
 			evidence: [`not_writable=${dir}`, `error=${error instanceof Error ? error.message : String(error)}`],
-			next: [`mkdir -p ${shellQuote(dir)}`, `re_harness install`],
+			next: [`mkdir -p ${shellQuote(dir)}`, `re_profile_check install`],
 		};
 	}
 }
 
-function harnessFileCheck(params: {
+function profileCheckFileCheck(params: {
 	id: string;
 	path: string;
 	markers?: string[];
-	missingStatus?: HarnessCheckStatus;
-}): HarnessCheck {
+	missingStatus?: ProfileCheckStatus;
+}): ProfileCheckRow {
 	const missingStatus = params.missingStatus ?? "warn";
 	if (!existsSync(params.path)) {
 		return {
@@ -30036,7 +30036,7 @@ function harnessFileCheck(params: {
 			id: params.id,
 			status: "fail",
 			evidence: [`path=${params.path}`, `missing_markers=${missingMarkers.join(",")}`],
-			next: [`repair markers in ${params.path}`, "re_harness full"],
+			next: [`repair markers in ${params.path}`, "re_profile_check full"],
 		};
 	}
 	return {
@@ -30046,129 +30046,111 @@ function harnessFileCheck(params: {
 	};
 }
 
-function harnessSourceFiles(): Array<{ id: string; path: string; markers: string[] }> {
+function profileCheckSourceFiles(): Array<{ id: string; path: string; markers: string[] }> {
 	return [
-		{ id: "profile:system", path: harnessWorkspacePath("repi-profile/SYSTEM.md"), markers: ["REPI", "re_harness"] },
+		{ id: "profile:system", path: profileCheckWorkspacePath("repi-profile/SYSTEM.md"), markers: ["REPI", "re_profile_check"] },
 		{
 			id: "profile:append-system",
-			path: harnessWorkspacePath("repi-profile/APPEND_SYSTEM.md"),
-			markers: ["operator_command_floor", "re_harness"],
+			path: profileCheckWorkspacePath("repi-profile/APPEND_SYSTEM.md"),
+			markers: ["operator_command_floor", "re_profile_check"],
 		},
 		{
 			id: "profile:extension",
-			path: harnessWorkspacePath("repi-profile/extensions/reverse-pentest-core.ts"),
-			markers: ["re_harness", "HarnessArtifact", "harness_artifact"],
+			path: profileCheckWorkspacePath("repi-profile/extensions/reverse-pentest-core.ts"),
+			markers: ["re_profile_check", "ProfileCheckArtifact", "profile_check_artifact"],
 		},
 		{
 			id: "profile:skill",
-			path: harnessWorkspacePath("repi-profile/skills/reverse-pentest-orchestrator/SKILL.md"),
-			markers: ["reverse_capability_guards", "re_harness"],
+			path: profileCheckWorkspacePath("repi-profile/skills/reverse-pentest-orchestrator/SKILL.md"),
+			markers: ["reverse_capability_guards", "re_profile_check"],
 		},
 		{
 			id: "profile:decision-prompt",
-			path: harnessWorkspacePath("repi-profile/prompts/decision.md"),
-			markers: ["compact_resume_case_memory", "re_harness"],
+			path: profileCheckWorkspacePath("repi-profile/prompts/decision.md"),
+			markers: ["compact_resume_case_memory", "re_profile_check"],
 		},
 		{
 			id: "profile:chain-prompt",
-			path: harnessWorkspacePath("repi-profile/prompts/chain.md"),
-			markers: ["proof_exit_criteria", "harness_artifact"],
+			path: profileCheckWorkspacePath("repi-profile/prompts/chain.md"),
+			markers: ["proof_exit_criteria", "profile_check_artifact"],
 		},
 		{
 			id: "source:core",
-			path: harnessWorkspacePath("packages/coding-agent/src/core/recon-profile.ts"),
-			markers: ["RECON_TOOL_NAMES", "re_harness", "HarnessArtifact", "buildHarnessArtifact"],
+			path: profileCheckWorkspacePath("packages/coding-agent/src/core/recon-profile.ts"),
+			markers: ["RECON_TOOL_NAMES", "re_profile_check", "ProfileCheckArtifact", "buildProfileCheckArtifact"],
 		},
 	];
 }
 
-function harnessInstalledFiles(
-	mode: HarnessMode,
-): Array<{ id: string; path: string; markers: string[]; missingStatus: HarnessCheckStatus }> {
-	const missingStatus: HarnessCheckStatus = mode === "install" ? "fail" : "warn";
+function profileCheckInstalledFiles(
+	mode: ProfileCheckMode,
+): Array<{ id: string; path: string; markers: string[]; missingStatus: ProfileCheckStatus }> {
+	const missingStatus: ProfileCheckStatus = mode === "install" ? "fail" : "warn";
 	return [
 		{
-			id: "install:system",
-			path: join(getAgentDir(), "SYSTEM.md"),
-			markers: ["REPI", "re_harness"],
+			id: "install:settings",
+			path: join(getAgentDir(), "settings.json"),
+			markers: ["compaction", "memory"],
 			missingStatus,
 		},
 		{
-			id: "install:append-system",
-			path: join(getAgentDir(), "APPEND_SYSTEM.md"),
-			markers: ["operator_command_floor", "re_harness"],
+			id: "install:profile-manifest",
+			path: join(getAgentDir(), "recon", "profile.json"),
+			markers: ["isolated-repi-profile", "repi"],
 			missingStatus,
 		},
 		{
-			id: "install:extension",
-			path: join(getAgentDir(), "extensions", "reverse-pentest-core.ts"),
-			markers: ["re_harness", "HarnessArtifact"],
-			missingStatus,
-		},
-		{
-			id: "install:skill",
-			path: join(getAgentDir(), "skills", "reverse-pentest-orchestrator", "SKILL.md"),
-			markers: ["reverse_capability_guards", "re_harness"],
-			missingStatus,
-		},
-		{
-			id: "install:node-deps:typebox",
-			path: join(getAgentDir(), "node_modules", "typebox", "package.json"),
-			markers: ["typebox"],
-			missingStatus,
-		},
-		{
-			id: "install:node-deps:repi-coding-agent",
-			path: join(getAgentDir(), "node_modules", "@pi-recon", "repi-coding-agent", "package.json"),
-			markers: ["@pi-recon/repi-coding-agent"],
+			id: "install:tool-index",
+			path: join(getAgentDir(), "recon", "tools", "tool-index.md"),
+			markers: ["REPI Tool Index"],
 			missingStatus,
 		},
 	];
 }
 
-function harnessInstallScriptChecks(): HarnessCheck[] {
+function profileCheckInstallScriptChecks(): ProfileCheckRow[] {
 	return [
-		harnessFileCheck({
-			id: "install-script:verify-profile",
-			path: harnessWorkspacePath("scripts/reverse-agent/verify-profile.mjs"),
-			markers: ["re_harness"],
+		profileCheckFileCheck({
+			id: "install-script:install-repi",
+			path: profileCheckWorkspacePath("scripts/reverse-agent/install-repi.sh"),
+			markers: ["install-repi.sh", "init-repi-profile.mjs"],
 			missingStatus: "warn",
 		}),
-		harnessFileCheck({
-			id: "install-script:install-global-profile",
-			path: harnessWorkspacePath("scripts/reverse-agent/install-global-profile.sh"),
-			markers: ["no longer installs a file-based global profile", "init-repi-profile.mjs", "install-repi.sh"],
+		profileCheckFileCheck({
+			id: "install-script:init-repi-profile",
+			path: profileCheckWorkspacePath("scripts/reverse-agent/init-repi-profile.mjs"),
+			markers: ["isolated-repi-profile", "settings.compaction"],
 			missingStatus: "warn",
 		}),
-		harnessFileCheck({
+		profileCheckFileCheck({
+			id: "install-script:repi-smoke",
+			path: profileCheckWorkspacePath("scripts/reverse-agent/repi-smoke.mjs"),
+			markers: ["repi-doctor", "model", "memory"],
+			missingStatus: "warn",
+		}),
+		profileCheckFileCheck({
 			id: "install-script:refresh-tool-index",
-			path: harnessWorkspacePath("scripts/reverse-agent/refresh-tool-index.sh"),
+			path: profileCheckWorkspacePath("scripts/reverse-agent/refresh-tool-index.sh"),
 			markers: ["TOOL"],
 			missingStatus: "warn",
 		}),
-		harnessFileCheck({
-			id: "install-script:pi-help-smoke",
-			path: harnessWorkspacePath("pi-test.sh"),
-			markers: ["node"],
-			missingStatus: "warn",
-		}),
 	];
 }
 
-function harnessSourceCorpus(): { paths: string[]; text: string } {
+function profileCheckSourceCorpus(): { paths: string[]; text: string } {
 	const paths = Array.from(
 		new Set([
-			...harnessSourceFiles().map((file) => file.path),
-			...harnessInstalledFiles("quick").map((file) => file.path),
+			...profileCheckSourceFiles().map((file) => file.path),
+			...profileCheckInstalledFiles("quick").map((file) => file.path),
 			builtinSkillFilePath(),
 			builtinPromptFilePath("decision"),
 			builtinPromptFilePath("chain"),
 		]),
 	).filter((path) => existsSync(path));
-	return { paths, text: paths.map((path) => readText(path)).join("\n\n--- pi-recon-harness-source ---\n\n") };
+	return { paths, text: paths.map((path) => readText(path)).join("\n\n--- repi-profile-check-source ---\n\n") };
 }
 
-function harnessCriticalMarkers(): string[] {
+function profileCheckCriticalMarkers(): string[] {
 	return [
 		"re_native_runtime",
 		"re_web_authz_state",
@@ -30181,8 +30163,8 @@ function harnessCriticalMarkers(): string[] {
 		"re_runtime_bridge",
 		"re_runtime_adapter",
 		"ToolchainDomainCapabilityV1",
-		"ProfessionalRuntimeBridgesGateV1",
-		"RuntimeAdapterExecutionGateV1",
+		"ProfessionalRuntimeBridgesCheckV1",
+		"RuntimeAdapterExecutionCheckV1",
 		"domain_toolchain_matrix",
 		"runtime_execution_bridge_matrix",
 		"adapter_runner_parser_ingest_contract",
@@ -30192,15 +30174,15 @@ function harnessCriticalMarkers(): string[] {
 		"operator_command_floor",
 		"proof_exit_criteria",
 		"specialist_runtime_planner",
-		"re_harness",
-		"harness_artifact",
+		"re_profile_check",
+		"profile_check_artifact",
 		"install_readiness",
 		"reverse_capability_guards",
 		"regression_guards",
 	];
 }
 
-function harnessReverseCapabilityMarkers(): string[] {
+function profileCheckReverseCapabilityMarkers(): string[] {
 	return [
 		"Native deep symbol/import/string anchors",
 		"browser/XHR/WS",
@@ -30245,18 +30227,18 @@ function harnessReverseCapabilityMarkers(): string[] {
 	];
 }
 
-function harnessMarkerChecks(
+function profileCheckMarkerChecks(
 	idPrefix: string,
 	markers: string[],
 	corpus: { paths: string[]; text: string },
-): HarnessCheck[] {
+): ProfileCheckRow[] {
 	if (corpus.paths.length === 0) {
 		return [
 			{
 				id: `${idPrefix}:source-corpus`,
 				status: "warn",
 				evidence: ["source_corpus=missing"],
-				next: ["run from Pi repository root or install profile, then re_harness full"],
+				next: ["run from REPI repository root or install profile, then re_profile_check full"],
 			},
 		];
 	}
@@ -30266,28 +30248,28 @@ function harnessMarkerChecks(
 			id: `${idPrefix}:${slug(marker).slice(0, 72)}`,
 			status: present ? "pass" : "fail",
 			evidence: [present ? `present=${marker}` : `missing=${marker}`, `source_files=${corpus.paths.length}`],
-			next: present ? undefined : [`restore capability marker ${marker}`, "re_harness full"],
+			next: present ? undefined : [`restore capability marker ${marker}`, "re_profile_check full"],
 		};
 	});
 }
 
-function harnessVerdict(checks: HarnessCheck[]): HarnessCheckStatus {
+function profileCheckVerdict(checks: ProfileCheckRow[]): ProfileCheckStatus {
 	if (checks.some((check) => check.status === "fail")) return "fail";
 	if (checks.some((check) => check.status === "warn")) return "warn";
 	return "pass";
 }
 
-function buildHarnessArtifact(mode: HarnessMode = "quick"): HarnessArtifact {
+function buildProfileCheckArtifact(mode: ProfileCheckMode = "quick"): ProfileCheckArtifact {
 	ensureReconStorage();
-	const installScriptChecks = harnessInstallScriptChecks();
-	const checks: HarnessCheck[] = [
-		...harnessSourceFiles()
+	const installScriptChecks = profileCheckInstallScriptChecks();
+	const checks: ProfileCheckRow[] = [
+		...profileCheckSourceFiles()
 			.filter((file) => mode !== "install" || existsSync(file.path))
 			.map((file) =>
-				harnessFileCheck({ id: file.id, path: file.path, markers: file.markers, missingStatus: "warn" }),
+				profileCheckFileCheck({ id: file.id, path: file.path, markers: file.markers, missingStatus: "warn" }),
 			),
-		...harnessInstalledFiles(mode).map((file) =>
-			harnessFileCheck({
+		...profileCheckInstalledFiles(mode).map((file) =>
+			profileCheckFileCheck({
 				id: file.id,
 				path: file.path,
 				markers: file.markers,
@@ -30297,24 +30279,24 @@ function buildHarnessArtifact(mode: HarnessMode = "quick"): HarnessArtifact {
 		...(mode === "install"
 			? installScriptChecks.filter((check) => !check.evidence.some((item) => item.startsWith("missing=")))
 			: installScriptChecks),
-		harnessWritableDirCheck("storage:evidence-harness", evidenceHarnessDir()),
-		harnessWritableDirCheck("storage:evidence-runs", evidenceRunsDir()),
-		harnessWritableDirCheck("storage:memory", join(reconDir(), "memory")),
-		harnessFileCheck({ id: "storage:tool-index", path: toolIndexPath(), markers: ["REPI Tool Index"] }),
+		profileCheckWritableDirCheck("storage:evidence-profile-check", evidenceProfileCheckDir()),
+		profileCheckWritableDirCheck("storage:evidence-runs", evidenceRunsDir()),
+		profileCheckWritableDirCheck("storage:memory", join(reconDir(), "memory")),
+		profileCheckFileCheck({ id: "storage:tool-index", path: toolIndexPath(), markers: ["REPI Tool Index"] }),
 	];
-	const corpus = harnessSourceCorpus();
-	const criticalChecks = harnessMarkerChecks("regression", harnessCriticalMarkers(), corpus);
-	const reverseChecks = harnessMarkerChecks("reverse-capability", harnessReverseCapabilityMarkers(), corpus);
+	const corpus = profileCheckSourceCorpus();
+	const criticalChecks = profileCheckMarkerChecks("regression", profileCheckCriticalMarkers(), corpus);
+	const reverseChecks = profileCheckMarkerChecks("reverse-capability", profileCheckReverseCapabilityMarkers(), corpus);
 	checks.push(...criticalChecks, ...reverseChecks);
 	const capabilityMatrix = [
 		`registered_tools=${Array.from(RECON_TOOL_NAMES).join(",")}`,
 		`registered_commands=${Array.from(RECON_COMMAND_NAMES).join(",")}`,
-		"execution_chain=route/mission/kernel -> decision/map/lane/autopilot -> campaign/operation/delegate/swarm/supervisor/reflect -> context/operator -> verifier/compiler/replayer/autofix -> proof_loop/knowledge_graph/harness",
+		"execution_chain=route/mission/kernel -> decision/map/lane/autopilot -> campaign/operation/delegate/swarm/supervisor/reflect -> context/operator -> verifier/compiler/replayer/autofix -> proof_loop/knowledge_graph/profile_check",
 		"runtime_domains=native,web_authz,live_browser,mobile,exploit_lab,pwn,pcap,firmware,agentsec,malware,cloud,identity,frida_gdb",
 		"domain_toolchain_matrix=ToolchainDomainCapabilityV1 runtime:toolchain-doctor domain:web-api domain:web-scan domain:frontend-js domain:rev-native domain:pwn domain:mobile domain:mobile-ios domain:pcap-dfir domain:memory-forensics domain:firmware-iot domain:crypto domain:cloud-identity domain:exploit-reliability fallback_available",
-		"runtime_execution_bridge_matrix=ProfessionalRuntimeBridgesGateV1 runtime:professional-runtime-bridges bridge-rev-ghidra-r2-angr verifier-pwn-crash-offset-primitive-exploit cdp-network-capture mobile-frida-java-hook-template",
-		"adapter_execution_matrix=RuntimeAdapterExecutionGateV1 runtime:adapter-execution adapter_runner_parser_ingest_contract adapter-r2-native-xref-runner adapter-frida-mobile-hook-runner adapter-web-cdp-network-runner adapter-pwntools-local-verifier-runner",
-		"compact_chain=pi-recon-compaction -> re_context resume -> re_operator dispatch -> re_proof_loop -> compact_resume_case_memory -> case_memory_lane_plan",
+		"runtime_execution_bridge_matrix=ProfessionalRuntimeBridgesCheckV1 runtime:professional-runtime-bridges bridge-rev-ghidra-r2-angr verifier-pwn-crash-offset-primitive-exploit cdp-network-capture mobile-frida-java-hook-template",
+		"adapter_execution_matrix=RuntimeAdapterExecutionCheckV1 runtime:adapter-execution adapter_runner_parser_ingest_contract adapter-r2-native-xref-runner adapter-frida-mobile-hook-runner adapter-web-cdp-network-runner adapter-pwntools-local-verifier-runner",
+		"compact_chain=repi-compaction -> re_context resume -> re_operator dispatch -> re_proof_loop -> compact_resume_case_memory -> case_memory_lane_plan",
 	];
 	const installReadiness = [
 		`agent_dir=${getAgentDir()}`,
@@ -30326,27 +30308,26 @@ function buildHarnessArtifact(mode: HarnessMode = "quick"): HarnessArtifact {
 					check.id === "storage:tool-index",
 			)
 			.map((check) => `${check.status}:${check.id}:${check.evidence.join(" | ")}`),
-		"verify_command=scripts/reverse-agent/verify-profile.mjs /root/pi-diy/pi",
-		"install_command=scripts/reverse-agent/install-repi.sh /root/pi-diy/pi",
-		"help_smoke=REPI_OFFLINE=1 ./pi-test.sh --recon --no-tools --help",
+		"verify_command=node scripts/reverse-agent/repi-smoke.mjs . --json",
+		"install_command=npm run install:repi",
+		"help_smoke=REPI_OFFLINE=1 ./repi --offline --help",
 	];
 	const regressionGuards = [
 		...criticalChecks.map((check) => `${check.status}:${check.id}:${check.evidence[0] ?? ""}`),
 		"transpile_guard=node TypeScript transpile packages/coding-agent/src/core/recon-profile.ts repi-profile/extensions/reverse-pentest-core.ts",
 		"focused_tests=node node_modules/vitest/dist/cli.js --run packages/coding-agent/test/recon-profile.test.ts packages/coding-agent/test/args.test.ts",
 		"repo_check=npm run check",
-		"verify_profile=scripts/reverse-agent/verify-profile.mjs /root/pi-diy/pi",
 	];
 	const reverseCapabilityGuards = reverseChecks.map(
 		(check) => `${check.status}:${check.id}:${check.evidence[0] ?? ""}`,
 	);
-	const verdict = harnessVerdict(checks);
+	const verdict = profileCheckVerdict(checks);
 	const nextActions = Array.from(
 		new Set([
 			...checks.flatMap((check) => (check.status === "pass" ? [] : (check.next ?? []))),
 			...(verdict === "fail"
-				? ["repair failing harness checks", "re_harness full", "npm run check"]
-				: ["re_harness full", "scripts/reverse-agent/verify-profile.mjs /root/pi-diy/pi"]),
+				? ["repair failing profile checks", "re_profile_check full", "npm run check"]
+				: ["re_profile_check full", "node scripts/reverse-agent/repi-smoke.mjs . --json"]),
 		]),
 	).slice(0, 24);
 	return {
@@ -30363,47 +30344,47 @@ function buildHarnessArtifact(mode: HarnessMode = "quick"): HarnessArtifact {
 	};
 }
 
-function formatHarnessArtifact(harness: HarnessArtifact, path?: string): string {
+function formatProfileCheckArtifact(profileCheck: ProfileCheckArtifact, path?: string): string {
 	return [
-		"harness:",
-		path ? `harness_artifact: ${path}` : undefined,
-		`timestamp: ${harness.timestamp}`,
-		`mode: ${harness.mode}`,
-		`verdict: ${harness.verdict}`,
+		"profile_check:",
+		path ? `profile_check_artifact: ${path}` : undefined,
+		`timestamp: ${profileCheck.timestamp}`,
+		`mode: ${profileCheck.mode}`,
+		`verdict: ${profileCheck.verdict}`,
 		"capability_matrix:",
-		...harness.capabilityMatrix.map((item) => `- ${item}`),
+		...profileCheck.capabilityMatrix.map((item) => `- ${item}`),
 		"checks:",
-		...harness.checks.map((check) => `- ${check.status} ${check.id}: ${check.evidence.join(" | ")}`),
+		...profileCheck.checks.map((check) => `- ${check.status} ${check.id}: ${check.evidence.join(" | ")}`),
 		"install_readiness:",
-		...harness.installReadiness.map((item) => `- ${item}`),
+		...profileCheck.installReadiness.map((item) => `- ${item}`),
 		"reverse_capability_guards:",
-		...harness.reverseCapabilityGuards.map((item) => `- ${item}`),
+		...profileCheck.reverseCapabilityGuards.map((item) => `- ${item}`),
 		"regression_guards:",
-		...harness.regressionGuards.map((item) => `- ${item}`),
+		...profileCheck.regressionGuards.map((item) => `- ${item}`),
 		"next_actions:",
-		...(harness.nextActions.length ? harness.nextActions.map((item) => `- ${item}`) : ["- none"]),
-		`next_harness_command: ${harness.verdict === "pass" ? "re_harness show" : "re_harness full"}`,
+		...(profileCheck.nextActions.length ? profileCheck.nextActions.map((item) => `- ${item}`) : ["- none"]),
+		`next_profile_check_command: ${profileCheck.verdict === "pass" ? "re_profile_check show" : "re_profile_check full"}`,
 		"source_artifacts:",
-		...(harness.sourceArtifacts.length ? harness.sourceArtifacts.map((item) => `- ${item}`) : ["- none"]),
+		...(profileCheck.sourceArtifacts.length ? profileCheck.sourceArtifacts.map((item) => `- ${item}`) : ["- none"]),
 	]
 		.filter(Boolean)
 		.join("\n");
 }
 
-function writeHarnessArtifact(harness: HarnessArtifact): string {
+function writeProfileCheckArtifact(profileCheck: ProfileCheckArtifact): string {
 	ensureReconStorage();
-	const path = join(evidenceHarnessDir(), `${harness.timestamp.replace(/[:.]/g, "-")}-${harness.mode}.md`);
+	const path = join(evidenceProfileCheckDir(), `${profileCheck.timestamp.replace(/[:.]/g, "-")}-${profileCheck.mode}.md`);
 	writeFileSync(
 		path,
 		[
-			"# REPI Harness Artifact",
+			"# REPI Profile Check Artifact",
 			"",
-			formatHarnessArtifact(harness, path),
+			formatProfileCheckArtifact(profileCheck, path),
 			"",
 			"## JSON",
 			"",
 			"```json",
-			JSON.stringify(harness, null, 2),
+			JSON.stringify(profileCheck, null, 2),
 			"```",
 			"",
 		].join("\n"),
@@ -30411,26 +30392,26 @@ function writeHarnessArtifact(harness: HarnessArtifact): string {
 	);
 	appendEvidence({
 		kind: "artifact",
-		title: `harness-${harness.mode}-${harness.verdict}`,
-		fact: `Harness ${harness.mode}: verdict=${harness.verdict}, checks=${harness.checks.length}, install_readiness=${harness.installReadiness.length}, reverse_capability_guards=${harness.reverseCapabilityGuards.length}, regression_guards=${harness.regressionGuards.length}`,
-		command: `re_harness ${harness.mode}`,
+		title: `profile-check-${profileCheck.mode}-${profileCheck.verdict}`,
+		fact: `Profile check ${profileCheck.mode}: verdict=${profileCheck.verdict}, checks=${profileCheck.checks.length}, install_readiness=${profileCheck.installReadiness.length}, reverse_capability_guards=${profileCheck.reverseCapabilityGuards.length}, regression_guards=${profileCheck.regressionGuards.length}`,
+		command: `re_profile_check ${profileCheck.mode}`,
 		path,
 		verify: `cat ${path}`,
-		confidence: "profile/install/regression harness",
+		confidence: "profile/install/regression check",
 	});
-	updateMissionGate("harness_ready", harness.verdict === "fail" ? "blocked" : "done", path);
+	updateMissionCheckpoint("profile_check_ready", profileCheck.verdict === "fail" ? "blocked" : "done", path);
 	return path;
 }
 
-function buildHarnessOutput(action: HarnessMode | "show" = "quick"): string {
+function buildProfileCheckOutput(action: ProfileCheckMode | "show" = "quick"): string {
 	if (action === "show") {
-		const path = latestHarnessArtifactPath();
-		if (!path) return "harness:\nstatus: missing\nnext: re_harness quick";
+		const path = latestProfileCheckArtifactPath();
+		if (!path) return "profile_check:\nstatus: missing\nnext: re_profile_check quick";
 		return truncateMiddle(readText(path), 24000);
 	}
-	const harness = buildHarnessArtifact(action);
-	const path = writeHarnessArtifact(harness);
-	return formatHarnessArtifact(harness, path);
+	const profileCheck = buildProfileCheckArtifact(action);
+	const path = writeProfileCheckArtifact(profileCheck);
+	return formatProfileCheckArtifact(profileCheck, path);
 }
 
 function latestKernelArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
@@ -30469,7 +30450,7 @@ function kernelSourceArtifacts(): string[] {
 function kernelDomainCapabilities(route?: string): string[] {
 	const base = [
 		"routing: re_route/re_mission selects the narrowest domain workflow before expansion",
-		"decision-core: re_decision_core reads gates/evidence/tool/artifact posture and emits operator_next_command before drift",
+		"decision-core: re_decision_core reads checkpoints/evidence/tool/artifact posture and emits operator_next_command before drift",
 		"mapping: re_map captures stat/hash/config/routes/auth/binary/url baseline before active proof",
 		"runtime: re_lane run/run-auto records stdout/stderr/exit, anchors, evidence_quality and self_heal_commands",
 		"orchestration: re_campaign→re_operation→re_delegate→re_swarm→re_supervisor splits, reviews and repairs specialist work",
@@ -30603,7 +30584,7 @@ function kernelDirectives(mission: MissionState | undefined, sources: string[]):
 			id: "decision-core-loop",
 			layer: "operator",
 			directive:
-				"每次路线不清、上下文恢复或关键 artifact 更新后，调用 re_decision_core tick，把 gate pressure 和 evidence priority 转成 operator_next_command。",
+				"每次路线不清、上下文恢复或关键 artifact 更新后，调用 re_decision_core tick，把 checkpoint pressure 和 evidence priority 转成 operator_next_command。",
 			evidence: evidence(/decision|kernel|contexts|operators|ledger/),
 			priority: 97.5,
 		},
@@ -30638,10 +30619,10 @@ function kernelDirectives(mission: MissionState | undefined, sources: string[]):
 			priority: 94,
 		},
 		{
-			id: "mission-gates",
+			id: "mission-checks",
 			layer: "mission",
 			directive:
-				"所有作战状态进入 mission lanes/gates；完成前必须解释或闭合 verifier/compiler/replayer/autofix/knowledge/completion gates。",
+				"所有作战状态进入 mission lanes/checkpoints；完成前必须解释或闭合 verifier/compiler/replayer/autofix/knowledge/completion checkpoints。",
 			evidence: mission ? [currentMissionPath()] : [],
 			priority: 92,
 		},
@@ -30662,7 +30643,7 @@ function kernelRefusalToExecutionRules(target?: string): string[] {
 		`missing_target -> re_map ${mappedTarget} 2，然后从 map_inferred_target 继续 re_lane plan`,
 		"missing_tool -> re_tool_index refresh；无法 fallback 时 re_bootstrap plan <tool>",
 		"ambiguous_objective -> re_route <task> + re_mission new <task>，只问一个会改变执行路径的问题",
-		`decision_gap -> re_decision_core tick ${mappedTarget}，把 gate/evidence/tool/artifact posture 转成 operator_next_command`,
+		`decision_gap -> re_decision_core tick ${mappedTarget}，把 checkpoint/evidence/tool/artifact posture 转成 operator_next_command`,
 		`scope_noise_or_public_looking_target -> 跳过空泛 scope 讨论，按任务语境先 re_map ${mappedTarget} 2，绑定 auth_context_gap/evidence gap，并进入 re_operator plan`,
 		`authorization_context_missing -> 先 re_map ${mappedTarget} 2 + re_live_browser plan ${mappedTarget}，写 auth_context_gap，然后 re_operator plan；最多问一个会改变执行路径的问题`,
 		`public_target_request -> 不因公网/品牌/生产外观空拒绝；先做 passive asset/request map、route/auth baseline、bounded_plan，再按证据决定下一 lane`,
@@ -30700,9 +30681,9 @@ function kernelToolCallPolicy(target?: string): string[] {
 
 function kernelArtifactContract(): string[] {
 	return [
-		"mission: recon/mission/current.json tracks route, lanes, gates and next actions",
+		"mission: recon/mission/current.json tracks route, lanes, checkpoints and next actions",
 		"evidence: recon/evidence/ledger.md plus maps/runs/browser/web-authz/chains/decisions/exploit-lab/mobile-runtime/native-runtime/graphs/operators/verifiers/replayers artifacts",
-		"decision: recon/evidence/decisions/*.md and memory/decision-core.md bind objective_stack, gate_pressure and operator_next_command",
+		"decision: recon/evidence/decisions/*.md and memory/decision-core.md bind objective_stack, check_pressure and operator_next_command",
 		"memory: field-journal, evolution-log, playbooks, context packs and knowledge-graph-index",
 		"report: final claims require key_evidence_block, repro_commands, verification and next step",
 		"conflicts: runtime and replay artifacts override stale source comments or labels",
@@ -30728,7 +30709,7 @@ function kernelNextActions(mission: MissionState | undefined, target?: string): 
 			`re_decision_core tick ${mappedTarget}`,
 			`re_map ${mappedTarget} 2`,
 		];
-	const pending = new Set(mission.gates.filter((gate) => gate.status !== "done").map((gate) => gate.name));
+	const pending = new Set(mission.checkpoints.filter((checkpoint) => checkpoint.status !== "done").map((checkpoint) => checkpoint.name));
 	const active = mission.lanes.find((lane) => lane.status === "in_progress") ?? mission.lanes[0];
 	const lane = active?.name ?? "map";
 	const actions: string[] = [];
@@ -30893,8 +30874,8 @@ function writeKernelArtifact(kernel: KernelArtifact): string {
 		verify: `cat ${path}`,
 		confidence: "profile directive kernel",
 	});
-	updateMissionGate("execution_kernel_ready", "done", path);
-	updateMissionGate("memory_or_evolution_written", "done", memoryPath("execution-kernel.md"));
+	updateMissionCheckpoint("execution_kernel_ready", "done", path);
+	updateMissionCheckpoint("memory_or_evolution_written", "done", memoryPath("execution-kernel.md"));
 	return path;
 }
 
@@ -30917,9 +30898,9 @@ function auditCompletion(): CompletionAudit {
 		blockers.push("no active mission");
 		return { ready: false, blockers, warnings };
 	}
-	for (const gate of mission.gates) {
-		if (gate.status === "pending") blockers.push(`pending gate: ${gate.name}`);
-		if (gate.status === "blocked") blockers.push(`blocked gate: ${gate.name}${gate.note ? ` — ${gate.note}` : ""}`);
+	for (const checkpoint of mission.checkpoints) {
+		if (checkpoint.status === "pending") blockers.push(`pending check: ${checkpoint.name}`);
+		if (checkpoint.status === "blocked") blockers.push(`blocked check: ${checkpoint.name}${checkpoint.note ? ` — ${checkpoint.note}` : ""}`);
 	}
 	const evidence = readText(evidenceLedgerPath()).trim();
 	if (!evidence || evidence === "# REPI Evidence Ledger") blockers.push("evidence ledger is empty");
@@ -30980,18 +30961,18 @@ function auditCompletion(): CompletionAudit {
 		for (const row of (supervisor.planCoverage ?? []).filter((item) => /worker_binding=fail|parallel_plan=missing|\bmissing=[1-9]/i.test(item)).slice(0, 8)) {
 			blockers.push(`supervisor plan coverage gap: ${row}`);
 		}
-		for (const row of (supervisor.claimGatePolicy ?? []).filter((item) => /worker_binding=(?!pass)|plan_contract_gaps=[1-9]|parallel_plan_id=missing/i.test(item)).slice(0, 8)) {
-			blockers.push(`supervisor claim gate blocks final claim: ${row}`);
+		for (const row of (supervisor.claimCheckPolicy ?? []).filter((item) => /worker_binding=(?!pass)|plan_contract_gaps=[1-9]|parallel_plan_id=missing/i.test(item)).slice(0, 8)) {
+			blockers.push(`supervisor claim checkpoint blocks final claim: ${row}`);
 		}
-		const supervisorStrict = supervisor.strictClaimGate ?? strictClaimGateSnapshot();
+		const supervisorStrict = supervisor.strictClaimCheck ?? strictClaimCheckSnapshot();
 		if (supervisorStrict.status !== "pass") {
 			blockers.push(
-				`supervisor strict claim gate blocks final claim: ${supervisorStrict.status} (${supervisorStrict.markerPath ?? "missing marker"})`,
+				`supervisor strict claim checkpoint blocks final claim: ${supervisorStrict.status} (${supervisorStrict.markerPath ?? "missing marker"})`,
 			);
 			for (const gap of supervisorStrict.requiredGaps.slice(0, 8)) blockers.push(`strict claim required gap: ${gap}`);
 		}
-		for (const row of (supervisor.claimGateResult ?? []).filter((item) => /final_publish_ready=no|strict_status=(?:blocked|missing)|required_gaps=[1-9]/i.test(item)).slice(0, 8)) {
-			blockers.push(`supervisor claim gate result blocks final claim: ${row}`);
+		for (const row of (supervisor.claimCheckResult ?? []).filter((item) => /final_publish_ready=no|strict_status=(?:blocked|missing)|required_gaps=[1-9]/i.test(item)).slice(0, 8)) {
+			blockers.push(`supervisor claim checkpoint result blocks final claim: ${row}`);
 		}
 	}
 	const swarmPath = latestSwarmArtifactPath();
@@ -31003,21 +30984,21 @@ function auditCompletion(): CompletionAudit {
 		for (const row of (swarm.executionAudit ?? []).filter((item) => /status=(?:pending_execution|needs_repair|needs_evidence)/i.test(item)).slice(0, 8)) {
 			blockers.push(`swarm execution audit gap: ${row}`);
 		}
-		if ((swarm.releaseGateMetadata ?? []).length && !supervisor) {
-			blockers.push(`swarm release gate metadata has no supervisor review: ${swarmPath}`);
+		if ((swarm.releaseCheckMetadata ?? []).length && !supervisor) {
+			blockers.push(`swarm release checkpoint metadata has no supervisor review: ${swarmPath}`);
 		}
-		for (const row of (swarm.releaseGateMetadata ?? []).filter((item) => /claim_gate_verdict=blocked|release_blocking_gaps=[1-9]|required_platform_gaps=[1-9]|unresolved_frontier_gaps=[1-9]|blocked_until_supervisor_claim_gate_passes/i.test(item)).slice(0, 8)) {
-			blockers.push(`swarm release gate blocks final claim: ${row}`);
+		for (const row of (swarm.releaseCheckMetadata ?? []).filter((item) => /claim_check_verdict=blocked|release_blocking_gaps=[1-9]|required_platform_gaps=[1-9]|unresolved_frontier_gaps=[1-9]|blocked_until_supervisor_claim_check_passes/i.test(item)).slice(0, 8)) {
+			blockers.push(`swarm release checkpoint blocks final claim: ${row}`);
 		}
-		const structuredClaimMergeGate = structuredClaimMergeGateFromSwarm(swarm);
-		if (structuredClaimMergeGate.status === "blocked") {
+		const structuredClaimMergeCheck = structuredClaimMergeCheckFromSwarm(swarm);
+		if (structuredClaimMergeCheck.status === "blocked") {
 			blockers.push(
-				`swarm structured claim merge blocks final claim: ${structuredClaimMergeGate.mergePath ?? swarmPath ?? "missing merge path"}`,
+				`swarm structured claim merge blocks final claim: ${structuredClaimMergeCheck.mergePath ?? swarmPath ?? "missing merge path"}`,
 			);
-			for (const error of structuredClaimMergeGate.errors.slice(0, 8)) blockers.push(`structured claim merge error: ${error}`);
+			for (const error of structuredClaimMergeCheck.errors.slice(0, 8)) blockers.push(`structured claim merge error: ${error}`);
 		}
 	}
-	const strictClaim = strictClaimGateSnapshot();
+	const strictClaim = strictClaimCheckSnapshot();
 	if (strictClaim.status !== "pass") {
 		blockers.push(
 			`strict claim release marker blocks final claim: ${strictClaim.status} (${strictClaim.markerPath ?? "missing marker"}; run re_complete audit)`,
@@ -31027,19 +31008,19 @@ function auditCompletion(): CompletionAudit {
 	const compilerPath = latestCompilerArtifactPath();
 	const compiler = compilerPath ? parseCompilerArtifact(compilerPath) : undefined;
 	if (compiler?.mode === "final") {
-		if (compiler.strictClaimGate?.status !== "pass") {
+		if (compiler.strictClaimCheck?.status !== "pass") {
 			blockers.push(
-				`compiler final artifact is not claim-gate ready: strict_claim_gate=${compiler.strictClaimGate?.status ?? "missing"} (${compilerPath})`,
+				`compiler final artifact is not claim-check ready: strict_claim_check=${compiler.strictClaimCheck?.status ?? "missing"} (${compilerPath})`,
 			);
 		}
-		for (const row of (compiler.claimGateResult ?? []).filter((item) => /final_publish_ready=no|strict_status=(?:blocked|missing)|required_gaps=[1-9]/i.test(item)).slice(0, 8)) {
-			blockers.push(`compiler claim gate result blocks final report: ${row}`);
+		for (const row of (compiler.claimCheckResult ?? []).filter((item) => /final_publish_ready=no|strict_status=(?:blocked|missing)|required_gaps=[1-9]/i.test(item)).slice(0, 8)) {
+			blockers.push(`compiler claim checkpoint result blocks final report: ${row}`);
 		}
-		if (compiler.structuredClaimMergeGate?.status === "blocked") {
+		if (compiler.structuredClaimMergeCheck?.status === "blocked") {
 			blockers.push(
-				`compiler structured claim merge blocks final report: ${compiler.structuredClaimMergeGate.mergePath ?? "missing merge path"}`,
+				`compiler structured claim merge blocks final report: ${compiler.structuredClaimMergeCheck.mergePath ?? "missing merge path"}`,
 			);
-			for (const error of compiler.structuredClaimMergeGate.errors.slice(0, 8)) blockers.push(`compiler structured claim merge error: ${error}`);
+			for (const error of compiler.structuredClaimMergeCheck.errors.slice(0, 8)) blockers.push(`compiler structured claim merge error: ${error}`);
 		}
 		if (!compiler.reportPath) blockers.push(`compiler final artifact has no release report path: ${compilerPath}`);
 	}
@@ -31108,11 +31089,11 @@ function writeReportScaffold(title?: string): string {
 	].join("\n");
 	writeFileSync(path, body, "utf-8");
 	appendCompletionMemoryEvent(audit, path);
-	const strictClaim = strictClaimGateSnapshot();
-	updateMissionGate(
+	const strictClaim = strictClaimCheckSnapshot();
+	updateMissionCheckpoint(
 		"report_or_writeup_ready",
 		strictClaim.status === "pass" ? "done" : "blocked",
-		`${path} strict_claim_gate=${strictClaim.status}`,
+		`${path} strict_claim_check=${strictClaim.status}`,
 	);
 	return path;
 }
@@ -31462,12 +31443,12 @@ const PROFESSIONAL_RUNTIME_BRIDGE_MATRIX: ProfessionalRuntimeBridgeSpec[] = [
 			"mobile-frida-java-hook-template: frida -U -f <package> -l hooks/java-crypto.js --no-pause",
 			"mobile-frida-objc-swift-hook-template: frida -U -f <bundle> -l hooks/objc-keychain.js --no-pause",
 			"mobile-keystore-keychain-certpin-anchors: re_verifier check <mobile-artifact>",
-			"mobile-runtime-attach-env-gate: REPI_FRIDA_DEVICE=<device> re_mobile_runtime run <package>",
+			"mobile-runtime-attach-env-check: REPI_FRIDA_DEVICE=<device> re_mobile_runtime run <package>",
 			"mobile-hook-output-artifact-contract: re_domain_proof_exit write mobile",
 		],
 		artifactPlan: [".repi/evidence/mobile/<mission>/static-triage.json", ".repi/evidence/mobile/<mission>/frida-hook-output.jsonl", ".repi/evidence/mobile/<mission>/cert-pinning-anchors.md", ".repi/evidence/mobile/<mission>/runtime-attach-manifest.json"],
 		envRefs: ["REPI_FRIDA_DEVICE", "REPI_ANDROID_SERIAL", "REPI_IOS_BUNDLE_ID", "REPI_MOBILE_RUNTIME_TIMEOUT_MS"],
-		proofExit: ["APK/IPA static triage", "Java/ObjC/Swift method anchors", "keystore/keychain/cert pinning anchors", "runtime attach env gate", "hook output artifact contract"],
+		proofExit: ["APK/IPA static triage", "Java/ObjC/Swift method anchors", "keystore/keychain/cert pinning anchors", "runtime attach env checkpoint", "hook output artifact contract"],
 	},
 ];
 
@@ -31475,7 +31456,7 @@ function runtimeBridgeSecretLike(value: string): boolean {
 	return /(sk-[A-Za-z0-9_-]{10,}|ghp_[A-Za-z0-9_]{10,}|github_pat_[A-Za-z0-9_]{10,}|AKIA[0-9A-Z]{12,}|-----BEGIN [A-Z ]+PRIVATE KEY-----)/.test(value);
 }
 
-function buildProfessionalRuntimeBridgesGate(bridgeFilter?: string): ProfessionalRuntimeBridgesGateV1 {
+function buildProfessionalRuntimeBridgesGate(bridgeFilter?: string): ProfessionalRuntimeBridgesCheckV1 {
 	ensureReconStorage();
 	const index = parseToolIndex();
 	const corpus = [RECON_SYSTEM_PROMPT, RECON_APPEND_SYSTEM_PROMPT, JSON.stringify(PROFESSIONAL_RUNTIME_BRIDGE_MATRIX), buildToolDigest()].join("\n");
@@ -31522,13 +31503,13 @@ function buildProfessionalRuntimeBridgesGate(bridgeFilter?: string): Professiona
 		};
 	});
 	return {
-		kind: "ProfessionalRuntimeBridgesGateV1",
+		kind: "ProfessionalRuntimeBridgesCheckV1",
 		schemaVersion: 1,
 		generatedAt: new Date().toISOString(),
-		ProfessionalRuntimeBridgesGateV1: true,
+		ProfessionalRuntimeBridgesCheckV1: true,
 		runtime: "runtime:professional-runtime-bridges",
 		toolIndexPath: toolIndexPath(),
-		requiredGates: ["professional_runtime_bridge_gate", "runtime_execution_bridge_matrix", "real_toolchain_bridge_contract", "exploit_verifier_runtime_contract", "web_cdp_replay_contract", "mobile_frida_dynamic_bridge_contract", "artifact_backed_tool_execution_plan", "env_ref_secret_boundary"],
+		requiredChecks: ["professional_runtime_bridge_check", "runtime_execution_bridge_matrix", "real_toolchain_bridge_contract", "exploit_verifier_runtime_contract", "web_cdp_replay_contract", "mobile_frida_dynamic_bridge_contract", "artifact_backed_tool_execution_plan", "env_ref_secret_boundary"],
 		bridges,
 		closure: {
 			allBridgeSpecsPresent: bridges.length === PROFESSIONAL_RUNTIME_BRIDGE_MATRIX.length || Boolean(bridgeFilter),
@@ -31539,18 +31520,18 @@ function buildProfessionalRuntimeBridgesGate(bridgeFilter?: string): Professiona
 			allEnvRefsSecretFree: bridges.every((bridge) => bridge.envRefOnly),
 		},
 		nextRuntimeCommands: ["re_runtime_bridge show", "re_runtime_bridge refresh", "re_runtime_bridge show web-cdp-replay", "re_runtime_bridge show mobile-frida", "re_exploit_lab run <target> 5", "re_live_browser run <url>", "re_mobile_runtime run <package>"],
-		invariants: ["professional_runtime_bridge_gate", "runtime_execution_bridge_matrix", "real_toolchain_bridge_contract", "exploit_verifier_runtime_contract", "web_cdp_replay_contract", "mobile_frida_dynamic_bridge_contract", "artifact_backed_tool_execution_plan", "env_ref_secret_boundary", "narrative_only_bridge_rejected"],
+		invariants: ["professional_runtime_bridge_check", "runtime_execution_bridge_matrix", "real_toolchain_bridge_contract", "exploit_verifier_runtime_contract", "web_cdp_replay_contract", "mobile_frida_dynamic_bridge_contract", "artifact_backed_tool_execution_plan", "env_ref_secret_boundary", "narrative_only_bridge_rejected"],
 	};
 }
 
-function writeProfessionalRuntimeBridgesArtifact(report: ProfessionalRuntimeBridgesGateV1): string {
+function writeProfessionalRuntimeBridgesArtifact(report: ProfessionalRuntimeBridgesCheckV1): string {
 	ensureReconStorage();
 	const path = join(evidenceToolchainDir(), `${report.generatedAt.replace(/[:.]/g, "-")}-professional-runtime-bridges.md`);
 	writeFileSync(path, `${formatProfessionalRuntimeBridgesGate(report, path)}\n\n## JSON\n\n\`\`\`json\n${JSON.stringify(report, null, 2)}\n\`\`\`\n`, "utf-8");
 	appendEvidence({
 		kind: "artifact",
 		title: "professional-runtime-bridges",
-		fact: `ProfessionalRuntimeBridgesGateV1 bridges=${report.bridges.length} fallback=${report.closure.allFallbacksAvailable} executable=${report.closure.allHaveExecutableTemplates}`,
+		fact: `ProfessionalRuntimeBridgesCheckV1 bridges=${report.bridges.length} fallback=${report.closure.allFallbacksAvailable} executable=${report.closure.allHaveExecutableTemplates}`,
 		command: "re_runtime_bridge show",
 		path,
 		verify: `cat ${path}`,
@@ -31559,10 +31540,10 @@ function writeProfessionalRuntimeBridgesArtifact(report: ProfessionalRuntimeBrid
 	return path;
 }
 
-function formatProfessionalRuntimeBridgesGate(report: ProfessionalRuntimeBridgesGateV1, path?: string): string {
+function formatProfessionalRuntimeBridgesGate(report: ProfessionalRuntimeBridgesCheckV1, path?: string): string {
 	return [
 		"professional_runtime_bridges:",
-		"ProfessionalRuntimeBridgesGateV1: true",
+		"ProfessionalRuntimeBridgesCheckV1: true",
 		"runtime: runtime:professional-runtime-bridges",
 		path ? `artifact: ${path}` : undefined,
 		`tool_index: ${report.toolIndexPath}`,
@@ -31646,13 +31627,13 @@ const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 		fallbackCommandTemplate: "adapter-frida-mobile-hook-runner-fallback: node -e \"const target=process.env.REPI_ADAPTER_TARGET||'unknown'; console.log('[parser-frida-hook-output] fallback=portable-mobile-manifest target='+target+' frida=optional adb=optional'); console.log('[parser-mobile-method-anchor] Crypto Cipher MessageDigest NSURLSession OkHttp KeyStore Keychain'); console.log('[parser-cert-pinning-anchor] TrustManager CertificatePinner SecTrust pinning X509');\"",
 		parserRules: [
 			{ id: "parser-frida-hook-output", regex: "(frida|hook|Interceptor|Java\\.perform|ObjC)", evidenceRank: "runtime_artifact", proofExitSignal: "Java/ObjC/Swift hook" },
-			{ id: "parser-mobile-method-anchor", regex: "(Crypto|Cipher|MessageDigest|NSURLSession|OkHttp|KeyStore|Keychain)", evidenceRank: "runtime_artifact", proofExitSignal: "runtime attach env gate" },
+			{ id: "parser-mobile-method-anchor", regex: "(Crypto|Cipher|MessageDigest|NSURLSession|OkHttp|KeyStore|Keychain)", evidenceRank: "runtime_artifact", proofExitSignal: "runtime attach env checkpoint" },
 			{ id: "parser-cert-pinning-anchor", regex: "(TrustManager|CertificatePinner|SecTrust|pinning|X509)", evidenceRank: "runtime_artifact", proofExitSignal: "hook output artifact contract" },
 		],
 		artifactKinds: ["frida-hook-output-jsonl", "mobile-runtime-attach-manifest", "runtime-adapter-transcript"],
 		ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
 		envRefs: ["REPI_FRIDA_DEVICE", "REPI_FRIDA_HOOK", "REPI_ANDROID_SERIAL", "REPI_RUNTIME_ADAPTER_TIMEOUT_MS"],
-		proofExitSignals: ["Java/ObjC/Swift hook", "runtime attach env gate", "hook output artifact contract"],
+		proofExitSignals: ["Java/ObjC/Swift hook", "runtime attach env checkpoint", "hook output artifact contract"],
 	},
 	{
 		id: "web-cdp-network-adapter",
@@ -31736,7 +31717,7 @@ function runtimeAdapterSecretLike(value: string): boolean {
 	return /(sk-[A-Za-z0-9_-]{10,}|ghp_[A-Za-z0-9_]{10,}|github_pat_[A-Za-z0-9_]{10,}|AKIA[0-9A-Z]{12,}|-----BEGIN [A-Z ]+PRIVATE KEY-----)/.test(value);
 }
 
-function buildRuntimeAdapterExecutionGate(adapterFilter?: string): RuntimeAdapterExecutionGateV1 {
+function buildRuntimeAdapterExecutionGate(adapterFilter?: string): RuntimeAdapterExecutionCheckV1 {
 	ensureReconStorage();
 	const index = parseToolIndex();
 	const specs = adapterFilter
@@ -31760,13 +31741,13 @@ function buildRuntimeAdapterExecutionGate(adapterFilter?: string): RuntimeAdapte
 		};
 	});
 	return {
-		kind: "RuntimeAdapterExecutionGateV1",
+		kind: "RuntimeAdapterExecutionCheckV1",
 		schemaVersion: 1,
 		generatedAt: new Date().toISOString(),
-		RuntimeAdapterExecutionGateV1: true,
+		RuntimeAdapterExecutionCheckV1: true,
 		runtime: "runtime:adapter-execution",
 		toolIndexPath: toolIndexPath(),
-		requiredGates: ["runtime_adapter_execution_gate", "adapter_runner_parser_ingest_contract", "r2_ghidra_native_adapter_contract", "frida_mobile_adapter_contract", "web_cdp_adapter_contract", "pwntools_exploit_verifier_adapter_contract", "tshark_pcap_adapter_contract", "binwalk_firmware_adapter_contract"],
+		requiredChecks: ["runtime_adapter_execution_check", "adapter_runner_parser_ingest_contract", "r2_ghidra_native_adapter_contract", "frida_mobile_adapter_contract", "web_cdp_adapter_contract", "pwntools_exploit_verifier_adapter_contract", "tshark_pcap_adapter_contract", "binwalk_firmware_adapter_contract"],
 		adapters,
 		closure: {
 			allAdapterSpecsPresent: adapters.length === RUNTIME_ADAPTER_EXECUTION_MATRIX.length || Boolean(adapterFilter),
@@ -31778,15 +31759,15 @@ function buildRuntimeAdapterExecutionGate(adapterFilter?: string): RuntimeAdapte
 			allHaveNativeOrFallbackTool: adapters.every((adapter) => adapter.present || adapter.fallbackPresent),
 			allEnvRefsSecretFree: adapters.every((adapter) => adapter.envRefOnly),
 		},
-		nextRuntimeCommands: ["re_runtime_adapter show", "re_runtime_adapter plan r2-native-xref-adapter <target>", "re_runtime_adapter run web-cdp-network-adapter <url>", "re_runtime_adapter run frida-mobile-hook-adapter <package>", "npm run gate:runtime-adapter-execution"],
-		invariants: ["runtime_adapter_execution_gate", "adapter_runner_parser_ingest_contract", "runner_output_parser_must_write_artifact", "artifact_ingest_target_must_include_evidence_knowledge_memory", "adapter_run_secret_literals_rejected"],
+		nextRuntimeCommands: ["re_runtime_adapter show", "re_runtime_adapter plan r2-native-xref-adapter <target>", "re_runtime_adapter run web-cdp-network-adapter <url>", "re_runtime_adapter run frida-mobile-hook-adapter <package>", "re_runtime_adapter show"],
+		invariants: ["runtime_adapter_execution_check", "adapter_runner_parser_ingest_contract", "runner_output_parser_must_write_artifact", "artifact_ingest_target_must_include_evidence_knowledge_memory", "adapter_run_secret_literals_rejected"],
 	};
 }
 
-function formatRuntimeAdapterExecutionGate(report: RuntimeAdapterExecutionGateV1, path?: string): string {
+function formatRuntimeAdapterExecutionGate(report: RuntimeAdapterExecutionCheckV1, path?: string): string {
 	return [
 		"runtime_adapter_execution:",
-		"RuntimeAdapterExecutionGateV1: true",
+		"RuntimeAdapterExecutionCheckV1: true",
 		"runtime: runtime:adapter-execution",
 		path ? `artifact: ${path}` : undefined,
 		`tool_index: ${report.toolIndexPath}`,
@@ -31809,11 +31790,11 @@ function formatRuntimeAdapterExecutionGate(report: RuntimeAdapterExecutionGateV1
 	].filter(Boolean).join("\n");
 }
 
-function writeRuntimeAdapterExecutionArtifact(report: RuntimeAdapterExecutionGateV1): string {
+function writeRuntimeAdapterExecutionArtifact(report: RuntimeAdapterExecutionCheckV1): string {
 	ensureReconStorage();
 	const path = join(evidenceToolchainDir(), `${report.generatedAt.replace(/[:.]/g, "-")}-runtime-adapter-execution.md`);
 	writeFileSync(path, `${formatRuntimeAdapterExecutionGate(report, path)}\n\n## JSON\n\n\`\`\`json\n${JSON.stringify(report, null, 2)}\n\`\`\`\n`, "utf-8");
-	appendEvidence({ kind: "artifact", title: "runtime-adapter-execution", fact: `RuntimeAdapterExecutionGateV1 adapters=${report.adapters.length} runner=${report.closure.allHaveRunnerTemplates} parser=${report.closure.allHaveParserRules} ingest=${report.closure.allHaveIngestTargets}`, command: "re_runtime_adapter show", path, verify: `cat ${path}`, confidence: "runtime:adapter-execution adapter_runner_parser_ingest_contract evidence-ledger knowledge-graph memory-event" });
+	appendEvidence({ kind: "artifact", title: "runtime-adapter-execution", fact: `RuntimeAdapterExecutionCheckV1 adapters=${report.adapters.length} runner=${report.closure.allHaveRunnerTemplates} parser=${report.closure.allHaveParserRules} ingest=${report.closure.allHaveIngestTargets}`, command: "re_runtime_adapter show", path, verify: `cat ${path}`, confidence: "runtime:adapter-execution adapter_runner_parser_ingest_contract evidence-ledger knowledge-graph memory-event" });
 	return path;
 }
 
@@ -31894,13 +31875,13 @@ async function runRuntimeAdapterExecution(pi: ExtensionAPI, options: { adapter?:
 	mkdirSync(dir, { recursive: true });
 	const path = join(dir, `${startedAt.replace(/[:.]/g, "-")}.json`);
 	writeFileSync(path, `${JSON.stringify({ ...artifact, stdoutHead: truncateMiddle(result.stdout, 8000), stderrHead: truncateMiddle(result.stderr, 4000) }, null, 2)}\n`, "utf-8");
-	appendEvidence({ kind: "runtime", title: `runtime-adapter ${adapter.adapterId}`, fact: `RuntimeAdapterExecutionGateV1 adapter=${adapter.adapterId} runner=${selectedRunner} exit=${result.code} parser_matches=${artifact.parserSignals.reduce((sum, row) => sum + row.matches.length, 0)} ingest=evidence-ledger,knowledge-graph,memory-event`, command: `re_runtime_adapter run ${adapter.adapterId} ${options.target}`, path, verify: `cat ${path}`, confidence: "runtime:adapter-execution adapter_runner_parser_ingest_contract runner_output_parser_must_write_artifact" });
+	appendEvidence({ kind: "runtime", title: `runtime-adapter ${adapter.adapterId}`, fact: `RuntimeAdapterExecutionCheckV1 adapter=${adapter.adapterId} runner=${selectedRunner} exit=${result.code} parser_matches=${artifact.parserSignals.reduce((sum, row) => sum + row.matches.length, 0)} ingest=evidence-ledger,knowledge-graph,memory-event`, command: `re_runtime_adapter run ${adapter.adapterId} ${options.target}`, path, verify: `cat ${path}`, confidence: "runtime:adapter-execution adapter_runner_parser_ingest_contract runner_output_parser_must_write_artifact" });
 	return formatRuntimeAdapterExecutionArtifact(artifact, path);
 }
 
 
 // Toolchain domain marker expansion: domain:agent-security domain:malware-analysis.
-// ReLaneSpecialistCommandPackGateV1 closure markers:
+// ReLaneSpecialistCommandPackCheckV1 closure markers:
 // route_to_domain_lane_seed_matrix -> domain_lane_command_pack_markers -> specialist_evidence_analyzer_anchor_matrix -> self_heal_command_fallback_matrix -> proof_exit_bridge_matrix.
 const RE_LANE_SPECIALIST_COMMAND_PACK_MATRIX: ReLaneSpecialistDomainPackV1[] = [
 	{
@@ -32040,7 +32021,7 @@ const RE_LANE_SPECIALIST_COMMAND_PACK_MATRIX: ReLaneSpecialistDomainPackV1[] = [
 	},
 ];
 
-function buildReLaneSpecialistCommandPackGate(domainFilter?: string): ReLaneSpecialistCommandPackGateV1 {
+function buildReLaneSpecialistCommandPackGate(domainFilter?: string): ReLaneSpecialistCommandPackCheckV1 {
 	const selected = domainFilter
 		? RE_LANE_SPECIALIST_COMMAND_PACK_MATRIX.filter((row) => row.domainId === domainFilter || row.domainId.includes(domainFilter))
 		: RE_LANE_SPECIALIST_COMMAND_PACK_MATRIX;
@@ -32056,7 +32037,7 @@ function buildReLaneSpecialistCommandPackGate(domainFilter?: string): ReLaneSpec
 		return { ...row, status: gaps.length ? ("blocked" as const) : ("ready" as const), gaps };
 	});
 	return {
-		kind: "ReLaneSpecialistCommandPackGateV1",
+		kind: "ReLaneSpecialistCommandPackCheckV1",
 		schemaVersion: 1,
 		generatedAt: new Date().toISOString(),
 		runtime: "runtime:re_lane-specialist-command-pack",
@@ -32080,10 +32061,10 @@ function buildReLaneSpecialistCommandPackGate(domainFilter?: string): ReLaneSpec
 	};
 }
 
-function formatReLaneSpecialistCommandPackGate(report: ReLaneSpecialistCommandPackGateV1): string {
+function formatReLaneSpecialistCommandPackGate(report: ReLaneSpecialistCommandPackCheckV1): string {
 	return [
 		"relane_specialist_command_pack:",
-		"ReLaneSpecialistCommandPackGateV1: true",
+		"ReLaneSpecialistCommandPackCheckV1: true",
 		`runtime: ${report.runtime}`,
 		`coverage: domains=${report.domainCount} ready=${report.readyDomainCount}`,
 		`closure: route=${report.closure.allDomainsHaveRouteMatchers} lanes=${report.closure.allDomainsHaveLaneSeeds} command_pack=${report.closure.allDomainsHaveCommandPacks} analyzer=${report.closure.allDomainsHaveAnalyzerAnchors} self_heal=${report.closure.allDomainsHaveSelfHeal} proof_exit=${report.closure.allDomainsHaveProofExitBridge}`,
@@ -32563,7 +32544,7 @@ function writeDomainProofExitClosureArtifact(report: DomainProofExitClosureV1): 
 		verify: `cat ${path}`,
 		confidence: "domain proof-exit closure bound to ToolchainDomainCapabilityV1 and runtime artifacts",
 	});
-	updateMissionGate("minimal_path_proven", report.status === "passed" ? "done" : report.matchedProofExits.length ? "pending" : "blocked", `DomainProofExitClosureV1 ${report.status}`);
+	updateMissionCheckpoint("minimal_path_proven", report.status === "passed" ? "done" : report.matchedProofExits.length ? "pending" : "blocked", `DomainProofExitClosureV1 ${report.status}`);
 	return path;
 }
 
@@ -33083,7 +33064,7 @@ async function installBootstrapTools(pi: ExtensionAPI, tools: string[]): Promise
 	].join("\n");
 	const result = await pi.exec("bash", ["-lc", script], { timeout: 600000 });
 	const refreshed = await refreshToolIndex(pi);
-	updateMissionGate("tool_index_checked", result.code === 0 ? "done" : "blocked", `bootstrap exit=${result.code}`);
+	updateMissionCheckpoint("tool_index_checked", result.code === 0 ? "done" : "blocked", `bootstrap exit=${result.code}`);
 	return [
 		formatBootstrapPlan(plan),
 		"",
@@ -33357,7 +33338,7 @@ function makeSelfReview(stats: ReconStats): string {
 	return [
 		"<self_review>",
 		`目标推进证据：${stats.lastRoute ? formatRoute(stats.lastRoute) : "未记录路由"}; tool_calls=${stats.calls}; bash_calls=${stats.bashCalls}; failures=${stats.failures}`,
-		`任务黑板：mission=${stats.currentMissionId ?? "none"}; gates=${missionGateSummary()}`,
+		`任务黑板：mission=${stats.currentMissionId ?? "none"}; checkpoints=${missionCheckSummary()}`,
 		`重复/死循环检查：last_commands=${stats.lastCommands.slice(-3).join(" | ") || "none"}; repeated=${stats.repeatedCommandCount}`,
 		"上个错误解释：如 failures 增长，先解释 stderr/exit code，再换路线。",
 		"下一条路线：被动证据不足→补映射；静态卡住→动态/trace/hook；源码与运行时冲突→信运行时。",
@@ -33846,7 +33827,7 @@ function buildMemoryStoreVerificationUnlocked(options: { write?: boolean } = {})
 				: storeGrade === "blocked"
 					? ["inspect memory/events.jsonl parse/hash-chain errors before appending", "restore from memory/store-snapshot.json if needed"]
 					: ["re_memory snapshot"],
-		requiredGates: [
+		requiredChecks: [
 			"memory_store_lock_acquired",
 			"hash_chain_verified_before_append",
 			"case_memory_rebuilt_from_events",
@@ -33981,8 +33962,8 @@ function formatMemoryStoreVerification(report: MemoryStoreVerificationV1): strin
 		`transaction_dir=${report.transactionDir}`,
 		`store_report=${report.storeReportPath}`,
 		`snapshot=${report.snapshotPath}`,
-		"required_gates:",
-		...report.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 		"errors:",
 		...(report.errors.length ? report.errors.map((error) => `- ${error}`) : ["- none"]),
 		"repair_commands:",
@@ -34419,7 +34400,7 @@ function appendMemoryEventTransaction(input: MemoryEventInput): {
 function appendMemoryEvent(input: MemoryEventInput): MemoryEventV1 {
 	ensureReconStorage();
 	const { event } = appendMemoryEventTransaction(input);
-	updateMissionGate("memory_or_evolution_written", "done", `memory_event=${event.id} case=${event.caseSignature}`);
+	updateMissionCheckpoint("memory_or_evolution_written", "done", `memory_event=${event.id} case=${event.caseSignature}`);
 	recordMemoryDepositionFromMemoryEvent(event);
 	return event;
 }
@@ -34805,7 +34786,7 @@ function buildMemoryDepositionReport(options: { write?: boolean } = {}): MemoryD
 		recentEvents: events.slice(-12),
 		pendingEventIds: pending.map((event) => event.id).slice(0, 80),
 		blockedEventIds: blocked.map((event) => event.id).slice(0, 80),
-		requiredGates: [
+		requiredChecks: [
 			"MemoryDepositionEngineV7",
 			"runtime_step_event_bus",
 			"post_tool_writeback_autocapture",
@@ -34862,8 +34843,8 @@ function formatMemoryDepositionReport(report = buildMemoryDepositionReport()): s
 			: ["- none"]),
 		"next_commands:",
 		...report.nextCommands.map((command) => `- ${command}`),
-		"required_gates:",
-		...report.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 	].join("\n");
 }
 
@@ -35146,7 +35127,7 @@ function buildMemoryExperienceReport(options: { write?: boolean; route?: string;
 					: claim.status === "quarantined" || claim.status === "conflicted"
 						? "quarantine"
 						: "retain";
-		const gate: MemoryExperiencePromotionRowV8["gate"] = claim.contradictionEventIds.length
+		const check: MemoryExperiencePromotionRowV8["check"] = claim.contradictionEventIds.length
 			? "contradiction"
 			: claim.evidenceRefs.some((artifact) => artifact.sha256)
 				? "artifact_sha256"
@@ -35164,7 +35145,7 @@ function buildMemoryExperienceReport(options: { write?: boolean; route?: string;
 			claimId: claim.id,
 			decision,
 			reason: claim.blockers.length ? claim.blockers.join(";") : `status=${claim.status} confidence=${claim.confidence}`,
-			gate,
+			check,
 			evidenceRefs: claim.evidenceRefs,
 		};
 		return { ...base, entryHash: memoryExperiencePromotionHash({ ...base, entryHash: "" }) };
@@ -35191,7 +35172,7 @@ function buildMemoryExperienceReport(options: { write?: boolean; route?: string;
 		MemoryExperienceEngineV8: true,
 		episode_model_v8: true,
 		structured_claim_extraction: true,
-		lesson_promotion_gate: true,
+		lesson_promotion_check: true,
 		contradiction_resolution: true,
 		usefulness_backprop: true,
 		reportPath: memoryExperienceReportPath(),
@@ -35218,11 +35199,11 @@ function buildMemoryExperienceReport(options: { write?: boolean; route?: string;
 		recentEpisodes: episodes.slice(-12),
 		recentClaims: claims.slice(-12),
 		recentLessons: lessons.slice(-12),
-		requiredGates: [
+		requiredChecks: [
 			"MemoryExperienceEngineV8",
 			"episode_model_v8",
 			"structured_claim_extraction",
-			"lesson_promotion_gate",
+			"lesson_promotion_check",
 			"contradiction_resolution",
 			"usefulness_backprop",
 			"experience_report_in_context_pack",
@@ -35232,7 +35213,7 @@ function buildMemoryExperienceReport(options: { write?: boolean; route?: string;
 			MemoryExperienceEngineV8: true,
 			episodeModel: true,
 			structuredClaimExtraction: true,
-			lessonPromotionGate: true,
+			lessonPromotionCheck: true,
 			contradictionResolution: true,
 			usefulnessBackprop: true,
 			scopeSafeInjectionOnly: true,
@@ -35273,8 +35254,8 @@ function buildMemoryExperienceReport(options: { write?: boolean; route?: string;
 				"## Avoid Commands / Failure Signatures",
 				...(avoidCommands.length ? avoidCommands.map((command) => `- ${command}`) : ["- none"]),
 				"",
-				"## Required Gates",
-				...report.requiredGates.map((gate) => `- ${gate}`),
+				"## Required Checks",
+				...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 				"",
 			].join("\n"),
 		);
@@ -35289,7 +35270,7 @@ function formatMemoryExperienceReport(report = buildMemoryExperienceReport()): s
 		`MemoryExperienceEngineV8=${report.MemoryExperienceEngineV8}`,
 		`episode_model_v8=${report.episode_model_v8}`,
 		`structured_claim_extraction=${report.structured_claim_extraction}`,
-		`lesson_promotion_gate=${report.lesson_promotion_gate}`,
+		`lesson_promotion_check=${report.lesson_promotion_check}`,
 		`contradiction_resolution=${report.contradiction_resolution}`,
 		`usefulness_backprop=${report.usefulness_backprop}`,
 		`status=${report.status}`,
@@ -35310,8 +35291,8 @@ function formatMemoryExperienceReport(report = buildMemoryExperienceReport()): s
 		...(report.recentLessons.length ? report.recentLessons.map((lesson) => `- ${lesson.action} claim=${lesson.claimId} ${truncateMiddle(lesson.lesson, 180)}`) : ["- none"]),
 		"next_commands:",
 		...report.nextCommands.map((command) => `- ${command}`),
-		"required_gates:",
-		...report.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 	].join("\n");
 }
 
@@ -35376,7 +35357,7 @@ function memorySkillCapsuleLifecycleFromClaim(status?: MemoryExperienceClaimStat
 	return "candidate";
 }
 
-function memorySkillCapsulePromotionGate(input: { evidenceRefs?: MemoryArtifactHash[]; lifecycle?: MemorySkillCapsuleLifecycleV9; promotionReady?: boolean; score?: number }): MemorySkillCapsulePromotionGateV9 {
+function memorySkillCapsulePromotionCheck(input: { evidenceRefs?: MemoryArtifactHash[]; lifecycle?: MemorySkillCapsuleLifecycleV9; promotionReady?: boolean; score?: number }): MemorySkillCapsulePromotionCheckV9 {
 	if (input.evidenceRefs?.some((artifact) => artifact.sha256)) return "artifact_sha256";
 	if (input.promotionReady) return "experience_promotion";
 	if (input.lifecycle === "promoted") return "replay_or_verifier";
@@ -35441,7 +35422,7 @@ function buildMemorySkillCapsuleReport(options: { route?: string; target?: strin
 				workerRoutingHints: [],
 				evidenceRefs,
 				score,
-				promotionGate: memorySkillCapsulePromotionGate({ evidenceRefs, lifecycle, promotionReady: claim?.promotionReady, score }),
+				promotionCheck: memorySkillCapsulePromotionCheck({ evidenceRefs, lifecycle, promotionReady: claim?.promotionReady, score }),
 				usage: { reuseCount: lesson.backprop.reuseCount, successCount: lesson.action === "reuse" ? 1 : 0, failureCount: lesson.backprop.failureCount, lastUsedAt: lesson.backprop.lastUsefulAt, usefulnessScore: score },
 				injection: {
 					operatorPromptSnippet: truncateMiddle(`Use skill capsule ${skillType}: ${lesson.lesson}`, 360),
@@ -35479,7 +35460,7 @@ function buildMemorySkillCapsuleReport(options: { route?: string; target?: strin
 				workerRoutingHints,
 				evidenceRefs,
 				score,
-				promotionGate: memorySkillCapsulePromotionGate({ evidenceRefs, lifecycle, score }),
+				promotionCheck: memorySkillCapsulePromotionCheck({ evidenceRefs, lifecycle, score }),
 				usage: { reuseCount: pattern.sourceEventIds.length, successCount: lifecycle === "promoted" ? 1 : 0, failureCount: lifecycle === "demoted" || lifecycle === "quarantined" ? 1 : 0, lastUsedAt: generatedAt, usefulnessScore: score },
 				injection: {
 					operatorPromptSnippet: truncateMiddle(`Use distilled ${pattern.patternType} skill for ${pattern.caseSignature}: ${pattern.summary}`, 360),
@@ -35509,7 +35490,7 @@ function buildMemorySkillCapsuleReport(options: { route?: string; target?: strin
 		generatedAt,
 		MemorySkillCapsuleV9: true,
 		skill_capsule_assetization: true,
-		verified_skill_promotion_gate: true,
+		verified_skill_promotion_check: true,
 		operator_skill_injection: true,
 		reportPath: memorySkillCapsuleReportPath(),
 		capsuleLedgerPath: memorySkillCapsuleLedgerPath(),
@@ -35527,10 +35508,10 @@ function buildMemorySkillCapsuleReport(options: { route?: string; target?: strin
 		workerRoutingHints,
 		status,
 		recentCapsules: deduped.slice(0, 24),
-		requiredGates: [
+		requiredChecks: [
 			"MemorySkillCapsuleV9",
 			"skill_capsule_assetization",
-			"verified_skill_promotion_gate",
+			"verified_skill_promotion_check",
 			"operator_skill_injection",
 			"memory_skill_capsules_in_context_pack",
 			"experience_to_skill_capsule",
@@ -35540,7 +35521,7 @@ function buildMemorySkillCapsuleReport(options: { route?: string; target?: strin
 			MemorySkillCapsuleV9: true,
 			experienceToSkillCapsule: true,
 			distilledPatternToSkillCapsule: true,
-			verifiedPromotionGate: true,
+			verifiedPromotionCheck: true,
 			operatorInjectionOnlyPromotedOrCandidate: true,
 		},
 		nextCommands: uniqueNonEmpty(
@@ -35569,7 +35550,7 @@ function buildMemorySkillCapsuleReport(options: { route?: string; target?: strin
 				"",
 				"## Capsules",
 				...(deduped.length
-					? deduped.slice(0, 160).map((capsule) => `- id=${capsule.id} lifecycle=${capsule.lifecycle} type=${capsule.skillType} score=${capsule.score.toFixed(2)} route=${capsule.route} gate=${capsule.promotionGate} next=${capsule.injection.nextActionCommands.slice(0, 3).join(" ; ") || "none"}`)
+					? deduped.slice(0, 160).map((capsule) => `- id=${capsule.id} lifecycle=${capsule.lifecycle} type=${capsule.skillType} score=${capsule.score.toFixed(2)} route=${capsule.route} checkpoint=${capsule.promotionCheck} next=${capsule.injection.nextActionCommands.slice(0, 3).join(" ; ") || "none"}`)
 					: ["- none"]),
 				"",
 				"## Operator Injection Commands",
@@ -35578,8 +35559,8 @@ function buildMemorySkillCapsuleReport(options: { route?: string; target?: strin
 				"## Verifier Commands",
 				...(verifierCommands.length ? verifierCommands.map((command) => `- ${command}`) : ["- none"]),
 				"",
-				"## Required Gates",
-				...report.requiredGates.map((gate) => `- ${gate}`),
+				"## Required Checks",
+				...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 				"",
 			].join("\n"),
 		);
@@ -35592,7 +35573,7 @@ function formatMemorySkillCapsules(report = buildMemorySkillCapsuleReport()): st
 		"memory_skill_capsule_v9:",
 		`MemorySkillCapsuleV9=${report.MemorySkillCapsuleV9}`,
 		`skill_capsule_assetization=${report.skill_capsule_assetization}`,
-		`verified_skill_promotion_gate=${report.verified_skill_promotion_gate}`,
+		`verified_skill_promotion_check=${report.verified_skill_promotion_check}`,
 		`operator_skill_injection=${report.operator_skill_injection}`,
 		`status=${report.status}`,
 		`capsules=${report.capsuleCount}`,
@@ -35612,8 +35593,8 @@ function formatMemorySkillCapsules(report = buildMemorySkillCapsuleReport()): st
 		...(report.recentCapsules.length ? report.recentCapsules.slice(0, 12).map((capsule) => `- ${capsule.lifecycle} ${capsule.skillType} score=${capsule.score.toFixed(2)} id=${capsule.id}`) : ["- none"]),
 		"next_commands:",
 		...report.nextCommands.map((command) => `- ${command}`),
-		"required_gates:",
-		...report.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 	].join("\n");
 }
 
@@ -35646,7 +35627,7 @@ function memoryDistillProviderConfigV10(): MemoryDistillProviderV10 {
 		apiKeyEnv: needsRemote ? apiKeyEnv : undefined,
 		timeoutMs: Number(process.env.REPI_MEMORY_DISTILL_TIMEOUT_MS) || 8000,
 		fallbackReason,
-		requiredGates: ["MemoryDistillPromotionV10", "provider_distill_contract", "distill_api_key_env_ref_only", "remote_distill_requires_explicit_allow", "local_distill_fallback"],
+		requiredChecks: ["MemoryDistillPromotionV10", "provider_distill_contract", "distill_api_key_env_ref_only", "remote_distill_requires_explicit_allow", "local_distill_fallback"],
 	};
 }
 
@@ -35675,7 +35656,7 @@ function memoryDistillDecision(input: { confidence: number; hasEvidence: boolean
 	if (input.hasConflict || input.sourceLifecycle === "quarantined") return { decision: "quarantine", reason: "conflict_or_quarantined_source" };
 	if (input.sourceLifecycle === "demoted") return { decision: "demote", reason: "source_lifecycle_demoted" };
 	if (input.hasEvidence && (input.hasVerifier || input.confidence >= 0.72)) return { decision: "promote", reason: "artifact_or_verifier_backed_high_confidence" };
-	if (input.confidence >= 0.62) return { decision: "retain", reason: "candidate_confidence_without_verifier_gate" };
+	if (input.confidence >= 0.62) return { decision: "retain", reason: "candidate_confidence_without_verifier_check" };
 	return { decision: "demote", reason: "low_confidence_distill_candidate" };
 }
 
@@ -35690,7 +35671,7 @@ function buildMemoryDistillPromotionReport(options: { route?: string; target?: s
 		const artifactSnippet = memoryDistillSnippetFromArtifacts(capsule.evidenceRefs, 500);
 		const claim = uniqueNonEmpty([capsule.injection.operatorPromptSnippet, artifactSnippet, capsule.preconditions.join(" | ")], 3).join("\n");
 		const confidence = clamp01(capsule.score + (capsule.evidenceRefs.some((ref) => ref.sha256) ? 0.06 : 0), capsule.score);
-		const hasVerifier = capsule.verifierCommands.length > 0 || capsule.promotionGate === "replay_or_verifier" || capsule.promotionGate === "artifact_sha256";
+		const hasVerifier = capsule.verifierCommands.length > 0 || capsule.promotionCheck === "replay_or_verifier" || capsule.promotionCheck === "artifact_sha256";
 		const decision = memoryDistillDecision({ confidence, hasEvidence: capsule.evidenceRefs.some((ref) => ref.sha256), sourceLifecycle: capsule.lifecycle, hasVerifier, hasConflict: false });
 		candidates.push(memoryDistillCandidateFrom({
 			id: `mdp:${sha256Text(`skill:${capsule.id}:${capsule.entryHash}`).slice(0, 24)}`,
@@ -35758,7 +35739,7 @@ function buildMemoryDistillPromotionReport(options: { route?: string; target?: s
 		MemoryDistillPromotionV10: true,
 		provider_distill_contract: true,
 		artifact_to_claim_distillation: true,
-		verifier_backed_promotion_gate: true,
+		verifier_backed_promotion_check: true,
 		skill_capsule_promotion_writeback: true,
 		reportPath: memoryDistillPromotionReportPath(),
 		candidateLedgerPath: memoryDistillPromotionCandidateLedgerPath(),
@@ -35776,8 +35757,8 @@ function buildMemoryDistillPromotionReport(options: { route?: string; target?: s
 		avoidCommands,
 		status,
 		recentCandidates: deduped.slice(0, 32),
-		requiredGates: ["MemoryDistillPromotionV10", "provider_distill_contract", "artifact_to_claim_distillation", "verifier_backed_promotion_gate", "skill_capsule_promotion_writeback", "memory_distill_promotion_in_context_pack", "memory_distill_orchestrator_step"],
-		policy: { MemoryDistillPromotionV10: true, providerContractEnvRefOnly: true, localFallbackDeterministic: true, artifactClaimDistillation: true, verifierBackedPromotionGate: true, skillCapsulePromotionWriteback: true },
+		requiredChecks: ["MemoryDistillPromotionV10", "provider_distill_contract", "artifact_to_claim_distillation", "verifier_backed_promotion_check", "skill_capsule_promotion_writeback", "memory_distill_promotion_in_context_pack", "memory_distill_orchestrator_step"],
+		policy: { MemoryDistillPromotionV10: true, providerContractEnvRefOnly: true, localFallbackDeterministic: true, artifactClaimDistillation: true, verifierBackedPromotionCheck: true, skillCapsulePromotionWriteback: true },
 		nextCommands: uniqueNonEmpty([
 			"re_memory distill-promote",
 			operatorInjectionCommands.length ? "re_operator plan # consumes MemoryDistillPromotionV10 promoted commands" : undefined,
@@ -35803,8 +35784,8 @@ function buildMemoryDistillPromotionReport(options: { route?: string; target?: s
 			"## Operator Injection Commands",
 			...(operatorInjectionCommands.length ? operatorInjectionCommands.map((command) => `- ${command}`) : ["- none"]),
 			"",
-			"## Required Gates",
-			...report.requiredGates.map((gate) => `- ${gate}`),
+			"## Required Checks",
+			...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 			"",
 		].join("\n"));
 	}
@@ -35817,7 +35798,7 @@ function formatMemoryDistillPromotion(report = buildMemoryDistillPromotionReport
 		`MemoryDistillPromotionV10=${report.MemoryDistillPromotionV10}`,
 		`provider_distill_contract=${report.provider_distill_contract}`,
 		`artifact_to_claim_distillation=${report.artifact_to_claim_distillation}`,
-		`verifier_backed_promotion_gate=${report.verifier_backed_promotion_gate}`,
+		`verifier_backed_promotion_check=${report.verifier_backed_promotion_check}`,
 		`skill_capsule_promotion_writeback=${report.skill_capsule_promotion_writeback}`,
 		`provider=${report.provider.backend}/${report.provider.model} status=${report.provider.status}`,
 		`status=${report.status}`,
@@ -35836,8 +35817,8 @@ function formatMemoryDistillPromotion(report = buildMemoryDistillPromotionReport
 		...(report.recentCandidates.length ? report.recentCandidates.slice(0, 12).map((candidate) => `- ${candidate.promotionDecision} confidence=${candidate.confidence.toFixed(2)} source=${candidate.sourceType}:${candidate.sourceId}`) : ["- none"]),
 		"next_commands:",
 		...report.nextCommands.map((command) => `- ${command}`),
-		"required_gates:",
-		...report.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 	].join("\n");
 }
 
@@ -36117,7 +36098,7 @@ function buildMemoryQualityLedgerReport(options: {
 		avoidCommands,
 		status,
 		rows: rows.slice(0, 80),
-		requiredGates: [
+		requiredChecks: [
 			"MemoryQualityLedgerV11",
 			"active_memory_policy",
 			"quality_score_feedback_loop",
@@ -36174,8 +36155,8 @@ function buildMemoryQualityLedgerReport(options: {
 			"## Pending Feedback",
 			...(report.requiredFeedbackEventIds.length ? report.requiredFeedbackEventIds.map((id) => `- ${id}`) : ["- none"]),
 			"",
-			"## Required Gates",
-			...report.requiredGates.map((gate) => `- ${gate}`),
+			"## Required Checks",
+			...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 			"",
 		].join("\n"));
 	}
@@ -36215,8 +36196,8 @@ function formatMemoryQualityLedger(report = buildMemoryQualityLedgerReport()): s
 			: ["- none"]),
 		"next_commands:",
 		...report.nextCommands.map((command) => `- ${command}`),
-		"required_gates:",
-		...report.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 	].join("\n");
 }
 
@@ -36486,7 +36467,7 @@ function buildMemoryReplayEvaluatorReport(options: {
 		avoidCommands,
 		status,
 		rows: rows.slice(0, 80),
-		requiredGates: [
+		requiredChecks: [
 			"MemoryReplayEvaluatorV12",
 			"memory_ab_replay",
 			"causal_attribution_signal",
@@ -36540,8 +36521,8 @@ function buildMemoryReplayEvaluatorReport(options: {
 			"## Attribution Events",
 			...(report.attributionEventIds.length ? report.attributionEventIds.map((id) => `- ${id}`) : ["- none"]),
 			"",
-			"## Required Gates",
-			...report.requiredGates.map((gate) => `- ${gate}`),
+			"## Required Checks",
+			...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 			"",
 		].join("\n"));
 	}
@@ -36580,8 +36561,8 @@ function formatMemoryReplayEvaluator(report = buildMemoryReplayEvaluatorReport()
 			: ["- none"]),
 		"next_commands:",
 		...report.nextCommands.map((command) => `- ${command}`),
-		"required_gates:",
-		...report.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 	].join("\n");
 }
 
@@ -36719,7 +36700,7 @@ function buildMemoryStrategyCapsuleReport(options: {
 				MemoryStrategyCapsuleV13: true,
 				executable_strategy_capsule: true,
 				replay_backed_strategy_promotion: true,
-				strategy_quality_gate: true,
+				strategy_quality_check: true,
 				caseSignature: sourceEvents[0]?.caseSignature ?? row.scenarioId,
 				route,
 				targetScope: targetScope || "workspace",
@@ -36784,7 +36765,7 @@ function buildMemoryStrategyCapsuleReport(options: {
 		MemoryStrategyCapsuleV13: true,
 		executable_strategy_capsule: true,
 		replay_backed_strategy_promotion: true,
-		strategy_quality_gate: true,
+		strategy_quality_check: true,
 		reportPath: memoryStrategyCapsuleReportPath(),
 		capsuleLedgerPath: memoryStrategyCapsuleLedgerPath(),
 		strategyBookPath: memoryStrategyCapsuleBookPath(),
@@ -36803,11 +36784,11 @@ function buildMemoryStrategyCapsuleReport(options: {
 		workerRoutingHints,
 		status,
 		recentCapsules: deduped.slice(0, 48),
-		requiredGates: [
+		requiredChecks: [
 			"MemoryStrategyCapsuleV13",
 			"executable_strategy_capsule",
 			"replay_backed_strategy_promotion",
-			"strategy_quality_gate",
+			"strategy_quality_check",
 			"strategy_capsule_in_context_pack",
 			"strategy_capsule_orchestrator_step",
 			"strategy_capsule_operator_injection",
@@ -36815,7 +36796,7 @@ function buildMemoryStrategyCapsuleReport(options: {
 		policy: {
 			MemoryStrategyCapsuleV13: true,
 			replayBackedPromotion: true,
-			qualityGateRequired: true,
+			qualityCheckRequired: true,
 			executableCommandsRequired: true,
 			verifierAndFallbackRequired: true,
 		},
@@ -36841,7 +36822,7 @@ function buildMemoryStrategyCapsuleReport(options: {
 				"MemoryStrategyCapsuleV13: true",
 				"executable_strategy_capsule: true",
 				"replay_backed_strategy_promotion: true",
-				"strategy_quality_gate: true",
+				"strategy_quality_check: true",
 				`generated_at: ${report.generatedAt}`,
 				`status: ${report.status}`,
 				"",
@@ -36853,8 +36834,8 @@ function buildMemoryStrategyCapsuleReport(options: {
 				"## Avoid / Demoted Commands",
 				...(avoidCommands.length ? avoidCommands.map((command) => `- ${command}`) : ["- none"]),
 				"",
-				"## Required Gates",
-				...report.requiredGates.map((gate) => `- ${gate}`),
+				"## Required Checks",
+				...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 				"",
 			].join("\n"),
 		);
@@ -36868,7 +36849,7 @@ function formatMemoryStrategyCapsules(report = buildMemoryStrategyCapsuleReport(
 		`MemoryStrategyCapsuleV13=${report.MemoryStrategyCapsuleV13}`,
 		`executable_strategy_capsule=${report.executable_strategy_capsule}`,
 		`replay_backed_strategy_promotion=${report.replay_backed_strategy_promotion}`,
-		`strategy_quality_gate=${report.strategy_quality_gate}`,
+		`strategy_quality_check=${report.strategy_quality_check}`,
 		`status=${report.status}`,
 		`capsules=${report.capsuleCount}`,
 		`promoted=${report.promotedCapsuleIds.length}`,
@@ -36888,8 +36869,8 @@ function formatMemoryStrategyCapsules(report = buildMemoryStrategyCapsuleReport(
 			: ["- none"]),
 		"next_commands:",
 		...report.nextCommands.map((command) => `- ${command}`),
-		"required_gates:",
-		...report.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 	].join("\n");
 }
 
@@ -37155,7 +37136,7 @@ function buildMemoryActiveKernelReport(options: {
 		scopeLocks: uniqueNonEmpty(activeDecisions.map((decision) => `${decision.route}:${decision.targetScope}`), 24),
 		feedbackWriteback: "Every active kernel injected/reused decision must append active_kernel_feedback with event id, outcome, artifact sha256, verifier result, and score delta.",
 		compactResumeHints,
-		requiredGates: [
+		requiredChecks: [
 			"MemoryActiveKernelV14",
 			"unified_memory_decision_engine",
 			"active_recall_scheduler",
@@ -37210,7 +37191,7 @@ function buildMemoryActiveKernelReport(options: {
 		status,
 		decisions: sorted,
 		activeInjectionPack,
-		requiredGates: activeInjectionPack.requiredGates,
+		requiredChecks: activeInjectionPack.requiredChecks,
 		policy: {
 			MemoryActiveKernelV14: true,
 			unifiedMemoryDecisionEngine: true,
@@ -37249,8 +37230,8 @@ function buildMemoryActiveKernelReport(options: {
 				? [...byAction("avoid"), ...byAction("quarantine"), ...byAction("expire")].map((decision) => `- ${decision.action} score=${decision.activeScore} source=${decision.source} events=${decision.sourceEventIds.join(",") || "none"} blockers=${decision.blockers.join(",") || "none"}`)
 				: ["- none"]),
 			"",
-			"## Required Gates",
-			...report.requiredGates.map((gate) => `- ${gate}`),
+			"## Required Checks",
+			...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 			"",
 		].join("\n"));
 	}
@@ -37287,8 +37268,8 @@ function formatMemoryActiveKernel(report = buildMemoryActiveKernelReport()): str
 			: ["- none"]),
 		"next_commands:",
 		...report.nextCommands.map((command) => `- ${command}`),
-		"required_gates:",
-		...report.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 	].join("\n");
 }
 
@@ -37619,7 +37600,7 @@ function buildMemoryMaturationRuntimeReport(options: {
 		maturationCoverage,
 		status,
 		rows,
-		requiredGates: ["MemoryMaturationRuntimeV15", "automatic_memory_maturation_pipeline", "tool_result_to_strategy_loop", "closed_loop_writeback", "retention_decay_scheduler", "stale_memory_rehearsal_queue", "usefulness_backprop_to_maturation", "promotion_demotion_replay_backed", "cross_session_maturation_ready"],
+		requiredChecks: ["MemoryMaturationRuntimeV15", "automatic_memory_maturation_pipeline", "tool_result_to_strategy_loop", "closed_loop_writeback", "retention_decay_scheduler", "stale_memory_rehearsal_queue", "usefulness_backprop_to_maturation", "promotion_demotion_replay_backed", "cross_session_maturation_ready"],
 		policy: { MemoryMaturationRuntimeV15: true, automaticMemoryMaturationPipeline: true, toolResultToStrategyLoop: true, closedLoopWriteback: true, retentionDecayScheduler: true, staleMemoryRehearsalQueue: true, usefulnessBackpropToMaturation: true, promotionDemotionReplayBacked: true, crossSessionMaturationReady: true },
 		nextCommands: uniqueNonEmpty(["re_memory mature", operatorCommands.length ? "re_operator plan # consume matured memory commands" : undefined, verifierCommands.length ? "re_verifier matrix # verify matured claims" : undefined, feedbackCommands.length ? "re_memory feedback # close maturation loop" : undefined, retentionCommands.length ? "re_memory replay # rehearse stale/decayed memory" : undefined, replayRequiredEventIds.length ? "re_memory replay # promote only replay-improving memory" : undefined, "re_context pack"], 14),
 	};
@@ -37649,8 +37630,8 @@ function buildMemoryMaturationRuntimeReport(options: {
 			"## Retention commands",
 			...(retentionCommands.length ? retentionCommands.slice(0, 20).map((command) => `- ${command}`) : ["- none"]),
 			"",
-			"## Required Gates",
-			...report.requiredGates.map((gate) => `- ${gate}`),
+			"## Required Checks",
+			...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 			"",
 		].join("\n"));
 	}
@@ -37693,8 +37674,8 @@ function formatMemoryMaturationRuntime(report = buildMemoryMaturationRuntimeRepo
 		...(report.rows.length ? report.rows.slice(0, 12).map((row) => `- ${row.action}/${row.retentionAction} maturity=${row.maturityScore} retention=${row.retentionScore} stale=${row.stalenessDays}d stages=${row.stagePath.join("->")} events=${row.sourceEventIds.join(",") || "none"}`) : ["- none"]),
 		"next_commands:",
 		...report.nextCommands.map((command) => `- ${command}`),
-		"required_gates:",
-		...report.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 	].join("\n");
 }
 
@@ -37813,7 +37794,7 @@ function memoryEmbeddingProviderConfig(overrides?: Partial<MemoryEmbeddingProvid
 		apiKeyEnv: requestedBackend === "openai-compatible" ? apiKeyEnv : undefined,
 		timeoutMs,
 		fallbackReason,
-		requiredGates: MEMORY_EMBEDDING_PROVIDER_GATE_MARKERS,
+		requiredChecks: MEMORY_EMBEDDING_PROVIDER_GATE_MARKERS,
 		...overrides,
 	};
 }
@@ -38104,7 +38085,7 @@ function buildMemoryVectorIndex(events = readMemoryEvents()): MemoryVectorIndexV
 		entries: events.map((event, index) =>
 			memoryVectorEntryFromEvent(event, embedding.provider, embedding.vectors[index] ?? memoryVectorForText(memoryTextForSearch(event))),
 		),
-		requiredGates: [
+		requiredChecks: [
 			"MemoryVectorIndexV1",
 			"MemoryEmbeddingProviderV1",
 			"deterministic_local_hash_embedding",
@@ -38172,7 +38153,7 @@ function searchMemoryVectors(query?: string, options?: { route?: string; target?
 		embeddingProvider: queryEmbedding.provider,
 		dimensions: queryEmbedding.provider.dimensions,
 		hits,
-		requiredGates: [
+		requiredChecks: [
 			"MemoryVectorSearchV1",
 			"MemoryEmbeddingProviderV1",
 			"vector_index_built_before_search",
@@ -38208,8 +38189,8 @@ function formatMemoryVectorSearch(report = searchMemoryVectors("")): string {
 						`- event=${hit.eventId} score=${hit.score.toFixed(2)} cosine=${hit.cosine.toFixed(3)} quality=${hit.qualityWeight.toFixed(2)} case=${hit.caseSignature} reasons=${hit.reasons.join(",") || "none"} commands=${hit.commands.length}`,
 				)
 			: ["- none"]),
-		"required_gates:",
-		...report.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 	].join("\n");
 }
 
@@ -38228,8 +38209,8 @@ function formatMemoryEmbeddingProvider(provider = memoryEmbeddingProviderConfig(
 		`endpoint=${provider.endpoint ?? "none"}`,
 		`api_key_env=${provider.apiKeyEnv ?? "none"}`,
 		`fallback_reason=${provider.fallbackReason ?? "none"}`,
-		"required_gates:",
-		...provider.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...provider.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 	].join("\n");
 }
 
@@ -38433,8 +38414,8 @@ function formatMemoryStatusBoard(report: MemoryUxDashboardV16): string {
 		"governance_commands:",
 		...report.governanceCommands.map((command) => `- ${command}`),
 		"",
-		"required_gates:",
-		...report.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 		"",
 	].join("\n");
 }
@@ -38538,7 +38519,7 @@ function buildMemoryUxDashboard(options: { query?: string; route?: string; targe
 		},
 		operatorCommands,
 		governanceCommands,
-		requiredGates: [
+		requiredChecks: [
 			"MemoryUxDashboardV16",
 			"user_visible_memory_status",
 			"recall_explainability",
@@ -38587,8 +38568,8 @@ function formatMemoryUxDashboard(report: MemoryUxDashboardV16): string {
 		...(report.operatorCommands.length ? report.operatorCommands.map((command) => `- ${command}`) : ["- none"]),
 		"governance_commands:",
 		...report.governanceCommands.map((command) => `- ${command}`),
-		"required_gates:",
-		...report.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 	].join("\n");
 }
 
@@ -38798,7 +38779,7 @@ function evaluateMemoryUsefulness(
 		scenarioCount,
 		scenarios: results,
 		aggregate,
-		requiredGates: [
+		requiredChecks: [
 			"hit_at_1_or_warn",
 			"hit_at_k_required",
 			"forbidden_memory_not_in_top_k",
@@ -38808,7 +38789,7 @@ function evaluateMemoryUsefulness(
 		reportPath: memoryUsefulnessEvalReportPath(),
 		recommendations:
 			aggregate.status === "pass"
-				? ["keep re_memory eval in release gates after memory schema changes"]
+				? ["keep re_memory eval in release checkpoints after memory schema changes"]
 				: [
 						"run re_memory verify and re_memory repair-index before trusting recall",
 						"inspect forbiddenHitIds for cross-route or failure-dominant pollution",
@@ -38836,8 +38817,8 @@ function formatMemoryUsefulnessEval(report = evaluateMemoryUsefulness()): string
 						`- id=${scenario.id} status=${scenario.status} expected_rank=${scenario.expectedRank ?? "missing"} topK=${scenario.topK} forbidden_hits=${scenario.forbiddenHitIds.join(",") || "none"} query=${truncateMiddle(scenario.query, 140)}`,
 				)
 			: ["- none"]),
-		"required_gates:",
-		...report.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 		"recommendations:",
 		...report.recommendations.map((item) => `- ${item}`),
 	].join("\n");
@@ -39135,7 +39116,7 @@ function memoryCommandFingerprint(command: string, target?: string): string {
 }
 
 function memoryVerifierRefs(event: MemoryEventV1): string[] {
-	const commandRefs = event.commands.filter((command) => /\bre_(?:verifier|replayer|proof_loop|complete)\b|\bnpm\s+run\s+gate:|\bpytest\b|\bvitest\b/i.test(command));
+	const commandRefs = event.commands.filter((command) => /\bre_(?:verifier|replayer|proof_loop|complete)\b|\bnpm\s+run\s+check:|\bpytest\b|\bvitest\b/i.test(command));
 	return uniqueNonEmpty(
 		[
 			...(event.quality.replayVerified ? [`replay_verified:event=${event.id}`] : []),
@@ -39322,7 +39303,7 @@ function buildMemorySemanticIndex(options?: { route?: string; target?: string; n
 		entries: injectable,
 		commands,
 		verifierRules,
-		requiredGates: [
+		requiredChecks: [
 			"artifact_sha256_required",
 			"promotion_requires_verifier_or_replay",
 			"quarantine_blocks_injection",
@@ -39387,8 +39368,8 @@ function formatMemorySedimentation(report = buildMemorySemanticIndex()): string 
 		...(report.contradictions.length
 			? report.contradictions.map((entry) => `- case=${entry.caseSignature} status=${entry.status} reasons=${entry.reasons.join(",")}`)
 			: ["- none"]),
-		"required_gates:",
-		...report.injectionPacket.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.injectionPacket.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 	].join("\n");
 }
 
@@ -39516,7 +39497,7 @@ function buildMemoryFeedbackClosureReport(options?: {
 		demotionRequiredEventIds: rows.filter((row) => row.feedbackStatus === "demoted").map((row) => row.eventId),
 		pendingFeedbackEventIds,
 		orphanFeedbackEventIds,
-		requiredGates: [
+		requiredChecks: [
 			"MemoryFeedbackClosureV1",
 			"feedback_event_links_source_event",
 			"success_feedback_promotes",
@@ -39553,8 +39534,8 @@ function formatMemoryFeedbackClosure(report = buildMemoryFeedbackClosureReport()
 							`- event=${row.eventId} status=${row.feedbackStatus} injection=${row.injectionAction} grade=${row.injectionGrade.toFixed(1)} feedback=${row.feedbackEventIds.length} blockers=${row.blockers.join(",") || "none"}`,
 					)
 			: ["- none"]),
-		"required_gates:",
-		...report.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 	].join("\n");
 }
 
@@ -39637,7 +39618,7 @@ function buildMemoryScopeIsolationReport(options?: {
 		blockedEventIds: rows.filter((row) => row.verdict === "block").map((row) => row.eventId),
 		warnEventIds: rows.filter((row) => row.verdict === "warn").map((row) => row.eventId),
 		allowedEventIds: rows.filter((row) => row.verdict === "allow").map((row) => row.eventId),
-		requiredGates: [
+		requiredChecks: [
 			"MemoryScopeIsolationV1",
 			"scope_filter_by_mission_session_workspace_target",
 			"cross_session_contamination_negative",
@@ -39676,8 +39657,8 @@ function formatMemoryScopeIsolation(report = buildMemoryScopeIsolationReport()):
 							`- event=${row.eventId} verdict=${row.verdict} action=${row.recommendedAction} reasons=${row.reasons.join(",") || "none"}`,
 					)
 			: ["- none"]),
-		"required_gates:",
-		...report.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 	].join("\n");
 }
 
@@ -39811,7 +39792,7 @@ function buildArtifactScopeFilterReport(options: {
 		warnArtifacts: decisions.filter((row) => row.verdict === "warn").map((row) => row.path),
 		allowedArtifacts: decisions.filter((row) => row.verdict === "allow").map((row) => row.path),
 		decisions,
-		requiredGates: [
+		requiredChecks: [
 			"ArtifactScopeFilterV1",
 			"MemoryScopeIsolationV1",
 			"latest_artifact_side_channel_scope_filter",
@@ -39855,8 +39836,8 @@ function formatArtifactScopeFilter(report: ArtifactScopeFilterReportV1): string 
 							`- kind=${row.artifactKind} verdict=${row.verdict} matched_by=${row.matchedBy} action=${row.recommendedAction} path=${row.path} reasons=${row.reasons.join(",") || "none"}`,
 					)
 			: ["- none"]),
-		"required_gates:",
-		...report.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 	].join("\n");
 }
 
@@ -40063,8 +40044,8 @@ function formatMemorySupervisorBoard(report: MemorySupervisorReportV1): string {
 		...(report.injectionAllowedEventIds.length ? report.injectionAllowedEventIds.map((id) => `- ${id}`) : ["- none"]),
 		"recommended_commands:",
 		...(report.recommendedCommands.length ? report.recommendedCommands.map((command) => `- ${command}`) : ["- none"]),
-		"required_gates:",
-		...report.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 		"",
 	].join("\n");
 }
@@ -40160,7 +40141,7 @@ function superviseMemoryLifecycle(): MemorySupervisorReportV1 {
 		retainQueue,
 		injectionAllowedEventIds: promotionQueue.flatMap((decision) => decision.eventIds).slice(0, 64),
 		recommendedCommands,
-		requiredGates: [
+		requiredChecks: [
 			"MemorySupervisorV1",
 			"store_verify_before_supervision",
 			"sedimentation_before_promotion",
@@ -40218,8 +40199,8 @@ function formatMemorySupervisor(report = superviseMemoryLifecycle()): string {
 			: ["- none"]),
 		"recommended_commands:",
 		...report.recommendedCommands.map((command) => `- ${command}`),
-		"required_gates:",
-		...report.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 	].join("\n");
 }
 
@@ -40464,7 +40445,7 @@ function buildMemoryOrchestratorReport(options: MemoryOrchestratorOptions = {}):
 			reason: `capsules=${skillCapsules.capsuleCount} promoted=${skillCapsules.promotedCapsuleIds.length} candidate=${skillCapsules.candidateCapsuleIds.length} operator_commands=${skillCapsules.operatorInjectionCommands.length}`,
 		}),
 		memoryOrchestratorStep({
-			id: "distill_promotion_provider_gate",
+			id: "distill_promotion_provider_check",
 			phase: "pre-operator",
 			status: distillPromotion.status === "blocked" ? "blocked" : distillPromotion.status === "empty" ? "pending" : distillPromotion.status === "warn" ? "warn" : "pass",
 			title: "MemoryDistillPromotionV10 用 provider 合同蒸馏 artifact/claim 并提升技能",
@@ -40651,7 +40632,7 @@ function buildMemoryOrchestratorReport(options: MemoryOrchestratorOptions = {}):
 		memoryMaturationPromoted: maturation.promotedEventIds.length,
 		memoryMaturationPending: maturation.pendingFeedbackEventIds.length + maturation.replayRequiredEventIds.length,
 		steps: stepRows,
-		requiredGates: [
+		requiredChecks: [
 			"MemoryOrchestratorV6",
 			"mandatory_memory_control_loop",
 			"pre_task_retrieve_before_operator",
@@ -40663,17 +40644,17 @@ function buildMemoryOrchestratorReport(options: MemoryOrchestratorOptions = {}):
 			"MemoryExperienceEngineV8",
 			"episode_model_v8",
 			"structured_claim_extraction",
-			"lesson_promotion_gate",
+			"lesson_promotion_check",
 			"contradiction_resolution",
 			"usefulness_backprop",
 			"MemorySkillCapsuleV9",
 			"skill_capsule_assetization",
-			"verified_skill_promotion_gate",
+			"verified_skill_promotion_check",
 			"operator_skill_injection",
 			"MemoryDistillPromotionV10",
 			"provider_distill_contract",
 			"artifact_to_claim_distillation",
-			"verifier_backed_promotion_gate",
+			"verifier_backed_promotion_check",
 			"skill_capsule_promotion_writeback",
 			"MemoryQualityLedgerV11",
 			"active_memory_policy",
@@ -40689,7 +40670,7 @@ function buildMemoryOrchestratorReport(options: MemoryOrchestratorOptions = {}):
 			"MemoryStrategyCapsuleV13",
 			"executable_strategy_capsule",
 			"replay_backed_strategy_promotion",
-			"strategy_quality_gate",
+			"strategy_quality_check",
 			"strategy_capsule_operator_injection",
 			"MemoryActiveKernelV14",
 			"unified_memory_decision_engine",
@@ -40796,8 +40777,8 @@ function formatMemoryOrchestrator(report = buildMemoryOrchestratorReport()): str
 		...(report.injectionCommands.length ? report.injectionCommands.slice(0, 12).map((command) => `- ${command}`) : ["- none"]),
 		"next_commands:",
 		...(report.nextCommands.length ? report.nextCommands.map((command) => `- ${command}`) : ["- none"]),
-		"required_gates:",
-		...report.requiredGates.map((gate) => `- ${gate}`),
+		"required_checks:",
+		...report.requiredChecks.map((checkpoint) => `- ${checkpoint}`),
 	].join("\n");
 }
 
@@ -40933,7 +40914,7 @@ function appendProofLoopMemoryEvent(proof: ProofLoopArtifact, artifactPath: stri
 			[
 				`Proof loop ${proof.mode}: verdict=${proof.verdict} executed=${proof.executed.length} replay_steps=${proof.replaySteps} specialist_queue=${proof.specialistQueue.length}.`,
 				...proof.evidenceSummary,
-				...proof.gateStatus,
+				...proof.checkStatus,
 			],
 			36,
 		),
@@ -40985,7 +40966,7 @@ function appendCompletionMemoryEvent(
 		task: `completion audit ${audit.mission.task}`,
 		route: audit.mission.route.domain,
 		target: audit.mission.task,
-		domainTags: ["completion", "claim_gate", audit.mission.route.domain],
+		domainTags: ["completion", "claim_check", audit.mission.route.domain],
 		outcome: audit.ready ? "success" : "blocked",
 		lessons: uniqueNonEmpty(
 			[
@@ -41001,7 +40982,7 @@ function appendCompletionMemoryEvent(
 		reuseRules: uniqueNonEmpty(
 			[
 				"Final output must include Outcome / Key Evidence / Verification / Next Step and an evidence block.",
-				audit.ready ? "All completion gates green; promote report scaffold/final answer." : "Blocked completion must return to operator/proof/autofix gates.",
+				audit.ready ? "All completion checkpoints green; promote report scaffold/final answer." : "Blocked completion must return to operator/proof/autofix checkpoints.",
 			],
 			16,
 		),
@@ -41213,7 +41194,7 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 		handler: async (args) => {
 			const action = args.trim() || "show";
 			const text = action === "refresh" ? await refreshToolIndex(pi) : buildToolDigest();
-			updateMissionGate("tool_index_checked", "done", `/re-tools ${action}`);
+			updateMissionCheckpoint("tool_index_checked", "done", `/re-tools ${action}`);
 			sendDisplayMessage(pi, "REPI Tool Index", truncateMiddle(text, 9000));
 		},
 	});
@@ -41226,7 +41207,7 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 			if (first === "show") parts.shift();
 			if (action === "refresh") await refreshToolIndex(pi);
 			const text = buildToolchainDomainCapabilityOutput("show", parts.join(" ") || undefined);
-			updateMissionGate("tool_index_checked", "done", `/re-toolchain ${action}`);
+			updateMissionCheckpoint("tool_index_checked", "done", `/re-toolchain ${action}`);
 			sendDisplayMessage(pi, "REPI Toolchain Domain Capability", truncateMiddle(text, 16000));
 		},
 	});
@@ -41241,7 +41222,7 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 			if (action === "refresh") await refreshToolIndex(pi);
 			const report = buildProfessionalRuntimeBridgesGate(parts.join(" ") || undefined);
 			const path = writeProfessionalRuntimeBridgesArtifact(report);
-			updateMissionGate("tool_index_checked", "done", "ProfessionalRuntimeBridgesGateV1");
+			updateMissionCheckpoint("tool_index_checked", "done", "ProfessionalRuntimeBridgesCheckV1");
 			sendDisplayMessage(pi, "REPI Professional Runtime Bridges", truncateMiddle(formatProfessionalRuntimeBridgesGate(report, path), 22000));
 		},
 	});
@@ -41266,7 +41247,7 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 					const path = writeRuntimeAdapterExecutionArtifact(report);
 					return formatRuntimeAdapterExecutionGate(report, path);
 				})();
-			updateMissionGate("tool_index_checked", "done", "RuntimeAdapterExecutionGateV1");
+			updateMissionCheckpoint("tool_index_checked", "done", "RuntimeAdapterExecutionCheckV1");
 			sendDisplayMessage(pi, "REPI Runtime Adapter Execution", truncateMiddle(text, 24000));
 		},
 	});
@@ -41278,7 +41259,7 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 			const parts = args.trim().split(/\s+/).filter(Boolean);
 			if (parts[0] === "show") parts.shift();
 			const report = buildReLaneSpecialistCommandPackGate(parts.join(" ") || undefined);
-			updateMissionGate("repro_commands_ready", report.readyDomainCount === report.domainCount ? "done" : "blocked", "ReLaneSpecialistCommandPackGateV1");
+			updateMissionCheckpoint("repro_commands_ready", report.readyDomainCount === report.domainCount ? "done" : "blocked", "ReLaneSpecialistCommandPackCheckV1");
 			sendDisplayMessage(pi, "REPI Lane Specialist Command Pack", truncateMiddle(formatReLaneSpecialistCommandPackGate(report), 20000));
 		},
 	});
@@ -41315,7 +41296,7 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 						: normalizeMemoryOrchestratorPhase(action);
 				const query = parts.join(" ") || rest || undefined;
 				const report = buildMemoryOrchestratorReport({ phase, query, target: artifactScopeInferTarget(query) });
-				updateMissionGate(
+				updateMissionCheckpoint(
 					"memory_checked",
 					report.steps.some((step) => step.blocking) ? "blocked" : "done",
 					`MemoryOrchestratorV6 phase=${report.phase} blocking=${report.steps.filter((step) => step.blocking).length}`,
@@ -41325,7 +41306,7 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 			}
 			if (trimmed === "sanitize" || trimmed === "clean-poison") {
 				const text = sanitizeReconPoisonedState();
-				updateMissionGate("memory_checked", "done", "memory poison sanitizer executed");
+				updateMissionCheckpoint("memory_checked", "done", "memory poison sanitizer executed");
 				sendDisplayMessage(pi, "REPI Memory Sanitizer", text);
 				return;
 			}
@@ -41350,7 +41331,7 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 					verifierRuleCandidate: directives.verifierRuleCandidate,
 					artifactPaths: directives.artifactPaths,
 				});
-				updateMissionGate("memory_or_evolution_written", "done", `${anchor} event=${event.id}`);
+				updateMissionCheckpoint("memory_or_evolution_written", "done", `${anchor} event=${event.id}`);
 				sendDisplayMessage(pi, "REPI Memory Appended", `field-journal entry: ${anchor}\nmemory_event: ${event.id}\ncase_signature: ${event.caseSignature}`);
 				return;
 			}
@@ -41368,36 +41349,36 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 					outcome: "partial",
 					confidence: 0.62,
 				});
-				updateMissionGate("memory_or_evolution_written", "done", `${anchor} event=${event.id}`);
+				updateMissionCheckpoint("memory_or_evolution_written", "done", `${anchor} event=${event.id}`);
 				sendDisplayMessage(pi, "REPI Evolution Appended", `evolution-log entry: ${anchor}\nmemory_event: ${event.id}\ncase_signature: ${event.caseSignature}`);
 				return;
 			}
 			if (trimmed.startsWith("search ") || trimmed.startsWith("search-events ")) {
 				const query = trimmed.replace(/^search(?:-events)?\s+/, "");
-				updateMissionGate("memory_checked", "done", `/re-memory search-events ${query}`);
+				updateMissionCheckpoint("memory_checked", "done", `/re-memory search-events ${query}`);
 				sendDisplayMessage(pi, "REPI Memory Event Search", formatMemoryRetrieval(query));
 				return;
 			}
 			if (trimmed === "events") {
-				updateMissionGate("memory_checked", "done", "/re-memory events");
+				updateMissionCheckpoint("memory_checked", "done", "/re-memory events");
 				sendDisplayMessage(pi, "REPI Memory Events", formatMemoryRetrieval());
 				return;
 			}
 			if (trimmed === "verify") {
 				const report = verifyMemoryStore();
-				updateMissionGate("memory_checked", report.storeGrade === "blocked" ? "blocked" : "done", `memory_store_v5=${report.storeGrade}`);
+				updateMissionCheckpoint("memory_checked", report.storeGrade === "blocked" ? "blocked" : "done", `memory_store_v5=${report.storeGrade}`);
 				sendDisplayMessage(pi, "REPI Memory Store Verification", formatMemoryStoreVerification(report));
 				return;
 			}
 			if (trimmed === "repair-index") {
 				const report = repairMemoryStoreIndex();
-				updateMissionGate("memory_or_evolution_written", report.storeGrade === "blocked" ? "blocked" : "done", `memory_store_v5_repair=${report.storeGrade}`);
+				updateMissionCheckpoint("memory_or_evolution_written", report.storeGrade === "blocked" ? "blocked" : "done", `memory_store_v5_repair=${report.storeGrade}`);
 				sendDisplayMessage(pi, "REPI Memory Store Repair", formatMemoryStoreVerification(report));
 				return;
 			}
 			if (trimmed === "compact-resume" || trimmed === "resume-ledger") {
 				const report = buildCompactResumeLedgerV2Report({ write: true });
-				updateMissionGate(
+				updateMissionCheckpoint(
 					"compaction_resume_ledger_v2_ready",
 					report.invalidTransitions.length ? "blocked" : "done",
 					`CompactResumeLedgerV2 state=${report.currentState} invalid=${report.invalidTransitions.length}`,
@@ -41407,57 +41388,57 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 			}
 			if (trimmed === "snapshot" || trimmed === "compact") {
 				const report = snapshotMemoryStore();
-				updateMissionGate("memory_or_evolution_written", report.storeGrade === "blocked" ? "blocked" : "done", `memory_store_v5_snapshot=${report.storeGrade}`);
+				updateMissionCheckpoint("memory_or_evolution_written", report.storeGrade === "blocked" ? "blocked" : "done", `memory_store_v5_snapshot=${report.storeGrade}`);
 				sendDisplayMessage(pi, "REPI Memory Store Snapshot", formatMemoryStoreVerification(report));
 				return;
 			}
 			if (trimmed === "eval" || trimmed === "usefulness") {
 				verifyMemoryStore();
 				const report = evaluateMemoryUsefulness();
-				updateMissionGate("memory_checked", report.aggregate.status === "fail" ? "blocked" : "done", `memory_usefulness_eval=${report.aggregate.status}`);
+				updateMissionCheckpoint("memory_checked", report.aggregate.status === "fail" ? "blocked" : "done", `memory_usefulness_eval=${report.aggregate.status}`);
 				sendDisplayMessage(pi, "REPI Memory Usefulness Eval", formatMemoryUsefulnessEval(report));
 				return;
 			}
 			if (trimmed === "feedback" || trimmed === "feedback-closure") {
 				const report = buildMemoryFeedbackClosureReport();
-				updateMissionGate("memory_checked", report.closureStatus === "fail" ? "blocked" : "done", `MemoryFeedbackClosureV1=${report.closureStatus}`);
+				updateMissionCheckpoint("memory_checked", report.closureStatus === "fail" ? "blocked" : "done", `MemoryFeedbackClosureV1=${report.closureStatus}`);
 				sendDisplayMessage(pi, "REPI Memory Feedback Closure", formatMemoryFeedbackClosure(report));
 				return;
 			}
 			if (trimmed === "quality" || trimmed === "quality-ledger" || trimmed === "score" || trimmed === "doctor") {
 				const report = buildMemoryQualityLedgerReport();
-				updateMissionGate("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryQualityLedgerV11=${report.status} rows=${report.rowCount}`);
+				updateMissionCheckpoint("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryQualityLedgerV11=${report.status} rows=${report.rowCount}`);
 				sendDisplayMessage(pi, "REPI Memory Quality Ledger", formatMemoryQualityLedger(report));
 				return;
 			}
 			if (trimmed === "replay" || trimmed === "ab-replay" || trimmed === "replay-eval" || trimmed === "causal") {
 				const report = buildMemoryReplayEvaluatorReport();
-				updateMissionGate("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryReplayEvaluatorV12=${report.status} scenarios=${report.scenarioCount}`);
+				updateMissionCheckpoint("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryReplayEvaluatorV12=${report.status} scenarios=${report.scenarioCount}`);
 				sendDisplayMessage(pi, "REPI Memory Replay Evaluator", formatMemoryReplayEvaluator(report));
 				return;
 			}
 			if (trimmed === "strategy" || trimmed === "strategies" || trimmed === "strategy-capsules" || trimmed === "playbook-strategy") {
 				const report = buildMemoryStrategyCapsuleReport();
-				updateMissionGate("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryStrategyCapsuleV13=${report.status} capsules=${report.capsuleCount}`);
+				updateMissionCheckpoint("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryStrategyCapsuleV13=${report.status} capsules=${report.capsuleCount}`);
 				sendDisplayMessage(pi, "REPI Memory Strategy Capsules", formatMemoryStrategyCapsules(report));
 				return;
 			}
 			if (trimmed === "active" || trimmed === "kernel" || trimmed === "active-kernel" || trimmed === "recall" || trimmed === "active-recall") {
 				const report = buildMemoryActiveKernelReport();
-				updateMissionGate("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryActiveKernelV14=${report.status} decisions=${report.decisionCount}`);
+				updateMissionCheckpoint("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryActiveKernelV14=${report.status} decisions=${report.decisionCount}`);
 				sendDisplayMessage(pi, "REPI Memory Active Kernel", formatMemoryActiveKernel(report));
 				return;
 			}
 			if (trimmed === "mature" || trimmed === "maturation" || trimmed === "maturation-runtime" || trimmed === "mature-runtime" || trimmed === "retention" || trimmed === "decay") {
 				const report = buildMemoryMaturationRuntimeReport();
-				updateMissionGate("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryMaturationRuntimeV15=${report.status} rows=${report.rowCount}`);
+				updateMissionCheckpoint("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryMaturationRuntimeV15=${report.status} rows=${report.rowCount}`);
 				sendDisplayMessage(pi, "REPI Memory Maturation Runtime", formatMemoryMaturationRuntime(report));
 				return;
 			}
 			if (trimmed === "scope" || trimmed === "scope-isolation" || trimmed.startsWith("scope ")) {
 				const target = trimmed.replace(/^scope(?:-isolation)?\s*/i, "").trim() || undefined;
 				const report = buildMemoryScopeIsolationReport({ target });
-				updateMissionGate("memory_checked", report.blockedEventIds.length ? "blocked" : "done", `MemoryScopeIsolationV1 blocked=${report.blockedEventIds.length}`);
+				updateMissionCheckpoint("memory_checked", report.blockedEventIds.length ? "blocked" : "done", `MemoryScopeIsolationV1 blocked=${report.blockedEventIds.length}`);
 				sendDisplayMessage(pi, "REPI Memory Scope Isolation", formatMemoryScopeIsolation(report));
 				return;
 			}
@@ -41467,32 +41448,32 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 			}
 			if (trimmed === "distill") {
 				const report = distillMemoryPatterns();
-				updateMissionGate("memory_or_evolution_written", "done", `memory_v3_distillation patterns=${report.patterns.length} quarantine=${report.quarantine.length}`);
+				updateMissionCheckpoint("memory_or_evolution_written", "done", `memory_v3_distillation patterns=${report.patterns.length} quarantine=${report.quarantine.length}`);
 				sendDisplayMessage(pi, "REPI Memory Distillation", formatMemoryDistillation(report));
 				return;
 			}
 			if (trimmed === "sediment" || trimmed === "index" || trimmed === "inject") {
 				const report = buildMemorySemanticIndex();
-				updateMissionGate("memory_or_evolution_written", "done", `memory_v4_sedimentation inject=${report.injectionPacket.entries.length} contradictions=${report.contradictions.length}`);
+				updateMissionCheckpoint("memory_or_evolution_written", "done", `memory_v4_sedimentation inject=${report.injectionPacket.entries.length} contradictions=${report.contradictions.length}`);
 				sendDisplayMessage(pi, "REPI Memory Sedimentation", formatMemorySedimentation(report));
 				return;
 			}
 			if (trimmed === "vector" || trimmed === "vectors" || trimmed.startsWith("vector ") || trimmed.startsWith("rerank ")) {
 				const query = trimmed.replace(/^(?:vector|vectors|rerank)\s*/i, "").trim();
 				const report = searchMemoryVectors(query);
-				updateMissionGate("memory_checked", "done", `MemoryVectorSearchV1 hits=${report.hits.length}`);
+				updateMissionCheckpoint("memory_checked", "done", `MemoryVectorSearchV1 hits=${report.hits.length}`);
 				sendDisplayMessage(pi, "REPI Memory Vector Search", formatMemoryVectorSearch(report));
 				return;
 			}
 			if (trimmed === "embedding" || trimmed === "embedding-provider") {
 				const provider = memoryEmbeddingProviderConfig();
-				updateMissionGate("memory_checked", "done", `MemoryEmbeddingProviderV1=${provider.backend}:${provider.status}`);
+				updateMissionCheckpoint("memory_checked", "done", `MemoryEmbeddingProviderV1=${provider.backend}:${provider.status}`);
 				sendDisplayMessage(pi, "REPI Memory Embedding Provider", formatMemoryEmbeddingProvider(provider));
 				return;
 			}
 			if (trimmed === "supervise" || trimmed === "supervisor" || trimmed === "lifecycle") {
 				const report = superviseMemoryLifecycle();
-				updateMissionGate("memory_or_evolution_written", report.storeGrade === "blocked" ? "blocked" : "done", `MemorySupervisorV1 promote=${report.promotionQueue.length} quarantine=${report.quarantineQueue.length} demote=${report.demotionQueue.length}`);
+				updateMissionCheckpoint("memory_or_evolution_written", report.storeGrade === "blocked" ? "blocked" : "done", `MemorySupervisorV1 promote=${report.promotionQueue.length} quarantine=${report.quarantineQueue.length} demote=${report.demotionQueue.length}`);
 				sendDisplayMessage(pi, "REPI Memory Supervisor", formatMemorySupervisor(report));
 				return;
 			}
@@ -41508,12 +41489,12 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 				);
 				return;
 			}
-			updateMissionGate("memory_checked", "done", "/re-memory show");
+			updateMissionCheckpoint("memory_checked", "done", "/re-memory show");
 			sendDisplayMessage(pi, "REPI Memory", buildMemoryDigest());
 		},
 	});
 	pi.registerCommand("re-mission", {
-		description: "Show or update REPI mission blackboard: /re-mission [show|new|gate] ...",
+		description: "Show or update REPI mission blackboard: /re-mission [show|new|checkpoint] ...",
 		handler: async (args) => {
 			const trimmed = args.trim();
 			if (trimmed.startsWith("new ")) {
@@ -41524,14 +41505,14 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 				sendDisplayMessage(pi, "REPI Mission Created", formatMission(mission));
 				return;
 			}
-			if (trimmed.startsWith("gate ")) {
-				const [, gate = "manual_gate", status = "done", ...noteParts] = trimmed.split(/\s+/);
+			if (trimmed.startsWith("checkpoint ")) {
+				const [, checkpoint = "manual_check", status = "done", ...noteParts] = trimmed.split(/\s+/);
 				const normalizedStatus = ["pending", "done", "blocked"].includes(status)
-					? (status as MissionGateStatus)
+					? (status as MissionCheckpointStatus)
 					: "done";
-				const mission = updateMissionGate(gate, normalizedStatus, noteParts.join(" "));
+				const mission = updateMissionCheckpoint(checkpoint, normalizedStatus, noteParts.join(" "));
 				stats.currentMissionId = mission.id;
-				sendDisplayMessage(pi, "REPI Mission Gate Updated", formatMission(mission));
+				sendDisplayMessage(pi, "REPI Mission Check Updated", formatMission(mission));
 				return;
 			}
 			sendDisplayMessage(pi, "REPI Mission", buildMissionDigest());
@@ -41564,7 +41545,7 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 					sendDisplayMessage(pi, "REPI Lane Command Pack", "no active lane");
 					return;
 				}
-				updateMissionGate("repro_commands_ready", "done", `lane-command-pack:${selectedLane.name}`);
+				updateMissionCheckpoint("repro_commands_ready", "done", `lane-command-pack:${selectedLane.name}`);
 				const pack = laneCommandPack(mission, selectedLane, rest.join(" ") || undefined);
 				const text = action === "run" ? await runLaneCommandPack(pi, pack) : formatLaneCommandPack(pack);
 				sendDisplayMessage(pi, "REPI Lane Command Pack", text);
@@ -41708,7 +41689,7 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 	});
 	pi.registerCommand("re-swarm", {
 		description:
-			"Build/show/run/merge REPI multi-specialist swarm runtime packets plus ReconParallelPlanV1/planCoverage/releaseGateMetadata: /re-swarm [plan|show|run|merge] [target] [max-workers] [max-commands]",
+			"Build/show/run/merge REPI multi-specialist swarm runtime packets plus ReconParallelPlanV1/planCoverage/releaseCheckMetadata: /re-swarm [plan|show|run|merge] [target] [max-workers] [max-commands]",
 		handler: async (args) => {
 			const parts = args.trim().split(/\s+/).filter(Boolean);
 			const first = parts[0];
@@ -41727,7 +41708,7 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 		},
 	});
 	pi.registerCommand("re-supervisor", {
-		description: "Review/show/repair REPI worker packets with ReconParallelPlanV1, planCoverage, and claimGatePolicy gates: /re-supervisor [review|show|repair] [target]",
+		description: "Review/show/repair REPI worker packets with ReconParallelPlanV1, planCoverage, and claimCheckPolicy checkpoints: /re-supervisor [review|show|repair] [target]",
 		handler: async (args) => {
 			const parts = args.trim().split(/\s+/).filter(Boolean);
 			const first = parts[0];
@@ -41857,13 +41838,13 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 			sendDisplayMessage(pi, "REPI Knowledge Graph", buildKnowledgeGraphOutput(action, { query }));
 		},
 	});
-	pi.registerCommand("re-harness", {
-		description: "Run/show REPI profile harness checks: /re-harness [quick|full|install|show]",
+	pi.registerCommand("re-profile-check", {
+		description: "Run/show REPI profile checks: /re-profile-check [quick|full|install|show]",
 		handler: async (args) => {
 			const action = args.trim().split(/\s+/).filter(Boolean)[0];
 			const mode =
 				action === "full" || action === "install" || action === "show" || action === "quick" ? action : "quick";
-			sendDisplayMessage(pi, "REPI Harness", buildHarnessOutput(mode));
+			sendDisplayMessage(pi, "REPI Profile Check", buildProfileCheckOutput(mode));
 		},
 	});
 	pi.registerCommand("re-bootstrap", {
@@ -41879,7 +41860,7 @@ function installReconCommands(pi: ExtensionAPI, stats: ReconStats): void {
 		},
 	});
 	pi.registerCommand("re-complete", {
-		description: "Audit REPI completion gates or write a report scaffold: /re-complete [audit|scaffold]",
+		description: "Audit REPI completion checkpoints or write a report scaffold: /re-complete [audit|scaffold]",
 		handler: async (args) => {
 			const action = args.trim() || "audit";
 			if (action.startsWith("scaffold")) {
@@ -41969,12 +41950,12 @@ function installReconTools(pi: ExtensionAPI): void {
 		name: "re_decision_core",
 		label: "RE Decision Core",
 		description:
-			"Plan, show, tick, or run the REPI decision core: objective stack, gate pressure, evidence priority, tool/artifact posture, decision rules, and operator queue.",
+			"Plan, show, tick, or run the REPI decision core: objective stack, checkpoint pressure, evidence priority, tool/artifact posture, decision rules, and operator queue.",
 		promptSnippet:
 			"Use re_decision_core when the next reverse/pentest action is unclear or after kernel/context changes to select a concrete operator_next_command.",
 		promptGuidelines: [
 			"Call re_decision_core tick after re_kernel build, compaction resume, or any major artifact update.",
-			"Use decision_rules and gate_pressure to choose re_map, re_lane, re_chain, re_operator, verifier, compiler, replayer, autofix, or knowledge actions.",
+			"Use decision_rules and check_pressure to choose re_map, re_lane, re_chain, re_operator, verifier, compiler, replayer, autofix, or knowledge actions.",
 			"Do not continue with narrative-only output when decision_core has an operator_next_command.",
 		],
 		parameters: Type.Object({
@@ -42312,7 +42293,7 @@ function installReconTools(pi: ExtensionAPI): void {
 		async execute(_toolCallId, params) {
 			if (params.action === "sanitize" || params.action === "clean-poison") {
 				const text = sanitizeReconPoisonedState();
-				updateMissionGate("memory_checked", "done", "memory poison sanitizer executed");
+				updateMissionCheckpoint("memory_checked", "done", "memory poison sanitizer executed");
 				return {
 					content: [{ type: "text" as const, text }],
 					details: { action: params.action, archiveRoot: /^archive_root:\s*(.+)$/m.exec(text)?.[1]?.trim() } as Record<
@@ -42343,7 +42324,7 @@ function installReconTools(pi: ExtensionAPI): void {
 					target: params.target ?? artifactScopeInferTarget(params.query ?? params.text),
 				});
 				const blocking = report.steps.filter((step) => step.blocking);
-				updateMissionGate(
+				updateMissionCheckpoint(
 					"memory_checked",
 					blocking.length ? "blocked" : "done",
 					`MemoryOrchestratorV6 phase=${report.phase} blocking=${blocking.length}`,
@@ -42391,7 +42372,7 @@ function installReconTools(pi: ExtensionAPI): void {
 					{ writeback: true },
 				);
 				const report = buildMemoryDepositionReport();
-				updateMissionGate(
+				updateMissionCheckpoint(
 					"memory_or_evolution_written",
 					report.status === "blocked" ? "blocked" : "done",
 					`MemoryDepositionEngineV7 event=${deposition.id} memory_event=${deposition.memoryEventId ?? "none"}`,
@@ -42414,7 +42395,7 @@ function installReconTools(pi: ExtensionAPI): void {
 			}
 			if (params.action === "event-bus" || params.action === "deposition-report") {
 				const report = buildMemoryDepositionReport();
-				updateMissionGate(
+				updateMissionCheckpoint(
 					"memory_checked",
 					report.status === "blocked" ? "blocked" : "done",
 					`MemoryDepositionEngineV7 status=${report.status} events=${report.runtimeEventCount}`,
@@ -42456,7 +42437,7 @@ function installReconTools(pi: ExtensionAPI): void {
 					});
 				}
 				const report = buildMemoryExperienceReport({ route: params.route, target: params.target ?? artifactScopeInferTarget(params.query ?? params.text) });
-				updateMissionGate(
+				updateMissionCheckpoint(
 					"memory_experience_ready",
 					report.status === "blocked" ? "blocked" : "done",
 					`MemoryExperienceEngineV8 lessons=${report.lessonCount} claims=${report.claimCount} status=${report.status}`,
@@ -42468,7 +42449,7 @@ function installReconTools(pi: ExtensionAPI): void {
 			}
 			if (params.action === "skills" || params.action === "skill-capsules" || params.action === "capsules") {
 				const report = buildMemorySkillCapsuleReport({ route: params.route, target: params.target ?? artifactScopeInferTarget(params.query ?? params.text) });
-				updateMissionGate(
+				updateMissionCheckpoint(
 					"memory_skill_capsules_ready",
 					report.status === "blocked" ? "blocked" : "done",
 					`MemorySkillCapsuleV9 capsules=${report.capsuleCount} promoted=${report.promotedCapsuleIds.length} status=${report.status}`,
@@ -42485,7 +42466,7 @@ function installReconTools(pi: ExtensionAPI): void {
 				params.action === "promote-distill"
 			) {
 				const report = buildMemoryDistillPromotionReport({ route: params.route, target: params.target ?? artifactScopeInferTarget(params.query ?? params.text) });
-				updateMissionGate(
+				updateMissionCheckpoint(
 					"memory_distill_promotion_ready",
 					report.status === "blocked" ? "blocked" : "done",
 					`MemoryDistillPromotionV10 candidates=${report.candidateCount} promoted=${report.promotedCandidateIds.length} status=${report.status}`,
@@ -42517,7 +42498,7 @@ function installReconTools(pi: ExtensionAPI): void {
 					verifierRuleCandidate: directives.verifierRuleCandidate,
 					artifactPaths: directives.artifactPaths,
 				});
-				updateMissionGate("memory_or_evolution_written", "done", `${anchor} event=${event.id}`);
+				updateMissionCheckpoint("memory_or_evolution_written", "done", `${anchor} event=${event.id}`);
 				return {
 					content: [{ type: "text" as const, text: `Appended field journal entry: ${anchor}\nmemory_event: ${event.id}\ncase_signature: ${event.caseSignature}` }],
 					details: { anchor, event } as unknown as Record<string, unknown>,
@@ -42537,7 +42518,7 @@ function installReconTools(pi: ExtensionAPI): void {
 					outcome: "partial",
 					confidence: 0.62,
 				});
-				updateMissionGate("memory_or_evolution_written", "done", `${anchor} event=${event.id}`);
+				updateMissionCheckpoint("memory_or_evolution_written", "done", `${anchor} event=${event.id}`);
 				return {
 					content: [{ type: "text" as const, text: `Appended evolution entry: ${anchor}\nmemory_event: ${event.id}\ncase_signature: ${event.caseSignature}` }],
 					details: { anchor, event } as unknown as Record<string, unknown>,
@@ -42554,7 +42535,7 @@ function installReconTools(pi: ExtensionAPI): void {
 					route: params.route,
 					target: params.target ?? artifactScopeInferTarget(params.query ?? params.text),
 				});
-				updateMissionGate(
+				updateMissionCheckpoint(
 					"memory_checked",
 					report.store.storeGrade === "blocked" ? "blocked" : "done",
 					`MemoryUxDashboardV16 hits=${report.recall.hitCount} store=${report.store.storeGrade}`,
@@ -42582,7 +42563,7 @@ function installReconTools(pi: ExtensionAPI): void {
 					route: params.route,
 					target: params.target ?? artifactScopeInferTarget(params.query ?? params.text),
 				});
-				updateMissionGate(
+				updateMissionCheckpoint(
 					"memory_or_evolution_written",
 					decision.applied ? "done" : "blocked",
 					`MemoryUxDashboardV16 governance=${decision.action} applied=${decision.applied}`,
@@ -42599,7 +42580,7 @@ function installReconTools(pi: ExtensionAPI): void {
 			}
 			if (params.action === "events" || params.action === "search-events") {
 				const text = formatMemoryRetrieval(params.query);
-				updateMissionGate("memory_checked", "done", `${params.action}:${params.query ?? ""}`);
+				updateMissionCheckpoint("memory_checked", "done", `${params.action}:${params.query ?? ""}`);
 				return {
 					content: [{ type: "text" as const, text }],
 					details: { query: params.query, report: memoryRetrievalReportPath() } as Record<string, unknown>,
@@ -42608,7 +42589,7 @@ function installReconTools(pi: ExtensionAPI): void {
 			if (params.action === "verify") {
 				const report = verifyMemoryStore();
 				const text = formatMemoryStoreVerification(report);
-				updateMissionGate("memory_checked", report.storeGrade === "blocked" ? "blocked" : "done", `memory_store_v5=${report.storeGrade}`);
+				updateMissionCheckpoint("memory_checked", report.storeGrade === "blocked" ? "blocked" : "done", `memory_store_v5=${report.storeGrade}`);
 				return {
 					content: [{ type: "text" as const, text }],
 					details: report as unknown as Record<string, unknown>,
@@ -42617,7 +42598,7 @@ function installReconTools(pi: ExtensionAPI): void {
 			if (params.action === "repair-index") {
 				const report = repairMemoryStoreIndex();
 				const text = formatMemoryStoreVerification(report);
-				updateMissionGate("memory_or_evolution_written", report.storeGrade === "blocked" ? "blocked" : "done", `memory_store_v5_repair=${report.storeGrade}`);
+				updateMissionCheckpoint("memory_or_evolution_written", report.storeGrade === "blocked" ? "blocked" : "done", `memory_store_v5_repair=${report.storeGrade}`);
 				return {
 					content: [{ type: "text" as const, text }],
 					details: report as unknown as Record<string, unknown>,
@@ -42625,7 +42606,7 @@ function installReconTools(pi: ExtensionAPI): void {
 			}
 			if (params.action === "compact-resume" || params.action === "resume-ledger") {
 				const report = buildCompactResumeLedgerV2Report({ write: true });
-				updateMissionGate(
+				updateMissionCheckpoint(
 					"compaction_resume_ledger_v2_ready",
 					report.invalidTransitions.length ? "blocked" : "done",
 					`CompactResumeLedgerV2 state=${report.currentState} invalid=${report.invalidTransitions.length}`,
@@ -42638,7 +42619,7 @@ function installReconTools(pi: ExtensionAPI): void {
 			if (params.action === "snapshot" || params.action === "compact") {
 				const report = snapshotMemoryStore();
 				const text = formatMemoryStoreVerification(report);
-				updateMissionGate("memory_or_evolution_written", report.storeGrade === "blocked" ? "blocked" : "done", `memory_store_v5_snapshot=${report.storeGrade}`);
+				updateMissionCheckpoint("memory_or_evolution_written", report.storeGrade === "blocked" ? "blocked" : "done", `memory_store_v5_snapshot=${report.storeGrade}`);
 				return {
 					content: [{ type: "text" as const, text }],
 					details: report as unknown as Record<string, unknown>,
@@ -42648,7 +42629,7 @@ function installReconTools(pi: ExtensionAPI): void {
 				verifyMemoryStore();
 				const report = evaluateMemoryUsefulness();
 				const text = formatMemoryUsefulnessEval(report);
-				updateMissionGate("memory_checked", report.aggregate.status === "fail" ? "blocked" : "done", `memory_usefulness_eval=${report.aggregate.status}`);
+				updateMissionCheckpoint("memory_checked", report.aggregate.status === "fail" ? "blocked" : "done", `memory_usefulness_eval=${report.aggregate.status}`);
 				return {
 					content: [{ type: "text" as const, text }],
 					details: report as unknown as Record<string, unknown>,
@@ -42657,7 +42638,7 @@ function installReconTools(pi: ExtensionAPI): void {
 			if (params.action === "feedback" || params.action === "feedback-closure") {
 				const report = buildMemoryFeedbackClosureReport();
 				const text = formatMemoryFeedbackClosure(report);
-				updateMissionGate("memory_checked", report.closureStatus === "fail" ? "blocked" : "done", `MemoryFeedbackClosureV1=${report.closureStatus}`);
+				updateMissionCheckpoint("memory_checked", report.closureStatus === "fail" ? "blocked" : "done", `MemoryFeedbackClosureV1=${report.closureStatus}`);
 				return {
 					content: [{ type: "text" as const, text }],
 					details: report as unknown as Record<string, unknown>,
@@ -42674,7 +42655,7 @@ function installReconTools(pi: ExtensionAPI): void {
 					target: params.target ?? artifactScopeInferTarget(params.query ?? params.text),
 				});
 				const text = formatMemoryQualityLedger(report);
-				updateMissionGate("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryQualityLedgerV11=${report.status} rows=${report.rowCount}`);
+				updateMissionCheckpoint("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryQualityLedgerV11=${report.status} rows=${report.rowCount}`);
 				return {
 					content: [{ type: "text" as const, text }],
 					details: report as unknown as Record<string, unknown>,
@@ -42692,7 +42673,7 @@ function installReconTools(pi: ExtensionAPI): void {
 					query: params.query ?? params.text,
 				});
 				const text = formatMemoryReplayEvaluator(report);
-				updateMissionGate("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryReplayEvaluatorV12=${report.status} scenarios=${report.scenarioCount}`);
+				updateMissionCheckpoint("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryReplayEvaluatorV12=${report.status} scenarios=${report.scenarioCount}`);
 				return {
 					content: [{ type: "text" as const, text }],
 					details: report as unknown as Record<string, unknown>,
@@ -42709,7 +42690,7 @@ function installReconTools(pi: ExtensionAPI): void {
 					target: params.target ?? artifactScopeInferTarget(params.query ?? params.text),
 				});
 				const text = formatMemoryStrategyCapsules(report);
-				updateMissionGate("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryStrategyCapsuleV13=${report.status} capsules=${report.capsuleCount}`);
+				updateMissionCheckpoint("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryStrategyCapsuleV13=${report.status} capsules=${report.capsuleCount}`);
 				return {
 					content: [{ type: "text" as const, text }],
 					details: report as unknown as Record<string, unknown>,
@@ -42728,7 +42709,7 @@ function installReconTools(pi: ExtensionAPI): void {
 					query: params.query ?? params.text,
 				});
 				const text = formatMemoryActiveKernel(report);
-				updateMissionGate("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryActiveKernelV14=${report.status} decisions=${report.decisionCount}`);
+				updateMissionCheckpoint("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryActiveKernelV14=${report.status} decisions=${report.decisionCount}`);
 				return {
 					content: [{ type: "text" as const, text }],
 					details: report as unknown as Record<string, unknown>,
@@ -42748,7 +42729,7 @@ function installReconTools(pi: ExtensionAPI): void {
 					query: params.query ?? params.text,
 				});
 				const text = formatMemoryMaturationRuntime(report);
-				updateMissionGate("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryMaturationRuntimeV15=${report.status} rows=${report.rowCount}`);
+				updateMissionCheckpoint("memory_checked", report.status === "blocked" ? "blocked" : "done", `MemoryMaturationRuntimeV15=${report.status} rows=${report.rowCount}`);
 				return {
 					content: [{ type: "text" as const, text }],
 					details: report as unknown as Record<string, unknown>,
@@ -42757,7 +42738,7 @@ function installReconTools(pi: ExtensionAPI): void {
 			if (params.action === "scope" || params.action === "scope-isolation") {
 				const report = buildMemoryScopeIsolationReport({ target: params.query });
 				const text = formatMemoryScopeIsolation(report);
-				updateMissionGate("memory_checked", report.blockedEventIds.length ? "blocked" : "done", `MemoryScopeIsolationV1 blocked=${report.blockedEventIds.length}`);
+				updateMissionCheckpoint("memory_checked", report.blockedEventIds.length ? "blocked" : "done", `MemoryScopeIsolationV1 blocked=${report.blockedEventIds.length}`);
 				return {
 					content: [{ type: "text" as const, text }],
 					details: report as unknown as Record<string, unknown>,
@@ -42769,7 +42750,7 @@ function installReconTools(pi: ExtensionAPI): void {
 					requestedBy: "re_memory_artifact_scope_filter",
 				});
 				const text = formatArtifactScopeFilter(selection.artifactScopeFilter);
-				updateMissionGate(
+				updateMissionCheckpoint(
 					"memory_checked",
 					selection.artifactScopeFilter.blockedArtifactCount ? "blocked" : "done",
 					`ArtifactScopeFilterV1 blocked=${selection.artifactScopeFilter.blockedArtifactCount}`,
@@ -42789,7 +42770,7 @@ function installReconTools(pi: ExtensionAPI): void {
 			if (params.action === "distill") {
 				const report = distillMemoryPatterns();
 				const text = formatMemoryDistillation(report);
-				updateMissionGate("memory_or_evolution_written", "done", `memory_v3_distillation patterns=${report.patterns.length} quarantine=${report.quarantine.length}`);
+				updateMissionCheckpoint("memory_or_evolution_written", "done", `memory_v3_distillation patterns=${report.patterns.length} quarantine=${report.quarantine.length}`);
 				return {
 					content: [{ type: "text" as const, text }],
 					details: {
@@ -42802,7 +42783,7 @@ function installReconTools(pi: ExtensionAPI): void {
 			if (params.action === "sediment" || params.action === "index" || params.action === "inject") {
 				const report = buildMemorySemanticIndex();
 				const text = formatMemorySedimentation(report);
-				updateMissionGate("memory_or_evolution_written", "done", `memory_v4_sedimentation inject=${report.injectionPacket.entries.length} contradictions=${report.contradictions.length}`);
+				updateMissionCheckpoint("memory_or_evolution_written", "done", `memory_v4_sedimentation inject=${report.injectionPacket.entries.length} contradictions=${report.contradictions.length}`);
 				return {
 					content: [{ type: "text" as const, text }],
 					details: {
@@ -42816,7 +42797,7 @@ function installReconTools(pi: ExtensionAPI): void {
 			if (params.action === "vector" || params.action === "vectors" || params.action === "rerank") {
 				const report = searchMemoryVectors(params.query);
 				const text = formatMemoryVectorSearch(report);
-				updateMissionGate("memory_checked", "done", `MemoryVectorSearchV1 hits=${report.hits.length}`);
+				updateMissionCheckpoint("memory_checked", "done", `MemoryVectorSearchV1 hits=${report.hits.length}`);
 				return {
 					content: [{ type: "text" as const, text }],
 					details: {
@@ -42827,7 +42808,7 @@ function installReconTools(pi: ExtensionAPI): void {
 			}
 			if (params.action === "embedding" || params.action === "embedding-provider") {
 				const provider = memoryEmbeddingProviderConfig();
-				updateMissionGate("memory_checked", "done", `MemoryEmbeddingProviderV1=${provider.backend}:${provider.status}`);
+				updateMissionCheckpoint("memory_checked", "done", `MemoryEmbeddingProviderV1=${provider.backend}:${provider.status}`);
 				return {
 					content: [{ type: "text" as const, text: formatMemoryEmbeddingProvider(provider) }],
 					details: provider as unknown as Record<string, unknown>,
@@ -42836,7 +42817,7 @@ function installReconTools(pi: ExtensionAPI): void {
 			if (params.action === "supervise" || params.action === "supervisor" || params.action === "lifecycle") {
 				const report = superviseMemoryLifecycle();
 				const text = formatMemorySupervisor(report);
-				updateMissionGate("memory_or_evolution_written", report.storeGrade === "blocked" ? "blocked" : "done", `MemorySupervisorV1 promote=${report.promotionQueue.length} quarantine=${report.quarantineQueue.length} demote=${report.demotionQueue.length}`);
+				updateMissionCheckpoint("memory_or_evolution_written", report.storeGrade === "blocked" ? "blocked" : "done", `MemorySupervisorV1 promote=${report.promotionQueue.length} quarantine=${report.quarantineQueue.length} demote=${report.demotionQueue.length}`);
 				return {
 					content: [{ type: "text" as const, text }],
 					details: {
@@ -42854,7 +42835,7 @@ function installReconTools(pi: ExtensionAPI): void {
 			}
 			const memory = buildMemoryDigest();
 			if (params.action === "search") {
-				updateMissionGate("memory_checked", "done", `search:${params.query ?? ""}`);
+				updateMissionCheckpoint("memory_checked", "done", `search:${params.query ?? ""}`);
 				const query = (params.query ?? "").toLowerCase();
 				const lines = memory
 					.split(/\r?\n/)
@@ -42866,22 +42847,22 @@ function installReconTools(pi: ExtensionAPI): void {
 					details: { query, matches: lines.length, eventReport: memoryRetrievalReportPath() } as Record<string, unknown>,
 				};
 			}
-			updateMissionGate("memory_checked", "done", "show");
+			updateMissionCheckpoint("memory_checked", "done", "show");
 			return { content: [{ type: "text" as const, text: memory }], details: { path: reconDir() } };
 		},
 	});
 	pi.registerTool({
 		name: "re_mission",
 		label: "RE Mission",
-		description: "Create, inspect, or update the REPI mission blackboard and completion gates.",
-		promptSnippet: "Track reverse/pentest mission lanes, gates, and next actions.",
+		description: "Create, inspect, or update the REPI mission blackboard and completion checkpoints.",
+		promptSnippet: "Track reverse/pentest mission lanes, checkpoints, and next actions.",
 		promptGuidelines: [
-			"Use re_mission to keep task state explicit: route, lanes, evidence gates, replay/report/memory gates.",
+			"Use re_mission to keep task state explicit: route, lanes, evidence checkpoints, replay/report/memory checkpoints.",
 		],
 		parameters: Type.Object({
-			action: Type.Union([Type.Literal("show"), Type.Literal("new"), Type.Literal("gate")]),
+			action: Type.Union([Type.Literal("show"), Type.Literal("new"), Type.Literal("checkpoint")]),
 			task: Type.Optional(Type.String()),
-			gate: Type.Optional(Type.String()),
+			check: Type.Optional(Type.String()),
 			status: Type.Optional(Type.Union([Type.Literal("pending"), Type.Literal("done"), Type.Literal("blocked")])),
 			note: Type.Optional(Type.String()),
 		}),
@@ -42894,8 +42875,8 @@ function installReconTools(pi: ExtensionAPI): void {
 					details: mission as unknown as Record<string, unknown>,
 				};
 			}
-			if (params.action === "gate") {
-				const mission = updateMissionGate(params.gate ?? "manual_gate", params.status ?? "done", params.note);
+			if (params.action === "checkpoint") {
+				const mission = updateMissionCheckpoint(params.check ?? "manual_check", params.status ?? "done", params.note);
 				return {
 					content: [{ type: "text" as const, text: formatMission(mission) }],
 					details: mission as unknown as Record<string, unknown>,
@@ -42918,7 +42899,7 @@ function installReconTools(pi: ExtensionAPI): void {
 			"Call re_lane plan with a lane/target to generate the smallest command pack before broad scanning.",
 			"Call re_lane run only for command packs with concrete targets and no placeholder values.",
 			"Call re_lane run-auto to execute bounded [auto:*] follow-up commands already attached to the active lane.",
-			"Call re_lane done when a lane has evidence; this advances the queue and updates related gates.",
+			"Call re_lane done when a lane has evidence; this advances the queue and updates related checkpoints.",
 			"Call re_lane block with a reason when the lane is stuck, then change evidence surface or toolchain.",
 		],
 		parameters: Type.Object({
@@ -42978,7 +42959,7 @@ function installReconTools(pi: ExtensionAPI): void {
 						details: { path: currentMissionPath() } as Record<string, unknown>,
 					};
 				}
-				updateMissionGate("repro_commands_ready", "done", `lane-command-pack:${lane.name}`);
+				updateMissionCheckpoint("repro_commands_ready", "done", `lane-command-pack:${lane.name}`);
 				const pack = laneCommandPack(mission, lane, params.target);
 				const text = params.action === "run" ? await runLaneCommandPack(pi, pack) : formatLaneCommandPack(pack);
 				return {
@@ -43004,7 +42985,7 @@ function installReconTools(pi: ExtensionAPI): void {
 		name: "re_map",
 		label: "RE Map",
 		description:
-			"Run a passive target/workspace mapper, write a map artifact, append evidence, and satisfy the passive_map_done gate.",
+			"Run a passive target/workspace mapper, write a map artifact, append evidence, and satisfy the passive_map_done checkpoint.",
 		promptSnippet: "Use re_map before broad exploitation to anchor files/routes/configs/binaries in evidence.",
 		promptGuidelines: [
 			"Call re_map early for security tasks to capture target stat, manifests, routes/auth strings, binary candidates, and HTTP baseline when applicable.",
@@ -43133,7 +43114,7 @@ function installReconTools(pi: ExtensionAPI): void {
 		name: "re_graph",
 		label: "RE Graph",
 		description:
-			"Build or show a REPI mission attack graph from mission lanes, gates, passive maps, run artifacts, evidence ledger, and tool-index gaps.",
+			"Build or show a REPI mission attack graph from mission lanes, checkpoints, passive maps, run artifacts, evidence ledger, and tool-index gaps.",
 		promptSnippet:
 			"Use re_graph to organize reverse/pentest work into a critical path, gaps, and next executable actions.",
 		promptGuidelines: [
@@ -43266,9 +43247,9 @@ function installReconTools(pi: ExtensionAPI): void {
 		name: "re_swarm",
 		label: "RE Swarm",
 		description:
-			"Build, show, run, or merge multi-specialist swarm runtime packets from delegation worker_packets, emitting ReconParallelPlanV1, planCoverage, releaseGateMetadata, bounded worker executions, parallel groups, merge protocol, collision matrix, and commander next actions.",
+			"Build, show, run, or merge multi-specialist swarm runtime packets from delegation worker_packets, emitting ReconParallelPlanV1, planCoverage, releaseCheckMetadata, bounded worker executions, parallel groups, merge protocol, collision matrix, and commander next actions.",
 		promptSnippet:
-			"Use re_swarm after re_delegate to organize specialist work as ReconParallelPlanV1-backed worker runtime packets with merge contracts and release-gate metadata.",
+			"Use re_swarm after re_delegate to organize specialist work as ReconParallelPlanV1-backed worker runtime packets with merge contracts and release-check metadata.",
 		promptGuidelines: [
 			"Call re_swarm plan after re_delegate plan/merge before broad multi-lane expansion.",
 			"Use worker_runtime_packets plus parallel_plan.workers as exact sub-agent handoff contracts with evidence requirements, artifactGlobs, limits, and merge keys.",
@@ -43305,12 +43286,12 @@ function installReconTools(pi: ExtensionAPI): void {
 		name: "re_supervisor",
 		label: "RE Supervisor",
 		description:
-			"Review, show, or repair REPI specialist worker packets using a supervisor critic over ReconParallelPlanV1, planCoverage, claimGatePolicy, evidence, conflicts, gates, and priority queues.",
+			"Review, show, or repair REPI specialist worker packets using a supervisor critic over ReconParallelPlanV1, planCoverage, claimCheckPolicy, evidence, conflicts, checkpoints, and priority queues.",
 		promptSnippet:
-			"Use re_supervisor after re_swarm/re_delegate to score worker evidence, enforce planCoverage/claimGatePolicy, find conflicts, and produce repair queues.",
+			"Use re_supervisor after re_swarm/re_delegate to score worker evidence, enforce planCoverage/claimCheckPolicy, find conflicts, and produce repair queues.",
 		promptGuidelines: [
-			"Call re_supervisor review before final claims or when worker packets, planCoverage, or claim gates conflict.",
-			"Use supervisor planCoverage, claimGatePolicy, repair_queue, and priority_queue to choose the next re_swarm/re_operation or lane action.",
+			"Call re_supervisor review before final claims or when worker packets, planCoverage, or claim checkpoints conflict.",
+			"Use supervisor planCoverage, claimCheckPolicy, repair_queue, and priority_queue to choose the next re_swarm/re_operation or lane action.",
 			"Call re_supervisor repair after blocked/weak worker packets to generate a concrete recovery queue.",
 		],
 		parameters: Type.Object({
@@ -43399,7 +43380,7 @@ function installReconTools(pi: ExtensionAPI): void {
 		promptGuidelines: [
 			"Call re_operator plan before dispatching a resumed mission.",
 			"Call re_operator dispatch with a small maxSteps value, then re_operator verify.",
-			"Call re_operator escalate when gates or artifacts remain blocked.",
+			"Call re_operator escalate when checkpoints or artifacts remain blocked.",
 		],
 		parameters: Type.Object({
 			action: Type.Optional(
@@ -43606,15 +43587,15 @@ function installReconTools(pi: ExtensionAPI): void {
 	});
 
 	pi.registerTool({
-		name: "re_harness",
-		label: "RE Harness",
+		name: "re_profile_check",
+		label: "RE Profile Check",
 		description:
-			"Run or show REPI profile harness checks for install readiness, regression guards, and reverse capability guards.",
+			"Run or show REPI profile checks for install readiness, regression guards, and reverse capability guards.",
 		promptSnippet:
-			"Use re_harness before installing/upgrading the profile or after major reverse/pentest capability changes.",
+			"Use re_profile_check before installing/upgrading the profile or after major reverse/pentest capability changes.",
 		promptGuidelines: [
-			"Call re_harness full after profile edits and before claiming the agent is installable.",
-			"Use install mode to verify install-repi/init wiring and keep the deprecated install-global-profile wrapper file-profile-free.",
+			"Call re_profile_check full after profile edits and before claiming the agent is installable.",
+			"Use install mode to verify install-repi/init wiring without touching global pi profile files.",
 			"Treat reverse_capability_guards and regression_guards failures as blockers before final completion.",
 		],
 		parameters: Type.Object({
@@ -43624,10 +43605,10 @@ function installReconTools(pi: ExtensionAPI): void {
 		}),
 		async execute(_toolCallId, params) {
 			const action = params.action ?? "quick";
-			const text = buildHarnessOutput(action);
+			const text = buildProfileCheckOutput(action);
 			return {
 				content: [{ type: "text" as const, text }],
-				details: { action, path: latestHarnessArtifactPath() } as Record<string, unknown>,
+				details: { action, path: latestProfileCheckArtifactPath() } as Record<string, unknown>,
 			};
 		},
 	});
@@ -43664,10 +43645,10 @@ function installReconTools(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "re_complete",
 		label: "RE Complete",
-		description: "Audit REPI completion gates or write a report scaffold from mission/evidence state.",
-		promptSnippet: "Audit completion gates before claiming a reverse/pentest task is done.",
+		description: "Audit REPI completion checkpoints or write a report scaffold from mission/evidence state.",
+		promptSnippet: "Audit completion checkpoints before claiming a reverse/pentest task is done.",
 		promptGuidelines: [
-			"Before final answers on security tasks, run re_complete audit or perform an equivalent gate check.",
+			"Before final answers on security tasks, run re_complete audit or perform an equivalent checkpoint check.",
 		],
 		parameters: Type.Object({
 			action: Type.Union([Type.Literal("audit"), Type.Literal("scaffold")]),
@@ -43727,7 +43708,7 @@ function installReconTools(pi: ExtensionAPI): void {
 		name: "re_runtime_bridge",
 		label: "RE Professional Runtime Bridges",
 		description:
-			"Inspect ProfessionalRuntimeBridgesGateV1: real toolchain bridge, exploit verifier runtime, Web/CDP replay harness, and Frida/Mobile dynamic bridge with artifact-backed command plans.",
+			"Inspect ProfessionalRuntimeBridgesCheckV1: real toolchain bridge, exploit verifier runtime, Web/CDP replay harness, and Frida/Mobile dynamic bridge with artifact-backed command plans.",
 		promptSnippet:
 			"Use re_runtime_bridge when a reverse/pentest task needs concrete external tool bridging, replay verification, CDP capture, or Frida/mobile dynamic analysis.",
 		promptGuidelines: [
@@ -43754,7 +43735,7 @@ function installReconTools(pi: ExtensionAPI): void {
 		name: "re_runtime_adapter",
 		label: "RE Runtime Adapter Execution",
 		description:
-			"Plan or run RuntimeAdapterExecutionGateV1 adapters that bind runner commands, parser rules, artifact kinds, ingest targets, and proof-exit signals for r2/Ghidra/Frida/CDP/pwntools/tshark/binwalk style workflows.",
+			"Plan or run RuntimeAdapterExecutionCheckV1 adapters that bind runner commands, parser rules, artifact kinds, ingest targets, and proof-exit signals for r2/Ghidra/Frida/CDP/pwntools/tshark/binwalk style workflows.",
 		promptSnippet:
 			"Use re_runtime_adapter to execute a bounded local adapter and parse output into evidence before claiming a reverse/pentest tool result.",
 		promptGuidelines: [
@@ -43784,7 +43765,7 @@ function installReconTools(pi: ExtensionAPI): void {
 		name: "re_lane_specialist_pack",
 		label: "RE Lane Specialist Command Pack",
 		description:
-			"Inspect ReLaneSpecialistCommandPackGateV1: route → re_lane command pack → analyzer anchors → self-heal commands → proof-exit bridge for each professional domain.",
+			"Inspect ReLaneSpecialistCommandPackCheckV1: route → re_lane command pack → analyzer anchors → self-heal commands → proof-exit bridge for each professional domain.",
 		promptSnippet:
 			"Use re_lane_specialist_pack before broad execution when a reverse/pentest route feels generic or under-tooled.",
 		promptGuidelines: [
@@ -43794,7 +43775,7 @@ function installReconTools(pi: ExtensionAPI): void {
 		parameters: Type.Object({ action: Type.Union([Type.Literal("show")]), domain: Type.Optional(Type.String()) }),
 		async execute(_toolCallId, params) {
 			const report = buildReLaneSpecialistCommandPackGate(params.domain);
-			updateMissionGate("repro_commands_ready", report.readyDomainCount === report.domainCount ? "done" : "blocked", "ReLaneSpecialistCommandPackGateV1");
+			updateMissionCheckpoint("repro_commands_ready", report.readyDomainCount === report.domainCount ? "done" : "blocked", "ReLaneSpecialistCommandPackCheckV1");
 			return {
 				content: [{ type: "text" as const, text: truncateMiddle(formatReLaneSpecialistCommandPackGate(report), 20000) }],
 				details: { action: params.action, domain: params.domain, closure: report.closure, readyDomainCount: report.readyDomainCount } as Record<string, unknown>,
@@ -43836,7 +43817,7 @@ function installReconTools(pi: ExtensionAPI): void {
 		parameters: Type.Object({ action: Type.Union([Type.Literal("show"), Type.Literal("refresh")]) }),
 		async execute(_toolCallId, params) {
 			const text = params.action === "refresh" ? await refreshToolIndex(pi) : buildToolDigest();
-			updateMissionGate("tool_index_checked", "done", params.action);
+			updateMissionCheckpoint("tool_index_checked", "done", params.action);
 			return {
 				content: [{ type: "text" as const, text: truncateMiddle(text, 12000) }],
 				details: { path: toolIndexPath(), action: params.action },
@@ -43906,7 +43887,7 @@ export function createReconExtensionFactory() {
 				"Tool index digest:",
 				buildToolDigest(),
 				"",
-				"Completion gate audit:",
+				"Completion checkpoint audit:",
 				formatCompletionAudit(),
 				"",
 				"Execution constraints:",
@@ -43914,7 +43895,7 @@ export function createReconExtensionFactory() {
 				"- Record decisive evidence in one block.",
 				"- If failures or repetition appear, change method instead of repeating.",
 				"- If a required tool is missing, plan/install through re_bootstrap and refresh tool-index.",
-				"- Before claiming completion, satisfy or explicitly explain every re_complete gate.",
+				"- Before claiming completion, satisfy or explicitly explain every re_complete checkpoint.",
 				stats.selfReviewDue ? makeSelfReview(stats) : "",
 			].join("\n");
 			stats.selfReviewDue = false;
@@ -44013,7 +43994,7 @@ export function createReconExtensionFactory() {
 			const contextPath = writeContextPackArtifact(contextPack);
 			const details = buildReconCompactionDetails(contextPack, contextPath);
 			const summary = buildReconCompactionSummary({ event, contextPack, contextPath });
-			pi.appendEntry("pi-recon-compaction-checkpoint", {
+			pi.appendEntry("repi-compaction-checkpoint", {
 				timestamp: Date.now(),
 				tokensBefore: event.preparation.tokensBefore,
 				firstKeptEntryId: event.preparation.firstKeptEntryId,
@@ -44043,8 +44024,8 @@ export function createReconExtensionFactory() {
 				compactionEntry: event.compactionEntry,
 				fromExtension: event.fromExtension,
 			});
-			pi.appendEntry("pi-recon-compaction-resume-contract", contract);
-			updateMissionGate(
+			pi.appendEntry("repi-compaction-resume-contract", contract);
+			updateMissionCheckpoint(
 				"compaction_resume_contract_ready",
 				contract.verified ? "done" : "pending",
 				contract.contextPath ?? "missing context path",
@@ -44062,10 +44043,10 @@ export function createReconExtensionFactory() {
 							? "already triggered for compaction entry"
 							: "auto-resume budget exhausted",
 			);
-			pi.appendEntry("pi-recon-compaction-auto-resume", autoResume);
+			pi.appendEntry("repi-compaction-auto-resume", autoResume);
 			const telemetry = initialReconCompactionResumeTelemetry(contract, autoResume);
 			const telemetryPath = writeReconCompactionResumeTelemetry(telemetry);
-			pi.appendEntry("pi-recon-compaction-resume-telemetry", { ...telemetry, path: telemetryPath });
+			pi.appendEntry("repi-compaction-resume-telemetry", { ...telemetry, path: telemetryPath });
 			if (canAutoResume) {
 				compactAutoResumeIds.add(resumeId);
 				compactAutoResumeBudget -= 1;

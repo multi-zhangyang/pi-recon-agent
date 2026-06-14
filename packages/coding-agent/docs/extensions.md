@@ -16,7 +16,7 @@ Extensions are TypeScript modules that extend repi's behavior. They can subscrib
 - **Custom rendering** - Control how tool calls/results and messages appear in TUI
 
 **Example use cases:**
-- Permission gates (confirm before `rm -rf`, `sudo`, etc.)
+- Permission confirmations (confirm before `rm -rf`, `sudo`, etc.)
 - Git checkpointing (stash at each turn, restore on branch)
 - Path protection (block writes to `.env`, `node_modules/`)
 - Custom compaction (summarize conversation your way)
@@ -1067,12 +1067,12 @@ Options:
 - `position`: `"at"` duplicates the active path through the selected entry without restoring editor text
 - `withSession`: run post-switch work against a fresh replacement-session context. Do not use captured old `repi` / command `ctx`; see [Session replacement lifecycle and footguns](#session-replacement-lifecycle-and-footguns).
 
-### ctx.navigateTree(targetId, options?)
+### ctx.naviconfirmationTree(targetId, options?)
 
-Navigate to a different point in the session tree:
+Naviconfirmation to a different point in the session tree:
 
 ```typescript
-const result = await ctx.navigateTree("entry-id-456", {
+const result = await ctx.naviconfirmationTree("entry-id-456", {
   summarize: true,
   customInstructions: "Focus on error handling changes",
   replaceInstructions: false, // true = replace default prompt entirely
@@ -2309,8 +2309,8 @@ Typical pattern:
 
 - inspect the text before the cursor
 - return your own suggestions when your extension-specific syntax matches
-- otherwise delegate to `current.getSuggestions(...)`
-- delegate `applyCompletion(...)` unless you need custom insertion behavior
+- otherwise deleconfirmation to `current.getSuggestions(...)`
+- deleconfirmation `applyCompletion(...)` unless you need custom insertion behavior
 
 ```typescript
 repi.on("session_start", (_event, ctx) => {
@@ -2565,8 +2565,8 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `send-user-message.ts` | Inject user messages | `registerCommand`, `sendUserMessage` |
 | `reload-runtime.ts` | Reload command and LLM tool handoff | `registerCommand`, `ctx.reload()`, `sendUserMessage` |
 | `shutdown-command.ts` | Graceful shutdown command | `registerCommand`, `shutdown()` |
-| **Events & Gates** |||
-| `permission-gate.ts` | Block dangerous commands | `on("tool_call")`, `ui.confirm` |
+| **Events & Confirms** |||
+| `permission-confirm.ts` | Block dangerous commands | `on("tool_call")`, `ui.confirm` |
 | `protected-paths.ts` | Block writes to specific paths | `on("tool_call")` |
 | `confirm-destructive.ts` | Confirm session changes | `on("session_before_switch")`, `on("session_before_fork")` |
 | `dirty-repo-guard.ts` | Warn on dirty git repo | `on("session_before_*")`, `exec` |

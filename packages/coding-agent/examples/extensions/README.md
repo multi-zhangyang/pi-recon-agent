@@ -6,10 +6,10 @@ Example extensions for repi-coding-agent.
 
 ```bash
 # Load an extension with --extension flag
-pi --extension examples/extensions/permission-gate.ts
+pi --extension examples/extensions/permission-confirm.ts
 
 # Or copy to extensions directory for auto-discovery
-cp permission-gate.ts ~/.pi/agent/extensions/
+cp permission-confirm.ts ~/.pi/agent/extensions/
 ```
 
 ## Examples
@@ -18,7 +18,7 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 
 | Extension | Description |
 |-----------|-------------|
-| `permission-gate.ts` | Prompts for confirmation before dangerous bash commands (rm -rf, sudo, etc.) |
+| `permission-confirm.ts` | Prompts for confirmation before dangerous bash commands (rm -rf, sudo, etc.) |
 | `protected-paths.ts` | Blocks writes to protected paths (.env, .git/, node_modules/) |
 | `confirm-destructive.ts` | Confirms before destructive session actions (clear, switch, fork) |
 | `dirty-repo-guard.ts` | Prevents session changes with uncommitted git changes |
@@ -39,8 +39,8 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 | `built-in-tool-renderer.ts` | Custom compact rendering for built-in tools (read, bash, edit, write) while keeping original behavior |
 | `minimal-mode.ts` | Override built-in tool rendering for minimal display (only tool calls, no output in collapsed mode) |
 | `truncated-tool.ts` | Wraps ripgrep with proper output truncation (50KB/2000 lines) |
-| `ssh.ts` | Delegate all tools to a remote machine via SSH using pluggable operations |
-| `subagent/` | Delegate tasks to specialized subagents with isolated context windows |
+| `ssh.ts` | Deleconfirmation all tools to a remote machine via SSH using pluggable operations |
+| `subagent/` | Deleconfirmation tasks to specialized subagents with isolated context windows |
 
 ### Commands & UI
 

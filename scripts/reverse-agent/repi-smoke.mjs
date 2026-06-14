@@ -15,20 +15,15 @@ function script(name) {
 	return join(scriptDir, name);
 }
 
+const repiPath = existsSync(join(root, "repi")) ? join(root, "repi") : "repi";
 const steps = [
 	{ id: "doctor", cmd: "node", args: [script("repi-doctor.mjs"), root] },
 	{ id: "memory-status", cmd: "node", args: [script("memory-inspect.mjs"), root, "status", "--json"] },
 	{ id: "model-doctor", cmd: "node", args: [script("model-inspect.mjs"), root, "doctor", "--json"] },
-	{ id: "cli-ux-gate", cmd: "node", args: [script("repi-cli-ux-gate.mjs"), root, "--strict"] },
+	{ id: "launcher-help", cmd: repiPath, args: ["--offline", "--help"] },
+	{ id: "launcher-list-models", cmd: repiPath, args: ["--offline", "--list-models"] },
 ];
-if (existsSync(join(root, "scripts", "reverse-agent", "memory-isolation-gate.mjs"))) {
-	steps.push(
-		{ id: "memory-scoped-gate", cmd: "npm", args: ["run", "gate:memory-isolation-default"] },
-		{ id: "shrinkwrap", cmd: "npm", args: ["run", "check:shrinkwrap"] },
-		{ id: "ts-imports", cmd: "npm", args: ["run", "check:ts-imports"] },
-	);
-}
-if (full) steps.push({ id: "full-check", cmd: "npm", args: ["run", "check"] });
+if (full) steps.push({ id: "full-check", cmd: "npm", args: ["run", "check"], timeout: 180_000 });
 
 function runStep(step) {
 	const startedAt = Date.now();

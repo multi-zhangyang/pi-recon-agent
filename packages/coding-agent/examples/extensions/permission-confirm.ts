@@ -1,5 +1,5 @@
 /**
- * Permission Gate Extension
+ * Permission Confirm Extension
  *
  * Prompts for confirmation before running potentially dangerous bash commands.
  * Patterns checked: rm -rf, sudo, chmod/chown 777

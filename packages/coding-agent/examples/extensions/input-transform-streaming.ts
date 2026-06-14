@@ -1,5 +1,5 @@
 /**
- * Streaming-Aware Input Gate
+ * Streaming-Aware Input Transform
  *
  * Demonstrates `event.streamingBehavior` to skip expensive pre-processing
  * during mid-stream steering, where low latency matters.

@@ -37,7 +37,7 @@ const roleLibrary = [
 		role: "verifier",
 		objective: "验证与反证：最小复现、claim 质量、失败条件、需要补证的步骤。",
 		evidenceContract: ["verification commands", "counter-evidence", "claim confidence", "blocking gaps"],
-		mergeKeys: ["verifier", "claim", "counterexample", "gate"],
+		mergeKeys: ["verifier", "claim", "counterexample", "check"],
 	},
 	{
 		role: "adversary",

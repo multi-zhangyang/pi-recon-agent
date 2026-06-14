@@ -16,7 +16,7 @@
 
 1. 从最新 `main` 分支创建 feature branch。
 2. 保持变更范围清晰，避免把重构、格式化和功能修改混在一个 PR。
-3. 给出验证命令和结果；涉及 REPI harness 的变更必须说明新增或更新的 gate。
+3. 给出验证命令和结果；涉及 REPI 运行时、安装、provider、memory、compact 或 MCP 的变更必须说明普通命令验证结果。
 4. 不要提交本地运行态：`~/.repi`、`.repi/`、`auth.json`、session、bugreport、provider 私钥、模型密钥。
 
 推荐本地验证：
@@ -25,34 +25,33 @@
 npm install
 npm run check
 npm run smoke:repi
-npm run gate:repi-harness
 ```
 
 如果改了安装、入口、发布、文档或安全边界，还需要运行：
 
 ```bash
-npm run gate:open-source-readiness
+npm run doctor:repi
+npm run smoke:repi
 npm run build
 ```
 
 ## 代码规范
 
 - TypeScript / JavaScript 代码必须通过 `npm run check`。
-- 新增 runtime 行为要有可执行验证：script、gate、fixture、schema 或 smoke test。
+- 新增 runtime 行为要有可执行验证：script、fixture、schema、doctor 或 smoke test。
 - 任何能力声明都要绑定证据；不要只改 README 或 prompt。
-- 面向用户的命令必须在 `README.md`、`--help`、doctor/smoke/harness 中保持一致。
+- 面向用户的命令必须在 `README.md`、`--help`、doctor/smoke 中保持一致。
 - 对 provider、memory、bugreport、session、auth 的改动必须默认脱敏并保持本地私有。
 
 ## 依赖升级策略
 
-npm 依赖由维护者手动升级，不接受只改 `package-lock.json` 的自动版本 PR。原因是本仓库还有生成的 coding-agent shrinkwrap、模型目录和 release harness，升级依赖后必须一起运行并提交对应结果：
+npm 依赖由维护者手动升级，不接受只改 `package-lock.json` 的自动版本 PR。原因是本仓库还有生成的 coding-agent shrinkwrap、模型目录和 release 流程，升级依赖后必须一起运行并提交对应结果：
 
 ```bash
 npm install
 npm run shrinkwrap:coding-agent
 npm run check
 npm run smoke:repi
-npm run gate:repi-harness
 ```
 
 GitHub Actions 依赖可以由 Dependabot 自动提交；npm 安全告警会在维护者确认兼容性后合并修复。
@@ -83,4 +82,4 @@ PR 合并前至少满足：
 - 代码和文档没有明显过期名称、私有端点或密钥。
 - CI 通过。
 - 变更有明确证据链和回滚路径。
-- 不降低 REPI 的独立产品边界、profile 隔离、memory 污染防护和 release harness 约束。
+- 不降低 REPI 的独立产品边界、profile 隔离、memory 污染防护和 release 流程约束。

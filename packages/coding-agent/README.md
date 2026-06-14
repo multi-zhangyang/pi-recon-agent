@@ -72,7 +72,7 @@ repi
 /login  # Then select provider
 ```
 
-Then start with `/re-harness quick`, `/re-kernel build <target>`, `/re-map <target> 2`, `/re-operator plan <target>`, `/re-verifier matrix`, and `/re-complete audit`. REPI still exposes the standard `read`, `write`, `edit`, and `bash` tools, but its default system prompt and commands are the REPI reverse/pentest control plane.
+Then start with `/re-profile-check quick`, `/re-kernel build <target>`, `/re-map <target> 2`, `/re-operator plan <target>`, `/re-verifier matrix`, and `/re-complete audit`. REPI still exposes the standard `read`, `write`, `edit`, and `bash` tools, but its default system prompt and commands are the REPI reverse/pentest control plane.
 
 **Platform notes:** [Windows](docs/windows.md) | [Termux (Android)](docs/termux.md) | [tmux](docs/tmux.md) | [Terminal setup](docs/terminal-setup.md) | [Shell aliases](docs/shell-aliases.md)
 

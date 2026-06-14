@@ -40,7 +40,7 @@ const ROUTES = [
 		domain: "Frontend / JS reverse",
 		prompt: "jsre",
 		match: /\b(js|javascript|webpack|vite|sign|signature|crypto\.subtle|wasm|bundle|xhr|fetch|websocket|anti-debug)\b/i,
-		workflow: ["asset inventory", "beautify/deobfuscate", "signing path trace", "first divergence", "replay harness"],
+		workflow: ["asset inventory", "beautify/deobfuscate", "signing path trace", "first divergence", "replayer"],
 		tools: ["node", "playwright/CDP", "esbuild", "jq", "re_live_browser"],
 		evidence: ["served assets", "signing function anchors", "request diff", "replay script", "verification matrix"],
 	},

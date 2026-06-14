@@ -293,6 +293,6 @@ repi --exclude-tools ask_question
 
 ## Design Principles
 
-REPI is organized around executable reverse/pentest workflows: passive mapping first, runtime proof before broad claims, evidence-ledger writeback, memory feedback, compact/resume continuity, and gate-backed capability claims.
+REPI is organized around executable reverse/pentest workflows: passive mapping first, runtime proof before broad claims, evidence-ledger writeback, memory feedback, compact/resume continuity, and checkpoint-backed capability claims.
 
 The core remains extensible through extensions, skills, prompt templates, packages, runtime adapters, and external sandboxes. Built-in reverse/pentest commands provide the default operating system; project-specific policy and tool routing can still be layered on top.

@@ -24,7 +24,7 @@ const agentDir = process.env.REPI_CODING_AGENT_DIR || process.env.REPI_AGENT_DIR
 const repiBin = process.env.REPI_BIN_PATH || join(root, "repi");
 const runtimeMemory = join(agentDir, "recon", "memory");
 const packageBinMode = process.env.REPI_PACKAGE_BIN === "1";
-const installedRepi = process.env.REPI_INSTALLED_BIN_PATH || "/usr/local/bin/repi";
+const installedRepi = process.env.REPI_INSTALLED_BIN_PATH || (existsSync(join(root, "repi")) ? join(root, "repi") : "/usr/local/bin/repi");
 const localScriptsDir = dirname(fileURLToPath(import.meta.url));
 
 function readJson(path) {

@@ -5,7 +5,6 @@ type ApiStyle = "openai-completions" | "openai-responses" | "anthropic-messages"
 
 type ProbeStatus = "pass" | "blocked" | "skipped";
 
-// ProviderEndpointDoctorV1 is covered by gate:provider-endpoint-doctor / runtime:provider-endpoint-doctor-live.
 interface ProviderDoctorOptions {
 	baseUrl: string;
 	model: string;

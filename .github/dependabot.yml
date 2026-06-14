@@ -4,9 +4,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    # npm upgrades are applied manually because this repo has a generated
-    # package shrinkwrap and release harness gates that Dependabot cannot
-    # regenerate on its own. Security alerts still remain visible in GitHub.
+    # npm upgrades are reviewed manually because this repo keeps generated lock/shrinkwrap files.
+    # Security alerts still remain visible in GitHub.
     open-pull-requests-limit: 0
     ignore:
       - dependency-name: "*"

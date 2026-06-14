@@ -59,7 +59,7 @@ for (const sub of [
 	"graphs",
 	"proof-loops",
 	"knowledge",
-	"harness",
+	"profile-checks",
 	"swarms",
 	"supervisor",
 	"contexts",

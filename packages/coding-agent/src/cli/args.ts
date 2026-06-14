@@ -252,7 +252,7 @@ ${updateCommandLine}
   ${APP_NAME} doctor [--fix|--json]
                                  Check and optionally repair the REPI install/runtime profile
   ${APP_NAME} smoke [--full|--json]
-                                 Run fast REPI harness checks
+                                 Run fast REPI runtime checks
   ${APP_NAME} selfcheck [--deep|--json] [--provider <name>] [--model <id>]
                                  End-to-end selfcheck for model/tool/memory/parallel/orchestration usability
   ${APP_NAME} bugreport [--output <path>|--stdout|--json]
@@ -365,7 +365,7 @@ ${chalk.bold("Examples:")}
   ${APP_NAME} --models sonnet:high,gpt-4o:low
 
   # Start with a specific thinking level
-  ${APP_NAME} --thinking high "审计当前仓库的 REPI harness 缺口"
+  ${APP_NAME} --thinking high "审计当前仓库的 REPI 运行时与 profile 缺口"
 
   # Passive/read-only mapping mode
   ${APP_NAME} --tools read,grep,find,ls -p "只读分析 src/ 的路由、鉴权和入口"

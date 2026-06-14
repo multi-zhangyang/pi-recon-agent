@@ -66,5 +66,5 @@ Exploit/proof chains must survive compact through `pi-recon-compaction`: restore
 
 ## Harness chain guard
 
-Exploit/proof chain 在声称可用或可安装前必须接入 `re_harness full` / `re_harness install`。`harness_artifact` 中的 `install_readiness`、`reverse_capability_guards`、`regression_guards` 是 chain 的前置质量门；fail 时优先修复 profile/extension/skill/prompts/storage，再继续 re_proof_loop 或 re_complete。
+Exploit/proof chain 在声称可用或可安装前必须接入 `re_profile_check full` / `re_profile_check install`。`profile_check_artifact` 中的 `install_readiness`、`reverse_capability_guards`、`regression_guards` 是 chain 的前置质量门；fail 时优先修复 profile/extension/skill/prompts/storage，再继续 re_proof_loop 或 re_complete。
 

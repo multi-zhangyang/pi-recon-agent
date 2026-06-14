@@ -9,7 +9,7 @@ FORCE_TOOLS=0
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP=""
 ACTION_COUNT=0
-MARKER_RE='REPI|pi-recon|reverse[/-]pentest|reverse-pentest|逆向渗透|re_(context|operator|proof_loop|harness|memory|swarm)|isolated-repi-profile|repi-profile'
+MARKER_RE='REPI|pi-recon|reverse[/-]pentest|reverse-pentest|逆向渗透|re_(context|operator|proof_loop|memory|swarm)|isolated-repi-profile|repi-profile'
 
 usage() {
   cat <<'MSG'
