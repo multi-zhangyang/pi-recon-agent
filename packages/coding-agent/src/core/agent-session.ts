@@ -291,6 +291,8 @@ export class AgentSession {
 	private _resourceLoader: ResourceLoader;
 	private _customTools: ToolDefinition[];
 	private _baseToolDefinitions: Map<string, ToolDefinition> = new Map();
+	private _mcpToolDefinitions: Map<string, ToolDefinition> = new Map();
+	private _mcpToolRefreshGeneration = 0;
 	private _cwd: string;
 	private _extensionRunnerRef?: { current?: ExtensionRunner };
 	private _initialActiveToolNames?: string[];
@@ -364,6 +366,20 @@ export class AgentSession {
 	get mcpManager(): McpManager {
 		this._mcpManager ??= createMcpManager({ cwd: this._cwd });
 		return this._mcpManager;
+	}
+
+	/** Refresh opt-in MCP direct tool definitions after an explicit MCP inspection/probe. */
+	async refreshMcpToolDefinitions(): Promise<number> {
+		const manager = this.mcpManager;
+		const generation = ++this._mcpToolRefreshGeneration;
+		const definitions = await manager.createToolDefinitions();
+		if (generation !== this._mcpToolRefreshGeneration) return this._mcpToolDefinitions.size;
+		this._mcpToolDefinitions = new Map([
+			...manager.createProxyToolDefinitions().map((definition) => [definition.name, definition] as const),
+			...definitions.map((definition) => [definition.name, definition] as const),
+		]);
+		this._refreshToolRegistry();
+		return this._mcpToolDefinitions.size;
 	}
 
 	private async _getRequiredRequestAuth(model: Model<any>): Promise<{
@@ -2377,12 +2393,17 @@ export class AgentSession {
 			(!allowedToolNames || allowedToolNames.has(name)) && !excludedToolNames?.has(name);
 
 		const registeredTools = this._extensionRunner.getAllRegisteredTools();
+		const mcpTools = Array.from(this._mcpToolDefinitions.values()).map((definition) => ({
+			definition,
+			sourceInfo: createSyntheticSourceInfo(`<mcp:${definition.name}>`, { source: "mcp" }),
+		}));
 		const allCustomTools = [
 			...registeredTools,
 			...this._customTools.map((definition) => ({
 				definition,
 				sourceInfo: createSyntheticSourceInfo(`<sdk:${definition.name}>`, { source: "sdk" }),
 			})),
+			...mcpTools,
 		].filter((tool) => isAllowedTool(tool.definition.name));
 		const definitionRegistry = new Map<string, ToolDefinitionEntry>(
 			Array.from(this._baseToolDefinitions.entries())
@@ -2461,6 +2482,13 @@ export class AgentSession {
 		this.setActiveToolsByName([...new Set(nextActiveToolNames)]);
 	}
 
+	private _installMcpToolDefinitions(): void {
+		const manager = this.mcpManager;
+		this._mcpToolDefinitions = new Map(
+			manager.createProxyToolDefinitions().map((definition) => [definition.name, definition]),
+		);
+	}
+
 	private _buildRuntime(options: {
 		activeToolNames?: string[];
 		flagValues?: Map<string, boolean | string>;
@@ -2484,6 +2512,7 @@ export class AgentSession {
 		this._baseToolDefinitions = new Map(
 			Object.entries(baseToolDefinitions).map(([name, tool]) => [name, tool as ToolDefinition]),
 		);
+		this._installMcpToolDefinitions();
 
 		const extensionsResult = this._resourceLoader.getExtensions();
 		if (options.flagValues) {

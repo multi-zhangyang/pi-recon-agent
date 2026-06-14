@@ -1,7 +1,11 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import type { AgentToolResult } from "@pi-recon/repi-agent-core";
+import { Type } from "typebox";
 import { APP_NAME, getAgentDir, VERSION } from "../config.ts";
+import type { ToolDefinition } from "./extensions/types.ts";
 
 export type McpTransport = "stdio" | "http";
 
@@ -17,6 +21,10 @@ export interface McpServerConfig {
 	timeoutMs?: number;
 	allowedTools?: string[];
 	blockedTools?: string[];
+	/** Opt-in: expose this server as runtime LLM-callable MCP tools. */
+	autoRegisterTools?: boolean;
+	/** Compatibility alias for older local configs. */
+	enableTools?: boolean;
 }
 
 export interface McpConfigFile {
@@ -50,12 +58,34 @@ export interface McpProbeResult {
 	error?: string;
 }
 
+export interface McpToolCallDetails {
+	serverId: string;
+	toolName: string;
+	isError: boolean;
+	contentItems: number;
+	stderrTail?: string;
+}
+
+export interface McpToolCallResult {
+	content: AgentToolResult<McpToolCallDetails>["content"];
+	details: McpToolCallDetails;
+	isError: boolean;
+}
+
 export interface McpManagerOptions {
 	cwd: string;
 	agentDir?: string;
 }
 
 const DEFAULT_MCP_TIMEOUT_MS = 10000;
+const MAX_MCP_TOOL_TEXT_CHARS = 64000;
+
+const mcpProxyToolSchema = Type.Object({
+	tool: Type.String({ description: "Original MCP tool name to call on this server" }),
+	arguments: Type.Optional(
+		Type.Record(Type.String(), Type.Any(), { description: "Arguments passed to the MCP tool" }),
+	),
+});
 
 const SECRET_PATTERNS: Array<[RegExp, string]> = [
 	[/\bsk-[A-Za-z0-9_-]{8,}\b/g, "<redacted:api-key>"],
@@ -69,6 +99,10 @@ function redact(text: string): string {
 	let out = text;
 	for (const [pattern, replacement] of SECRET_PATTERNS) out = out.replace(pattern, replacement);
 	return out;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readJsonFile(path: string): McpConfigFile | undefined {
@@ -110,6 +144,78 @@ function redactedConfig(config: McpServerConfig): McpServerConfig {
 	return { ...config, env, headers };
 }
 
+function sanitizeToolNamePart(value: string, fallback: string): string {
+	const sanitized = value
+		.replace(/[^A-Za-z0-9_]/g, "_")
+		.replace(/_+/g, "_")
+		.replace(/^_+|_+$/g, "");
+	return (sanitized || fallback).slice(0, 64);
+}
+
+function shortHash(value: string): string {
+	return createHash("sha1").update(value).digest("hex").slice(0, 8);
+}
+
+function createMcpToolName(serverId: string, toolName: string): string {
+	const server = sanitizeToolNamePart(serverId, "server");
+	const tool = sanitizeToolNamePart(toolName, "tool");
+	const base = `mcp__${server}__${tool}`;
+	if (base.length <= 96) return base;
+	return `mcp__${server.slice(0, 32)}__${tool.slice(0, 40)}__${shortHash(`${serverId}/${toolName}`)}`;
+}
+
+function createMcpProxyToolName(serverId: string): string {
+	return `mcp__${sanitizeToolNamePart(serverId, "server")}__call`;
+}
+
+function normalizeInputSchema(inputSchema: unknown): ToolDefinition["parameters"] {
+	if (!isRecord(inputSchema)) return Type.Object({}, { additionalProperties: true });
+	const schema = structuredClone(inputSchema) as Record<string, unknown>;
+	if (!schema.type && isRecord(schema.properties)) schema.type = "object";
+	return schema as ToolDefinition["parameters"];
+}
+
+function normalizeToolArgs(args: unknown): Record<string, unknown> {
+	return isRecord(args) ? args : {};
+}
+
+function textFromContent(content: McpToolCallResult["content"]): string {
+	return content
+		.map((item) => (item.type === "text" ? item.text : `[image:${item.mimeType}]`))
+		.join("\n")
+		.trim();
+}
+
+function truncateMcpText(text: string): string {
+	const redacted = redact(text);
+	if (redacted.length <= MAX_MCP_TOOL_TEXT_CHARS) return redacted;
+	return `${redacted.slice(0, MAX_MCP_TOOL_TEXT_CHARS)}\n\n[truncated MCP tool output at ${MAX_MCP_TOOL_TEXT_CHARS} chars]`;
+}
+
+function normalizeMcpContent(result: unknown): McpToolCallResult["content"] {
+	const content = isRecord(result) && Array.isArray(result.content) ? result.content : [];
+	const normalized: McpToolCallResult["content"] = [];
+	for (const item of content) {
+		if (!isRecord(item)) continue;
+		if (item.type === "text" && typeof item.text === "string") {
+			normalized.push({ type: "text", text: truncateMcpText(item.text) });
+			continue;
+		}
+		if (item.type === "image" && typeof item.data === "string" && typeof item.mimeType === "string") {
+			normalized.push({ type: "image", data: item.data, mimeType: item.mimeType });
+			continue;
+		}
+		normalized.push({ type: "text", text: truncateMcpText(JSON.stringify(item)) });
+	}
+	if (normalized.length === 0) normalized.push({ type: "text", text: "MCP tool returned no content." });
+	return normalized;
+}
+
+function toAgentToolResult(result: McpToolCallResult): AgentToolResult<McpToolCallDetails> {
+	if (result.isError) throw new Error(textFromContent(result.content) || "MCP tool returned an error");
+	return { content: result.content, details: result.details };
+}
+
 class StdioJsonRpcClient {
 	private child: ReturnType<typeof spawn>;
 	private nextId = 1;
@@ -140,21 +246,41 @@ class StdioJsonRpcClient {
 		return this.stderr.slice(-4000);
 	}
 
-	request(method: string, params?: Record<string, unknown>, timeoutMs = DEFAULT_MCP_TIMEOUT_MS): Promise<any> {
+	request(
+		method: string,
+		params?: Record<string, unknown>,
+		timeoutMs = DEFAULT_MCP_TIMEOUT_MS,
+		signal?: AbortSignal,
+	): Promise<any> {
 		const id = this.nextId++;
 		const message = { jsonrpc: "2.0", id, method, ...(params ? { params } : {}) };
 		return new Promise((resolve, reject) => {
+			if (signal?.aborted) {
+				reject(new Error("Operation aborted"));
+				return;
+			}
+			const cleanup = () => {
+				clearTimeout(timer);
+				signal?.removeEventListener("abort", onAbort);
+			};
+			const onAbort = () => {
+				this.pending.delete(id);
+				cleanup();
+				reject(new Error("Operation aborted"));
+			};
 			const timer = setTimeout(() => {
 				this.pending.delete(id);
+				signal?.removeEventListener("abort", onAbort);
 				reject(new Error(`MCP request timeout: ${method}`));
 			}, timeoutMs);
+			signal?.addEventListener("abort", onAbort, { once: true });
 			this.pending.set(id, {
 				resolve: (value) => {
-					clearTimeout(timer);
+					cleanup();
 					resolve(value);
 				},
 				reject: (error) => {
-					clearTimeout(timer);
+					cleanup();
 					reject(error);
 				},
 			});
@@ -182,24 +308,54 @@ class StdioJsonRpcClient {
 
 	private onStdout(chunk: string): void {
 		this.buffer += chunk;
-		while (this.buffer.includes("\n")) {
+		while (this.buffer.length > 0) {
+			if (this.buffer.startsWith("Content-Length:")) {
+				if (!this.consumeContentLengthMessage()) break;
+				continue;
+			}
+			if (!this.buffer.includes("\n")) break;
 			const index = this.buffer.indexOf("\n");
 			const line = this.buffer.slice(0, index).trim();
 			this.buffer = this.buffer.slice(index + 1);
 			if (!line) continue;
-			let message: any;
-			try {
-				message = JSON.parse(line);
-			} catch {
-				continue;
-			}
-			if (message.id === undefined) continue;
-			const pending = this.pending.get(message.id);
-			if (!pending) continue;
-			this.pending.delete(message.id);
-			if (message.error) pending.reject(new Error(redact(JSON.stringify(message.error))));
-			else pending.resolve(message.result);
+			this.handleMessageLine(line);
 		}
+	}
+
+	private consumeContentLengthMessage(): boolean {
+		const headerEnd = this.buffer.includes("\r\n\r\n")
+			? this.buffer.indexOf("\r\n\r\n")
+			: this.buffer.indexOf("\n\n");
+		if (headerEnd < 0) return false;
+		const delimiter = this.buffer.slice(headerEnd, headerEnd + 4).startsWith("\r\n") ? "\r\n\r\n" : "\n\n";
+		const header = this.buffer.slice(0, headerEnd);
+		const match = header.match(/Content-Length:\s*(\d+)/i);
+		if (!match) {
+			this.buffer = this.buffer.slice(headerEnd + delimiter.length);
+			return true;
+		}
+		const length = Number(match[1]);
+		const start = headerEnd + delimiter.length;
+		if (this.buffer.length < start + length) return false;
+		const body = this.buffer.slice(start, start + length);
+		this.buffer = this.buffer.slice(start + length);
+		this.handleMessageLine(body.trim());
+		return true;
+	}
+
+	private handleMessageLine(line: string): void {
+		let message: any;
+		try {
+			message = JSON.parse(line);
+		} catch {
+			return;
+		}
+		if (message.id === undefined) return;
+		const pending = this.pending.get(message.id);
+		if (!pending) return;
+		this.pending.delete(message.id);
+		if (message.error) pending.reject(new Error(redact(JSON.stringify(message.error))));
+		else pending.resolve(message.result);
 	}
 
 	private rejectAll(error: Error): void {
@@ -251,6 +407,86 @@ export class McpManager {
 		return results;
 	}
 
+	async callTool(
+		serverId: string,
+		toolName: string,
+		args?: unknown,
+		signal?: AbortSignal,
+	): Promise<McpToolCallResult> {
+		const entry = this.getServer(serverId);
+		if (!entry) throw new Error(`MCP server not found: ${serverId}`);
+		if (entry.config.disabled) throw new Error(`MCP server is disabled: ${entry.id}`);
+		if (!this.isToolAllowed(entry, toolName)) throw new Error(`MCP tool is not allowed: ${entry.id}/${toolName}`);
+		const transport = normalizeTransport(entry.config);
+		if (transport === "http") throw new Error("MCP HTTP transport is configured but not started yet");
+		return this.withInitializedStdioClient(
+			entry,
+			async (client) => {
+				const timeoutMs = entry.config.timeoutMs ?? DEFAULT_MCP_TIMEOUT_MS;
+				const result = await client.request(
+					"tools/call",
+					{ name: toolName, arguments: normalizeToolArgs(args) },
+					timeoutMs,
+					signal,
+				);
+				const isError = isRecord(result) && result.isError === true;
+				const content = normalizeMcpContent(result);
+				return {
+					content,
+					isError,
+					details: {
+						serverId: entry.id,
+						toolName,
+						isError,
+						contentItems: content.length,
+						stderrTail: client.stderrTail || undefined,
+					},
+				};
+			},
+			signal,
+		);
+	}
+
+	createProxyToolDefinitions(): ToolDefinition[] {
+		return this.loadServers()
+			.filter((entry) => this.shouldExposeTools(entry))
+			.map((entry) => {
+				const serverId = entry.id;
+				const toolName = createMcpProxyToolName(serverId);
+				return {
+					name: toolName,
+					label: `MCP ${serverId}`,
+					description: `Call an allowed MCP tool on server '${serverId}'. Use /mcp ${serverId} or repi mcp probe ${serverId} to inspect available tool names.`,
+					promptSnippet: `Call MCP server ${serverId} tools`,
+					promptGuidelines: [
+						`This is a proxy for MCP server '${serverId}'. Pass the original MCP tool name in 'tool'.`,
+						"Respect allowedTools/blockedTools from ~/.repi/agent/mcp.json or project .repi/mcp.json.",
+					],
+					parameters: mcpProxyToolSchema,
+					execute: async (_toolCallId, params, signal) => {
+						const result = await this.callTool(serverId, params.tool, params.arguments ?? {}, signal);
+						return toAgentToolResult(result);
+					},
+				} satisfies ToolDefinition<typeof mcpProxyToolSchema, McpToolCallDetails>;
+			});
+	}
+
+	async createToolDefinitions(): Promise<ToolDefinition[]> {
+		const definitions: ToolDefinition[] = [];
+		const usedNames = new Set(this.createProxyToolDefinitions().map((definition) => definition.name));
+		for (const entry of this.loadServers().filter((candidate) => this.shouldExposeTools(candidate))) {
+			const probe = await this.probeEntry(entry);
+			if (!probe.ok) continue;
+			for (const tool of probe.tools) {
+				let runtimeName = createMcpToolName(entry.id, tool.name);
+				if (usedNames.has(runtimeName)) runtimeName = `${runtimeName}__${shortHash(`${entry.id}/${tool.name}`)}`;
+				usedNames.add(runtimeName);
+				definitions.push(this.createToolDefinition(entry.id, runtimeName, tool));
+			}
+		}
+		return definitions;
+	}
+
 	formatConfig(): string {
 		const entries = this.loadServers();
 		const lines = ["MCP servers:"];
@@ -258,7 +494,7 @@ export class McpManager {
 		if (entries.length === 0) {
 			lines.push("- none");
 			lines.push(
-				'example: create ~/.repi/agent/mcp.json with { "mcpServers": { "demo": { "transport": "stdio", "command": "node", "args": ["server.js"] } } }',
+				'example: create ~/.repi/agent/mcp.json with { "mcpServers": { "demo": { "transport": "stdio", "command": "node", "args": ["server.js"], "autoRegisterTools": true } } }',
 			);
 			return lines.join("\n");
 		}
@@ -268,7 +504,7 @@ export class McpManager {
 			const target =
 				transport === "stdio" ? [config.command, ...(config.args ?? [])].filter(Boolean).join(" ") : config.url;
 			lines.push(
-				`- ${entry.id} [${transport}${config.disabled ? ", disabled" : ""}] ${target ?? "<missing-target>"}`,
+				`- ${entry.id} [${transport}${config.disabled ? ", disabled" : ""}${this.shouldExposeTools(entry) ? ", tools:auto" : ""}] ${target ?? "<missing-target>"}`,
 			);
 			lines.push(`  source=${entry.sourcePath}`);
 		}
@@ -295,6 +531,71 @@ export class McpManager {
 		return lines.join("\n");
 	}
 
+	private createToolDefinition(serverId: string, runtimeName: string, tool: McpToolSummary): ToolDefinition {
+		return {
+			name: runtimeName,
+			label: `MCP ${serverId}/${tool.name}`,
+			description: tool.description ?? `Call MCP tool '${tool.name}' on server '${serverId}'.`,
+			promptSnippet: `Call MCP tool ${serverId}/${tool.name}`,
+			promptGuidelines: [
+				`Routes to MCP server '${serverId}', original tool '${tool.name}'.`,
+				"Use this when the MCP server is the most direct source of truth for the task.",
+			],
+			parameters: normalizeInputSchema(tool.inputSchema),
+			execute: async (_toolCallId, params, signal) => {
+				const result = await this.callTool(serverId, tool.name, params, signal);
+				return toAgentToolResult(result);
+			},
+		};
+	}
+
+	private shouldExposeTools(entry: McpServerEntry): boolean {
+		return !entry.config.disabled && (entry.config.autoRegisterTools === true || entry.config.enableTools === true);
+	}
+
+	private isToolAllowed(entry: McpServerEntry, toolName: string): boolean {
+		const allowed = new Set(entry.config.allowedTools ?? []);
+		const blocked = new Set(entry.config.blockedTools ?? []);
+		return (allowed.size === 0 || allowed.has(toolName)) && !blocked.has(toolName);
+	}
+
+	private filterTools(entry: McpServerEntry, rawTools: unknown): McpToolSummary[] {
+		const tools = Array.isArray(rawTools) ? rawTools : [];
+		return tools
+			.filter((tool: any) => typeof tool?.name === "string")
+			.filter((tool: any) => this.isToolAllowed(entry, tool.name))
+			.map((tool: any) => ({
+				name: tool.name,
+				description: typeof tool.description === "string" ? tool.description : undefined,
+				inputSchema: tool.inputSchema,
+			}));
+	}
+
+	private async withInitializedStdioClient<T>(
+		entry: McpServerEntry,
+		callback: (client: StdioJsonRpcClient, init: any) => Promise<T>,
+		signal?: AbortSignal,
+	): Promise<T> {
+		const client = new StdioJsonRpcClient(entry);
+		try {
+			const timeoutMs = entry.config.timeoutMs ?? DEFAULT_MCP_TIMEOUT_MS;
+			const init = await client.request(
+				"initialize",
+				{
+					protocolVersion: "2025-11-25",
+					capabilities: {},
+					clientInfo: { name: APP_NAME, version: VERSION },
+				},
+				timeoutMs,
+				signal,
+			);
+			client.notify("notifications/initialized");
+			return await callback(client, init);
+		} finally {
+			client.close();
+		}
+	}
+
 	private async probeEntry(entry: McpServerEntry): Promise<McpProbeResult> {
 		const transport = normalizeTransport(entry.config);
 		if (entry.config.disabled)
@@ -310,43 +611,26 @@ export class McpManager {
 			};
 		}
 
-		const client = new StdioJsonRpcClient(entry);
+		let stderrTail = "";
 		try {
-			const timeoutMs = entry.config.timeoutMs ?? DEFAULT_MCP_TIMEOUT_MS;
-			const init = await client.request(
-				"initialize",
-				{
-					protocolVersion: "2025-11-25",
-					capabilities: {},
-					clientInfo: { name: APP_NAME, version: VERSION },
-				},
-				timeoutMs,
-			);
-			client.notify("notifications/initialized");
-			const listed = await client.request("tools/list", {}, timeoutMs).catch((error) => ({ error }));
-			const rawTools = Array.isArray(listed?.tools) ? listed.tools : [];
-			const allowed = new Set(entry.config.allowedTools ?? []);
-			const blocked = new Set(entry.config.blockedTools ?? []);
-			const tools = rawTools
-				.filter((tool: any) => typeof tool?.name === "string")
-				.filter((tool: any) => allowed.size === 0 || allowed.has(tool.name))
-				.filter((tool: any) => !blocked.has(tool.name))
-				.map((tool: any) => ({
-					name: tool.name,
-					description: typeof tool.description === "string" ? tool.description : undefined,
-					inputSchema: tool.inputSchema,
-				}));
-			return {
-				serverId: entry.id,
-				ok: true,
-				transport,
-				command: [entry.config.command, ...(entry.config.args ?? [])].filter(Boolean).join(" "),
-				protocolVersion: typeof init?.protocolVersion === "string" ? init.protocolVersion : undefined,
-				serverInfo: init?.serverInfo,
-				capabilities: init?.capabilities,
-				tools,
-				stderrTail: client.stderrTail,
-			};
+			const result = await this.withInitializedStdioClient(entry, async (client, init) => {
+				const timeoutMs = entry.config.timeoutMs ?? DEFAULT_MCP_TIMEOUT_MS;
+				const listed = await client.request("tools/list", {}, timeoutMs).catch((error) => ({ error }));
+				const tools = this.filterTools(entry, listed?.tools);
+				stderrTail = client.stderrTail;
+				return {
+					serverId: entry.id,
+					ok: true,
+					transport,
+					command: [entry.config.command, ...(entry.config.args ?? [])].filter(Boolean).join(" "),
+					protocolVersion: typeof init?.protocolVersion === "string" ? init.protocolVersion : undefined,
+					serverInfo: init?.serverInfo,
+					capabilities: init?.capabilities,
+					tools,
+					stderrTail: client.stderrTail,
+				} satisfies McpProbeResult;
+			});
+			return result;
 		} catch (error) {
 			return {
 				serverId: entry.id,
@@ -354,11 +638,9 @@ export class McpManager {
 				transport,
 				command: [entry.config.command, ...(entry.config.args ?? [])].filter(Boolean).join(" "),
 				tools: [],
-				stderrTail: client.stderrTail,
+				stderrTail,
 				error: redact(error instanceof Error ? error.message : String(error)),
 			};
-		} finally {
-			client.close();
 		}
 	}
 }

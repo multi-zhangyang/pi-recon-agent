@@ -26,7 +26,7 @@ Config files:
 Example ~/.repi/agent/mcp.json:
 {
   "mcpServers": {
-    "demo": { "transport": "stdio", "command": "node", "args": ["/path/server.js"] }
+    "demo": { "transport": "stdio", "command": "node", "args": ["/path/server.js"], "autoRegisterTools": true }
   }
 }
 `;
@@ -43,6 +43,13 @@ function readJson(path) {
 	if (!existsSync(path)) return undefined;
 	try { return JSON.parse(readFileSync(path, "utf8")); } catch { return undefined; }
 }
+function redactConfig(cfg) {
+	const out = { ...cfg };
+	if (out.env) out.env = Object.fromEntries(Object.entries(out.env).map(([k, v]) => [k, String(v).startsWith("$") ? v : "<redacted>"]));
+	if (out.headers) out.headers = Object.fromEntries(Object.entries(out.headers).map(([k, v]) => [k, String(v).startsWith("$") ? v : "<redacted>"]));
+	return out;
+}
+function redactServers(servers) { return servers.map(s => ({ ...s, config: redactConfig(s.config) })); }
 function configPaths() { return [join(agentDir, "mcp.json"), join(cwd, ".repi", "mcp.json")]; }
 function loadServers() {
 	const map = new Map();
@@ -81,7 +88,11 @@ function probe(entry) {
 				if (msg.error) return finish({ serverId: entry.id, ok: false, transport: "stdio", tools: [], error: redact(JSON.stringify(msg.error)) });
 				if (stage === "init" && msg.id === 1) { stage = "tools"; writeLine(child, { jsonrpc: "2.0", method: "notifications/initialized" }); req("tools/list", {}); continue; }
 				if (stage === "tools" && msg.id === 2) {
-					const tools = Array.isArray(msg.result?.tools) ? msg.result.tools.map(t => ({ name: t.name, description: t.description })).filter(t => t.name) : [];
+					const allowed = new Set(cfg.allowedTools || []);
+					const blocked = new Set(cfg.blockedTools || []);
+					const tools = Array.isArray(msg.result?.tools) ? msg.result.tools
+						.map(t => ({ name: t.name, description: t.description }))
+						.filter(t => t.name && (allowed.size === 0 || allowed.has(t.name)) && !blocked.has(t.name)) : [];
 					return finish({ serverId: entry.id, ok: true, transport: "stdio", protocolVersion: "2025-11-25", tools });
 				}
 			}
@@ -92,7 +103,7 @@ function probe(entry) {
 function textStatus(servers) {
 	const lines = ["MCP servers:", `config_paths: ${configPaths().join(", ")}`];
 	if (!servers.length) lines.push("- none");
-	for (const s of servers) lines.push(`- ${s.id} [${s.config.transport || "stdio"}${s.config.disabled ? ", disabled" : ""}] source=${s.sourcePath}`);
+	for (const s of servers) lines.push(`- ${s.id} [${s.config.transport || "stdio"}${s.config.disabled ? ", disabled" : ""}${s.config.autoRegisterTools || s.config.enableTools ? ", tools:auto" : ""}] source=${s.sourcePath}`);
 	return lines.join("\n");
 }
 function textProbe(results) {
@@ -107,7 +118,7 @@ function textProbe(results) {
 if (["--help", "-h", "help"].includes(command)) { console.log(usage()); process.exit(0); }
 const servers = loadServers();
 if (["status", "config"].includes(command)) {
-	const report = { kind: "repi-mcp-status", ok: true, configPaths: configPaths(), servers };
+	const report = { kind: "repi-mcp-status", ok: true, configPaths: configPaths(), servers: redactServers(servers) };
 	console.log(json ? JSON.stringify(report, null, 2) : textStatus(servers));
 	process.exit(0);
 }

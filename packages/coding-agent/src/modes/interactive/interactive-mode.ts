@@ -5439,8 +5439,12 @@ export class InteractiveMode {
 				info = manager.formatConfig();
 			} else if (args === "list" || args === "tools" || args === "probe") {
 				info = manager.formatProbeResults(await manager.probeAll());
+				const count = await this.session.refreshMcpToolDefinitions();
+				info += `\nregistered_runtime_tools=${count}`;
 			} else {
 				info = manager.formatProbeResults([await manager.probeServer(args)]);
+				const count = await this.session.refreshMcpToolDefinitions();
+				info += `\nregistered_runtime_tools=${count}`;
 			}
 			this.chatContainer.addChild(new Spacer(1));
 			this.chatContainer.addChild(new Text(info, 1, 0));
