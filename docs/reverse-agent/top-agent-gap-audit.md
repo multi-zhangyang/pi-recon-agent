@@ -127,7 +127,7 @@ REPI 已经有逆向/渗透 profile、模型配置、隔离 profile、trust、co
 - 已补 resource mention UX：普通任务消息支持 `@mcp/<server>/<uri>` / `mcp://<server>/<uri>`，发送模型前读取 resource 并注入 `<mcp-resource>` 上下文块。
 - 已补 subagent MCP allowlist/继承：child agent 默认继承 MCP 配置，把 proxy/search/resources/prompts runtime tools 加入 worker allowlist，并通过 `REPI_MCP_ALLOWED_SERVERS` / `REPI_MCP_ALLOWED_TOOLS` 约束 worker。
 - 已新增独立 `gate:repi-mcp`，覆盖 stdio/http、search、call、resources/read、prompts/get、auth-info、连接池重连、脱敏和静态接线。
-- 已新增可选 `gate:repi-jshook-mcp-live`，用本机 JSHook MCP 做 live dogfood，覆盖 router 型 MCP 的 `call_tool` 调用约定、resources/prompts、连接池状态继承，并可选 headless browser DOM 取证。
+- 已补 router/search 模式 MCP 的通用调用提示，并用真实本机 JSHook search 模式做 dogfood 验证；不为单个 MCP 引入专用 gate。
 - 已补 MCP tool-call 大输出 artifact 落盘：长文本写到 `~/.repi/agent/recon/mcp-artifacts/`，上下文只收 preview、path、sha256、bytes。
 - 已补 MCP resources/list 与 resources/read runtime tools：`mcp__server__list_resources`、`mcp__server__read_resource`，resource 大文本同样复用 artifact 落盘。
 - 已补 MCP prompts/list 与 prompts/get runtime tools 和 CLI：`mcp__server__list_prompts`、`mcp__server__get_prompt`、`repi mcp prompts/get-prompt`。

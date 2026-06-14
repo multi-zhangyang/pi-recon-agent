@@ -730,7 +730,6 @@ repi mcp prompts demo
 repi mcp get-prompt demo triage '{"target":"example.test"}'
 repi mcp auth-info remote-demo
 npm run gate:repi-mcp
-REPI_JSHOOK_MCP_LIVE=1 REPI_JSHOOK_BROWSER_LIVE=1 npm run gate:repi-jshook-mcp-live
 ```
 
 会话内：
@@ -764,7 +763,7 @@ REPI_JSHOOK_MCP_LIVE=1 REPI_JSHOOK_BROWSER_LIVE=1 npm run gate:repi-jshook-mcp-l
 - `mcp__demo__list_prompts`：列出 MCP server 暴露的 prompts。
 - `mcp__demo__get_prompt`：按名称和参数获取 MCP prompt，长 prompt 同样落 artifact。
 
-对 JSHook 这类“工具路由器型 MCP”，搜索结果经常会提示 `call_tool({ name: "browser_status", args: {...} })`。此时不要把 `browser_status` 当成 `mcp__jshook__call` 的 `tool` 参数直接传入；应调用：
+对“工具路由器 / search 模式”的 MCP，搜索结果可能提示 `call_tool({ name: "browser_status", args: {...} })` 这类包装调用。此时应按 MCP 当前 `tools/list` 暴露的真实工具来走：如果真实工具是 `call_tool`，就通过 proxy 调用 `tool="call_tool"`，把目标动态工具放进 `arguments.name`：
 
 ```json
 {
@@ -776,14 +775,7 @@ REPI_JSHOOK_MCP_LIVE=1 REPI_JSHOOK_BROWSER_LIVE=1 npm run gate:repi-jshook-mcp-l
 }
 ```
 
-本地已有 JSHook MCP 时，可直接复制标准 MCP 配置到 `~/.repi/agent/mcp.json` 或项目 `<cwd>/.repi/mcp.json`。发布前可跑可选 live gate：
-
-```bash
-REPI_JSHOOK_MCP_LIVE=1 npm run gate:repi-jshook-mcp-live
-REPI_JSHOOK_MCP_LIVE=1 REPI_JSHOOK_BROWSER_LIVE=1 npm run gate:repi-jshook-mcp-live
-```
-
-该 gate 会用隔离 profile 读取本机 MCP 配置，验证 probe、router call、resources、prompts、连接池状态继承；开启 `REPI_JSHOOK_BROWSER_LIVE=1` 后还会启动 headless browser、导航 data URL 并执行 DOM 取证。
+也就是说，`mcp__server__call.tool` 必须是 MCP 已暴露的真实工具名；搜索出来的动态工具名只有在后续 `tools/list` 真正出现后，才适合直接调用。
 
 `headers` 支持 `$ENV_NAME` 或 `Bearer $ENV_NAME` 形式的本地环境变量展开；也可以用 `"bearerToken": "$MCP_API_KEY"` 或 `"oauth": {"accessToken": "$TOKEN"}` 自动生成 `Authorization: Bearer ...`。`repi mcp auth-info <server>` 会读取远程 server 的 `WWW-Authenticate` / protected-resource metadata，方便接入 OAuth MCP server。`deferToolSchemas: true` 时不会把直连工具 schema 注册进 runtime，只保留 search/proxy/resources/prompts 这些轻量入口。MCP session 默认会连接池复用并在失败时做一次重连，`poolIdleMs` 可调整空闲关闭时间。子代理默认继承 MCP 配置，并通过 `REPI_MCP_ALLOWED_SERVERS` / `REPI_MCP_ALLOWED_TOOLS` 做 worker 级 allowlist。`allowedTools` / `blockedTools` 会同时作用于探测、直连工具和 proxy 调用。stdout/stderr 与返回文本会做默认脱敏；超过阈值的大文本不会整段塞回上下文，而是写入：
 

@@ -165,8 +165,7 @@
 		"gate:repi-cli-ux": "node scripts/reverse-agent/repi-cli-ux-gate.mjs . --strict",
 		"health:repi": "node scripts/reverse-agent/repi-health.mjs .",
 		"mission:repi": "node scripts/reverse-agent/repi-mission.mjs . status",
-		"engage:repi": "node scripts/reverse-agent/repi-engage.mjs . . --json",
-		"gate:repi-jshook-mcp-live": "node scripts/reverse-agent/repi-jshook-mcp-live-gate.mjs . --strict"
+		"engage:repi": "node scripts/reverse-agent/repi-engage.mjs . . --json"
 	},
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "0.0.26",
