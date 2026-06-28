@@ -5,6 +5,41 @@ the [pi coding agent](https://github.com/earendil-works/pi) runtime. This
 changelog covers REPI-specific releases. The upstream pi changelog is preserved
 in `CHANGELOG.upstream.md` for reference.
 
+## [0.1.1] - 2026-06-28
+
+Patch release: bug fixes from real-run verification and a full
+test-suite reconciliation. No feature or contract changes.
+
+### Fixed
+
+- **Subagent delegation auth**: `auth.json` was not copied into a subagent's
+  agent-home, so delegation via the model-login flow failed to authenticate.
+  The launcher now provisions the child agent-home with the parent's auth.
+- **model-test error output**: a model-test run that errored printed
+  `undefined` instead of the error; the error path now surfaces the message.
+- **Non-interactive `--help` stdout leak**: a regression let `--help` and
+  startup package-install chatter reach real stdout in print/json/rpc modes,
+  breaking the "stdout is machine-readable" contract. The stdout takeover is
+  now gated only on appMode; interactive `--help` (TTY) still goes to stdout.
+- **Installer**: create `/usr/local/bin` when it is on `PATH` but missing, so
+  the launcher symlink target directory exists.
+
+### Tests
+
+- Reconciled **17 stale assertions** with the current implementation contract
+  (full vitest suite: 1428 passed, 44 skipped, 0 failed; was 17 failed). The
+  tests had drifted from two intentional refactors: the `gates` field was
+  removed from `MissionState` in favor of `checkpoints`, and `re_harness` /
+  `re-harness` were renamed to `re_profile_check` / `re-profile-check` (plus
+  `GateV1` → `CheckV1` and `gate:` → `check:` markers). Also fixed a misshapen
+  `prepareCompaction` mock and a `process.cwd()`-relative `dark.json` test
+  path, and added the missing `context-compact-audit.mjs` harness.
+
+### Docs
+
+- Rewrote the README install section around the verified 0.1.0 paths and led
+  with the basic `repi` start command.
+
 ## [0.1.0] - 2026-06-28
 
 First public REPI release: a standalone reverse/pentest agent with an isolated
