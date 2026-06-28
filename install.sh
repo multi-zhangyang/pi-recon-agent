@@ -110,13 +110,28 @@ else
 fi
 
 # --- launcher + runtime profile ------------------------------------------
-# No bin flag given: prefer /usr/local/bin when writable (already on PATH for
-# root, so `repi` works in the current shell immediately); otherwise fall back
-# to ~/.local/bin (install-repi.sh will auto-add it to the user's shell rc).
-# Pass --user/--system/--bin-dir through untouched when explicitly given.
+# No bin flag given: pick a launcher dir that is ALREADY on $PATH and writable
+# so `repi` works in the current shell immediately (a child script cannot
+# modify the parent shell's PATH, so installing off-PATH always requires a
+# manual export or a new shell). Preference order:
+#   1. /usr/local/bin, /usr/local/sbin  (standard, on PATH for root)
+#   2. the first writable entry on $PATH that is not a system-critical dir
+#   3. ~/.local/bin  (install-repi.sh auto-adds it to shell rc for new shells)
+# Explicit --user/--system/--bin-dir are passed through untouched.
 if [ "${#BIN_ARGS[@]}" -eq 0 ]; then
-  if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
-    BIN_ARGS=("--system")
+  chosen=""
+  for d in /usr/local/bin /usr/local/sbin; do
+    [ -d "$d" ] && [ -w "$d" ] && chosen="$d" && break
+  done
+  if [ -z "$chosen" ]; then
+    IFS=':' read -ra _path_dirs <<<"$PATH"
+    for d in "${_path_dirs[@]}"; do
+      case "$d" in ""|/bin|/usr/bin|/sbin|/usr/sbin) continue ;; esac
+      [ -d "$d" ] && [ -w "$d" ] && chosen="$d" && break
+    done
+  fi
+  if [ -n "$chosen" ]; then
+    BIN_ARGS=("--bin-dir" "$chosen")
   else
     BIN_ARGS=("--user")
   fi
