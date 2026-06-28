@@ -76,7 +76,9 @@ Options:
   --api-key-env <ENV>            API key environment variable (default: ${DEFAULT_API_KEY_ENV})
   --context-window <tokens>      Context window for generated template (default: 262144)
   --max-tokens <tokens>          Max output tokens for generated template (default: 4096)
-  --timeout-ms <ms>              Per-endpoint probe timeout (default: 45000)
+  --timeout-ms <ms>              Per-endpoint probe timeout (default: 120000; reasoning
+                                 models can take >45s on even a trivial probe, so the
+                                 default is widened to avoid false "blocked request_exception")
   --template-only                Only print models.json template; do not call endpoint
   --json                         Print ProviderEndpointDoctorV1 JSON
 
@@ -97,7 +99,7 @@ function parseArgs(args: string[]): ProviderDoctorOptions | null {
 		apiKeyValue: "",
 		contextWindow: 262144,
 		maxTokens: 4096,
-		timeoutMs: 45000,
+		timeoutMs: 120000,
 		json: false,
 		templateOnly: false,
 	};
@@ -116,7 +118,7 @@ function parseArgs(args: string[]): ProviderDoctorOptions | null {
 		else if (arg === "--api-key-env") options.apiKeyEnv = next();
 		else if (arg === "--context-window") options.contextWindow = parseBoundedInt(next(), 1024, 1048576, 262144);
 		else if (arg === "--max-tokens") options.maxTokens = parseBoundedInt(next(), 64, 65536, 4096);
-		else if (arg === "--timeout-ms") options.timeoutMs = parseBoundedInt(next(), 1000, 180000, 45000);
+		else if (arg === "--timeout-ms") options.timeoutMs = parseBoundedInt(next(), 1000, 300000, 120000);
 		else if (arg === "--json") options.json = true;
 		else if (arg === "--template-only") options.templateOnly = true;
 		else throw new Error(`Unknown provider-doctor argument: ${arg}`);

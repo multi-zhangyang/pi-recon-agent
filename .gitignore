@@ -41,3 +41,10 @@ plans/
 .pi/hf-sessions/
 .pi/hf-sessions-backup/
 collect.sh
+
+# REPI runtime artifacts — the agent dir must live in ~/.repi/agent, never inside
+# the repo. Ignore stray auth.json/settings.json/recon/ written into the package
+# dir by a run whose agent-dir resolution fell back to the checkout.
+packages/coding-agent/auth.json
+packages/coding-agent/settings.json
+packages/coding-agent/recon/

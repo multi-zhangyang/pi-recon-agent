@@ -1379,9 +1379,19 @@ export class AgentSession {
 			} else {
 				this.agent.steer(appMessage);
 			}
-		} else if (options?.triggerTurn && options.deliverAs === "steer" && this.agent.state.messages.length > 0) {
+		} else if (options?.deliverAs === "steer" && this.agent.state.messages.length > 0) {
+			// Queue as a steering message. Only trigger an immediate continuation when
+			// explicitly requested (triggerTurn); otherwise leave it queued for the
+			// session's own resume loop to drain. This avoids a double-resume race where
+			// a caller running inside _runAutoCompaction (e.g. a session_compact
+			// extension handler) starts a run via _continueQueuedMessages while the
+			// session's post-compaction while-loop is about to resume on its own — both
+			// call agent.continue() and the second hits the activeRun guard
+			// ("Agent is already processing").
 			this.agent.steer(appMessage);
-			await this._continueQueuedMessages();
+			if (options?.triggerTurn) {
+				await this._continueQueuedMessages();
+			}
 		} else if (options?.triggerTurn) {
 			await this._runAgentPrompt(appMessage);
 		} else {

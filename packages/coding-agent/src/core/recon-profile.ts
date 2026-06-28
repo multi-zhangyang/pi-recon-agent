@@ -34307,14 +34307,22 @@ export function createReconExtensionFactory() {
 			if (canAutoResume) {
 				compactAutoResumeIds.add(resumeId);
 				compactAutoResumeBudget -= 1;
-				pi.sendMessage(
+				// Queue the resume prompt as a steering message WITHOUT triggering a turn
+				// (triggerTurn: false). This handler runs inside _runAutoCompaction; the
+				// session's own post-compaction while-loop will resume and drain the steer
+				// queue (runLoop polls getSteeringMessages at turn start), delivering the
+				// resume prompt in a single, session-owned continuation. Using
+				// triggerTurn: true here started a concurrent agent.continue() that raced
+				// the session loop and crashed with "Agent is already processing".
+				// Await to avoid a floating (un-awaited) promise.
+				await pi.sendMessage(
 					{
 						customType: "repi-auto-resume",
 						content: reconCompactionAutoResumePrompt(contract),
 						display: true,
 						details: autoResume,
 					},
-					{ deliverAs: "steer", triggerTurn: true },
+					{ deliverAs: "steer", triggerTurn: false },
 				);
 			}
 			if (ctx.hasUI) {
