@@ -6,8 +6,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write # create the GitHub Release
-  id-token: write # npm --provenance (OIDC)
+  contents: write # create the GitHub Release and upload assets
 
 concurrency:
   group: release-${{ github.ref }}
@@ -15,7 +14,7 @@ concurrency:
 
 jobs:
   release:
-    name: build, verify, publish
+    name: build, verify, release
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -26,14 +25,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          # full history is not required, but fetch tags for version sanity
           fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: "24"
-          registry-url: "https://registry.npmjs.org"
           cache: npm
 
       - name: Install dependencies
@@ -56,26 +53,23 @@ jobs:
           git diff --check
           git diff --exit-code
 
-      # Dry-run switch: set REPI_RELEASE_DRY_RUN=1 in the triggering workflow
-      # (or temporarily on the tag) to validate build+check+smoke+pack without
-      # publishing or creating a release. Remove once NPM_TOKEN is configured.
-      - name: Publish to npm (dry-run)
-        if: env.REPI_RELEASE_DRY_RUN == '1'
-        run: node scripts/publish.mjs --dry-run
-
-      - name: Configure npm auth
-        if: env.REPI_RELEASE_DRY_RUN != '1'
+      # Pack the four workspace packages into tarballs and attach them to the
+      # release. Users who want a local npm install can download a tarball and
+      # run `npm i -g ./<pkg>-<ver>.tgz`; everyone else uses install.sh.
+      # No npm publish, no NPM_TOKEN, no external account required.
+      - name: Pack release tarballs
         run: |
-          printf "//registry.npmjs.org/:_authToken=%s\n" "${{ secrets.NPM_TOKEN }}" >> ~/.npmrc
-
-      - name: Publish to npm
-        if: env.REPI_RELEASE_DRY_RUN != '1'
-        run: node scripts/publish.mjs
+          mkdir -p release-assets
+          for d in packages/ai packages/agent packages/tui packages/coding-agent; do
+            (cd "$d" && npm pack --ignore-scripts)
+            cp "$d"/*.tgz release-assets/
+          done
+          ls -la release-assets/
 
       - name: GitHub Release
-        if: env.REPI_RELEASE_DRY_RUN != '1'
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
+          files: release-assets/*.tgz
