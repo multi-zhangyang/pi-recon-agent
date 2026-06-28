@@ -5,7 +5,7 @@ the [pi coding agent](https://github.com/earendil-works/pi) runtime. This
 changelog covers REPI-specific releases. The upstream pi changelog is preserved
 in `CHANGELOG.upstream.md` for reference.
 
-## [0.78.1-repi.1] - 2026-06-28
+## [0.1.0] - 2026-06-28
 
 First public REPI release: a standalone reverse/pentest agent with an isolated
 runtime, a reverse/pentest tool kernel, specialist subagents, and mature

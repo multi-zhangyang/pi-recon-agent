@@ -4,7 +4,7 @@ REPI 是独立的逆向渗透命令行智能体,主题是 reverse / pentest **ex
 
 REPI 与原版 `pi` agent 划开边界:它不是 `pi` 的 profile,也不是通用 coding agent。项目复用成熟的工具调用、插件、MCP 和 subagent 机制,不回到纯自研 agent 控制平面的臃肿。安装 REPI 不会覆盖本机已有的 `pi` 命令,运行数据默认写入 `~/.repi/agent`。
 
-> 版本:`0.78.1-repi.1` · 仓库:`https://github.com/multi-zhangyang/pi-recon-agent`(fork 自 `earendil-works/pi`)
+> 版本:`0.1.0` · 仓库:`https://github.com/multi-zhangyang/pi-recon-agent`(fork 自 `earendil-works/pi`)
 
 ---
 

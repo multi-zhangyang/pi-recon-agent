@@ -34,6 +34,6 @@ body:
     id: version
     attributes:
       label: Version
-      description: e.g. 0.78.1
+      description: e.g. 0.1.0
     validations:
       required: false

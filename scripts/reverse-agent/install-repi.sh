@@ -110,17 +110,52 @@ if [ "$(absolute_path "$REPI_LINK")" != "$ROOT/repi" ]; then
 fi
 node "$ROOT/scripts/reverse-agent/init-repi-profile.mjs" "$ROOT"
 REPI_INIT_VERBOSE=1 "$ROOT/repi" --offline --help >/dev/null 2>&1
-PATH_HINT=""
+
+# If the launcher dir is not on PATH, add it to the user's shell rc files
+# idempotently so future shells have `repi` available with no manual export.
+# Only do this for user-local dirs (under $HOME) — never rewrite rc for a
+# system dir like /usr/local/bin (already on PATH) and never touch rc when
+# running with sudo (the rc would be root's, not the invoking user's).
+BIN_ON_PATH=0
 case ":$PATH:" in
-  *":$BIN_DIR:"*) ;;
-  *) PATH_HINT="  PATH hint: export PATH=\"$BIN_DIR:\$PATH\"" ;;
+  *":$BIN_DIR:"*) BIN_ON_PATH=1 ;;
 esac
+
+RC_LINE="export PATH=\"$BIN_DIR:\$PATH\""
+RC_UPDATED=""
+if [ "$BIN_ON_PATH" -ne 1 ] && [ "${SUDO_USER:-}" = "" ] && [ -n "$HOME" ]; then
+  case "$BIN_DIR" in
+    "$HOME"|"$HOME"/*)
+      for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+        # Only edit a rc that already exists (don't create new shell configs);
+        # skip .zshrc unless the user actually uses zsh.
+        [ -f "$rc" ] || continue
+        case "$rc" in
+          *.zshrc) [ -n "${ZSH_VERSION:-}" ] || grep -q 'repi' "$rc" 2>/dev/null || continue ;;
+        esac
+        if ! grep -qF "$RC_LINE" "$rc" 2>/dev/null; then
+          printf '\n# Added by repi install\n%s\n' "$RC_LINE" >> "$rc"
+          RC_UPDATED="${RC_UPDATED}${rc##*/} "
+        fi
+      done
+      ;;
+  esac
+fi
+
+PATH_HINT=""
+if [ "$BIN_ON_PATH" -ne 1 ]; then
+  if [ -n "$RC_UPDATED" ]; then
+    PATH_HINT="  Added PATH export to: ${RC_UPDATED% }\n  Open a new shell, or for this shell run: export PATH=\"$BIN_DIR:\$PATH\""
+  else
+    PATH_HINT="  PATH hint (run in this shell): export PATH=\"$BIN_DIR:\$PATH\""
+  fi
+fi
 cat <<MSG
 Installed REPI:
   launcher: $BIN_DIR/repi -> $ROOT/repi
   runtime : ${REPI_CODING_AGENT_DIR:-${REPI_AGENT_DIR:-$HOME/.repi/agent}}
   profile : built-in reverse/pentest kernel initialized
-${PATH_HINT}
+$(printf "${PATH_HINT}")
 
 Next commands:
   repi commands
