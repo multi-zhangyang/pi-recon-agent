@@ -636,8 +636,15 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	time("parseArgs");
 	let appMode = resolveAppMode(parsed, process.stdin.isTTY);
+	// In non-interactive modes (print/json/rpc) stdout is reserved for
+	// machine-readable agent output, so all human-readable chatter — including
+	// --help and startup package-install output — must route to stderr. The
+	// takeover is therefore gated only on appMode; interactive `--help` (TTY)
+	// stays appMode==="interactive" and keeps the Unix convention of help→stdout.
+	// `--version`/`--list-models`/`--export` produce user-requested stdout output
+	// and remain excluded so they reach real stdout.
 	const shouldTakeOverStdout =
-		appMode !== "interactive" && !parsed.help && !parsed.version && parsed.listModels === undefined && !parsed.export;
+		appMode !== "interactive" && !parsed.version && parsed.listModels === undefined && !parsed.export;
 	if (shouldTakeOverStdout) {
 		takeOverStdout();
 	}
