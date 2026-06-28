@@ -110,8 +110,16 @@ else
 fi
 
 # --- launcher + runtime profile ------------------------------------------
+# No bin flag given: prefer /usr/local/bin when writable (already on PATH for
+# root, so `repi` works in the current shell immediately); otherwise fall back
+# to ~/.local/bin (install-repi.sh will auto-add it to the user's shell rc).
+# Pass --user/--system/--bin-dir through untouched when explicitly given.
 if [ "${#BIN_ARGS[@]}" -eq 0 ]; then
-  BIN_ARGS=("--user")
+  if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
+    BIN_ARGS=("--system")
+  else
+    BIN_ARGS=("--user")
+  fi
 fi
 bash "$ROOT/scripts/reverse-agent/install-repi.sh" --root "$ROOT" "${BIN_ARGS[@]}"
 
