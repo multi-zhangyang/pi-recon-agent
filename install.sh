@@ -114,14 +114,18 @@ fi
 # so `repi` works in the current shell immediately (a child script cannot
 # modify the parent shell's PATH, so installing off-PATH always requires a
 # manual export or a new shell). Preference order:
-#   1. /usr/local/bin, /usr/local/sbin  (standard, on PATH for root)
+#   1. /usr/local/bin, /usr/local/sbin — standard, on PATH for root. If the
+#      dir is on PATH but missing (common on minimal containers), create it.
 #   2. the first writable entry on $PATH that is not a system-critical dir
 #   3. ~/.local/bin  (install-repi.sh auto-adds it to shell rc for new shells)
 # Explicit --user/--system/--bin-dir are passed through untouched.
 if [ "${#BIN_ARGS[@]}" -eq 0 ]; then
   chosen=""
   for d in /usr/local/bin /usr/local/sbin; do
-    [ -d "$d" ] && [ -w "$d" ] && chosen="$d" && break
+    case ":$PATH:" in *":$d:"*) : ;; *) continue ;; esac   # only if on PATH
+    if { [ -d "$d" ] && [ -w "$d" ]; } || { mkdir -p "$d" 2>/dev/null && [ -w "$d" ]; }; then
+      chosen="$d"; break
+    fi
   done
   if [ -z "$chosen" ]; then
     IFS=':' read -ra _path_dirs <<<"$PATH"
