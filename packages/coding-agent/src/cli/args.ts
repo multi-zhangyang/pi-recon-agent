@@ -213,10 +213,9 @@ export function parseArgs(args: string[]): Args {
 }
 
 export function printHelp(extensionFlags?: ExtensionFlag[]): void {
-	const isReconPrimary =
-		process.env.REPI_PRIMARY === "1" || process.env.REPI_PRODUCT === "1" || process.env.PI_RECON_PRIMARY === "1";
+	const isReconPrimary = process.env.REPI_PRIMARY === "1" || process.env.REPI_PRODUCT === "1" || APP_NAME === "repi";
 	const description = isReconPrimary
-		? "REPI reverse/pentest autonomous agent with read, bash, edit, write tools"
+		? "REPI reverse/pentest execution agent with read, bash, edit, write tools"
 		: "AI coding assistant with read, bash, edit, write tools";
 	const reconBanner = isReconPrimary
 		? `${chalk.bold("REPI:")} independent product; built-in reverse/pentest kernel is enabled. Runtime storage: ~/${CONFIG_DIR_NAME}/agent.\n\n`

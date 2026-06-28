@@ -23,7 +23,7 @@ describe("REPI kernel profile", () => {
 	let previousBranchId: string | undefined;
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `pi-recon-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		tempDir = join(tmpdir(), `repi-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		agentDir = join(tempDir, "agent");
 		mkdirSync(agentDir, { recursive: true });
 		previousAgentDir = process.env[ENV_AGENT_DIR];
@@ -45,13 +45,13 @@ describe("REPI kernel profile", () => {
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 
-	it("routes security tasks to a narrow workflow", () => {
+	it("routes reverse/pentest tasks to a narrow workflow", () => {
 		const route = routeReconTask("分析这个 ELF 的许可证校验逻辑");
 		expect(route.domain).toBe("Native reverse");
 		expect(route.workflow).toContain("headers/imports");
-		expect(routeReconTask("LLM agent prompt injection MCP tool call 边界验证").domain).toBe("Agent / LLM security");
+		expect(routeReconTask("LLM agent prompt injection MCP tool call 边界验证").domain).toBe("Agent / LLM boundary");
 		expect(routeReconTask("autopwn exploit reliability poc replay matrix").domain).toBe("Exploit reliability");
-		expect(routeReconTask("nuclei ffuf web 漏洞扫描和目录扫描").domain).toBe("Web vulnerability scanning");
+		expect(routeReconTask("nuclei ffuf web 漏洞扫描和目录扫描").domain).toBe("Web pentest scanning");
 		expect(routeReconTask("iOS IPA Keychain TLS pinning Frida 逆向").domain).toBe("Mobile / iOS");
 		expect(routeReconTask("volatility vmem memory dump 内存取证").domain).toBe("Memory forensics");
 	});
@@ -63,7 +63,7 @@ describe("REPI kernel profile", () => {
 
 		const skill = skillsResult.skills.find((candidate) => candidate.name === "reverse-pentest-orchestrator");
 		expect(skill).toBeDefined();
-		expect(skill?.sourceInfo.source).toBe("builtin:pi-recon");
+		expect(skill?.sourceInfo.source).toBe("builtin:repi");
 		expect(skill?.filePath).toContain(join("recon", "builtin", "reverse-pentest-orchestrator", "SKILL.md"));
 		expect(existsSync(skill!.filePath)).toBe(true);
 
@@ -256,7 +256,7 @@ describe("REPI kernel profile", () => {
 				turnPrefixMessages: [],
 				isSplitTurn: false,
 				tokensBefore: 4242,
-				previousSummary: "previous Pi summary",
+				previousSummary: "previous REPI summary",
 				fileOps: {},
 				settings: {},
 			},
@@ -270,19 +270,19 @@ describe("REPI kernel profile", () => {
 		expect(compaction?.firstKeptEntryId).toBe("entry-keep");
 		expect(compaction?.tokensBefore).toBe(4242);
 		expect(compaction?.summary).toContain("# REPI Compaction Summary");
-		expect(compaction?.summary).toContain("kind: pi-recon-compaction");
+		expect(compaction?.summary).toContain("kind: repi-compaction");
 		expect(compaction?.summary).toContain("re_context resume");
 		expect(compaction?.summary).toContain("re_operator plan");
 		expect(compaction?.summary).toContain("re_operator dispatch");
 		expect(compaction?.summary).toContain("re_proof_loop run <target> 4 2");
 		expect(compaction?.summary).toContain("autonomous_execution_budget");
-		expect(compaction?.details?.kind).toBe("pi-recon-compaction");
+		expect(compaction?.details?.kind).toBe("repi-compaction");
 		expect(compaction?.details?.resumeCommand).toBe("re_context resume");
 		expect(compaction?.details?.contextPath).toBeDefined();
 		expect(existsSync(compaction!.details!.contextPath!)).toBe(true);
-		const checkpoint = appended.find((entry) => entry.type === "pi-recon-compaction-checkpoint");
+		const checkpoint = appended.find((entry) => entry.type === "repi-compaction-checkpoint");
 		expect(checkpoint).toBeDefined();
-		expect(checkpoint?.details.compactionKind).toBe("pi-recon-compaction");
+		expect(checkpoint?.details.compactionKind).toBe("repi-compaction");
 		expect(checkpoint?.details.firstKeptEntryId).toBe("entry-keep");
 
 		const compactedHandler = handlers.get("session_compact")?.[0] as
@@ -307,20 +307,20 @@ describe("REPI kernel profile", () => {
 			},
 			{ hasUI: false },
 		);
-		const resumeContract = appended.find((entry) => entry.type === "pi-recon-compaction-resume-contract");
+		const resumeContract = appended.find((entry) => entry.type === "repi-compaction-resume-contract");
 		expect(resumeContract).toBeDefined();
-		expect(resumeContract?.details.kind).toBe("pi-recon-compaction-resume-contract");
+		expect(resumeContract?.details.kind).toBe("repi-compaction-resume-contract");
 		expect(resumeContract?.details.verified).toBe(true);
 		expect(resumeContract?.details.contextPath).toBe(compaction?.details?.contextPath);
 		expect(String(resumeContract?.details.resumeContract)).toContain("re_context resume");
-		const autoResume = appended.find((entry) => entry.type === "pi-recon-compaction-auto-resume");
-		expect(autoResume?.details.kind).toBe("pi-recon-compaction-auto-resume");
+		const autoResume = appended.find((entry) => entry.type === "repi-compaction-auto-resume");
+		expect(autoResume?.details.kind).toBe("repi-compaction-auto-resume");
 		expect(autoResume?.details.triggered).toBe(true);
-		const telemetry = appended.find((entry) => entry.type === "pi-recon-compaction-resume-telemetry");
-		expect(telemetry?.details.kind).toBe("pi-recon-compaction-resume-telemetry");
+		const telemetry = appended.find((entry) => entry.type === "repi-compaction-resume-telemetry");
+		expect(telemetry?.details.kind).toBe("repi-compaction-resume-telemetry");
 		expect(String(telemetry?.details.path)).toContain("compaction-auto-resume-board.md");
 		expect(sentMessages).toHaveLength(1);
-		expect(sentMessages[0]?.message.customType).toBe("pi-recon-auto-resume");
+		expect(sentMessages[0]?.message.customType).toBe("repi-auto-resume");
 		expect(sentMessages[0]?.message.content).toContain("REPI Auto Resume Trigger");
 		expect(sentMessages[0]?.message.content).toContain("bounded_resume_commands");
 		expect(sentMessages[0]?.options?.triggerTurn).toBe(true);
@@ -2156,7 +2156,7 @@ describe("REPI kernel profile", () => {
 						"[exploit-lab-replay] run=2 exit=0 duration=0.12 stdout_sha256=aaa stderr_sha256=bbb stdout_len=20 stderr_len=0 ok=true",
 						"[exploit-lab-summary] runs=3 ok=3 success_rate=1.000 stable=true unique_exits=1 unique_stdout_hashes=1",
 						"[exploit-lab-flake] failures=0 timeout_or_nonzero=0 stable=true retry_budget=0",
-						"[exploit-lab-bundle] manifest=/tmp/pi-recon-exploit-lab-manifest.json artifacts=1 target=./exploit.py cmd_sha256=def",
+						"[exploit-lab-bundle] manifest=/tmp/repi-exploit-lab-manifest.json artifacts=1 target=./exploit.py cmd_sha256=def",
 					].join("\n"),
 					stderr: "",
 					killed: false,
@@ -2188,7 +2188,7 @@ describe("REPI kernel profile", () => {
 		});
 
 		expect(execCalls).toHaveLength(1);
-		expect(execCalls[0]?.args.join("\n")).toContain("pi-recon-exploit-lab-runner.py");
+		expect(execCalls[0]?.args.join("\n")).toContain("repi-exploit-lab-runner.py");
 		expect(result.content[0]?.text).toContain("exploit_lab:");
 		expect(result.content[0]?.text).toContain("mode: run");
 		expect(result.content[0]?.text).toContain("executions:");
@@ -2230,7 +2230,7 @@ describe("REPI kernel profile", () => {
 						"[mobile-device] emulator-5554 device product=sdk",
 						"[mobile-process] pidof com.demo.app 1234",
 						"[mobile-frida-process] 1234 com.demo.app",
-						"[mobile-frida-hook-template] /tmp/pi-recon-mobile-frida-hooks.js hooks=Java.crypto,String.equals,Debug.isDebuggerConnected,native.strcmp,memcmp",
+						"[mobile-frida-hook-template] /tmp/repi-mobile-frida-hooks.js hooks=Java.crypto,String.equals,Debug.isDebuggerConnected,native.strcmp,memcmp",
 						"[mobile-hook-line] Java.perform",
 						"[mobile-crypto-hook] Cipher.doFinal in=aa",
 						"[mobile-native-hook] strcmp ret=0x0",
@@ -2266,7 +2266,7 @@ describe("REPI kernel profile", () => {
 		});
 
 		expect(execCalls).toHaveLength(1);
-		expect(execCalls[0]?.args.join("\n")).toContain("pi-recon-mobile-frida-hooks.js");
+		expect(execCalls[0]?.args.join("\n")).toContain("repi-mobile-frida-hooks.js");
 		expect(result.content[0]?.text).toContain("mobile_runtime:");
 		expect(result.content[0]?.text).toContain("mode: run");
 		expect(result.content[0]?.text).toContain("executions:");
@@ -2309,7 +2309,7 @@ describe("REPI kernel profile", () => {
 					code: 0,
 					stdout: [
 						"[web-authz-env] node=/usr/bin/node curl=/usr/bin/curl jq=/usr/bin/jq python3=/usr/bin/python3 timeout=9s",
-						"[web-authz-script] /tmp/pi-recon-web-authz-state.mjs artifact=/tmp/pi-recon-web-authz-state.json principals=anon,A,B",
+						"[web-authz-script] /tmp/repi-web-authz-state.mjs artifact=/tmp/repi-web-authz-state.json principals=anon,A,B",
 						"[web-authz-run] [web-authz-state] principal=anon route=/api/users/123 method=GET status=401 bytes=20 hash=aaa",
 						"[web-authz-run] [web-authz-state] principal=A route=/api/users/123 method=GET status=200 bytes=120 hash=bbb",
 						"[web-authz-run] [web-authz-state] principal=B route=/api/users/123 method=GET status=200 bytes=118 hash=ccc",
@@ -2317,7 +2317,7 @@ describe("REPI kernel profile", () => {
 						"[web-authz-run] [web-authz-object] route=/api/users/123 owner=A principal_a_status=200 principal_b_status=200 same_body_ab=false alt_status=200 potential_bola=true",
 						"[web-authz-run] [web-authz-sequence] principal=A steps=2 statuses=200,200 hashes=bbb,ddd",
 						"[web-authz-run] [web-authz-rollback] status=skipped reason=set_REPI_AUTHZ_MUTATE=1_and_REPI_MUTATION_URL",
-						"[web-authz-run] [web-authz-artifact] /tmp/pi-recon-web-authz-state.json",
+						"[web-authz-run] [web-authz-artifact] /tmp/repi-web-authz-state.json",
 					].join("\n"),
 					stderr: "",
 					killed: false,
@@ -2348,7 +2348,7 @@ describe("REPI kernel profile", () => {
 		});
 
 		expect(execCalls).toHaveLength(1);
-		expect(execCalls[0]?.args.join("\n")).toContain("pi-recon-web-authz-state.mjs");
+		expect(execCalls[0]?.args.join("\n")).toContain("repi-web-authz-state.mjs");
 		expect(result.content[0]?.text).toContain("web_authz_state:");
 		expect(result.content[0]?.text).toContain("mode: run");
 		expect(result.content[0]?.text).toContain("executions:");
@@ -2397,10 +2397,10 @@ describe("REPI kernel profile", () => {
 						"[native-ldd] libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6",
 						"[native-symbol] strcmp",
 						"[native-string] license",
-						"[native-gdb-script] /tmp/pi-recon-native-gdb.gdb breakpoints=main,strcmp,strncmp,memcmp,strstr",
+						"[native-gdb-script] /tmp/repi-native-gdb.gdb breakpoints=main,strcmp,strncmp,memcmp,strstr",
 						"[native-gdb] Program received signal SIGSEGV",
 						"[native-gdb] RIP 0x6161616b RSP 0x7fffffffe000",
-						"[native-pwn-scaffold] /tmp/pi-recon-native-pwn-scaffold.py target=./vuln cyclic=128 rop=leak-libc-verifier",
+						"[native-pwn-scaffold] /tmp/repi-native-pwn-scaffold.py target=./vuln cyclic=128 rop=leak-libc-verifier",
 					].join("\n"),
 					stderr: "",
 					killed: false,
@@ -2431,8 +2431,8 @@ describe("REPI kernel profile", () => {
 		});
 
 		expect(execCalls).toHaveLength(1);
-		expect(execCalls[0]?.args.join("\n")).toContain("pi-recon-native-gdb.gdb");
-		expect(execCalls[0]?.args.join("\n")).toContain("pi-recon-native-pwn-scaffold.py");
+		expect(execCalls[0]?.args.join("\n")).toContain("repi-native-gdb.gdb");
+		expect(execCalls[0]?.args.join("\n")).toContain("repi-native-pwn-scaffold.py");
 		expect(result.content[0]?.text).toContain("native_runtime:");
 		expect(result.content[0]?.text).toContain("mode: run");
 		expect(result.content[0]?.text).toContain("executions:");
@@ -2738,7 +2738,7 @@ describe("REPI kernel profile", () => {
 		};
 
 		const webPlan = await planFor("Web API JWT auth websocket replay", "surface", "https://target.local/app");
-		expect(webPlan).toContain("route: Web / API security");
+		expect(webPlan).toContain("route: Web / API pentest");
 		expect(webPlan).toContain("specialist_runtime_planner: browser/XHR/WS");
 		expect(webPlan).toContain("browser-xhr-ws-capture-scaffold");
 		expect(webPlan).toContain("localStorage");
@@ -2756,10 +2756,10 @@ describe("REPI kernel profile", () => {
 		expect(webPlan).toContain("web-api-authz-static-scaffold");
 		expect(webPlan).toContain("web-api-schema-diff-scaffold");
 		expect(webPlan).toContain("web-api-state-source-scaffold");
-		expect(webPlan).toContain("/tmp/pi-recon-browser-artifact.json");
+		expect(webPlan).toContain("/tmp/repi-browser-artifact.json");
 
 		const webScanPlan = await planFor("nuclei ffuf katana web 漏洞扫描", "scope", "https://target.local");
-		expect(webScanPlan).toContain("route: Web vulnerability scanning");
+		expect(webScanPlan).toContain("route: Web pentest scanning");
 		expect(webScanPlan).toContain("specialist_runtime_planner: web vulnerability scanner/triage");
 		expect(webScanPlan).toContain("web-scan-scope-baseline");
 		expect(webScanPlan).toContain("web-scan-crawl-corpus-scaffold");
@@ -2786,7 +2786,7 @@ describe("REPI kernel profile", () => {
 		expect(nativePlan).toContain("native-deep-compare-trace-scaffold");
 		expect(nativePlan).toContain("native-deep-patch-hypothesis-scaffold");
 		expect(nativePlan).toContain("native-deep-symbolic-fuzz-scaffold");
-		expect(nativePlan).toContain("/tmp/pi-recon-native-symbolic-fuzz.py");
+		expect(nativePlan).toContain("/tmp/repi-native-symbolic-fuzz.py");
 
 		const pwnPlan = await planFor("pwn ret2libc heap exploit", "primitive", "./vuln");
 		expect(pwnPlan).toContain("route: Pwn / exploit");
@@ -2841,7 +2841,7 @@ describe("REPI kernel profile", () => {
 		expect(firmwarePlan).toContain("firmware-emulation-scaffold");
 
 		const agentSecPlan = await planFor("LLM agent prompt injection MCP tool call memory poisoning", "surface", ".");
-		expect(agentSecPlan).toContain("route: Agent / LLM security");
+		expect(agentSecPlan).toContain("route: Agent / LLM boundary");
 		expect(agentSecPlan).toContain("specialist_runtime_planner: agent prompt/tool boundary");
 		expect(agentSecPlan).toContain("agent-prompt-surface-map");
 		expect(agentSecPlan).toContain("agent-tool-boundary-scaffold");
@@ -2907,10 +2907,10 @@ describe("REPI kernel profile", () => {
 					return {
 						code: 0,
 						stdout: [
-							"[pi-recon-js-hook] fetch.args GET /api",
-							"[pi-recon-js-hook] crypto.subtle.sign.args key body",
+							"[repi-js-hook] fetch.args GET /api",
+							"[repi-js-hook] crypto.subtle.sign.args key body",
 							"crypto.subtle.sign.ret 32",
-							"[js-signing-normalized] artifact=/tmp/pi-recon-js-observed.json events=3 urls=1 crypto_ops=crypto.subtle.sign key_fields=signature,nonce body_hashes=abc123",
+							"[js-signing-normalized] artifact=/tmp/repi-js-observed.json events=3 urls=1 crypto_ops=crypto.subtle.sign key_fields=signature,nonce body_hashes=abc123",
 							"[js-first-divergence] expected=deadbeef candidate=feedface match=false suspect=body observed_keys=urls,cryptoOps,keyFields",
 							"[js-first-divergence-candidate] name=body bytes=128 sha256=aaa hmacSha256=bbb",
 							"[js-replay-harness] url=https://target.local/api method=POST status=200 bytes=88 body_hash=ccc signature_key=X-Signature",
@@ -2931,10 +2931,10 @@ describe("REPI kernel profile", () => {
 							"[cdp-request] GET https://target.local/api/me type=Fetch",
 							"[cdp-response] 200 https://target.local/api/me",
 							"[cdp-ws] wss://target.local/ws",
-							"[browser-artifact] /tmp/pi-recon-browser-artifact.json",
+							"[browser-artifact] /tmp/repi-browser-artifact.json",
 							'[storage-snapshot] {"href":"https://target.local/app","localStorage":{"access_token":"tok"}}',
-							"[replay-eval] artifact=/tmp/pi-recon-browser-artifact.json method=GET url=https://target.local/api/me status=200 expected=200 replay_match=true bytes=123 body_hash=abc123",
-							"[route-graph] artifact=/tmp/pi-recon-browser-artifact.json routes=2 auth_routes=1 idor_params=1",
+							"[replay-eval] artifact=/tmp/repi-browser-artifact.json method=GET url=https://target.local/api/me status=200 expected=200 replay_match=true bytes=123 body_hash=abc123",
+							"[route-graph] artifact=/tmp/repi-browser-artifact.json routes=2 auth_routes=1 idor_params=1",
 							"[route-node] GET /api/users/:id statuses=200 auth=true params=id idor=id sample=https://target.local/api/users/123?id=123",
 							"[auth-matrix] route=/api/users/123 anon=401 a=200 b=200 same_ab=false diff_anon_a=true bytes_a=120 bytes_b=118 hash_a=aaa hash_b=bbb",
 							"[idor-candidate] method=GET route=/api/users/:id param=id sample=https://target.local/api/users/123?id=123",
@@ -2942,9 +2942,9 @@ describe("REPI kernel profile", () => {
 							"[authz-state] principal=anon route=/api/users/:id method=GET status=401 bytes=20 hash=anon sequence=direct",
 							"[authz-state] principal=A route=/api/users/:id method=GET status=200 bytes=120 hash=aaa sequence=direct",
 							"[authz-state] principal=B route=/api/users/:id method=GET status=200 bytes=118 hash=bbb sequence=direct",
-							"[authz-state-machine] artifact=/tmp/pi-recon-authz-state-machine.json routes=1 states=3 principals=anon,A,B",
+							"[authz-state-machine] artifact=/tmp/repi-authz-state-machine.json routes=1 states=3 principals=anon,A,B",
 							"[authz-sequence] name=list-then-detail principal=A steps=2 statuses=200,200 stable=true drift=false",
-							"[authz-sequence-artifact] /tmp/pi-recon-authz-sequence.json",
+							"[authz-sequence-artifact] /tmp/repi-authz-sequence.json",
 							"[authz-ownership] route=/api/users/:id object=123 owner=A principal=A status=200 principal_b_status=200 same_body=false potential_bola=true",
 							"[authz-rollback] route=/api/users/123 mutation=PATCH before=aaa after=ccc rollback=aaa restored=true",
 							"[web-authz-static] route_file=src/routes.ts line=10 code=app.get('/users/:id')",
@@ -2974,11 +2974,11 @@ describe("REPI kernel profile", () => {
 							"[native-symbol] 0000000000401156 FUNC GLOBAL main",
 							"[native-import] strcmp GLIBC_2.2.5",
 							"[native-string] license invalid",
-							"[native-decompiler] analyzeHeadless=missing script=/tmp/pi-recon-ghidra-export.java",
+							"[native-decompiler] analyzeHeadless=missing script=/tmp/repi-ghidra-export.java",
 							"[native-decompiler-fallback] sym.main cmp eax,0",
-							"[native-compare-trace] script=/tmp/pi-recon-native-compare-trace.gdb target=./license",
+							"[native-compare-trace] script=/tmp/repi-native-compare-trace.gdb target=./license",
 							"[native-compare] fn=strcmp a=user b=secret rip=0x401234",
-							"[native-patch] candidates=3 artifact=/tmp/pi-recon-native-patch-candidates.json",
+							"[native-patch] candidates=3 artifact=/tmp/repi-native-patch-candidates.json",
 							"[native-patch-candidate] 401250: jne 401270",
 							"[native-symbolic] angr=present arch=<Arch AMD64 (LE)> entry=0x401000",
 							"[native-symbolic] cfg_functions=42",
@@ -3002,7 +3002,7 @@ describe("REPI kernel profile", () => {
 							"[pwn-rop-chain] pop_rdi=0x40123b puts@plt=0x401030 puts@got=0x404018",
 							"[pwn-local-verifier] target=./vuln offset=120 payload_len=128 exit=-11",
 							"[pwn-heap] gdb_python_ready=true",
-							"[pwn-tcache] artifact=/tmp/pi-recon-pwn-heap-tcache.log anchors=malloc,free,tcachebins,fastbins,unsortedbin",
+							"[pwn-tcache] artifact=/tmp/repi-pwn-heap-tcache.log anchors=malloc,free,tcachebins,fastbins,unsortedbin",
 							"[pwn-fmtstr] target=./vuln probes=5",
 							"[pwn-fmtstr-probe] idx=1 exit=0 payload=%p.%p output=0x41414141",
 							"[pwn-srop-gadget] 0x401234 : syscall ; ret",
@@ -3022,14 +3022,14 @@ describe("REPI kernel profile", () => {
 						stdout: [
 							"[exploit-candidate] file=./exploit.py",
 							"[exploit-poc] file=exploit.py kind=pwn-pwntools bytes=2048 sha256=abc executable=true",
-							"[exploit-poc-summary] candidates=1 artifact=/tmp/pi-recon-exploit-candidates.json",
+							"[exploit-poc-summary] candidates=1 artifact=/tmp/repi-exploit-candidates.json",
 							"[exploit-replay] cmd=python3 exploit.py runs=5 timeout=8",
 							"[exploit-replay] run=1 exit=0 duration=0.120 hash=aaa ok=true stdout_len=40 stderr_len=0",
-							"[exploit-replay-summary] runs=5 ok=5 success_rate=1.000 unique_hashes=1 unique_exits=1 stable=true artifact=/tmp/pi-recon-exploit-replay-matrix.json",
+							"[exploit-replay-summary] runs=5 ok=5 success_rate=1.000 unique_hashes=1 unique_exits=1 stable=true artifact=/tmp/repi-exploit-replay-matrix.json",
 							"[exploit-env] python=3.12 platform=Linux target=exploit.py sha256=abc",
 							"[exploit-flake] runs=5 failures=0 unique_exits=1 unique_hashes=1 stable=true",
-							"[exploit-bundle] manifest=/tmp/pi-recon-exploit-bundle-manifest.json artifacts=3",
-							"[exploit-bundle-artifact] path=/tmp/pi-recon-exploit-replay-matrix.json bytes=512 sha256=def",
+							"[exploit-bundle] manifest=/tmp/repi-exploit-bundle-manifest.json artifacts=3",
+							"[exploit-bundle-artifact] path=/tmp/repi-exploit-replay-matrix.json bytes=512 sha256=def",
 						].join("\n"),
 						stderr: "",
 						killed: false,
@@ -3044,8 +3044,8 @@ describe("REPI kernel profile", () => {
 							"http.request GET /flag",
 							"[pcap-stream-rank] stream=0 packets=42 bytes=4096 duration=1.337 hosts=10.0.0.1,10.0.0.2 protocols=HTTP,TCP",
 							"[pcap-secret-timeline] frame=7 time=Jun 08 stream=0 src=10.0.0.1 dst=10.0.0.2 value=Authorization: Bearer token",
-							"/tmp/pi-recon-pcap-objects/flag.txt",
-							"[pcap-transform-chain] file=/tmp/pi-recon-pcap-objects/flag.txt bytes=64 hints=base64,secret-string decoded=base64:flag{demo}",
+							"/tmp/repi-pcap-objects/flag.txt",
+							"[pcap-transform-chain] file=/tmp/repi-pcap-objects/flag.txt bytes=64 hints=base64,secret-string decoded=base64:flag{demo}",
 						].join("\n"),
 						stderr: "",
 						killed: false,
@@ -3057,13 +3057,13 @@ describe("REPI kernel profile", () => {
 						stdout: [
 							"[firmware-image] path=router.bin bytes=8388608 sha256=abc magic=27051956 entropy=7.812",
 							"DECIMAL HEXADECIMAL DESCRIPTION Squashfs filesystem, little endian, version 4.0",
-							"[firmware-extract] target=router.bin out=/tmp/pi-recon-firmware-extract",
-							"[firmware-rootfs] /tmp/pi-recon-firmware-extract/squashfs-root",
-							"[firmware-config] root=/tmp/pi-recon-firmware-extract/squashfs-root",
+							"[firmware-extract] target=router.bin out=/tmp/repi-firmware-extract",
+							"[firmware-rootfs] /tmp/repi-firmware-extract/squashfs-root",
+							"[firmware-config] root=/tmp/repi-firmware-extract/squashfs-root",
 							"[firmware-secret] /etc/passwd:root:$1$hash:0:0:root:/root:/bin/sh",
 							"[firmware-service] /etc/init.d/S50dropbear dropbear -p 22",
 							"[firmware-surface] endpoint=/www/cgi-bin/login.cgi",
-							"[firmware-emulation] root=/tmp/pi-recon-firmware-extract/squashfs-root busybox=/bin/busybox arch=ELF 32-bit MSB executable, MIPS",
+							"[firmware-emulation] root=/tmp/repi-firmware-extract/squashfs-root busybox=/bin/busybox arch=ELF 32-bit MSB executable, MIPS",
 							"[firmware-emulation] qemu=qemu-mips-static",
 						].join("\n"),
 						stderr: "",
@@ -3080,7 +3080,7 @@ describe("REPI kernel profile", () => {
 							"[agent-tool-risk] file=src/unsafe.ts reason=exec_without_visible_schema_guard",
 							"[agent-memory] file=recon/memory/field-journal.md bytes=120 sha256=abc",
 							"[agent-memory-risk] file=recon/memory/field-journal.md line=4 text=ignore previous developer message",
-							"[agent-injection-replay] corpus=/tmp/pi-recon-agent-injection-corpus.jsonl cases=4 target=.",
+							"[agent-injection-replay] corpus=/tmp/repi-agent-injection-corpus.jsonl cases=4 target=.",
 							"[agent-injection-case] name=tool-json-smuggle channel=tool_output bytes=66",
 							"[agent-delegation] file=src/mcp.ts hits=2",
 							"[agent-delegation-risk] file=src/mcp.ts line=tools/call delegates to sub-agent capability",
@@ -3144,7 +3144,7 @@ describe("REPI kernel profile", () => {
 					return {
 						code: 0,
 						stdout: [
-							"[pi-recon-frida] Java runtime ready",
+							"[repi-frida] Java runtime ready",
 							"[doFinal] javax.crypto.Cipher",
 							"[doFinal.ret] hexdump ...",
 							"[native] strcmp 0x1 0x2",

@@ -1,17 +1,17 @@
-# REPI Agent
+# REPI Reverse/Pentest Agent
 
-REPI Agent 是面向逆向工程、渗透测试、漏洞分析和复杂工程任务组织的命令行智能体。它提供独立的 `repi` 命令、独立的运行目录、可配置模型、多工具调用、MCP 接入、上下文压缩、任务记忆、子代理和工程化诊断能力。
+REPI 是独立的逆向渗透命令行智能体，主题是 reverse / pentest execution：逆向工程、漏洞验证、Web/API 渗透、pwn、移动、固件、流量/取证、恶意样本分析和可复现证据整理。它提供独立的 `repi` 命令、独立运行目录、可配置模型、多工具调用、MCP 接入、上下文压缩、任务记忆、子代理和工程化诊断能力。
 
-项目基于 Pi Coding Agent 底层深度改造，但作为独立产品使用：安装 REPI 不会覆盖本机已有的 `pi` 命令，运行数据默认写入 `~/.repi/agent`。
+REPI 已经和原版 `pi` agent 划开边界：它不是 `pi` 的 profile，也不是通用 coding agent。项目会复用成熟的工具调用、插件、MCP 和 subagent 机制，避免回到纯自研 agent 控制平面导致的臃肿。安装 REPI 不会覆盖本机已有的 `pi` 命令，运行数据默认写入 `~/.repi/agent`。
 
 ## 特性
 
 - **独立命令**：使用 `repi` 启动；不接管、不删除、不覆盖用户已有的 `pi`。
-- **逆向/渗透工作流**：内置面向 recon、reverse、pwn、web/API、移动、DFIR、协议分析的任务组织提示与工具策略。
+- **逆向渗透工作流**：内置面向 recon、reverse、pwn、web/API、移动、固件、DFIR、协议分析和 exploit proof 的任务组织、工具策略与证据产物。
 - **模型配置**：支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 兼容接口；支持自定义 base URL、上下文窗口、价格、缓存价格和默认模型。
 - **上下文管理**：支持自动 compact、resume contract、跨会话恢复和上下文压缩配置。
 - **MCP 接入**：支持 stdio / streamable HTTP MCP server，支持工具搜索、proxy 调用、resources、prompts、连接池、失败重连和输出脱敏。
-- **子代理**：支持隔离 worker、并行任务、独立日志、合并报告和 MCP 配置继承/限制。
+- **子代理**：支持隔离 worker、并行专家任务、独立日志、证据合并和 MCP 配置继承/限制。
 - **记忆治理**：支持作用域隔离、沉淀、查询、清理、修复和导出，避免跨任务污染。
 - **诊断工具**：提供 `doctor`、`smoke`、`selfcheck`、`bugreport` 等普通用户命令。
 

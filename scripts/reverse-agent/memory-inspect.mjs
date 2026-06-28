@@ -204,6 +204,19 @@ function clip(value, max = 260) {
 	return text.length > max ? `${text.slice(0, max - 14)}...<truncated>` : text;
 }
 
+function normalizeRouteLabel(value) {
+	const raw = String(value ?? "").trim();
+	if (!raw) return "unknown";
+	if (/^Agent \/ LLM security$/i.test(raw)) return "Agent / LLM boundary";
+	if (/^Web \/ API security$/i.test(raw)) return "Web / API pentest";
+	if (/^Security general$/i.test(raw)) return "Reverse/Pentest general";
+	return raw
+		.replace(/\bAgent \/ LLM security\b/gi, "Agent / LLM boundary")
+		.replace(/\bWeb \/ API security\b/gi, "Web / API pentest")
+		.replace(/\bSecurity general\b/gi, "Reverse/Pentest general")
+		.replace(/\bred[- ]team\b/gi, "reverse/pentest");
+}
+
 function redactJson(value, depth = 0) {
 	if (depth > 8) return "<truncated-depth>";
 	if (value === null || value === undefined) return value;
@@ -215,6 +228,8 @@ function redactJson(value, depth = 0) {
 		for (const [key, inner] of Object.entries(value)) {
 			if (/api[-_]?key|auth|authorization|password|secret|token/i.test(key)) {
 				out[key] = "<redacted>";
+			} else if (key === "route" && typeof inner === "string") {
+				out[key] = clip(normalizeRouteLabel(inner), 1200);
 			} else {
 				out[key] = redactJson(inner, depth + 1);
 			}
@@ -266,7 +281,7 @@ function eventSummary(event, score, options = {}) {
 		ts: safeTime(event.ts),
 		score,
 		outcome: redact(event.outcome ?? "unknown"),
-		route: clip(event.route ?? "unknown", 120),
+		route: clip(normalizeRouteLabel(event.route), 120),
 		target: clip(event.target ?? "workspace", 160),
 	};
 	if (options.details !== false) {
@@ -298,7 +313,7 @@ function memoryText(event) {
 	return [
 		event.id,
 		event.caseSignature,
-		event.route,
+		normalizeRouteLabel(event.route),
 		event.target,
 		event.task,
 		...(event.domainTags ?? []),

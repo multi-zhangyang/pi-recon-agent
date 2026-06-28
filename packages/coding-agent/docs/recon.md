@@ -1,6 +1,6 @@
-# REPI Kernel Profile
+# REPI Reverse/Pentest Kernel Profile
 
-REPI includes a built-in reverse-engineering and penetration-testing kernel profile. The `repi` launcher enables the profile and stores state under `~/.repi/agent`.
+REPI includes a built-in reverse-engineering and penetration-testing kernel profile. The product is an independent reverse/pentest execution agent, not a generic security assistant or a generic coding agent. The `repi` launcher enables the profile and stores state under `~/.repi/agent`.
 
 ```bash
 repi
@@ -11,7 +11,7 @@ repi doctor
 
 ## Execution-first runtime
 
-`--recon` / `--reverse-pentest` is not just a prompt preset. It changes runtime session wiring and installs an execution contract:
+`--recon` / `--reverse-pentest` is not just a prompt preset. It changes runtime session wiring and installs an execution contract for practical reverse/pentest work:
 
 - map first: files, configs, routes, logs, manifests, storage, endpoints;
 - trace the live path before making broad claims;

@@ -2,7 +2,7 @@
 	"name": "repi-monorepo",
 	"version": "0.78.1-repi.1",
 	"private": true,
-	"description": "REPI Agent monorepo: reverse-engineering and penetration-testing autonomous CLI agent",
+	"description": "REPI reverse/pentest monorepo: autonomous CLI agent for reverse engineering and penetration testing",
 	"license": "MIT",
 	"repository": {
 		"type": "git",
@@ -19,12 +19,13 @@
 	"type": "module",
 	"keywords": [
 		"repi",
+		"reverse-pentest",
 		"reverse-engineering",
 		"penetration-testing",
-		"red-team",
-		"coding-agent",
 		"llm-agent",
-		"security-research"
+		"pwn",
+		"web-pentest",
+		"malware-analysis"
 	],
 	"workspaces": [
 		"packages/*",
@@ -37,7 +38,7 @@
 	"scripts": {
 		"clean": "npm run clean --workspaces",
 		"build": "cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../coding-agent && npm run build",
-		"check": "biome check --write --error-on-warnings . && npm run check:pinned-deps && npm run check:ts-imports && npm run check:shrinkwrap && tsgo --noEmit && npm run check:browser-smoke",
+		"check": "biome check --write --error-on-warnings . && npm run check:pinned-deps && npm run check:ts-imports && npm run check:shrinkwrap && tsgo --noEmit && npm run contract:repi && npm run check:browser-smoke",
 		"check:browser-smoke": "node scripts/check-browser-smoke.mjs",
 		"check:pinned-deps": "node scripts/check-pinned-deps.mjs",
 		"check:shrinkwrap": "node scripts/generate-coding-agent-shrinkwrap.mjs --check",
@@ -60,6 +61,7 @@
 		"prepare": "husky",
 		"install:repi": "bash scripts/reverse-agent/install-repi.sh .",
 		"doctor:repi": "node scripts/reverse-agent/repi-doctor.mjs .",
+		"contract:repi": "node scripts/reverse-agent/repi-product-contract.mjs .",
 		"smoke:repi": "node scripts/reverse-agent/repi-smoke.mjs .",
 		"selfcheck:repi": "node scripts/reverse-agent/repi-selfcheck.mjs .",
 		"memory:consolidate": "node scripts/reverse-agent/memory-consolidate.mjs .",

@@ -25,8 +25,7 @@ const bashSchema = Type.Object({
 	command: Type.String({ description: "Bash command to execute" }),
 	timeout: Type.Optional(
 		Type.Number({
-			description:
-				"Timeout in seconds. Optional; REPI applies REPI_BASH_DEFAULT_TIMEOUT_SECONDS/PI_BASH_DEFAULT_TIMEOUT_SECONDS when unset.",
+			description: "Timeout in seconds. Optional; REPI applies REPI_BASH_DEFAULT_TIMEOUT_SECONDS when unset.",
 		}),
 	),
 });
@@ -296,10 +295,7 @@ export function createBashToolDefinition(
 			onUpdate?,
 			_ctx?,
 		) {
-			const effectiveTimeout =
-				timeout ??
-				envPositiveTimeoutSeconds("REPI_BASH_DEFAULT_TIMEOUT_SECONDS") ??
-				envPositiveTimeoutSeconds("PI_BASH_DEFAULT_TIMEOUT_SECONDS");
+			const effectiveTimeout = timeout ?? envPositiveTimeoutSeconds("REPI_BASH_DEFAULT_TIMEOUT_SECONDS");
 			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
 			const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
 			const output = new OutputAccumulator({ tempFilePrefix: "pi-bash" });

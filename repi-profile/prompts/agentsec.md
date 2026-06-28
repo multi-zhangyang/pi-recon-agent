@@ -3,9 +3,9 @@ description: 启动 REPI Agent/LLM prompt-tool-memory 边界验证工作流
 argument-hint: "<agent-app-or-workspace>"
 ---
 
-REPI agent security task: $ARGUMENTS
+REPI agent boundary task: $ARGUMENTS
 
-1. 路由到 `Agent / LLM security`，确认 lanes：surface → tool-boundary → memory → injection → delegation → report。
+1. 路由到 `Agent / LLM boundary`，确认 lanes：surface → tool-boundary → memory → injection → delegation → report。
 2. 运行 `agent-prompt-surface-map`，枚举 system/developer/user/tool/memory/RAG/MCP 输入边界和不可信内容入口。
 3. 运行 `agent-tool-boundary-scaffold`，映射 registerTool/function_call/shell/API 参数/schema/allowlist/output-trust 边界。
 4. 运行 `agent-memory-poisoning-scaffold`，扫描 memory/RAG/playbook/transcript/日志投毒路径和 payload 锚点。

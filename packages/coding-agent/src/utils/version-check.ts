@@ -59,7 +59,6 @@ export async function getLatestPiRelease(
 ): Promise<LatestPiRelease | undefined> {
 	if (
 		process.env.REPI_PRODUCT === "1" ||
-		process.env.PI_RECON_PRODUCT === "1" ||
 		process.env.REPI_SKIP_VERSION_CHECK ||
 		process.env.PI_SKIP_VERSION_CHECK ||
 		process.env.REPI_OFFLINE ||

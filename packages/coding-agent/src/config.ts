@@ -460,15 +460,12 @@ try {
 	if (err.code !== "ENOENT") throw e;
 }
 
-const runtimeAppNameOverride =
-	process.env.REPI_CODING_AGENT_APP_NAME?.trim() || process.env.PI_CODING_AGENT_APP_NAME?.trim();
-const runtimeConfigDirOverride =
-	process.env.REPI_CODING_AGENT_CONFIG_DIR?.trim() || process.env.PI_CODING_AGENT_CONFIG_DIR?.trim();
+const runtimeAppNameOverride = process.env.REPI_CODING_AGENT_APP_NAME?.trim();
+const runtimeConfigDirOverride = process.env.REPI_CODING_AGENT_CONFIG_DIR?.trim();
 const piConfigName: string | undefined = runtimeAppNameOverride || pkg.piConfig?.name;
 export const PACKAGE_NAME: string = pkg.name || "@pi-recon/repi-coding-agent";
 export const APP_NAME: string = piConfigName || "repi";
-export const IS_REPI_PRODUCT: boolean =
-	process.env.REPI_PRODUCT === "1" || process.env.PI_RECON_PRODUCT === "1" || APP_NAME === "repi";
+export const IS_REPI_PRODUCT: boolean = process.env.REPI_PRODUCT === "1" || APP_NAME === "repi";
 export const APP_TITLE: string = piConfigName ? APP_NAME : "REPI";
 export const CONFIG_DIR_NAME: string = runtimeConfigDirOverride || pkg.piConfig?.configDir || ".repi";
 export const VERSION: string = pkg.version || "0.0.0";

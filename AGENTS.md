@@ -1,5 +1,18 @@
 # Development Rules
 
+## Product Direction
+
+REPI is an independent reverse-engineering and penetration-testing agent. The product theme is **reverse/pentest execution**, not a generic security assistant, not a generic coding agent, not "Pi with a profile", and not a pure self-researched agent framework.
+
+Keep changes aligned with this direction:
+
+- Build for practical reverse engineering, exploitation research, web/API pentest, pwn, mobile, firmware, DFIR/traffic analysis, malware triage, and related evidence-driven workflows.
+- Prefer proven agent/runtime patterns from Pi, Claude Code-style tool use, plugins, MCP, and subagents over inventing large custom control planes.
+- Expand capability through clear operator commands, tools, artifacts, specialist lanes, and bounded subagents. Avoid narrative-only process layers that do not improve execution.
+- It is acceptable to make breaking changes when they reduce old REPI drift, remove generic-agent baggage, or make the reverse/pentest product sharper.
+- User-facing names, docs, runtime markers, artifacts, and new source identifiers should say REPI, not Pi or pi-recon. Any remaining Pi-prefixed compatibility should be treated as an internal migration layer only.
+- Do not reposition REPI as broad "security", "AI safety", "generic adversarial testing platform", "general automation", or "coding assistant" unless the user explicitly changes the product direction.
+
 ## Conversational Style
 
 - Keep answers short and concise

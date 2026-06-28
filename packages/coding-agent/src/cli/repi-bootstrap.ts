@@ -109,16 +109,12 @@ function stripRepiWrapperFlags(args: readonly string[]): {
 export function bootstrapRepiCli(args: readonly string[]): string[] {
 	process.env.REPI_CODING_AGENT_APP_NAME = process.env.REPI_CODING_AGENT_APP_NAME || "repi";
 	process.env.REPI_CODING_AGENT_CONFIG_DIR = process.env.REPI_CODING_AGENT_CONFIG_DIR || ".repi";
-	process.env.PI_CODING_AGENT_APP_NAME = process.env.PI_CODING_AGENT_APP_NAME || "repi";
-	process.env.PI_CODING_AGENT_CONFIG_DIR = process.env.PI_CODING_AGENT_CONFIG_DIR || ".repi";
 	process.env.REPI_PRIMARY = "1";
 	process.env.REPI_PRODUCT = "1";
-	process.env.PI_RECON_PRIMARY = "1";
-	process.env.PI_RECON_PRODUCT = "1";
 	process.env.REPI_SKIP_VERSION_CHECK = process.env.REPI_SKIP_VERSION_CHECK || "1";
 	process.env.REPI_SKIP_PACKAGE_UPDATE_CHECK = process.env.REPI_SKIP_PACKAGE_UPDATE_CHECK || "1";
 	process.env.REPI_TELEMETRY = process.env.REPI_TELEMETRY || "0";
-	process.env.REPI_OFFLINE = process.env.REPI_OFFLINE || process.env.PI_OFFLINE || "0";
+	process.env.REPI_OFFLINE = process.env.REPI_OFFLINE || "0";
 	process.env.REPI_PRINT_PROGRESS = process.env.REPI_PRINT_PROGRESS || "1";
 	process.env.REPI_PRINT_TIMEOUT_MS = process.env.REPI_PRINT_TIMEOUT_MS || "210000";
 	process.env.REPI_PRINT_TIMEOUT_GRACE_MS = process.env.REPI_PRINT_TIMEOUT_GRACE_MS || "30000";
@@ -131,8 +127,6 @@ export function bootstrapRepiCli(args: readonly string[]): string[] {
 		process.env.PI_SKIP_PACKAGE_UPDATE_CHECK || process.env.REPI_SKIP_PACKAGE_UPDATE_CHECK;
 	process.env.PI_TELEMETRY = process.env.PI_TELEMETRY || process.env.REPI_TELEMETRY;
 	process.env.PI_OFFLINE = process.env.PI_OFFLINE || process.env.REPI_OFFLINE;
-	process.env.PI_BASH_DEFAULT_TIMEOUT_SECONDS =
-		process.env.PI_BASH_DEFAULT_TIMEOUT_SECONDS || process.env.REPI_BASH_DEFAULT_TIMEOUT_SECONDS;
 
 	const stripped = stripRepiWrapperFlags(args);
 	initializeRepiProfile();
