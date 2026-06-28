@@ -19,9 +19,13 @@ curl -fsSL https://raw.githubusercontent.com/multi-zhangyang/pi-recon-agent/main
 装完直接用,无需手动改 PATH:
 
 ```bash
+repi                 # 启动交互式会话(最常用)
+repi -p "分析 /tmp/vuln 的溢出"   # 或一次性任务
 repi doctor          # 检查安装/配置/权限
 repi --offline --help
 ```
+
+> 第一次用前需要先配模型(否则 `repi` 启动后无法调用 LLM):见下方[模型配置](#模型配置)。`repi doctor` 会提示缺失项。
 
 安装脚本会优先把 launcher 装到**已在 `$PATH` 上的可写目录**(默认 `/usr/local/bin`;若该目录在 PATH 里但不存在,会自动 `mkdir -p` 建出来),所以 `repi` 装完在**当前终端**立即可用。仅当没有任何可写的 PATH 目录时才回退到 `~/.local/bin`,并自动把 `export PATH="$HOME/.local/bin:$PATH"` 写进 `~/.bashrc` / `~/.profile`(新终端自动生效,当前终端按提示执行一次 export 或 `exec $SHELL -l`)。
 
