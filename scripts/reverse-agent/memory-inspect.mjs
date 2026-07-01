@@ -3,9 +3,17 @@ import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, readdir
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { atomicWriteFile, withFileLock, scopedMemoryRootFor } from "./lib/memory-purge-helpers.mjs";
 
 const rawArgs = process.argv.slice(2);
 const knownCommands = new Set(["status", "list", "show", "diff", "why", "forget", "quarantine", "doctor", "export", "purge", "sanitize", "repair", "help"]);
+// opt #273: --cwd <dir> scopes the memory tree to a specific project
+// (recon/memory/projects/<encoded-cwd>/) instead of the legacy global root.
+function valueAfterFlag(args, flag) {
+	const index = args.indexOf(flag);
+	return index >= 0 && index + 1 < args.length ? args[index + 1] : undefined;
+}
+const cwdScope = valueAfterFlag(rawArgs, "--cwd");
 let root = process.cwd();
 if (rawArgs[0] && !rawArgs[0].startsWith("--") && !knownCommands.has(rawArgs[0])) {
 	root = resolve(rawArgs.shift());
@@ -17,7 +25,7 @@ const all = rawArgs.includes("--all");
 const verbose = rawArgs.includes("--verbose") || rawArgs.includes("-v");
 const limit = parseLimit(rawArgs, 12);
 const agentDir = process.env.REPI_CODING_AGENT_DIR || process.env.REPI_AGENT_DIR || join(homedir(), ".repi", "agent");
-const memoryDir = join(agentDir, "recon", "memory");
+const memoryDir = scopedMemoryRootFor(agentDir, cwdScope);
 const eventsPath = join(memoryDir, "events.jsonl");
 const caseMemoryPath = join(memoryDir, "case-memory.jsonl");
 const reportPath = join(memoryDir, "consolidation-report.json");
@@ -662,8 +670,24 @@ function buildExportReport() {
 	};
 	if (output) {
 		const outputPath = resolve(output);
-		mkdirSync(dirname(outputPath), { recursive: true, mode: 0o700 });
-		writeFileSync(outputPath, `${JSON.stringify(bundle, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+		try {
+			mkdirSync(dirname(outputPath), { recursive: true, mode: 0o700 });
+			writeFileSync(outputPath, `${JSON.stringify(bundle, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+		} catch (error) {
+			// opt #176: bare writeFileSync here threw uncaught on ENOSPC/EACCES
+			// and aborted the script mid-export. Now surface a stderr diagnostic
+			// and a non-zero exit via ok:false (the caller exits 1 on !ok).
+			const message = error instanceof Error ? error.message : String(error);
+			console.error(`repi memory export: failed to write output ${outputPath}: ${message}`);
+			return {
+				kind: "repi-memory-export-report",
+				schemaVersion: 1,
+				generatedAt: new Date().toISOString(),
+				ok: false,
+				outputPath,
+				error: `failed to write output: ${message}`,
+			};
+		}
 	}
 	return {
 		kind: "repi-memory-export-report",
@@ -751,24 +775,33 @@ function buildPurgeReport() {
 	let removed = 0;
 	if (apply && selected.size > 0) {
 		mkdirSync(memoryDir, { recursive: true, mode: 0o700 });
-		if (existsSync(eventsPath)) copyFileSync(eventsPath, backupPath);
-		const nextLines = [];
-		for (const line of readFileSync(eventsPath, "utf8").split(/\r?\n/)) {
-			if (!line.trim()) continue;
-			let row;
-			try {
-				row = JSON.parse(line);
-			} catch {
+		// Lock the events.jsonl RMW so a concurrent runtime appendFile (or a
+		// racing second purge) cannot interleave: previously the purge did an
+		// unlocked copy→read→filter→writeFileSync (truncate-then-rewrite), so
+		// an in-flight append was silently lost and a crash mid-write left a
+		// truncated events log. withFileLock (proper-lockfile) serializes the
+		// RMW across processes; atomicWriteFile (temp+rename, same-dir) ensures
+		// a crash mid-write leaves the prior events log intact. opt #176.
+		withFileLock(eventsPath, () => {
+			if (existsSync(eventsPath)) copyFileSync(eventsPath, backupPath);
+			const nextLines = [];
+			for (const line of readFileSync(eventsPath, "utf8").split(/\r?\n/)) {
+				if (!line.trim()) continue;
+				let row;
+				try {
+					row = JSON.parse(line);
+				} catch {
+					nextLines.push(line);
+					continue;
+				}
+				if (row?.kind === "repi-memory-event" && selected.has(row.id)) {
+					removed++;
+					continue;
+				}
 				nextLines.push(line);
-				continue;
 			}
-			if (row?.kind === "repi-memory-event" && selected.has(row.id)) {
-				removed++;
-				continue;
-			}
-			nextLines.push(line);
-		}
-		writeFileSync(eventsPath, `${nextLines.join("\n")}${nextLines.length ? "\n" : ""}`, { encoding: "utf8", mode: 0o600 });
+			atomicWriteFile(eventsPath, `${nextLines.join("\n")}${nextLines.length ? "\n" : ""}`, 0o600);
+		});
 		appendFileSync(
 			governancePath,
 			`${JSON.stringify({
@@ -837,6 +870,7 @@ function buildSanitizeReport() {
 	if (rawArgs.includes("--include-sessions")) roots.push(join(agentDir, "sessions"));
 	const files = uniqueValues(roots.flatMap((dir) => walkTextFiles(dir, 4000)), 8000);
 	const rows = [];
+	const writeErrors = [];
 	const ts = new Date().toISOString().replace(/[:.]/g, "-");
 	for (const path of files) {
 		let before = "";
@@ -855,11 +889,22 @@ function buildSanitizeReport() {
 		});
 		if (apply && confirmed) {
 			if (backup) copyFileSync(path, `${path}.bak-${ts}`);
-			writeFileSync(path, after, { encoding: "utf8", mode: 0o600 });
+			// opt #176: bare writeFileSync threw uncaught on ENOSPC/EACCES mid-
+			// sanitize and aborted the whole script mid-collection. Now wrap the
+			// per-file write so one failure is recorded + surfaced rather than
+			// crashing; the final report carries ok:false + the error so the
+			// process exits non-zero.
 			try {
-				chmodSync(path, 0o600);
-			} catch {
-				// Best-effort on non-POSIX filesystems.
+				writeFileSync(path, after, { encoding: "utf8", mode: 0o600 });
+				try {
+					chmodSync(path, 0o600);
+				} catch {
+					// Best-effort on non-POSIX filesystems.
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				console.error(`repi memory sanitize: failed to write ${path}: ${message}`);
+				writeErrors.push({ path, error: message });
 			}
 		}
 	}
@@ -884,13 +929,15 @@ function buildSanitizeReport() {
 		kind: "repi-memory-sanitize-report",
 		schemaVersion: 1,
 		generatedAt: new Date().toISOString(),
-		ok: true,
+		ok: writeErrors.length === 0,
 		apply,
 		confirmed,
 		backup,
 		roots,
 		scannedFiles: files.length,
 		changedFiles: rows.length,
+		writeErrors: writeErrors.length ? writeErrors.slice(0, limit) : undefined,
+		error: writeErrors.length ? `${writeErrors.length} file(s) failed to write during sanitize; see writeErrors` : undefined,
 		rows: rows.slice(0, limit),
 		next: apply ? ["repi memory doctor", "repi memory list"] : ["repi memory sanitize --apply --yes"],
 	};

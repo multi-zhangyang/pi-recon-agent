@@ -9,7 +9,7 @@ import {
 	memoryEventsPath,
 	memoryProceduralPath,
 	memoryProjectPath,
-	readTextFile as readText,
+	readTextFileCached,
 } from "./storage.ts";
 import { truncateMiddle } from "./text.ts";
 
@@ -237,7 +237,7 @@ export function formatMemoryUxGovernanceDecision(
 }
 
 export function memoryLineCount(path: string): number {
-	const text = readText(path);
+	const text = readTextFileCached(path);
 	if (!text.trim()) return 0;
 	return text.split(/\r?\n/).filter((line) => line.trim()).length;
 }
@@ -249,7 +249,7 @@ export function memoryFileStatusLine(label: string, path: string): string {
 }
 
 export function readMemoryNote(path: string, emptyTitle: string, limit = 900): string {
-	const text = readText(path).trim();
+	const text = readTextFileCached(path).trim();
 	if (!text) return `${emptyTitle}=empty`;
 	const meaningful = text
 		.split(/\r?\n/)

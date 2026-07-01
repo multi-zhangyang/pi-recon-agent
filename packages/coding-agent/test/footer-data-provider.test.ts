@@ -262,4 +262,44 @@ describe("FooterDataProvider reftable branch detection", () => {
 			vi.useRealTimers();
 		}
 	});
+
+	it("bounds the git symbolic-ref probe with a wall timeout (opt #126)", async () => {
+		// Both the sync (spawnSync) and async (execFile) footer git probes must
+		// pass `timeout` so a hung git / filesystem stall can't block the event
+		// loop (sync) or stall the background refresh loop forever (async).
+
+		// Sync path: a plain reftable repo with an .invalid HEAD forces
+		// resolveGitBranchSync → resolveBranchWithGitSync (spawnSync).
+		const repoDir = createPlainReftableRepo(tempDir);
+		process.chdir(repoDir);
+		const provider = new FooterDataProvider(repoDir);
+		try {
+			expect(provider.getGitBranch()).toBe("main");
+			expect(vi.mocked(spawnSync)).toHaveBeenCalledWith(
+				"git",
+				["--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD"],
+				expect.objectContaining({ timeout: 5000 }),
+			);
+		} finally {
+			provider.dispose();
+		}
+
+		// Async path: a reftable worktree refresh fires execFile.
+		const { worktreeDir, reftableDir } = createReftableWorktree(tempDir);
+		process.chdir(worktreeDir);
+		const asyncProvider = new FooterDataProvider(worktreeDir);
+		try {
+			vi.mocked(execFile).mockClear();
+			writeFileSync(join(reftableDir, "tables.list"), "1\n");
+			await waitFor(() => vi.mocked(execFile).mock.calls.length === 1);
+			expect(vi.mocked(execFile)).toHaveBeenCalledWith(
+				"git",
+				["--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD"],
+				expect.objectContaining({ timeout: 5000 }),
+				expect.any(Function),
+			);
+		} finally {
+			asyncProvider.dispose();
+		}
+	});
 });

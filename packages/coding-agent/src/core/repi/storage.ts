@@ -1,21 +1,83 @@
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	chmodSync,
+	closeSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readdirSync,
+	readFileSync,
+	readSync,
+	statSync,
+} from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "../../config.ts";
+import { resolvePath } from "../../utils/paths.ts";
+import { atomicWriteFileSync } from "../tools/atomic-write.ts";
 
 export function reconDir(): string {
 	return join(getAgentDir(), "recon");
 }
 
+// --- Per-project memory scoping (opt #273) -------------------------------------
+// Memory was GLOBAL (~/.repi/agent/recon/memory/) while sessions are per-cwd,
+// so an agent run in project A distilled/recalled memory that polluted project B.
+// Scope the memory tree per-cwd: when a session binds, setMemoryScopeCwd(cwd)
+// routes ALL memory*Path() helpers under recon/memory/projects/<encoded-cwd>/.
+// When no scope is set (standalone CLI tools / tests without a session), falls
+// back to the legacy global recon/memory root — backwards compatible. The
+// encoding mirrors getDefaultSessionDirPath (session-manager.ts:491) so a
+// project's memory sits alongside its sessions under the same agent dir.
+let memoryScopeCwd: string | null = null;
+
+export function setMemoryScopeCwd(cwd: string | null): void {
+	memoryScopeCwd = cwd ? resolvePath(cwd) : null;
+}
+
+export function getMemoryScopeCwd(): string | null {
+	return memoryScopeCwd;
+}
+
+export function encodeCwdForScope(cwd: string): string {
+	const resolvedCwd = resolvePath(cwd);
+	return `--${resolvedCwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+}
+
+export function scopedMemoryRoot(): string {
+	if (memoryScopeCwd) {
+		return join(reconDir(), "memory", "projects", encodeCwdForScope(memoryScopeCwd));
+	}
+	return join(reconDir(), "memory");
+}
+
 export function memoryPath(name: string): string {
-	return join(reconDir(), "memory", name);
+	return join(scopedMemoryRoot(), name);
 }
 
 export function memoryPlaybooksDir(): string {
-	return join(reconDir(), "memory", "playbooks");
+	return join(scopedMemoryRoot(), "playbooks");
 }
 
 export function memoryPlaybooksArchiveDir(): string {
 	return join(memoryPlaybooksDir(), "archive");
+}
+
+// --- Claude-Code-style project notes (opt #273 follow-on) ---------------------
+// One-file-per-fact memory under the per-cwd scoped root, mirroring Claude
+// Code's <project>/memory/ layout: notes/<slug>.md (frontmatter + body) + a
+// MEMORY.md index (one line per note). Additive on top of the existing v5/v6
+// distill system; scoped per-cwd via scopedMemoryRoot so notes never pollute
+// other projects.
+export function memoryNotesDir(): string {
+	return join(scopedMemoryRoot(), "notes");
+}
+
+export function memoryNotesIndexPath(): string {
+	return join(scopedMemoryRoot(), "MEMORY.md");
+}
+
+export function memoryNotePath(name: string): string {
+	return join(memoryNotesDir(), `${name}.md`);
 }
 
 export function reconArchiveDir(): string {
@@ -418,6 +480,18 @@ export function runtimeFailureLedgerPath(): string {
 	return join(evidenceFailuresDir(), "ledger.jsonl");
 }
 
+/**
+ * Compact `{signature: count}` summary of the runtime-failure ledger. The
+ * ledger itself is an append-only audit log (capped + rotated); this summary is
+ * the O(1) source of truth for per-signature attempt counts used by the
+ * "exhausted after maxAttempts" decision. Keeping counts here (not by scanning
+ * the ledger) lets the ledger be safely rotated without resetting attempt
+ * counts — and removes the O(n) per-failure scan of the growing ledger.
+ */
+export function runtimeFailureSummaryPath(): string {
+	return join(evidenceFailuresDir(), "summary.json");
+}
+
 export function runtimeRepairQueuePath(): string {
 	return join(evidenceRepairsDir(), "queue.jsonl");
 }
@@ -460,19 +534,169 @@ export function chmodPrivate(path: string, mode: number): void {
 }
 
 export function writePrivateTextFile(path: string, content: string): void {
-	writeFileSync(path, content, { encoding: "utf-8", mode: 0o600 });
+	// Atomic temp+rename (mode 0o600): this is the SHARED write path for all REPI
+	// persisted state — playbooks, missions, evidence, memory transactions, tool
+	// index — and appendPrivateTextFile does a read-modify-write through it. A
+	// plain writeFileSync truncates then writes, so a crash (SIGKILL/OOM/SIGTERM)
+	// mid-write leaves a truncated/partial file; readTextFile swallows the parse
+	// failure and returns "" (graceful, no crash) but the playbook/mission/evidence
+	// is SILENTLY LOST. temp+rename means a reader sees either the complete prior
+	// content or the complete new content. chmodPrivate after the rename still
+	// enforces 0o600 (atomicWriteFileSync preserves an existing target's mode).
+	atomicWriteFileSync(path, content, 0o600);
 	chmodPrivate(path, 0o600);
+}
+
+// opt #163 — stat-first OOM guard cap (bytes) for the SHARED readTextFile/
+// readTextFileCached read path. The old code did readFileSync(path, "utf-8")
+// of the WHOLE file with no size bound; jsonl.ts:79 then raw.split(/\r?\n/)
+// built an unbounded array plus rows.push accumulation. These are the shared
+// read paths for ALL REPI persisted state (playbooks, missions, evidence notes,
+// memory transactions, tool index) and (via readTextFileCached) the events/
+// case/quality/governance/claims/replay JSONL ledgers. The chain ledgers are
+// rotation-bounded by default (#113, 500 rows), but
+// REPI_MEMORY_EVENTS_MAX_ROWS=0 disables rotation and the non-ledger callers
+// (playbooks/evidence notes/missions) have NO rotation — a large note or
+// unrotated ledger loaded wholly into memory and split into an unbounded array
+// → OOM. Files at or above this cap return the caller's fallback (default ""
+// → JSON.parse/split yields [] / empty) so the caller degrades gracefully
+// instead of OOMing. Override with REPI_READ_TEXT_FILE_MAX_BYTES; 0 disables
+// the guard. Consistent with opt #34's REPI_READ_MAX_FILE_BYTES (16 MB).
+const DEFAULT_READ_TEXT_FILE_MAX_BYTES = 16 * 1024 * 1024;
+function resolveReadTextFileMaxBytes(): number {
+	const raw = process.env.REPI_READ_TEXT_FILE_MAX_BYTES;
+	if (raw !== undefined && raw.trim() !== "") {
+		const parsed = Number(raw);
+		if (Number.isFinite(parsed) && parsed >= 0) return Math.floor(parsed);
+	}
+	return DEFAULT_READ_TEXT_FILE_MAX_BYTES;
+}
+
+// Dedup set of paths already flagged as over-cap this session, so the hot
+// recall path (readTextFileCached on events.jsonl runs multiple times per tool
+// result) does not spam stderr for the same oversized file.
+const overCapWarnedPaths = new Set<string>();
+
+function warnOverCap(path: string, size: number, cap: number): void {
+	if (overCapWarnedPaths.has(path)) return;
+	overCapWarnedPaths.add(path);
+	// NOT a silent drop: a truncated ledger/note is observable here. The
+	// missing/unreadable case stays silent per the existing catch contract.
+	process.stderr.write(
+		`repi: readTextFile "${path}" is ${size} bytes > cap ${cap} (REPI_READ_TEXT_FILE_MAX_BYTES); returning fallback, content not loaded\n`,
+	);
 }
 
 export function readTextFile(path: string, fallback = ""): string {
 	try {
+		const size = statSync(path).size;
+		const cap = resolveReadTextFileMaxBytes();
+		if (cap > 0 && size > cap) {
+			warnOverCap(path, size, cap);
+			return fallback;
+		}
 		return readFileSync(path, "utf-8");
 	} catch {
 		return fallback;
 	}
 }
 
+const textFileCache = new Map<string, { mtimeMs: number; size: number; value: string }>();
+
+/**
+ * mtime+size-keyed cache of {@link readTextFile}, for hot-path readers of files
+ * that are INVARIANT within a turn (or across many tool results) but read
+ * repeatedly. The per-tool-result memory-recall packet header reads the core/
+ * project/procedural memory .md notes TWICE each (memoryLineCount for the
+ * status line + readMemoryNote for the packet) — 6 readFileSync of invariant
+ * files per tool result, plus the same files re-read on every subsequent tool
+ * result until the memory system rewrites them. This pays one stat(2) per call
+ * and re-reads only when the file's mtime/size change (every REPI write goes
+ * through atomic temp+rename, which updates both). Identical return contract to
+ * readTextFile: `fallback` (default "") on any missing/unreadable path. The
+ * missing/unreadable case is NOT cached, so a not-yet-created file is observed
+ * on the next call once it appears. Apply ONLY to readers of infrequently-
+ * changing files — hot files (events.jsonl on a deposit tool result, the tool-
+ * trace ledger) still pay the stat but get a cache miss + re-read (the stat is
+ * cheaper than the read+parse they replace, and the cache hits on the majority
+ * of tool results where no deposit happened).
+ */
+export function readTextFileCached(path: string, fallback = ""): string {
+	try {
+		const stat = statSync(path);
+		const mtimeMs = stat.mtimeMs;
+		const size = stat.size;
+		// opt #163 — same stat-first OOM guard as readTextFile. readTextFileCached
+		// previously statSync'd only for the cache key, not to bound the read; a
+		// huge file still paid the unbounded readFileSync + jsonl split. The
+		// over-cap case returns fallback and is NOT cached (matching the missing-
+		// file doctrine) so a later shrink below the cap is observed on the next
+		// call.
+		const cap = resolveReadTextFileMaxBytes();
+		if (cap > 0 && size > cap) {
+			warnOverCap(path, size, cap);
+			return fallback;
+		}
+		const cached = textFileCache.get(path);
+		if (cached && cached.mtimeMs === mtimeMs && cached.size === size) {
+			return cached.value;
+		}
+		const value = readFileSync(path, "utf-8");
+		textFileCache.set(path, { mtimeMs, size, value });
+		return value;
+	} catch {
+		return fallback;
+	}
+}
+
 export function appendPrivateTextFile(path: string, text: string): void {
+	// True append (O(chunk) write + a 1-byte tail read) instead of read-modify-write
+	// (O(file) read + O(file) atomic rewrite on EVERY append). This is the SHARED
+	// append path for every REPI append-only artifact — tool-call trace ledger,
+	// runtime failure/repair ledgers, evidence ledger, field/case/evolution
+	// journals — so the read-modify-write made each append O(current file size):
+	// a 500-row tool-trace ledger paid a 500-row read + 500-row atomic rewrite per
+	// appended row, 2× per tool call. The bytes appended are IDENTICAL to the old
+	// path (callers pre-hash/pre-format the content; this only persists bytes), so
+	// hash-chain verification is unaffected — only the write mechanism changed.
+	//
+	// Newline-separator contract preserved EXACTLY: the old code joined
+	// `${current}${current.endsWith("\n") ? "" : "\n"}${text}` where `current` is
+	// `readTextFile(path)` → "" on a missing OR empty file. So a separator "\n" is
+	// prepended unless the existing content ends with "\n" — INCLUDING the missing
+	// / empty case ("" does not end with "\n"), which is the existing leading-blank-
+	// line behavior (harmless for JSONL readers that filter(Boolean) and for
+	// markdown). We detect "doesn't end with \n" with a 1-byte range read of the
+	// last byte (openSync + readSync at offset size-1); a missing or size-0 file
+	// gets the separator too, matching the old path.
+	let prefix = "\n";
+	try {
+		const size = statSync(path).size;
+		if (size > 0) {
+			const fd = openSync(path, "r");
+			try {
+				const buf = Buffer.alloc(1);
+				if (readSync(fd, buf, 0, 1, size - 1) > 0 && buf[0] === 0x0a) prefix = "";
+			} finally {
+				closeSync(fd);
+			}
+		}
+	} catch {
+		// missing/unreadable → keep prefix "\n" (matches old: "" doesn't end with \n).
+	}
+	// Crash safety: appendFileSync is NOT atomic (a crash mid-append can leave a
+	// partial trailing line). Acceptable here — JSONL readers (readToolTraceEvents
+	// et al.) skip unparseable lines per-line via try/catch, markdown journals are
+	// tolerant, and the load-bearing memory hash-chain ledger does NOT use this
+	// path (it has its own atomic writer). If true append fails (e.g. a filesystem
+	// without O_APPEND), fall back to the atomic read-modify-write path below,
+	// preserving the write + 0o600 contract.
+	try {
+		appendFileSync(path, `${prefix}${text}`, { encoding: "utf8", mode: 0o600 });
+		return;
+	} catch {
+		// Fall through to the atomic read-modify-write fallback.
+	}
 	const current = readTextFile(path);
 	writePrivateTextFile(path, `${current}${current.endsWith("\n") ? "" : "\n"}${text}`);
 }
@@ -737,6 +961,36 @@ export function artifactBasename(path: string): string {
 export function readJsonObjectFile<T>(path: string): T | undefined {
 	try {
 		return JSON.parse(readFileSync(path, "utf-8")) as T;
+	} catch {
+		return undefined;
+	}
+}
+
+const jsonObjectFileCache = new Map<string, { mtimeMs: number; size: number; value: unknown }>();
+
+/**
+ * mtime+size-keyed cache of {@link readJsonObjectFile}. The REPI modules bypass
+ * {@link SettingsManager}'s in-memory cache and read settings.json raw on every
+ * call — {@link repiMemorySettings} alone reads it 3× per tool result (recall +
+ * scoped-hits + format-packet), each a readFileSync + JSON.parse of an invariant
+ * file. This pays one stat(2) per call instead, and only re-reads + re-parses
+ * when the file's mtime/size change (atomic temp+rename writes from
+ * SettingsManager update both). Identical return contract: undefined on any
+ * missing/unreadable/invalid-JSON path (parse failure is not cached, so a
+ * transiently-corrupt file keeps re-reading until fixed).
+ */
+export function readJsonObjectFileCached<T>(path: string): T | undefined {
+	try {
+		const stat = statSync(path);
+		const mtimeMs = stat.mtimeMs;
+		const size = stat.size;
+		const cached = jsonObjectFileCache.get(path);
+		if (cached && cached.mtimeMs === mtimeMs && cached.size === size) {
+			return cached.value as T | undefined;
+		}
+		const value = JSON.parse(readFileSync(path, "utf-8")) as T;
+		jsonObjectFileCache.set(path, { mtimeMs, size, value });
+		return value;
 	} catch {
 		return undefined;
 	}

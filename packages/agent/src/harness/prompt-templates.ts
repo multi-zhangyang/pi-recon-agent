@@ -245,19 +245,67 @@ export function parseCommandArgs(argsString: string): string[] {
 	return args;
 }
 
-/** Substitute prompt template placeholders (`$1`, `$@`, `$ARGUMENTS`, `${@:N}`, `${@:N:L}`) with command arguments. */
+/**
+ * Substitute prompt template placeholders (`$1`, `$@`, `$ARGUMENTS`, `${@:N}`, `${@:N:L}`) with command arguments.
+ *
+ * Foundational opt #253: SINGLE-PASS substitution. The old impl ran four
+ * sequential `String.replace` passes (`$N`, then `${@:N}`, then `$ARGUMENTS`,
+ * then `$@`). A value inserted by an EARLIER pass could be re-expanded by a
+ * LATER pass: e.g. `substituteArgs("$1", ["$@", "extra"])` — pass 1 turned
+ * `$1` into the literal arg `$@`, then pass 4 (`$@`) re-expanded that into
+ * `allArgs` = "$@ extra", corrupting the substitution (the user's literal "$@"
+ * arg became the joined arg list). Single-pass scans `content` once and appends
+ * substituted values to `result` without re-scanning them, so arg values
+ * containing placeholder syntax are preserved literally.
+ */
 export function substituteArgs(content: string, args: string[]): string {
-	let result = content;
-	result = result.replace(/\$(\d+)/g, (_, num: string) => args[parseInt(num, 10) - 1] ?? "");
-	result = result.replace(/\$\{@:(\d+)(?::(\d+))?\}/g, (_, startStr: string, lengthStr?: string) => {
-		let start = parseInt(startStr, 10) - 1;
-		if (start < 0) start = 0;
-		if (lengthStr) return args.slice(start, start + parseInt(lengthStr, 10)).join(" ");
-		return args.slice(start).join(" ");
-	});
 	const allArgs = args.join(" ");
-	result = result.replace(/\$ARGUMENTS/g, allArgs);
-	result = result.replace(/\$@/g, allArgs);
+	let result = "";
+	let i = 0;
+	while (i < content.length) {
+		if (content[i] !== "$") {
+			result += content[i];
+			i++;
+			continue;
+		}
+		// ${@:start} or ${@:start:length} (bash-style slicing) — check first; it's
+		// the only `${...}` form we expand. A non-matching `${...}` is preserved.
+		if (content[i + 1] === "{") {
+			const close = content.indexOf("}", i + 2);
+			if (close !== -1) {
+				const m = /^@:(\d+)(?::(\d+))?$/.exec(content.slice(i + 2, close));
+				if (m) {
+					let start = parseInt(m[1], 10) - 1; // 1-indexed → 0-indexed
+					if (start < 0) start = 0; // bash: $0 means $1
+					result += m[2] ? args.slice(start, start + parseInt(m[2], 10)).join(" ") : args.slice(start).join(" ");
+					i = close + 1;
+					continue;
+				}
+			}
+		}
+		// $ARGUMENTS — all args joined (prefix match, matching the old global regex)
+		if (content.startsWith("$ARGUMENTS", i)) {
+			result += allArgs;
+			i += "$ARGUMENTS".length;
+			continue;
+		}
+		// $@ — all args joined
+		if (content[i + 1] === "@") {
+			result += allArgs;
+			i += 2;
+			continue;
+		}
+		// $N — positional arg (greedy digits)
+		const m = /^\$(\d+)/.exec(content.slice(i));
+		if (m) {
+			result += args[parseInt(m[1], 10) - 1] ?? "";
+			i += m[0].length;
+			continue;
+		}
+		// Lone "$" (not a placeholder) — keep literally.
+		result += "$";
+		i++;
+	}
 	return result;
 }
 

@@ -26,6 +26,16 @@ export function isRepiTask(text: string): boolean {
 
 export function routeRepiTask(text: string): RoutePlan {
 	const lower = text.toLowerCase();
+	// Web-target signal: a URL / web-site / HTTP-API reference makes this a Web task,
+	// NOT a Native reverse task — even when the word "逆向" appears. Without this, a
+	// bare "逆向 https://example.com" (URL but no explicit web/api/渗透 keyword) fell
+	// through every web branch and landed in the Native branch (line ~186) on "逆向",
+	// routing a Web/API target to the native-reverse-pwn workflow. The web-target
+	// signal is checked BEFORE the Native "逆向" fallback so a URL always wins.
+	const webTargetSignal =
+		/https?:\/\/|www\.|\.(?:com|net|org|io|cn|app|dev|site|co|xyz|info|biz)\b|网站|站点|网页|接口|endpoint|\bhttp\b|登录|cookie|session|bearer|authorization|请求|响应|header|x-forwarded|user-agent/i.test(
+			lower,
+		);
 	const jsSpecific =
 		/(?:\bjs\b|jsre|javascript|frontend|js\s*逆向|签名|加密参数|webpack|sourcemap|风控|crypto|subtle|\bsign\b|signature|nonce|timestamp|encrypt|decrypt)/.test(
 			lower,
@@ -183,7 +193,22 @@ export function routeRepiTask(text: string): RoutePlan {
 			["image inventory", "extract rootfs", "config/secret map", "service attack surface", "emulation/report"],
 		);
 	}
-	if (/elf|pe\b|dll|so\b|binary|二进制|逆向|反编译|反汇编|ida|radare2|ghidra|wasm/.test(lower)) {
+	// Native reverse: a CONCRETE binary keyword always wins (elf/pe/dll/binary/ida/...).
+	// The bare word "逆向"/reverse alone routes Native ONLY when there is NO web-target
+	// signal — otherwise "逆向 https://example.com" (a Web/API target) would land here on
+	// "逆向" instead of the web-authz workflow. .exe/.dll etc. are concrete binaries, so a
+	// URL hosting a binary still routes Native (the binary keyword beats the URL signal).
+	const nativeConcrete =
+		/elf|pe\b|dll|so\b|binary|二进制|反编译|反汇编|ida|radare2|\br2\b|ghidra|wasm|\.exe\b|executable|compiled/i.test(
+			lower,
+		);
+	// nativeReverseWord requires the "engineer" compound (or 逆向) so the bare English
+	// word "reverse" — which appears in default fallback task strings like "reverse/pentest
+	// task" across recon-profile.ts — does NOT flip a generic task to Native reverse.
+	// Without this, default missions route to Native (triage/control-flow lanes) instead of
+	// the generic Reverse/Pentest general lanes (map/prove), breaking the autopilot contract.
+	const nativeReverseWord = /逆向|reverse[-_ ]?engineer/i.test(lower);
+	if (nativeConcrete || (nativeReverseWord && !webTargetSignal)) {
 		return plan(
 			"Native reverse",
 			"understand compiled/native target",
@@ -230,6 +255,19 @@ export function routeRepiTask(text: string): RoutePlan {
 			"ticket/token/SPN/SID + Impacket/NetExec",
 			"identity-windows",
 			["principal map", "credential usability", "privilege graph", "pivot command", "event/evidence record"],
+		);
+	}
+	// Web-target fallback: a URL / web-site / HTTP-API reference that matched no more-
+	// specific domain (mobile/firmware/malware/pwn/crypto/pcap/cloud/AD/native) is a Web/API
+	// pentest task — route it to the web-authz workflow, never the generic orchestrator.
+	// This is the fix for "逆向 <web target>" being misrouted to Native.
+	if (webTargetSignal) {
+		return plan(
+			"Web / API pentest",
+			"prove request/auth/state vulnerability path",
+			"routes/auth/session + replay",
+			"web-runtime",
+			["route map", "auth/session boundary", "minimal replay", "state mutation", "PoC verification"],
 		);
 	}
 	return plan(

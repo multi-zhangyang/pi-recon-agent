@@ -188,13 +188,19 @@ export class ToolExecutionComponent extends Container {
 			if (this.convertedImages.has(i)) continue;
 
 			const index = i;
-			convertToPng(img.data, img.mimeType).then((converted) => {
-				if (converted) {
-					this.convertedImages.set(index, converted);
-					this.updateDisplay();
-					this.ui.requestRender();
-				}
-			});
+			convertToPng(img.data, img.mimeType)
+				.then((converted) => {
+					if (converted) {
+						this.convertedImages.set(index, converted);
+						this.updateDisplay();
+						this.ui.requestRender();
+					}
+				})
+				// opt #54 — defense-in-depth: convertToPng is hardened to never reject (opt #54
+				// wrapped its loadPhoton await in try/catch), but this is a fire-and-forget render
+				// path with no caller to observe a rejection. Swallow so an unexpected throw
+				// can't become an unhandledRejection (no global handler exists) and crash the agent.
+				.catch(() => {});
 		}
 	}
 
@@ -216,6 +222,27 @@ export class ToolExecutionComponent extends Container {
 	override invalidate(): void {
 		super.invalidate();
 		this.updateDisplay();
+	}
+
+	/**
+	 * Teardown: clear any render-state interval the tool's renderer created (the
+	 * bash tool's 1s elapsed-display setInterval, stored on rendererState.interval)
+	 * so a discarded in-flight tool does not keep firing invalidate()/requestRender()
+	 * on a detached component forever. Then propagate to nested children.
+	 */
+	override dispose(): void {
+		const interval = this.rendererState?.interval as NodeJS.Timeout | undefined;
+		if (interval) {
+			try {
+				clearInterval(interval);
+			} catch {
+				// ignore
+			}
+			if (this.rendererState) {
+				this.rendererState.interval = undefined;
+			}
+		}
+		super.dispose();
 	}
 
 	override render(width: number): string[] {

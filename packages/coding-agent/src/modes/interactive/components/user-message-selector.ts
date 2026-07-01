@@ -109,6 +109,9 @@ class UserMessageList implements Component {
  */
 export class UserMessageSelectorComponent extends Container {
 	private messageList: UserMessageList;
+	// opt #152: track the auto-cancel timer so dispose() can cancel it instead
+	// of firing onCancel on a detached component after the picker is dismissed.
+	private emptyListTimer: ReturnType<typeof setTimeout> | null = null;
 
 	constructor(
 		messages: UserMessageItem[],
@@ -145,8 +148,20 @@ export class UserMessageSelectorComponent extends Container {
 
 		// Auto-cancel if no messages
 		if (messages.length === 0) {
-			setTimeout(() => onCancel(), 100);
+			this.emptyListTimer = setTimeout(() => onCancel(), 100);
+			this.emptyListTimer.unref();
 		}
+	}
+
+	dispose(): void {
+		// opt #152: cancel any pending auto-cancel timer so it can't fire onCancel
+		// on a detached component after the picker is dismissed via showSelector's
+		// done(). super.dispose() propagates to children (Container.dispose).
+		if (this.emptyListTimer) {
+			clearTimeout(this.emptyListTimer);
+			this.emptyListTimer = null;
+		}
+		super.dispose();
 	}
 
 	getMessageList(): UserMessageList {

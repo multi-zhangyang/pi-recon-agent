@@ -184,6 +184,19 @@ export function killTrackedDetachedChildren(): void {
 	trackedDetachedChildPids.clear();
 }
 
+// Safety-net reap on any process exit (opt #61). The per-mode signal handlers
+// (print/rpc/interactive) call killTrackedDetachedChildren() on SIGTERM/SIGHUP
+// and then process.exit() — but SIGINT (Ctrl+C) is NOT in those handler lists,
+// so a Ctrl+C in print/rpc mode took the default-exit path (exit 130) WITHOUT
+// reaping tracked detached bash children → they were reparented to init and
+// kept running (cost/leak). A hard process.exit() / uncaughtException exit had
+// the same gap. `process.on("exit")` fires on all of those (SIGINT-default,
+// SIGHUP-default, process.exit, uncaughtException — NOT SIGKILL) and is
+// idempotent (killTrackedDetachedChildren clears the set, so a second fire from
+// a per-mode handler that already reaped is a no-op). Registered once at module
+// load; the function is a named export so the listener reference is stable.
+process.on("exit", killTrackedDetachedChildren);
+
 /**
  * Kill a process and all its children (cross-platform)
  */
@@ -191,11 +204,17 @@ export function killProcessTree(pid: number): void {
 	if (process.platform === "win32") {
 		// Use taskkill on Windows to kill process tree
 		try {
-			spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
+			const t = spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
 				stdio: "ignore",
 				detached: true,
 				windowsHide: true,
 			});
+			// The try/catch only catches synchronous spawn failures; an async
+			// spawn "error" event (taskkill somehow absent/broken in a
+			// restricted environment) would otherwise be uncaught → agent
+			// crash during process-tree teardown. Swallow it best-effort.
+			t.on("error", () => {});
+			t.unref();
 		} catch {
 			// Ignore errors if taskkill fails
 		}

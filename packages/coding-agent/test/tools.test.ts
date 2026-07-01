@@ -1,11 +1,24 @@
 import { applyPatch } from "diff";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import {
+	chmodSync,
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	symlinkSync,
+	writeFileSync,
+} from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeBashWithOperations } from "../src/core/bash-executor.ts";
+import { atomicWriteFile } from "../src/core/tools/atomic-write.ts";
 import { type BashOperations, createBashTool, createLocalBashOperations } from "../src/core/tools/bash.ts";
 import { computeEditsDiff } from "../src/core/tools/edit-diff.ts";
+import { OutputAccumulator } from "../src/core/tools/output-accumulator.ts";
 import {
 	createEditTool,
 	createFindTool,
@@ -66,6 +79,143 @@ describe("Coding Agent Tools", () => {
 			const testFile = join(testDir, "nonexistent.txt");
 
 			await expect(readTool.execute("test-call-2", { path: testFile })).rejects.toThrow(/ENOENT|not found/i);
+		});
+
+		it("should reject binary files with an actionable hint instead of dumping garbage", async () => {
+			const testFile = join(testDir, "binary.elf");
+			// A NUL byte in the leading bytes is the binary signature.
+			writeFileSync(testFile, Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x00, 0x01, 0x02, 0x03]));
+
+			await expect(readTool.execute("test-call-binary", { path: testFile })).rejects.toThrow(/binary file/i);
+			const err = await readTool.execute("test-call-binary-2", { path: testFile }).catch((e) => e);
+			expect(err.message).toContain("strings");
+			expect(err.message).toContain("file");
+		});
+
+		it("should read text files that contain no NUL bytes normally", async () => {
+			// Ensure the binary detector does not false-positive on normal text.
+			const testFile = join(testDir, "plain.txt");
+			writeFileSync(testFile, "just text\nwith newlines\nand unicode “quotes”\n");
+			const result = await readTool.execute("test-call-plain", { path: testFile });
+			expect(getTextOutput(result)).toContain("just text");
+		});
+
+		it("should strip a leading UTF-8 BOM instead of surfacing it on line 1", async () => {
+			// A leading BOM (U+FEFF) is invisible metadata. It must not appear in
+			// read output — otherwise the model copies it into edit oldText and the
+			// edit tool (which strips BOM from the file) fails to match.
+			const testFile = join(testDir, "bom.txt");
+			writeFileSync(testFile, "﻿first line\nsecond line\n");
+			const result = await readTool.execute("test-call-bom", { path: testFile });
+			const output = getTextOutput(result);
+			expect(output).toContain("first line");
+			expect(output).toContain("second line");
+			expect(output.charCodeAt(0)).not.toBe(0xfeff);
+			expect(output).not.toContain("﻿");
+		});
+
+		it("should reject a directory with an actionable ls hint instead of EISDIR", async () => {
+			const subDir = join(testDir, "subdir");
+			mkdirSync(subDir, { recursive: true });
+			await expect(readTool.execute("test-call-dir", { path: subDir })).rejects.toThrow(/directory/i);
+			const err = await readTool.execute("test-call-dir-2", { path: subDir }).catch((e) => e);
+			expect(err.message).toContain("ls");
+			expect(err.message).not.toContain("EISDIR");
+		});
+
+		it("should reject a special file (device) with an actionable bash hint instead of hanging/OOM", async () => {
+			// Regression: read used to call fs.readFile on the path BEFORE any
+			// regular-file check. /dev/zero never returns EOF, so readFile would
+			// hang or OOM — the binary/NUL heuristic runs only AFTER the full read
+			// resolves, too late. Now a stat guard rejects non-regular files.
+			// /dev/zero is a character device on linux/darwin; skip on win32.
+			if (process.platform === "win32") return;
+			const err = await readTool.execute("test-call-devzero", { path: "/dev/zero" }).catch((e) => e);
+			expect(err).toBeInstanceOf(Error);
+			expect(err.message).toMatch(/not a regular file|special file/i);
+			// Must point the model at a bash fallback so it can still inspect the file.
+			expect(err.message).toContain("file");
+			expect(err.message).not.toMatch(/^[\x00]+$/); // never returned the raw zero bytes
+		});
+
+		it("should reject a named pipe (FIFO) with the special-file hint", async () => {
+			// A FIFO has no writer, so readFile would block forever without the guard.
+			if (process.platform === "win32") return;
+			const fifo = join(testDir, "named-pipe");
+			const { spawnSync } = await import("child_process");
+			spawnSync("mkfifo", [fifo]);
+			if (!existsSync(fifo)) return; // mkfifo unavailable — skip gracefully
+			try {
+				const err = await readTool.execute("test-call-fifo", { path: fifo }).catch((e) => e);
+				expect(err).toBeInstanceOf(Error);
+				expect(err.message).toMatch(/not a regular file|special file/i);
+			} finally {
+				try {
+					rmSync(fifo);
+				} catch {
+					// ignore
+				}
+			}
+		});
+
+		it("should reject a pathologically large file BEFORE loading it into memory, with a bash-streaming hint", async () => {
+			// Regression: read loads the WHOLE file into a Buffer, decodes it to a
+			// string, and splits into an array of ALL lines before truncating
+			// (offset/limit slice in memory too). A multi-GB file would OOM the
+			// agent. Now a stat-size guard rejects oversized files before readFile
+			// is ever called and steers the model to streaming bash commands.
+			let readFileCalled = false;
+			const bigFileTool = createReadTool(testDir, {
+				operations: {
+					access: async () => {},
+					readFile: async () => {
+						readFileCalled = true;
+						return Buffer.from("x");
+					},
+					stat: async () => ({
+						isFile: () => true,
+						isDirectory: () => false,
+						isBlockDevice: () => false,
+						isCharacterDevice: () => false,
+						isFIFO: () => false,
+						isSocket: () => false,
+						size: 2 * 1024 * 1024 * 1024, // 2GB — over the 16MB default limit
+					}),
+					detectImageMimeType: async () => undefined,
+				},
+			});
+			const err = await bigFileTool.execute("test-call-bigfile", { path: "huge.log" }).catch((e) => e);
+			expect(err).toBeInstanceOf(Error);
+			expect(err.message).toMatch(/exceeds the .* in-memory read limit/i);
+			// Must point the model at a streaming bash fallback.
+			expect(err.message).toContain("head");
+			expect(err.message).toContain("sed");
+			// The guard MUST reject before readFile loads the file into memory.
+			expect(readFileCalled).toBe(false);
+		});
+
+		it("should still read a file under the in-memory size limit (size guard does not over-trigger)", async () => {
+			// Same mock shape, but size under the 16MB limit → readFile IS called
+			// and the content is returned, proving the guard only catches oversized
+			// files and does not change behavior for normal reads.
+			const smallFileTool = createReadTool(testDir, {
+				operations: {
+					access: async () => {},
+					readFile: async () => Buffer.from("hello world\n"),
+					stat: async () => ({
+						isFile: () => true,
+						isDirectory: () => false,
+						isBlockDevice: () => false,
+						isCharacterDevice: () => false,
+						isFIFO: () => false,
+						isSocket: () => false,
+						size: 12, // under the 16MB limit
+					}),
+					detectImageMimeType: async () => undefined,
+				},
+			});
+			const result = await smallFileTool.execute("test-call-smallfile", { path: "small.txt" });
+			expect(getTextOutput(result)).toContain("hello world");
 		});
 
 		it("should truncate files exceeding line limit", async () => {
@@ -248,6 +398,19 @@ describe("Coding Agent Tools", () => {
 			expect(applyPatch(originalContent, result.details.patch)).toBe("Hello, testing!");
 		});
 
+		it("should report the first changed line in the success message", async () => {
+			const testFile = join(testDir, "edit-line.txt");
+			writeFileSync(testFile, ["alpha", "beta", "gamma", "delta"].join("\n"));
+			const result = await editTool.execute("test-call-edit-line", {
+				path: testFile,
+				edits: [{ oldText: "gamma", newText: "GAMMA" }],
+			});
+			const output = getTextOutput(result);
+			expect(output).toContain("Successfully replaced 1 block(s)");
+			// "gamma" is line 3 — the model sees where the edit landed.
+			expect(output).toContain("first change at line 3");
+		});
+
 		it("should fail if text not found", async () => {
 			const testFile = join(testDir, "edit-test.txt");
 			const originalContent = "Hello, world!";
@@ -422,7 +585,10 @@ describe("Coding Agent Tools", () => {
 			const missingFile = join(testDir, "missing-preview.txt");
 			const result = await computeEditsDiff(missingFile, [{ oldText: "hello", newText: "world" }], testDir);
 
-			expect(result).toEqual({ error: `Could not edit file: ${missingFile}. Error code: ENOENT.` });
+			// Source surfaces an actionable "use the write tool" hint after the code.
+			expect(result).toEqual({
+				error: `Could not edit file: ${missingFile}. Error code: ENOENT. ${missingFile} does not exist. Use the write tool to create it, e.g. write ${missingFile} with the full content.`,
+			});
 		});
 
 		it("should include EACCES in diff preview for unreadable files", async () => {
@@ -433,6 +599,124 @@ describe("Coding Agent Tools", () => {
 			const result = await computeEditsDiff(unreadableFile, [{ oldText: "hello", newText: "world" }], testDir);
 
 			expect(result).toEqual({ error: `Could not edit file: ${unreadableFile}. Error code: EACCES.` });
+		});
+	});
+
+	describe("atomic writes", () => {
+		it("atomicWriteFile writes content fully and leaves no temp file behind", async () => {
+			const target = join(testDir, "atomic-new.txt");
+			const content = "line one\nline two\n";
+			await atomicWriteFile(target, content);
+			expect(readFileSync(target, "utf-8")).toBe(content);
+			// The temp file must have been renamed into place, not leaked.
+			const leftover = readdirSync(testDir).filter((name) => name.endsWith(".tmp"));
+			expect(leftover).toEqual([]);
+		});
+
+		it("atomicWriteFile preserves the existing file mode on overwrite (executable bit)", async () => {
+			const target = join(testDir, "atomic-exec.sh");
+			writeFileSync(target, "original\n");
+			chmodSync(target, 0o755);
+			expect(statSync(target).mode & 0o777).toBe(0o755);
+
+			await atomicWriteFile(target, "replaced\n");
+
+			expect(readFileSync(target, "utf-8")).toBe("replaced\n");
+			// A naive temp+rename would reset this to 0o666; mode preservation keeps 0o755.
+			expect(statSync(target).mode & 0o777).toBe(0o755);
+		});
+
+		it("atomicWriteFile cleans up the temp file and leaves the target intact when the write fails", async () => {
+			const target = join(testDir, "atomic-preserve.txt");
+			writeFileSync(target, "untouched\n");
+			// Point at a path inside a non-existent directory so the temp-file write
+			// fails before any rename. The target must remain unchanged and no temp
+			// artifact may leak in the parent dir.
+			const badPath = join(testDir, "missing-subdir", "nope.txt");
+			await expect(atomicWriteFile(badPath, "anything\n")).rejects.toThrow();
+			expect(readFileSync(target, "utf-8")).toBe("untouched\n");
+			expect(readdirSync(testDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+		});
+
+		it("atomicWriteFile writes through a symlink to its target and preserves the link", async () => {
+			// Regression: rename(temp, symlinkPath) replaces the symlink ENTRY with a
+			// regular file, breaking the link and leaving the real target unchanged.
+			// atomicWriteFile must resolve the symlink and write the REAL file.
+			const real = join(testDir, "symlink-real.txt");
+			writeFileSync(real, "original\n");
+			const link = join(testDir, "symlink-link.txt");
+			symlinkSync(real, link);
+			expect(lstatSync(link).isSymbolicLink()).toBe(true);
+
+			await atomicWriteFile(link, "edited-through-link\n");
+
+			// The link is still a symlink...
+			expect(lstatSync(link).isSymbolicLink()).toBe(true);
+			// ...and the REAL target was updated (writing through the link).
+			expect(readFileSync(real, "utf-8")).toBe("edited-through-link\n");
+			expect(readFileSync(link, "utf-8")).toBe("edited-through-link\n");
+			// No temp artifact leaked.
+			expect(readdirSync(testDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+		});
+
+		it("atomicWriteFile creates the target through a dangling symlink without breaking the link", async () => {
+			// A dangling symlink (target doesn't exist yet) can't be realpath-resolved.
+			// Writing through the link creates the pointed-to file and keeps the link.
+			const real = join(testDir, "dangling-real.txt");
+			const link = join(testDir, "dangling-link.txt");
+			symlinkSync(real, link);
+			expect(lstatSync(link).isSymbolicLink()).toBe(true);
+			expect(existsSync(real)).toBe(false);
+
+			await atomicWriteFile(link, "created-through-dangling\n");
+
+			expect(lstatSync(link).isSymbolicLink()).toBe(true);
+			expect(readFileSync(real, "utf-8")).toBe("created-through-dangling\n");
+			expect(readFileSync(link, "utf-8")).toBe("created-through-dangling\n");
+		});
+
+		it("write tool leaves no temp file behind after a successful write", async () => {
+			const target = join(testDir, "write-atomic.txt");
+			const content = "hello atomic\n";
+			const result = await writeTool.execute("test-call-write-atomic", { path: target, content });
+			expect(getTextOutput(result)).toContain("Successfully wrote");
+			expect(readFileSync(target, "utf-8")).toBe(content);
+			expect(readdirSync(testDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+		});
+
+		it("write tool reports accurate UTF-8 byte count for multi-byte content", async () => {
+			const target = join(testDir, "write-bytes.txt");
+			// 4 CJK chars = 12 UTF-8 bytes, but content.length (UTF-16 code units) = 4.
+			const content = "你好世界";
+			const result = await writeTool.execute("test-call-write-bytes", { path: target, content });
+			const output = getTextOutput(result);
+			expect(output).toContain("Successfully wrote 12 bytes");
+			expect(output).not.toContain("Successfully wrote 4 bytes");
+		});
+
+		it("edit tool preserves an existing executable bit through an edit", async () => {
+			const target = join(testDir, "edit-atomic.sh");
+			writeFileSync(target, ["alpha", "beta", "gamma"].join("\n"));
+			chmodSync(target, 0o755);
+
+			const result = await editTool.execute("test-call-edit-atomic", {
+				path: target,
+				edits: [{ oldText: "beta", newText: "BETA" }],
+			});
+			expect(getTextOutput(result)).toContain("Successfully replaced");
+			expect(readFileSync(target, "utf-8")).toBe(["alpha", "BETA", "gamma"].join("\n"));
+			expect(statSync(target).mode & 0o777).toBe(0o755);
+			expect(readdirSync(testDir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+		});
+
+		it("write tool refuses to clobber a directory with a clear error and leaves no temp behind", async () => {
+			const dirTarget = join(testDir, "a-subdir");
+			mkdirSync(dirTarget, { recursive: true });
+			await expect(writeTool.execute("test-call-write-dir", { path: dirTarget, content: "nope\n" })).rejects.toThrow(
+				/is a directory, not a file/i,
+			);
+			// No stray temp file leaked inside the target directory.
+			expect(readdirSync(dirTarget).filter((name) => name.endsWith(".tmp"))).toEqual([]);
 		});
 	});
 
@@ -448,6 +732,95 @@ describe("Coding Agent Tools", () => {
 			await expect(bashTool.execute("test-call-9", { command: "exit 1" })).rejects.toThrow(
 				/(Command failed|code 1)/,
 			);
+		});
+
+		it("should surface a signal-termination status when exitCode is null", async () => {
+			// null exit code = killed by a signal that was NOT our abort/timeout
+			// (e.g. OOM SIGKILL / external SIGTERM). The model must not mistake the
+			// partial output for success.
+			const operations: BashOperations = {
+				exec: async (_command, _cwd, { onData }) => {
+					onData(Buffer.from("partial output before kill\n", "utf-8"));
+					return { exitCode: null };
+				},
+			};
+			const bash = createBashTool(testDir, { operations });
+			await expect(bash.execute("test-call-signal", { command: "oom-bait" })).rejects.toThrow(
+				/terminated by a signal/i,
+			);
+			const err = await bash.execute("test-call-signal-2", { command: "oom-bait" }).catch((e) => e);
+			expect(err.message).toContain("no exit code");
+			expect(err.message).toContain("partial output before kill");
+		});
+
+		it("OutputAccumulator persists truncated output to a temp file the model can read", async () => {
+			// Truncated output is spilled to a temp file so the model can read/tail it.
+			// This locks the ensureTempFile path (which now also registers exit cleanup).
+			const acc = new OutputAccumulator({ maxBytes: 64, maxLines: 2, tempFilePrefix: "pi-test-acc" });
+			acc.append(Buffer.from("line one is long enough to exceed the small byte budget\n"));
+			acc.append(Buffer.from("line two keeps spilling\n"));
+			acc.finish();
+			const snapshot = acc.snapshot({ persistIfTruncated: true });
+			expect(snapshot.truncation.truncated).toBe(true);
+			expect(snapshot.fullOutputPath).toBeDefined();
+			expect(snapshot.fullOutputPath).toContain("pi-test-acc");
+			// Flush the write stream so the file is on disk before we read it.
+			await acc.closeTempFile();
+			expect(existsSync(snapshot.fullOutputPath!)).toBe(true);
+			expect(readFileSync(snapshot.fullOutputPath!, "utf-8")).toContain("line one");
+			// Clean up the tracked temp file for the test (the exit handler handles real runs).
+			try {
+				rmSync(snapshot.fullOutputPath!);
+			} catch {
+				// ignore
+			}
+		});
+
+		it("OutputAccumulator degrades gracefully when the temp-file stream errors mid-stream", async () => {
+			// Regression: ensureTempFile created a WriteStream with NO "error"
+			// listener. A mid-stream write failure (disk full / EACCES / ENOTDIR)
+			// would emit an unhandled "error" event → uncaught → agent crash, AND
+			// snapshot() would point the model at a broken "Full output" path.
+			// Force a real ENOTDIR by making the temp file's parent a regular file:
+			// createWriteStream succeeds lazily, the first .write() emits "error".
+			const blocker = join(tmpdir(), "pi-err-parent");
+			writeFileSync(blocker, "x");
+			try {
+				const acc = new OutputAccumulator({
+					maxBytes: 64,
+					maxLines: 2,
+					tempFilePrefix: "pi-err-parent/child",
+				});
+				// Large enough to exceed the 64-byte budget and trigger ensureTempFile.
+				acc.append(Buffer.from("this line is long enough to exceed the small byte budget for sure\n"));
+				acc.append(Buffer.from("a second line keeps spilling past the budget\n"));
+				// Wait for the async ENOTDIR "error" event to fire and be absorbed by
+				// the persistent listener (no unhandled-error crash = test passes).
+				for (let i = 0; i < 50; i++) {
+					const snap = acc.snapshot({ persistIfTruncated: true });
+					if (snap.fullOutputPath === undefined) break;
+					await new Promise((resolve) => setTimeout(resolve, 5));
+				}
+				// Appending after the error must not throw (graceful degradation to
+				// the rolling tail rather than crashing on a nullled stream). Do this
+				// BEFORE finish() — a finished accumulator rightly rejects appends.
+				expect(() => acc.append(Buffer.from("post-failure line that simply drops\n"))).not.toThrow();
+				acc.finish();
+				const snapshot = acc.snapshot({ persistIfTruncated: true });
+				// The broken temp path must be withheld so the model is never told to
+				// read a partial/missing "Full output" file.
+				expect(snapshot.fullOutputPath).toBeUndefined();
+				// The rolling tail still works after the temp file died — the
+				// post-failure append reached the in-memory snapshot (maxLines=2
+				// trims earlier lines, so check the most recent one).
+				expect(snapshot.content).toContain("post-failure line that simply drops");
+			} finally {
+				try {
+					rmSync(blocker);
+				} catch {
+					// ignore
+				}
+			}
 		});
 
 		it("should respect timeout", async () => {
@@ -682,6 +1055,29 @@ describe("Coding Agent Tools", () => {
 			expect(fullOutput).toContain("1\n2\n3");
 			expect(fullOutput).toContain("2998\n2999\n3000");
 		});
+
+		it("executeBash should flush the temp file before returning so fullOutputPath is immediately readable", async () => {
+			// Regression: executeBashWithOperations used to call tempFileStream.end()
+			// WITHOUT awaiting 'finish', then return fullOutputPath — the caller could
+			// read the path before writes were flushed to disk (the older test above
+			// had to poll existsSync to work around this). Now the stream is awaited,
+			// so the file is readable the instant the call resolves.
+			const result = await executeBashWithOperations("seq 4000", process.cwd(), createLocalBashOperations());
+			const fullOutputPath = result.fullOutputPath;
+
+			expect(result.truncated).toBe(true);
+			expect(fullOutputPath).toBeDefined();
+			// No polling: the file must already exist and be fully flushed.
+			expect(existsSync(fullOutputPath!)).toBe(true);
+			const fullOutput = readFileSync(fullOutputPath!, "utf-8");
+			expect(fullOutput).toContain("1\n2\n3");
+			expect(fullOutput).toContain("3998\n3999\n4000");
+			try {
+				rmSync(fullOutputPath!);
+			} catch {
+				// ignore
+			}
+		});
 	});
 
 	describe("grep tool", () => {
@@ -735,6 +1131,15 @@ describe("Coding Agent Tools", () => {
 			expect(getTextOutput(result)).toContain("No matches found");
 			expect(existsSync(marker)).toBe(false);
 		});
+
+		it("should convert an invalid regex into an actionable hint (literal:true or escape)", async () => {
+			await expect(
+				grepTool.execute("test-call-grep-invalid-regex", {
+					pattern: "(unclosed",
+					path: testDir,
+				}),
+			).rejects.toThrow(/Invalid regex pattern.*Hint.*literal:true/is);
+		});
 	});
 
 	describe("find tool", () => {
@@ -779,7 +1184,7 @@ describe("Coding Agent Tools", () => {
 					pattern: "[",
 					path: testDir,
 				}),
-			).rejects.toThrow(/error parsing glob|fd exited with code 1|fd error/i);
+			).rejects.toThrow(/Invalid glob pattern.*Hint.*backslash/is);
 		});
 
 		it("should treat flag-like patterns as search text", async () => {
@@ -802,6 +1207,15 @@ describe("Coding Agent Tools", () => {
 
 			expect(output).toContain(".hidden-file");
 			expect(output).toContain(".hidden-dir/");
+		});
+
+		it("should reject a file path with an actionable read hint instead of 'Not a directory'", async () => {
+			const filePath = join(testDir, "a-file.txt");
+			writeFileSync(filePath, "hello\n");
+			await expect(lsTool.execute("test-call-ls-file", { path: filePath })).rejects.toThrow(/is a file/i);
+			const err = await lsTool.execute("test-call-ls-file-2", { path: filePath }).catch((e) => e);
+			expect(err.message).toContain("read");
+			expect(err.message).not.toContain("Not a directory");
 		});
 	});
 });
@@ -951,6 +1365,27 @@ describe("edit tool fuzzy matching", () => {
 				edits: [{ oldText: "this does not exist", newText: "replacement" }],
 			}),
 		).rejects.toThrow(/Could not find the exact text/);
+	});
+
+	it("should embed a surrounding-line snippet in the not-found hint so the model can retry without a read", async () => {
+		// The anchor line ("gamma") exists, but the full block doesn't — the hint
+		// must locate it, name a cause, and embed the real surrounding lines so the
+		// model can copy the exact text instead of issuing a separate read.
+		const testFile = join(testDir, "hint-snippet.txt");
+		writeFileSync(testFile, ["alpha", "beta", "gamma", "delta", "epsilon"].join("\n"));
+
+		const err = await editTool
+			.execute("test-hint-snippet", {
+				path: testFile,
+				edits: [{ oldText: "gamma\nWRONG", newText: "GAMMA\nRIGHT" }],
+			})
+			.catch((e) => e);
+		expect(err.message).toContain("Could not find the exact text");
+		expect(err.message).toContain("line 3");
+		// The actual file lines around the anchor are embedded in the error.
+		expect(err.message).toContain("beta");
+		expect(err.message).toContain("gamma");
+		expect(err.message).toContain("delta");
 	});
 
 	it("should detect duplicates after fuzzy normalization", async () => {

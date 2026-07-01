@@ -133,7 +133,12 @@ export function createLsToolDefinition(
 						// Check if path is a directory.
 						const stat = await ops.stat(dirPath);
 						if (!stat.isDirectory()) {
-							reject(new Error(`Not a directory: ${dirPath}`));
+							const hintPath = path ?? dirPath;
+							reject(
+								new Error(
+									`${dirPath} is a file, not a directory. Use the read tool to read its contents instead, e.g. read ${hintPath}.`,
+								),
+							);
 							return;
 						}
 
@@ -152,6 +157,7 @@ export function createLsToolDefinition(
 						// Format entries with directory indicators.
 						const results: string[] = [];
 						let entryLimitReached = false;
+						let unstattable = 0;
 						for (const entry of entries) {
 							if (results.length >= effectiveLimit) {
 								entryLimitReached = true;
@@ -164,8 +170,15 @@ export function createLsToolDefinition(
 								const entryStat = await ops.stat(fullPath);
 								if (entryStat.isDirectory()) suffix = "/";
 							} catch {
-								// Skip entries we cannot stat.
-								continue;
+								// The entry exists in the directory but could not be stat'd
+								// (permission denied, broken symlink, ELOOP, or deleted
+								// between readdir and stat). Previously these were silently
+								// `continue`'d, so the model saw a shorter listing with no
+								// marker and no indication the entry existed — a hidden file
+								// the model needed to know about. Emit the name with a `?`
+								// marker (type unknown) and tally for a trailing notice.
+								unstattable++;
+								suffix = "?";
 							}
 							results.push(entry + suffix);
 						}
@@ -191,6 +204,9 @@ export function createLsToolDefinition(
 						if (truncation.truncated) {
 							notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
 							details.truncation = truncation;
+						}
+						if (unstattable > 0) {
+							notices.push(`${unstattable} ${unstattable === 1 ? "entry" : "entries"} could not be stat'd`);
 						}
 						if (notices.length > 0) {
 							output += `\n\n[${notices.join(". ")}]`;

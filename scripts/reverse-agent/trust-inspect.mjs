@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { atomicWriteFile } from "./lib/memory-purge-helpers.mjs";
 
 const argv = process.argv.slice(2);
 const rootArg = argv[0] && !argv[0].startsWith("-") ? argv.shift() : process.cwd();
@@ -44,7 +45,16 @@ function writeTrust(data) {
 	} catch {
 		// Best-effort on non-POSIX filesystems.
 	}
-	writeFileSync(trustPath, `${JSON.stringify(sorted, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+	// opt #189: atomic temp+rename (mode 0o600 preserved) so a crash/SIGTERM
+	// mid-write cannot leave a partially-written trust file → JSON.parse throws
+	// on next read → agent treats all project-local files as untrusted until
+	// manually repaired. The MAIN trust write was made atomic in the opt #43
+	// audit; this separate maintenance/repair script mutates the SAME trust file
+	// but was still bare writeFileSync (truncate-then-write). Reuses the opt #176
+	// atomicWriteFile helper (temp+rename, same-dir, mode-preserved,
+	// unlink-on-error). Post-write chmod enforces 0o600 even if the existing-mode
+	// preservation branch kept a looser mode.
+	atomicWriteFile(trustPath, `${JSON.stringify(sorted, null, 2)}\n`, 0o600);
 	try {
 		chmodSync(trustPath, 0o600);
 	} catch {

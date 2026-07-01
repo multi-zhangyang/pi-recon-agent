@@ -455,4 +455,52 @@ rl.on("line", (line) => {
 			await new Promise<void>((resolve) => server.close(() => resolve()));
 		}
 	});
+
+	it("rejects in-flight requests immediately when the stdio client is closed", async () => {
+		// A server that answers initialize/tools/list but silently ignores
+		// tools/call → the request stays pending. Closing the client must reject
+		// it with "MCP client closed" (the explicit close() rejectAll) rather than
+		// waiting for the per-request 10s timeout or the child 'close' event
+		// (which would surface as "MCP server exited ..." and trigger a retry).
+		tempRoot = mkdtempSync(join(tmpdir(), "repi-mcp-"));
+		const agentDir = join(tempRoot, "agent");
+		mkdirSync(agentDir, { recursive: true });
+		const fakeServer = join(tempRoot, "fake-mcp-pending.mjs");
+		writeFileSync(
+			fakeServer,
+			`import readline from "node:readline";
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+ const msg = JSON.parse(line);
+ if (msg.method === "initialize") console.log(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2025-11-25", serverInfo: { name: "fake" }, capabilities: { tools: {} } } }));
+ if (msg.method === "tools/list") console.log(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "echo", description: "Echo", inputSchema: { type: "object" } }] } }));
+ // tools/call intentionally never answered → request hangs.
+});
+`,
+		);
+		chmodSync(fakeServer, 0o700);
+		writeFileSync(
+			join(agentDir, "mcp.json"),
+			JSON.stringify({
+				mcpServers: {
+					fake: { transport: "stdio", command: process.execPath, args: [fakeServer], allowedTools: ["echo"] },
+				},
+			}),
+		);
+		const manager = createMcpManager({ cwd: tempRoot, agentDir });
+		// Probe first so the client is initialized and pooled; tools/call is then
+		// the only pending request.
+		const probe = await manager.probeServer("fake");
+		expect(probe.ok).toBe(true);
+		const pending = manager.callTool("fake", "echo", { text: "hi" });
+		// Give the request a moment to be sent, then tear down.
+		await new Promise<void>((resolve) => setTimeout(resolve, 150));
+		await manager.closeAll();
+		await expect(
+			Promise.race([
+				pending,
+				new Promise<never>((_, reject) => setTimeout(() => reject(new Error("callTool hung")), 5000)),
+			]),
+		).rejects.toThrow("MCP client closed");
+	});
 });

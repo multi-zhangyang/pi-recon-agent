@@ -72,6 +72,26 @@ export class BashExecutionComponent extends Container {
 		this.updateDisplay();
 	}
 
+	/**
+	 * Teardown: stop the Loader's 80ms animation interval so a component
+	 * discarded while still `"running"` (session switch via chatContainer.clear,
+	 * compaction rebuild, or stop()) does not keep firing requestRender() on a
+	 * detached component until the underlying command eventually settles. Same
+	 * class of leak opt #47 fixed for ToolExecutionComponent's renderer interval;
+	 * clear()/removeChild() re-arrange live children without disposing them, so
+	 * the detach sites must call dispose() explicitly. super.dispose() then
+	 * propagates to nested children (contentContainer → Loader → Loader.dispose
+	 * also stops the interval; belt-and-suspenders).
+	 */
+	override dispose(): void {
+		try {
+			this.loader.stop();
+		} catch {
+			// ignore — best-effort teardown
+		}
+		super.dispose();
+	}
+
 	override invalidate(): void {
 		super.invalidate();
 		this.updateDisplay();

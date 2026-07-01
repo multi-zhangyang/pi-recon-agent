@@ -1,10 +1,14 @@
 import { createHash } from "node:crypto";
+import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { safeHeadEnd, safeTailStart } from "../tools/truncate.ts";
 
 export function truncateMiddle(text: string, limit: number): string {
 	if (text.length <= limit) return text;
 	const head = Math.floor(limit * 0.55);
 	const tail = Math.floor(limit * 0.35);
-	return `${text.slice(0, head)}\n...<truncated ${text.length - limit} chars>...\n${text.slice(-tail)}`;
+	const headEnd = safeHeadEnd(text, head);
+	const tailStart = safeTailStart(text, text.length - tail);
+	return `${text.slice(0, headEnd)}\n...<truncated ${text.length - limit} chars>...\n${text.slice(tailStart)}`;
 }
 
 export function metadataValue(text: string, key: string): string | undefined {
@@ -49,6 +53,47 @@ export function interestingLines(text: string, pattern: RegExp, limit: number): 
 
 export function sha256Text(text: string): string {
 	return createHash("sha256").update(text).digest("hex");
+}
+
+// opt #159 (moved from recon-profile.ts #158): hash an artifact file's FULL
+// contents without loading it whole. createHash("sha256").update(readFileSync
+// (path)) read the ENTIRE file into memory — a multi-GB artifact (memory dump,
+// captured binary, coredump, large replay/compiler artifact) OOM-crashed (V8
+// heap / ERR_FS_FILE_TOO_LARGE) before the digest ran. stat-first: files <=
+// HASH_FILE_FAST_MAX keep the fast readFileSync path; larger files stream
+// through the hash in fixed HASH_FILE_CHUNK_SIZE chunks via positioned readSync,
+// so memory stays bounded to one chunk regardless of file size. The digest
+// covers ALL bytes (unlike opt #156's tail-read), so the hash is byte-identical
+// to the old whole-file hash. Shared here so both recon-profile.ts and
+// memory-event.ts use one implementation without a circular import (recon-
+// profile is the assembly layer that imports repi/*; repi/* must not import
+// back from recon-profile).
+const HASH_FILE_CHUNK_SIZE = 1024 * 1024;
+const HASH_FILE_FAST_MAX = 1024 * 1024;
+export function hashFileSha256(path: string): string {
+	const stat = statSync(path);
+	if (stat.size <= HASH_FILE_FAST_MAX) {
+		return createHash("sha256").update(readFileSync(path)).digest("hex");
+	}
+	const fd = openSync(path, "r");
+	try {
+		const hash = createHash("sha256");
+		const buf = Buffer.alloc(HASH_FILE_CHUNK_SIZE);
+		let pos = 0;
+		while (pos < stat.size) {
+			const n = readSync(fd, buf, 0, Math.min(HASH_FILE_CHUNK_SIZE, stat.size - pos), pos);
+			if (n <= 0) break;
+			hash.update(buf.subarray(0, n));
+			pos += n;
+		}
+		return hash.digest("hex");
+	} finally {
+		try {
+			closeSync(fd);
+		} catch {
+			// Best-effort: fd may already be invalid.
+		}
+	}
 }
 
 export function clamp01(value: number | undefined, fallback: number): number {

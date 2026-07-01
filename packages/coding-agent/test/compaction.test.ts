@@ -15,6 +15,7 @@ import {
 	getLastAssistantUsage,
 	prepareCompaction,
 	shouldCompact,
+	stripTrailingErrorAssistants,
 } from "../src/core/compaction/index.ts";
 import {
 	buildSessionContext,
@@ -184,6 +185,111 @@ describe("Token calculation", () => {
 	it("should handle zero values", () => {
 		const usage = createMockUsage(0, 0, 0, 0);
 		expect(calculateContextTokens(usage)).toBe(0);
+	});
+
+	it("estimateContextTokens counts trailing tool results so a large batch trips the proactive threshold that the stale last-usage alone would miss", () => {
+		// Reproduces the rationale for the proactive-trigger wiring fix: the
+		// post-turn shouldStopAfterTurn check used to consult only
+		// calculateContextTokens(assistantMessage.usage), which reflects the
+		// request that produced the assistant message and EXCLUDES the tool
+		// results executed that turn (sent in the NEXT request). A single large
+		// tool-result batch can push the next request past the threshold — or
+		// even over the window — while the stale usage stays below it, so the
+		// proactive check misses it and the model loses a turn to a reactive
+		// overflow. estimateContextTokens adds the trailing tool-result tokens.
+		const contextWindow = 100_000;
+		const settings: CompactionSettings = { ...DEFAULT_COMPACTION_SETTINGS, triggerPercent: 85 };
+		// 85% of 100k = 85k trigger threshold.
+		// Last request usage: 80k tokens — below the threshold.
+		const assistant = createAssistantMessage("done", createMockUsage(79_900, 100));
+		expect(calculateContextTokens(assistant.usage!)).toBe(80_000);
+		// Stale path (pre-fix): below threshold → does NOT compact.
+		expect(shouldCompact(calculateContextTokens(assistant.usage!), contextWindow, settings)).toBe(false);
+
+		// A trailing tool result with ~400k chars of text ≈ 100k estimated tokens.
+		const hugeToolResult: AgentMessage = {
+			role: "toolResult",
+			toolCallId: "call_1",
+			toolName: "bash",
+			content: [{ type: "text", text: "x".repeat(400_000) }],
+			isError: false,
+			timestamp: Date.now(),
+		};
+		const messages: AgentMessage[] = [assistant, hugeToolResult];
+		const estimate = estimateContextTokens(messages);
+		// The trailing tool result is counted on top of the usage.
+		expect(estimate.usageTokens).toBe(80_000);
+		expect(estimate.trailingTokens).toBeGreaterThan(80_000);
+		expect(estimate.tokens).toBeGreaterThan(80_000);
+		expect(estimate.lastUsageIndex).toBe(0);
+		// Fixed path: the next request (usage + trailing tool results) is over
+		// the threshold → compaction trips NOW, before the overflow request.
+		expect(shouldCompact(estimate.tokens, contextWindow, settings)).toBe(true);
+	});
+});
+
+describe("stripTrailingErrorAssistants", () => {
+	function errorAssistant(stopReason: "error" | "aborted" = "error"): AgentMessage {
+		return { ...createAssistantMessage(""), stopReason };
+	}
+	function userMessage(): AgentMessage {
+		return { role: "user", content: "hi", timestamp: Date.now() } as AgentMessage;
+	}
+	function toolResult(): AgentMessage {
+		return {
+			role: "toolResult",
+			toolCallId: "call_1",
+			toolName: "bash",
+			content: [{ type: "text", text: "ok" }],
+			isError: false,
+			timestamp: Date.now(),
+		} as AgentMessage;
+	}
+
+	it("strips ALL trailing error/aborted assistants, not just the last one (regression for the compaction willRetry single-`if` bug)", () => {
+		// Reproduces the post-buildSessionContext shape: the session retains every
+		// error assistant from prior retryable failures, so a rebuild brings back
+		// several trailing error assistants. Stripping only the last one leaves an
+		// earlier error assistant as the new last message → runAgentLoopContinue
+		// throws "Cannot continue from message role: assistant".
+		const messages: AgentMessage[] = [
+			userMessage(),
+			errorAssistant("error"),
+			errorAssistant("error"),
+			errorAssistant("aborted"),
+		];
+		const stripped = stripTrailingErrorAssistants(messages);
+		expect(stripped.length).toBe(1);
+		expect(stripped[0].role).toBe("user");
+	});
+
+	it("stops at the first non-error/aborted trailing message (does not strip healthy assistants or tool results)", () => {
+		const healthy = createAssistantMessage("done");
+		const messages: AgentMessage[] = [userMessage(), healthy, errorAssistant(), errorAssistant()];
+		const stripped = stripTrailingErrorAssistants(messages);
+		expect(stripped.length).toBe(2);
+		expect(stripped[1]).toBe(healthy);
+	});
+
+	it("preserves a trailing tool result (never strips non-assistant trailing messages)", () => {
+		const messages: AgentMessage[] = [userMessage(), errorAssistant(), toolResult()];
+		const stripped = stripTrailingErrorAssistants(messages);
+		expect(stripped.length).toBe(3);
+		expect(stripped).toBe(messages); // same reference — nothing to strip
+	});
+
+	it("returns the same array reference when there is nothing to strip", () => {
+		const messages: AgentMessage[] = [userMessage(), createAssistantMessage("done")];
+		expect(stripTrailingErrorAssistants(messages)).toBe(messages);
+	});
+
+	it("handles an empty array", () => {
+		expect(stripTrailingErrorAssistants([])).toEqual([]);
+	});
+
+	it("handles an array of only error assistants", () => {
+		const messages: AgentMessage[] = [errorAssistant(), errorAssistant()];
+		expect(stripTrailingErrorAssistants(messages)).toEqual([]);
 	});
 });
 

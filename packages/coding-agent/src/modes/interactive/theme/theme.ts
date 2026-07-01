@@ -426,15 +426,39 @@ export class Theme {
 
 let BUILTIN_THEMES: Record<string, ThemeJson> | undefined;
 
+// opt #52 — load each built-in theme file defensively. The previous bare
+// `JSON.parse(readFileSync(...))` threw ENOENT/SyntaxError if dark.json or light.json was
+// missing, truncated (interrupted update / disk error), or hand-edited to invalid JSON. That
+// threw out of `getBuiltinThemes` → `getAvailableThemesWithPaths` (the /themes command) AND
+// out of `loadThemeJson` → `loadTheme` → `initTheme`/`setTheme`. initTheme/setTheme catch the
+// primary load and fall back to `loadTheme("dark")` — but if dark.json is the corrupt file the
+// fallback threw INSIDE the catch → uncaught → startup crash. The sibling custom-theme loader
+// (getCustomThemeInfos) and resource-loader.loadThemeFromFile both wrap theme parsing in
+// try/catch; this built-in path did not. Now a corrupt built-in is skipped (omitted from the
+// record) so getAvailableThemesWithPaths degrades gracefully, and loadThemeJson throws a clean
+// "Theme not found: <name>" instead of an opaque ENOENT/SyntaxError. The dark-fallback chain
+// in initTheme/setTheme was also hardened (loadFallbackTheme tries dark → light) so a corrupt
+// dark.json degrades to light instead of crashing startup; only a fully-broken install (both
+// built-ins corrupt) still throws, which is a genuinely unusable theme state.
+function loadBuiltinThemeFile(themePath: string): ThemeJson | undefined {
+	try {
+		return JSON.parse(fs.readFileSync(themePath, "utf-8")) as ThemeJson;
+	} catch {
+		return undefined;
+	}
+}
+
 function getBuiltinThemes(): Record<string, ThemeJson> {
 	if (!BUILTIN_THEMES) {
 		const themesDir = getThemesDir();
 		const darkPath = path.join(themesDir, "dark.json");
 		const lightPath = path.join(themesDir, "light.json");
-		BUILTIN_THEMES = {
-			dark: JSON.parse(fs.readFileSync(darkPath, "utf-8")) as ThemeJson,
-			light: JSON.parse(fs.readFileSync(lightPath, "utf-8")) as ThemeJson,
-		};
+		const themes: Record<string, ThemeJson> = {};
+		const dark = loadBuiltinThemeFile(darkPath);
+		if (dark) themes.dark = dark;
+		const light = loadBuiltinThemeFile(lightPath);
+		if (light) themes.light = light;
+		BUILTIN_THEMES = themes;
 	}
 	return BUILTIN_THEMES;
 }
@@ -480,11 +504,20 @@ export function getAvailableThemesWithPaths(): ThemeInfo[] {
 function getCustomThemeInfos(): ThemeInfo[] {
 	const customThemesDir = getCustomThemesDir();
 	const result: ThemeInfo[] = [];
-	if (!fs.existsSync(customThemesDir)) {
+	// opt #52 — wrap readdirSync: existsSync-then-readdirSync has a TOCTOU gap (dir deleted or
+	// chmod'd between the two) and EACCES/EIO on the dir throws out of getCustomThemeInfos →
+	// getAvailableThemesWithPaths → crashes the /themes command. The per-file loadThemeFromPath
+	// below was already guarded; the directory read was not. Return empty on any read error
+	// (sibling resource-loader.loadThemesFromDir and extensions loader use the same pattern).
+	let files: string[];
+	try {
+		files = fs.readdirSync(customThemesDir);
+	} catch {
 		return result;
 	}
+	if (!files) return result;
 
-	for (const file of fs.readdirSync(customThemesDir)) {
+	for (const file of files) {
 		if (!file.endsWith(".json")) {
 			continue;
 		}
@@ -774,6 +807,17 @@ export function setRegisteredThemes(themes: Theme[]): void {
 	}
 }
 
+// opt #52 — dark-fallback chain. initTheme/setTheme catch a failed primary load and fall
+// back to "dark"; but if dark.json itself is the corrupt/missing file, that fallback threw
+// INSIDE the catch → uncaught → startup crash. This tries "dark" then "light" so a corrupt
+// dark.json degrades to light; only a fully-broken install (both built-ins unreadable) still
+// throws, which is a genuinely unusable theme state.
+function loadFallbackTheme(): Theme {
+	if (getBuiltinThemes().dark) return loadTheme("dark");
+	if (getBuiltinThemes().light) return loadTheme("light");
+	throw new Error("No usable built-in theme found (dark.json and light.json both unreadable)");
+}
+
 export function initTheme(themeName?: string, enableWatcher: boolean = false): void {
 	const name = themeName ?? getDefaultTheme();
 	currentThemeName = name;
@@ -783,9 +827,18 @@ export function initTheme(themeName?: string, enableWatcher: boolean = false): v
 			startThemeWatcher();
 		}
 	} catch (_error) {
-		// Theme is invalid - fall back to dark theme silently
-		currentThemeName = "dark";
-		setGlobalTheme(loadTheme("dark"));
+		// Theme is invalid - fall back to a usable built-in (dark, then light). If the
+		// primary failure was a corrupt dark.json, this degrades to light instead of
+		// crashing startup (opt #52).
+		try {
+			const fallback = loadFallbackTheme();
+			currentThemeName = getBuiltinThemes().dark ? "dark" : "light";
+			setGlobalTheme(fallback);
+		} catch {
+			// Both built-ins unreadable — nothing to fall back to. Leave the global theme
+			// untouched rather than crashing startup; the TUI runs with whatever colors
+			// were initialized (or raw terminal defaults).
+		}
 		// Don't start watcher for fallback theme
 	}
 }
@@ -802,9 +855,15 @@ export function setTheme(name: string, enableWatcher: boolean = false): { succes
 		}
 		return { success: true };
 	} catch (error) {
-		// Theme is invalid - fall back to dark theme
-		currentThemeName = "dark";
-		setGlobalTheme(loadTheme("dark"));
+		// Theme is invalid - fall back to a usable built-in (dark, then light) so a
+		// corrupt dark.json doesn't crash the /theme command (opt #52).
+		try {
+			const fallback = loadFallbackTheme();
+			currentThemeName = getBuiltinThemes().dark ? "dark" : "light";
+			setGlobalTheme(fallback);
+		} catch {
+			// Both built-ins unreadable — leave the global theme untouched.
+		}
 		// Don't start watcher for fallback theme
 		return {
 			success: false,

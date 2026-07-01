@@ -55,6 +55,20 @@ vi.mock("../src/core/compaction/index.js", () => ({
 		contextWindow: number,
 		settings: { enabled: boolean; reserveTokens: number },
 	) => settings.enabled && contextTokens > contextWindow - settings.reserveTokens,
+	// Faithful copy of the real pure helper (see compaction/utils.ts). The mock
+	// replaces the compaction module, so it must provide this export too — the
+	// overflow-recovery path in _checkCompaction calls it to strip trailing
+	// error/aborted assistants before retrying.
+	stripTrailingErrorAssistants: (messages: Array<{ role: string; stopReason?: string }>) => {
+		let end = messages.length;
+		while (end > 0) {
+			const last = messages[end - 1];
+			if (last?.role === "assistant" && (last.stopReason === "error" || last.stopReason === "aborted")) {
+				end--;
+			} else break;
+		}
+		return end === messages.length ? messages : messages.slice(0, end);
+	},
 }));
 
 describe("AgentSession auto-compaction queue resume", () => {

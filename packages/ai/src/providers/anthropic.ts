@@ -26,9 +26,11 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.ts";
+import { safeStringifyError, terminalErrorMessage } from "../utils/error-stringify.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.ts";
+import { callOnResponseWithDrain } from "../utils/response-drain.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 
 import { resolveCloudflareBaseUrl } from "./cloudflare.ts";
@@ -345,7 +347,25 @@ function consumeLine(text: string): { line: string; rest: string } | null {
 	};
 }
 
-async function* iterateSseMessages(
+/**
+ * Resolve the per-stream SSE buffer cap shared with codex `parseSSE`. See
+ * openai-codex-responses.ts `SSE_BUFFER_MAX_BYTES` for the full doctrine.
+ * `iterateSseMessages` does `buffer += decoder.decode(...)` and slices on the
+ * SSE line separator with NO length check → a proxy/CDN that strips `\n`/`\r\n`
+ * separators grows the buffer unbounded → OOM mid-stream. The idle timeout
+ * bounds wall-clock, not bytes. `REPI_SSE_BUFFER_MAX_BYTES` env overrides; 0
+ * disables (legacy unbounded). opt #185.
+ */
+export const SSE_BUFFER_MAX_BYTES = (() => {
+	const raw = process.env.REPI_SSE_BUFFER_MAX_BYTES;
+	if (raw === undefined || raw === "") return 16 * 1024 * 1024;
+	const n = Number(raw);
+	if (!Number.isFinite(n) || n < 0) return 16 * 1024 * 1024;
+	if (n === 0) return Number.POSITIVE_INFINITY;
+	return Math.floor(n);
+})();
+
+export async function* iterateSseMessages(
 	body: ReadableStream<Uint8Array>,
 	signal?: AbortSignal,
 	idleTimeoutMs?: number,
@@ -367,6 +387,16 @@ async function* iterateSseMessages(
 			}
 
 			buffer += decoder.decode(value, { stream: true });
+
+			// opt #185: bound the un-flushed buffer. A proxy/CDN that strips the
+			// `\n`/`\r\n` SSE line separator would otherwise accumulate unbounded →
+			// OOM. Throw a framing error so agent-loop retry engages; the finally
+			// block cancels/drains the reader (drainResponseBody doctrine).
+			if (SSE_BUFFER_MAX_BYTES !== Number.POSITIVE_INFINITY && buffer.length > SSE_BUFFER_MAX_BYTES) {
+				throw new Error(
+					`Anthropic stream framing error: buffer exceeded REPI_SSE_BUFFER_MAX_BYTES (${SSE_BUFFER_MAX_BYTES}) with no line separator`,
+				);
+			}
 			let consumed = consumeLine(buffer);
 			while (consumed) {
 				buffer = consumed.rest;
@@ -401,6 +431,15 @@ async function* iterateSseMessages(
 			yield trailingEvent;
 		}
 	} finally {
+		// Cancel/drain the body so a mid-stream throw (a server-side `error`
+		// SSE event, an unparseable event, or an abort) doesn't strand the
+		// keep-alive socket. undici does NOT release the socket until the body
+		// is consumed OR cancelled, and releaseLock() alone leaves a partially-
+		// read body holding it (the idle-timeout path already cancels at :428;
+		// this covers every other exit). cancel() is a no-op on an already-
+		// done/errored stream, and rejects on some error states — swallow.
+		// Same doctrine as opt #49 (HTTP response body drain). (opt #117)
+		await reader.cancel().catch(() => {});
 		reader.releaseLock();
 	}
 }
@@ -554,7 +593,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 				maxRetries: options?.maxRetries ?? 0,
 			};
 			const response = await client.messages.create({ ...params, stream: true }, requestOptions).asResponse();
-			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+			await callOnResponseWithDrain(response.body, () =>
+				options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model),
+			);
 			stream.push({ type: "start", partial: output });
 
 			type Block = (ThinkingContent | TextContent | (ToolCall & { partialJson: string })) & { index: number };
@@ -723,7 +764,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			}
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error("An unknown error occurred");
+				// opt #275: surface the captured errorMessage / abort label
+				// instead of a generic "An unknown error occurred". Inline
+				// guard kept so TS narrows stopReason for the `done` push.
+				throw new Error(terminalErrorMessage(output.stopReason, output.errorMessage) as string);
 			}
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
@@ -735,7 +779,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 				delete (block as { partialJson?: string }).partialJson;
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			output.errorMessage = error instanceof Error ? error.message : safeStringifyError(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -1035,7 +1079,7 @@ function normalizeToolCallId(id: string): string {
 	return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 }
 
-function convertMessages(
+export function convertMessages(
 	messages: Message[],
 	model: Model<"anthropic-messages">,
 	isOAuthToken: boolean,
@@ -1101,13 +1145,46 @@ function convertMessages(
 				} else if (block.type === "thinking") {
 					// Redacted thinking: pass the opaque payload back as redacted_thinking
 					if (block.redacted) {
+						// opt #214: a redacted-thinking block without a signature (torn
+						// write, manual edit, schema migration, or a partially-persisted
+						// history) cannot be replayed — Anthropic rejects a
+						// redacted_thinking block whose `data` is missing/empty, which
+						// aborts the ENTIRE turn before any output. Pre-fix the
+						// `data: block.thinkingSignature!` non-null assertion emitted
+						// `data: undefined` in that case → every subsequent turn failed
+						// with an API error until the history was repaired. Gracefully
+						// skip the unreplayable block so the rest of the conversation
+						// proceeds (degraded reasoning for that one block, vs. a hard
+						// turn rejection on every turn).
+						if (!block.thinkingSignature || block.thinkingSignature.trim().length === 0) {
+							continue;
+						}
 						blocks.push({
 							type: "redacted_thinking",
-							data: block.thinkingSignature!,
+							data: block.thinkingSignature,
 						});
 						continue;
 					}
-					if (block.thinking.trim().length === 0) continue;
+					// opt #212: thinkingDisplay:"omitted" streams an EMPTY thinking
+					// string BUT a real signature (signature_delta arrives even when
+					// thinking_delta does not — see the streaming handler ~line 697).
+					// The old `thinking.trim().length === 0` guard dropped the whole
+					// block here, discarding the signature → the model lost its
+					// encrypted reasoning context across turns (silent multi-turn
+					// reasoning degradation, contradicting the documented "omitted"
+					// contract at ~line 217-219). Preserve the block when a signature
+					// is present so the encrypted reasoning chain travels back; only
+					// drop when there is genuinely nothing to replay.
+					if (block.thinking.trim().length === 0) {
+						if (block.thinkingSignature && block.thinkingSignature.trim().length > 0) {
+							blocks.push({
+								type: "thinking",
+								thinking: "",
+								signature: block.thinkingSignature,
+							});
+						}
+						continue;
+					}
 					// If thinking signature is missing/empty (e.g., from aborted stream),
 					// convert to plain text for Anthropic. Some compatible providers emit
 					// and accept empty signatures, so let marked models preserve the block.
@@ -1237,7 +1314,7 @@ function convertTools(
 	});
 }
 
-function mapStopReason(reason: Anthropic.Messages.StopReason | string): StopReason {
+export function mapStopReason(reason: Anthropic.Messages.StopReason | string): StopReason {
 	switch (reason) {
 		case "end_turn":
 			return "stop";
@@ -1254,7 +1331,11 @@ function mapStopReason(reason: Anthropic.Messages.StopReason | string): StopReas
 		case "sensitive": // Content flagged by safety filters (not yet in SDK types)
 			return "error";
 		default:
-			// Handle unknown stop reasons gracefully (API may add new values)
-			throw new Error(`Unhandled stop reason: ${reason}`);
+			// Handle unknown stop reasons gracefully (API may add new values —
+			// pause_turn, refusal, sensitive have appeared after the SDK types).
+			// Throwing here would let the outer catch discard the ENTIRE response
+			// as stopReason:"error", losing all content. Mistral's mapChatStopReason
+			// defaults to "stop"; we do the same to preserve content.
+			return "stop";
 	}
 }

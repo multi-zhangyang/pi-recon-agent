@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS } from "../src/core/http-dispatcher.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
@@ -376,6 +376,41 @@ describe("SettingsManager", () => {
 			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ sessionDir: "~/sessions" }));
 			const manager = SettingsManager.create(projectDir, agentDir);
 			expect(manager.getSessionDir()).toBe(join(homedir(), "sessions"));
+		});
+	});
+
+	describe("atomic persistence", () => {
+		// settings.json is rewritten via withLock → atomicWriteFileSync (temp+rename)
+		// on every setX call. A crash mid-write must never leave a truncated/partial
+		// file (next load's JSON.parse would throw → settings lost). temp+rename
+		// replaces the inode; the old truncate-then-write kept it — the inode-change
+		// assertion is the regression probe.
+
+		it("setTheme replaces settings.json atomically: inode changes, mode 0o644, no .tmp leftover, value survives reload", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			expect(existsSync(settingsPath)).toBe(false);
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setTheme("dark");
+			await manager.flush(); // save() enqueues an async write
+			expect(existsSync(settingsPath)).toBe(true);
+			// New file created at 0o644 (matches the old writeFileSync default; no secrets).
+			expect(statSync(settingsPath).mode & 0o777).toBe(0o644);
+			const inodeBefore = statSync(settingsPath).ino;
+
+			// A second setX rewrites via temp+rename → new inode. Truncate keeps the
+			// inode; this assertion fails if the write regresses.
+			manager.setTheme("light");
+			await manager.flush();
+			const inodeAfter = statSync(settingsPath).ino;
+			expect(inodeAfter).not.toBe(inodeBefore);
+
+			// Mode preserved; no stray temp; content complete + survives reload.
+			expect(statSync(settingsPath).mode & 0o777).toBe(0o644);
+			expect(readdirSync(dirname(settingsPath)).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+			expect(JSON.parse(readFileSync(settingsPath, "utf8")).theme).toBe("light");
+			const reloaded = SettingsManager.create(projectDir, agentDir);
+			expect(reloaded.getTheme()).toBe("light");
 		});
 	});
 });

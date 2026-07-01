@@ -40,6 +40,8 @@ import {
 } from "../utils/diagnostics.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
+import { parseJsonWithRepair } from "../utils/json-parse.ts";
+import { callOnResponseWithDrain } from "../utils/response-drain.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.ts";
 import { buildBaseOptions } from "./simple-options.ts";
@@ -55,6 +57,14 @@ const BASE_DELAY_MS = 1000;
 const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
 const DEFAULT_SSE_HEADER_TIMEOUT_MS = 10_000;
 const DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS = 15_000;
+// Fallback idle timeout for the WebSocket stream when the caller does not set
+// timeoutMs. The SSE reader (readSSEChunk) and the explicit-timeout WebSocket
+// path both bound idleness, but parseWebSocket's idle guard only fired when
+// idleTimeoutMs > 0 — a caller with no timeoutMs left a stalled socket (open,
+// no events, no close frame) hanging forever. 10 min matches the SDK default
+// noted in types.ts ("OpenAI and Anthropic SDK clients default to 10 minutes").
+// (opt #124)
+const DEFAULT_WEBSOCKET_IDLE_TIMEOUT_MS = 600_000;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
 
@@ -157,11 +167,20 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 			reject(new Error("Request was aborted"));
 			return;
 		}
-		const timeout = setTimeout(resolve, ms);
-		signal?.addEventListener("abort", () => {
+		// Named handler removed on BOTH settle paths — without removal each call
+		// leaked one `abort` listener on signal for the signal's lifetime (a run
+		// signal with N codex backoffs/retries → N leaked listeners). (opt #119)
+		const onAbort = () => {
 			clearTimeout(timeout);
+			signal?.removeEventListener("abort", onAbort);
 			reject(new Error("Request was aborted"));
-		});
+		};
+		const timeout = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		timeout.unref?.();
+		signal?.addEventListener("abort", onAbort);
 	});
 }
 
@@ -308,6 +327,17 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 					throw new Error("Request was aborted");
 				}
 
+				// opt #257: distinguish a NON-retryable HTTP status throw (400/401/403/
+				// 422 — parsed to a friendly message at the bottom of the try) from a
+				// network/fetch failure. Pre-fix both were caught by the same catch and
+				// the catch retried anything whose message didn't include "usage limit",
+				// so a 401 was re-sent on every attempt with exponential backoff
+				// (1+2+4s) — only surfacing after maxRetries+1 total requests, and
+				// risking auth-endpoint rate-limiting/lockout. The retry at the
+				// `isRetryableError` branch below already handles retryable HTTP
+				// statuses (429/5xx); the throw at the bottom of the try is ONLY for
+				// non-retryable HTTP statuses.
+				let nonRetryableHttp = false;
 				try {
 					const headerTimeout = createSSEHeaderTimeout();
 					const combinedSignal = combineAbortSignals([options?.signal, headerTimeout.signal]);
@@ -325,9 +355,12 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 						combinedSignal.cleanup();
 						headerTimeout.clear();
 					}
-					await options?.onResponse?.(
-						{ status: response.status, headers: headersToRecord(response.headers) },
-						model,
+					// Capture the narrowed `response` (a `let` that TS widens back to
+					// `Response | undefined` inside the closure below) into a const so the
+					// callback body type-checks. (opt #122)
+					const res = response;
+					await callOnResponseWithDrain(res.body, () =>
+						options?.onResponse?.({ status: res.status, headers: headersToRecord(res.headers) }, model),
 					);
 
 					if (response.ok) {
@@ -354,6 +387,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 						statusText: response.statusText,
 					});
 					const info = await parseErrorResponse(fakeResponse);
+					nonRetryableHttp = true;
 					throw new Error(info.friendlyMessage || info.message);
 				} catch (error) {
 					if (error instanceof Error) {
@@ -362,8 +396,11 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 						}
 					}
 					lastError = error instanceof Error ? error : new Error(String(error));
-					// Network errors are retryable
-					if (attempt < maxRetries && !lastError.message.includes("usage limit")) {
+					// Network errors are retryable; a non-retryable HTTP status
+					// (nonRetryableHttp, opt #257) is NOT — re-sending an auth/usage
+					// limit permanently-rejected request just wastes attempts + delay
+					// and can trip rate-limiting/lockout.
+					if (attempt < maxRetries && !nonRetryableHttp && !lastError.message.includes("usage limit")) {
 						const delayMs = BASE_DELAY_MS * 2 ** attempt;
 						await sleep(delayMs, options?.signal);
 						continue;
@@ -660,7 +697,49 @@ async function readSSEChunk(
 	}
 }
 
-async function* parseSSE(
+/**
+ * Resolve the per-stream SSE buffer cap shared by {@link parseSSE} (codex) and
+ * anthropic.ts `iterateSseMessages`. Both do `buffer += decoder.decode(...)`
+ * and slice on the SSE frame separator (`\n\n` / `\n`) with NO length check. A
+ * misbehaving proxy/gateway/CDN that strips the separator (the user's env uses
+ * Cloudflare AI Gateway + custom baseUrls) → buffer grows unbounded → OOM
+ * mid-stream. The idle timeout bounds wall-clock, not bytes. 16 MB matches the
+ * read-tool large-file guard doctrine (opt #34) and the MCP HTTP body cap
+ * (opt #170); well above any legitimate SSE event (tool results are capped at
+ * the context boundary ~256K, opt #15). `REPI_SSE_BUFFER_MAX_BYTES` env
+ * overrides; 0 disables (legacy unbounded). opt #185.
+ */
+export const SSE_BUFFER_MAX_BYTES = (() => {
+	const raw = process.env.REPI_SSE_BUFFER_MAX_BYTES;
+	if (raw === undefined || raw === "") return 16 * 1024 * 1024;
+	const n = Number(raw);
+	if (!Number.isFinite(n) || n < 0) return 16 * 1024 * 1024;
+	if (n === 0) return Number.POSITIVE_INFINITY;
+	return Math.floor(n);
+})();
+
+// Parse the `data:` lines of one SSE frame into event records. Uses
+// `parseJsonWithRepair` so a frame with truncated/repaired JSON still parses;
+// an unrecoverable frame (proxy HTML injection, bare-string error frame, etc.)
+// is SKIPPED rather than thrown — one bad frame must not kill the whole turn
+// (the "one bad frame kills the turn" class already fixed in sibling providers).
+// The `[DONE]` sentinel and empty data are ignored. (opt #186)
+function parseCodexDataFrame(chunk: string): Record<string, unknown>[] {
+	const dataLines = chunk
+		.split("\n")
+		.filter((l) => l.startsWith("data:"))
+		.map((l) => l.slice(5).trim());
+	if (dataLines.length === 0) return [];
+	const data = dataLines.join("\n").trim();
+	if (!data || data === "[DONE]") return [];
+	try {
+		return [parseJsonWithRepair<Record<string, unknown>>(data)];
+	} catch {
+		return [];
+	}
+}
+
+export async function* parseSSE(
 	response: Response,
 	signal?: AbortSignal,
 	idleTimeoutMs?: number,
@@ -687,30 +766,33 @@ async function* parseSSE(
 			if (done) break;
 			buffer += decoder.decode(value, { stream: true });
 
+			// opt #185: bound the un-flushed buffer. A proxy/CDN that strips the
+			// `\n\n` SSE frame separator would otherwise accumulate unbounded → OOM.
+			// Throw a CodexProtocolError so agent-loop retry engages; the finally
+			// block cancels/drains the reader (drainResponseBody doctrine).
+			if (SSE_BUFFER_MAX_BYTES !== Number.POSITIVE_INFINITY && buffer.length > SSE_BUFFER_MAX_BYTES) {
+				throw new CodexProtocolError(
+					`Codex SSE framing error: buffer exceeded REPI_SSE_BUFFER_MAX_BYTES (${SSE_BUFFER_MAX_BYTES}) with no frame separator`,
+					{ payload: buffer.slice(0, 256) },
+				);
+			}
+
 			let idx = buffer.indexOf("\n\n");
 			while (idx !== -1) {
 				const chunk = buffer.slice(0, idx);
 				buffer = buffer.slice(idx + 2);
-
-				const dataLines = chunk
-					.split("\n")
-					.filter((l) => l.startsWith("data:"))
-					.map((l) => l.slice(5).trim());
-				if (dataLines.length > 0) {
-					const data = dataLines.join("\n").trim();
-					if (data && data !== "[DONE]") {
-						try {
-							yield JSON.parse(data) as Record<string, unknown>;
-						} catch (cause) {
-							throw new CodexProtocolError(`Invalid Codex SSE JSON: ${formatThrownValue(cause)}`, {
-								cause,
-								payload: data,
-							});
-						}
-					}
-				}
+				for (const ev of parseCodexDataFrame(chunk)) yield ev;
 				idx = buffer.indexOf("\n\n");
 			}
+		}
+
+		// Final decoder flush + trailing-buffer drain (mirrors anthropic.ts:411-432).
+		// A final `response.completed` frame whose trailing `\n\n` never arrives
+		// (truncated connection) would otherwise sit un-parseable in the buffer and be
+		// dropped → zero usage/cost and a tool-use turn mislabeled as `stop`.
+		buffer += decoder.decode();
+		if (buffer.length > 0) {
+			for (const ev of parseCodexDataFrame(buffer)) yield ev;
 		}
 	} finally {
 		signal?.removeEventListener("abort", onAbort);
@@ -818,17 +900,25 @@ export function closeOpenAICodexWebSocketSessions(sessionId?: string): void {
 		const entry = websocketSessionCache.get(sessionId);
 		if (entry) closeEntry(entry);
 		websocketSessionCache.delete(sessionId);
+		// opt #147: trim the per-session debug-stats + SSE-fallback satellites too.
+		// Without this, cleanupSessionResources (fired on every newSession/fork/
+		// switchSession/reload) only clears the WS-connection cache, while these
+		// two accumulate one entry per unique sessionId forever (unbounded growth
+		// in a long-running rpc daemon / interactive session that forks repeatedly).
+		resetOpenAICodexWebSocketDebugStats(sessionId);
 		return;
 	}
 	for (const entry of websocketSessionCache.values()) {
 		closeEntry(entry);
 	}
 	websocketSessionCache.clear();
+	// opt #147: trim satellites on global close too (parity with the per-session path).
+	resetOpenAICodexWebSocketDebugStats();
 }
 
 registerSessionResourceCleanup(closeOpenAICodexWebSocketSessions);
 
-function isWebSocketSseFallbackActive(sessionId: string | undefined): boolean {
+export function isWebSocketSseFallbackActive(sessionId: string | undefined): boolean {
 	return sessionId ? websocketSseFallbackSessions.has(sessionId) : false;
 }
 
@@ -839,7 +929,7 @@ function recordWebSocketSseFallback(sessionId: string | undefined): void {
 	stats.websocketFallbackActive = isWebSocketSseFallbackActive(sessionId);
 }
 
-function recordWebSocketFailure(sessionId: string | undefined, error: unknown): void {
+export function recordWebSocketFailure(sessionId: string | undefined, error: unknown): void {
 	if (!sessionId) return;
 	websocketSseFallbackSessions.add(sessionId);
 
@@ -919,7 +1009,7 @@ function closeWebSocketSilently(socket: WebSocketLike, code = 1000, reason = "do
 	} catch {}
 }
 
-function scheduleSessionWebSocketExpiry(sessionId: string, entry: CachedWebSocketConnection): void {
+export function scheduleSessionWebSocketExpiry(sessionId: string, entry: CachedWebSocketConnection): void {
 	if (entry.idleTimer) {
 		clearTimeout(entry.idleTimer);
 	}
@@ -928,6 +1018,7 @@ function scheduleSessionWebSocketExpiry(sessionId: string, entry: CachedWebSocke
 		closeWebSocketSilently(entry.socket, 1000, "idle_timeout");
 		websocketSessionCache.delete(sessionId);
 	}, SESSION_WEBSOCKET_CACHE_TTL_MS);
+	entry.idleTimer.unref?.();
 }
 
 async function connectWebSocket(
@@ -1151,6 +1242,10 @@ async function* parseWebSocket(
 	signal?: AbortSignal,
 	idleTimeoutMs?: number,
 ): AsyncGenerator<Record<string, unknown>> {
+	// (opt #124) always bound stream idleness — without a fallback a caller that
+	// omits timeoutMs gets an unbounded hang on a stalled socket.
+	const effectiveIdleTimeoutMs =
+		idleTimeoutMs !== undefined && idleTimeoutMs > 0 ? idleTimeoutMs : DEFAULT_WEBSOCKET_IDLE_TIMEOUT_MS;
 	const queue: Record<string, unknown>[] = [];
 	let pending: (() => void) | null = null;
 	let done = false;
@@ -1233,15 +1328,15 @@ async function* parseWebSocket(
 			let timeout: ReturnType<typeof setTimeout> | undefined;
 			await new Promise<void>((resolve, reject) => {
 				pending = resolve;
-				if (idleTimeoutMs !== undefined && idleTimeoutMs > 0) {
+				if (effectiveIdleTimeoutMs > 0) {
 					timeout = setTimeout(() => {
-						const error = new Error(`WebSocket idle timeout after ${idleTimeoutMs}ms`);
+						const error = new Error(`WebSocket idle timeout after ${effectiveIdleTimeoutMs}ms`);
 						failed = error;
 						done = true;
 						pending = null;
 						closeWebSocketSilently(socket, 1000, "idle_timeout");
 						reject(error);
-					}, idleTimeoutMs);
+					}, effectiveIdleTimeoutMs);
 				}
 			}).finally(() => {
 				if (timeout) {

@@ -87,12 +87,14 @@ import { type SessionContext, SessionManager } from "../../core/session-manager.
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
+import { registerPersistedTempFile } from "../../core/tools/output-accumulator.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasProjectTrustInputs, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getChangelogPath, getNewEntries, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
 import { parseGitUrl } from "../../utils/git.ts";
+import { drainResponseBody } from "../../utils/http-drain.ts";
 import { getCwdRelativePath } from "../../utils/paths.ts";
 import { getPiUserAgent } from "../../utils/pi-user-agent.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
@@ -148,6 +150,29 @@ import {
 interface Expandable {
 	setExpanded(expanded: boolean): void;
 }
+
+/**
+ * Configurable timeout for an external-editor ($VISUAL/$EDITOR) session, in ms.
+ * A wedged editor — e.g. $EDITOR misconfigured to a non-interactive / daemon
+ * process that never exits, or a GUI editor launched without --wait that
+ * nonetheless keeps a child alive — leaves the spawn's 'close' event pending
+ * forever → openExternalEditor's await never settles → `finally { ui.start() }`
+ * never runs → the interactive session hangs with the TUI stopped (terminal was
+ * released via ui.stop(), so the only escape is killing the agent). Default 0 =
+ * no timeout (a legit vim session can run arbitrarily long; a default kill
+ * would interrupt real edits). Set REPI_EXTERNAL_EDITOR_TIMEOUT_MS > 0 to arm a
+ * kill-on-timeout safety net: SIGTERM → SIGKILL after the grace, then resolve so
+ * the finally block restarts the TUI. 0 / garbage / negative → disabled.
+ */
+function externalEditorTimeoutMs(): number {
+	const raw = process.env.REPI_EXTERNAL_EDITOR_TIMEOUT_MS;
+	if (raw === undefined || raw.trim() === "") return 0;
+	const value = Number(raw);
+	if (!Number.isFinite(value) || value < 0) return 0;
+	return Math.floor(value);
+}
+
+const EXTERNAL_EDITOR_SIGKILL_GRACE_MS = 2000;
 
 function isExpandable(obj: unknown): obj is Expandable {
 	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
@@ -411,6 +436,21 @@ export class InteractiveMode {
 			paddingX: editorPaddingX,
 			autocompleteMaxVisible,
 		});
+		// opt #142: contain async/sync action-handler errors at the dispatch
+		// boundary (no global unhandledRejection handler; uncaughtCrash only
+		// handles uncaughtException). Route to showError so one bad key shows an
+		// error line instead of crashing / killing the session.
+		this.defaultEditor.onActionError = (err) => {
+			this.showError(`Action handler error: ${err instanceof Error ? err.message : String(err)}`);
+		};
+		// opt #145: same containment for the Editor submit dispatch (Enter →
+		// submitValue → onSubmit). onSubmit is a large async body with no
+		// top-level try/catch; a rejecting submission path (expired auth,
+		// command-handler throw) would otherwise become an unhandledRejection
+		// crashing the host with the terminal in raw mode.
+		this.defaultEditor.onSubmitError = (err) => {
+			this.showError(`Submit handler error: ${err instanceof Error ? err.message : String(err)}`);
+		};
 		this.editor = this.defaultEditor;
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor as Component);
@@ -855,6 +895,12 @@ export class InteractiveMode {
 				proc.stdout?.on("data", (data) => {
 					stdout += data.toString();
 				});
+				// Stdio stream 'error' listener: proc.kill() after the 2s timeout (or a
+				// broken pipe) can make the piped stdout emit 'error' (EIO/EPIPE)
+				// INDEPENDENTLY of the child's own 'error'/'close'. Without a listener
+				// that is an `Unhandled 'error' event` crash. Swallow — close/error
+				// still drive resolution. Same doctrine as waitForChildProcess (#40).
+				proc.stdout?.on("error", () => {});
 				proc.on("error", () => {
 					clearTimeout(timer);
 					resolve(undefined);
@@ -935,7 +981,7 @@ export class InteractiveMode {
 			},
 			signal: AbortSignal.timeout(5000),
 		})
-			.then(() => undefined)
+			.then((response) => drainResponseBody(response))
 			.catch(() => undefined);
 	}
 
@@ -1640,13 +1686,123 @@ export class InteractiveMode {
 		process.exit(1);
 	}
 
+	/**
+	 * Dispose every in-flight ToolExecutionComponent (clearing its render-state
+	 * interval — the bash tool's 1s elapsed-display timer) then drop the
+	 * pendingTools map. Use ONLY at discard sites where the components have
+	 * already been detached from chatContainer (e.g. after chatContainer.clear()
+	 * in renderCurrentSessionState / renderSessionContext). Without this, a
+	 * session switch / rewind mid-tool-execution leaves the detached component's
+	 * 1s interval firing invalidate()+requestRender() on a dead component for the
+	 * rest of the session. Do NOT use at sites where the components remain visible
+	 * in chatContainer (agent_start / message_end / agent_end) — dispose() clears
+	 * the component's children and would blank a still-rendered tool.
+	 */
+	private clearPendingTools(): void {
+		for (const component of this.pendingTools.values()) {
+			try {
+				component.dispose?.();
+			} catch {
+				// A failing teardown must not skip the remaining components.
+			}
+		}
+		this.pendingTools.clear();
+	}
+
+	/**
+	 * Dispose in-flight / deferred BashExecutionComponents and reset their state.
+	 * Foundational opt #137: on session switch (renderCurrentSessionState) and
+	 * compaction rebuild (renderSessionContext) the chatContainer is cleared but
+	 * clear() does NOT dispose children, so a bash command still `"running"` kept
+	 * its Loader's 80ms animation interval firing requestRender() on a detached
+	 * component (same leak class as opt #47). AND pendingBashComponents was never
+	 * reset, so a subsequent flushPendingBashComponents() in the new session would
+	 * addChild() the PREVIOUS session's bash components → stale output rendered.
+	 * Dispose each (stops the loader interval) and clear both references.
+	 */
+	private clearPendingBashComponents(): void {
+		const components: BashExecutionComponent[] = [];
+		if (this.bashComponent) components.push(this.bashComponent);
+		components.push(...this.pendingBashComponents);
+		for (const component of components) {
+			try {
+				component.dispose();
+			} catch {
+				// A failing teardown must not skip the remaining components.
+			}
+		}
+		this.bashComponent = undefined;
+		this.pendingBashComponents = [];
+	}
+
+	/**
+	 * Foundational opt #143: tear down transient compaction/retry UI state that
+	 * survives a session switch. compaction_start/auto_retry_start swap
+	 * `defaultEditor.onEscape` to a transient abort fn and create a Loader /
+	 * CountdownTimer whose intervals (80ms / 1s) are NOT unref'd. The matching
+	 * `*_end` events restore onEscape + stop the timers — but a session switch
+	 * (newSession/fork/navigateTree/resume/clear) rebinds the event stream to the
+	 * new session, so the old session's `*_end` never reaches this UI. Result:
+	 * (1) the Loader/CountdownTimer intervals keep firing invalidate() +
+	 * requestRender() on a detached status container for the whole new session
+	 * (leak + spurious renders); (2) `defaultEditor.onEscape` stays bound to the
+	 * transient `() => this.session.abortCompaction()` / `abortRetry()` — and
+	 * since `this.session` is a getter returning the CURRENT session, Escape in
+	 * the new session calls abort on a session that isn't compacting/retrying
+	 * (no-op or error) while the real interrupt handler is lost. This mirrors the
+	 * `compaction_end` / `auto_retry_end` cleanup (restore the saved handler —
+	 * which itself uses the `this.session` getter, so it works on the new session
+	 * — stop + null the timers, clear the status container) and is wired into
+	 * renderCurrentSessionState so EVERY switch path gets it.
+	 */
+	private teardownTransientUiState(): void {
+		// Restore retry first, then compaction: if (impossibly) both were active,
+		// compaction's saved handler is the original normal handler, so restoring
+		// it last makes the original win.
+		if (this.retryEscapeHandler) {
+			this.defaultEditor.onEscape = this.retryEscapeHandler;
+			this.retryEscapeHandler = undefined;
+		}
+		if (this.autoCompactionEscapeHandler) {
+			this.defaultEditor.onEscape = this.autoCompactionEscapeHandler;
+			this.autoCompactionEscapeHandler = undefined;
+		}
+		if (this.retryCountdown) {
+			try {
+				this.retryCountdown.dispose();
+			} catch {
+				// Best-effort: a failing dispose must not abort the switch.
+			}
+			this.retryCountdown = undefined;
+		}
+		if (this.retryLoader) {
+			try {
+				this.retryLoader.stop();
+			} catch {
+				// Best-effort.
+			}
+			this.retryLoader = undefined;
+		}
+		if (this.autoCompactionLoader) {
+			try {
+				this.autoCompactionLoader.stop();
+			} catch {
+				// Best-effort.
+			}
+			this.autoCompactionLoader = undefined;
+		}
+		this.statusContainer.clear();
+	}
+
 	private renderCurrentSessionState(): void {
+		this.teardownTransientUiState();
 		this.chatContainer.clear();
 		this.pendingMessagesContainer.clear();
 		this.compactionQueuedMessages = [];
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
-		this.pendingTools.clear();
+		this.clearPendingTools();
+		this.clearPendingBashComponents();
 		this.renderInitialMessages();
 	}
 
@@ -2276,6 +2432,13 @@ export class InteractiveMode {
 				if (!customEditor.onExtensionShortcut) {
 					customEditor.onExtensionShortcut = (data: string) => this.defaultEditor.onExtensionShortcut?.(data);
 				}
+				if (!customEditor.onActionError) {
+					customEditor.onActionError = (err: unknown) => this.defaultEditor.onActionError?.(err);
+				}
+				// opt #145: a swapped-in custom editor inherits the submit error sink too.
+				if (!customEditor.onSubmitError) {
+					customEditor.onSubmitError = (err: unknown) => this.defaultEditor.onSubmitError?.(err);
+				}
 				// Copy action handlers (clear, suspend, model switching, etc.)
 				for (const [action, handler] of this.defaultEditor.actionHandlers) {
 					(customEditor.actionHandlers as Map<string, () => void>).set(action, handler);
@@ -2490,6 +2653,13 @@ export class InteractiveMode {
 			const fileName = `pi-clipboard-${crypto.randomUUID()}.${ext}`;
 			const filePath = path.join(tmpDir, fileName);
 			fs.writeFileSync(filePath, Buffer.from(image.bytes));
+			// Track for best-effort unlink at process exit so pasted-image temp
+			// files don't accumulate in the OS tmpdir forever. The path is inserted
+			// into the editor and may be read by the model during the session, so it
+			// is only removed when the agent process is done — or, since opt #153,
+			// when this session is disposed (newSession/fork/switch/dispose) so a
+			// long-running rpc/interactive process can't leak across sessions.
+			registerPersistedTempFile(filePath, this.session.sessionManager.getSessionId());
 
 			// Insert file path directly
 			this.editor.insertTextAtCursor?.(filePath);
@@ -2693,9 +2863,13 @@ export class InteractiveMode {
 				return;
 			}
 
-			// If streaming, use prompt() with steer behavior
-			// This handles extension commands (execute immediately), prompt template expansion, and queueing
-			if (this.session.isStreaming) {
+			// If streaming OR mid-retry-backoff, use prompt() with steer behavior.
+			// During auto-retry isStreaming is false, so without the isRetrying check
+			// the input fell through to normal submission and raced with the pending
+			// retry continuation (opt #118). Steer queues the message for the retried
+			// agent.continue() to drain. This handles extension commands (execute
+			// immediately), prompt template expansion, and queueing.
+			if (this.session.isStreaming || this.session.isRetrying) {
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
 				await this.session.prompt(text, { streamingBehavior: "steer" });
@@ -3200,7 +3374,14 @@ export class InteractiveMode {
 		sessionContext: SessionContext,
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
-		this.pendingTools.clear();
+		// The chatContainer was cleared by the caller (renderCurrentSessionState /
+		// rewind / direct callers) — or this is the initial render with an empty
+		// pendingTools — so the pending components are detached. Dispose their
+		// render-state intervals (bash 1s elapsed tick) before rebuilding.
+		this.clearPendingTools();
+		// opt #137: also dispose in-flight bash components (Loader 80ms interval)
+		// detached by the caller's chatContainer.clear() and reset their state.
+		this.clearPendingBashComponents();
 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
 
 		if (options.updateFooter) {
@@ -3363,7 +3544,17 @@ export class InteractiveMode {
 			// terminal. If the terminal is gone, the restore writes below emit EIO,
 			// which the stdout/stderr error handler turns into emergencyTerminalExit;
 			// the render loop is already idle, so this cannot hot-spin (see #4144).
-			await this.runtimeHost.dispose();
+			// Foundational opt #136: guard the dispose await — shutdown() is reached
+			// via fire-and-forget `void this.shutdown()` at several call sites, and
+			// there is no global unhandledRejection handler. A throwing extension
+			// session_shutdown teardown would reject here → unhandledRejection →
+			// crash BEFORE this.stop() restores the terminal (leaving it in raw mode
+			// with no cursor). Contain it: log + proceed to terminal restore + exit.
+			try {
+				await this.runtimeHost.dispose();
+			} catch (err) {
+				console.error("Extension dispose error during shutdown:", err);
+			}
 			await this.ui.terminal.drainInput(1000);
 			this.stop();
 			process.exit(0);
@@ -3377,7 +3568,14 @@ export class InteractiveMode {
 		await this.ui.terminal.drainInput(1000);
 
 		this.stop();
-		await this.runtimeHost.dispose();
+		// opt #136: guard dispose — see the fromSignal branch above. A throwing
+		// extension teardown must not crash (unhandledRejection, no global handler)
+		// before the process exits; the terminal is already restored by this.stop().
+		try {
+			await this.runtimeHost.dispose();
+		} catch (err) {
+			console.error("Extension dispose error during shutdown:", err);
+		}
 
 		const resumeCommand = formatResumeCommand(this.sessionManager);
 		if (resumeCommand) {
@@ -3472,6 +3670,24 @@ export class InteractiveMode {
 		const uncaughtExceptionHandler = (error: Error) => this.uncaughtCrash(error);
 		process.prependListener("uncaughtException", uncaughtExceptionHandler);
 		this.signalCleanupHandlers.push(() => process.off("uncaughtException", uncaughtExceptionHandler));
+
+		// Foundational opt #268: route unhandled REJECTIONS to the same crash
+		// recovery as uncaught exceptions. registerSignalHandlers runs early in
+		// init() (before ui.start + rebindCurrentSession), so an uncaughtException
+		// during init is recovered — but an awaited rejection (e.g. an extension's
+		// session_start handler rejecting in bindCurrentSessionExtensions) is NOT a
+		// sync throw: it propagates as a rejected promise up run()→main(), and
+		// main(cliArgs) has no .catch() (cli.ts) → it becomes an unhandledRejection.
+		// There is NO global unhandledRejection handler (the repo relies on per-site
+		// catches; many comments note this gap), so Node's default fires exit(1)
+		// WITHOUT calling uncaughtCrash → the terminal is left in raw mode with no
+		// cursor (ui.stop never runs), requiring `stty sane && reset` to recover.
+		// Mirror the uncaughtException handler so rejections also restore the TUI.
+		const unhandledRejectionHandler = (reason: unknown) => {
+			this.uncaughtCrash(reason instanceof Error ? reason : new Error(String(reason)));
+		};
+		process.prependListener("unhandledRejection", unhandledRejectionHandler);
+		this.signalCleanupHandlers.push(() => process.off("unhandledRejection", unhandledRejectionHandler));
 	}
 
 	private unregisterSignalHandlers(): void {
@@ -3534,9 +3750,11 @@ export class InteractiveMode {
 			return;
 		}
 
-		// Alt+Enter queues a follow-up message (waits until agent finishes)
+		// Alt+Enter queues a follow-up message (waits until agent finishes).
+		// Also queue during auto-retry backoff (isStreaming is false mid-retry;
+		// without isRetrying the input raced with the pending retry — opt #118).
 		// This handles extension commands (execute immediately), prompt template expansion, and queueing
-		if (this.session.isStreaming) {
+		if (this.session.isStreaming || this.session.isRetrying) {
 			this.editor.addToHistory?.(text);
 			this.editor.setText("");
 			await this.session.prompt(text, { streamingBehavior: "followUp" });
@@ -3546,7 +3764,17 @@ export class InteractiveMode {
 		// If not streaming, Alt+Enter acts like regular Enter (trigger onSubmit)
 		else if (this.editor.onSubmit) {
 			this.editor.setText("");
-			this.editor.onSubmit(text);
+			// opt #145: contain a rejecting async onSubmit here too (this site
+			// bypasses Editor.submitValue, so the submitValue guard doesn't cover
+			// it). Route to the same submit error sink.
+			try {
+				const ret = this.editor.onSubmit(text) as unknown;
+				if (ret && typeof (ret as Promise<unknown>).then === "function") {
+					(ret as Promise<unknown>).catch((err: unknown) => this.defaultEditor.onSubmitError?.(err));
+				}
+			} catch (err) {
+				this.defaultEditor.onSubmitError?.(err);
+			}
 		}
 	}
 
@@ -3661,14 +3889,57 @@ export class InteractiveMode {
 			// Do not use spawnSync here. On Windows, synchronous child_process calls can keep
 			// Node/libuv's console input read active after ui.stop() pauses stdin, racing
 			// vim/nvim for the console input buffer until Ctrl+C cancels the pending read.
+			//
+			// opt #144: arm a configurable timeout (REPI_EXTERNAL_EDITOR_TIMEOUT_MS). A
+			// wedged editor that never exits would otherwise leave this Promise pending
+			// forever → the finally below never runs → the TUI is never restarted and the
+			// session hangs. On timeout: SIGTERM → SIGKILL after the grace, resolve null
+			// so the finally restarts the TUI, and surface a warning. settle() is
+			// idempotent so a late 'close'/'error' after the timeout kill is a no-op.
+			const editorTimeoutMs = externalEditorTimeoutMs();
+			let timedOut = false;
 			const status = await new Promise<number | null>((resolve) => {
+				let settled = false;
+				let timeoutTimer: NodeJS.Timeout | undefined;
+				let sigkillTimer: NodeJS.Timeout | undefined;
+				const settle = (code: number | null) => {
+					if (settled) return;
+					settled = true;
+					if (timeoutTimer) clearTimeout(timeoutTimer);
+					if (sigkillTimer) clearTimeout(sigkillTimer);
+					resolve(code);
+				};
 				const child = spawn(editor, [...editorArgs, tmpFile], {
 					stdio: "inherit",
 					shell: process.platform === "win32",
 				});
-				child.on("error", () => resolve(null));
-				child.on("close", (code) => resolve(code));
+				child.on("error", () => settle(null));
+				child.on("close", (code) => settle(code));
+				if (editorTimeoutMs > 0) {
+					timeoutTimer = setTimeout(() => {
+						timedOut = true;
+						try {
+							child.kill("SIGTERM");
+						} catch {
+							// Already dead — settle via the pending 'close'.
+						}
+						sigkillTimer = setTimeout(() => {
+							try {
+								child.kill("SIGKILL");
+							} catch {
+								// Already dead.
+							}
+						}, EXTERNAL_EDITOR_SIGKILL_GRACE_MS);
+						sigkillTimer.unref?.();
+					}, editorTimeoutMs);
+					timeoutTimer.unref?.();
+				}
 			});
+			if (timedOut) {
+				this.showWarning(
+					`External editor timed out after ${editorTimeoutMs}ms and was killed. Set REPI_EXTERNAL_EDITOR_TIMEOUT_MS to adjust (0 disables).`,
+				);
+			}
 
 			// On successful exit (status 0), replace editor content
 			if (status === 0) {
@@ -3951,12 +4222,24 @@ export class InteractiveMode {
 	 * @param create Factory that receives a `done` callback and returns the component and focus target
 	 */
 	private showSelector(create: (done: () => void) => { component: Component; focus: Component }): void {
+		let selectorComponent: Component | undefined;
 		const done = () => {
+			// opt #151: dispose the dismissed selector BEFORE clearing. Container.clear()
+			// is a re-arrange primitive that does NOT dispose children, so without this a
+			// selector carrying its own timers/listeners (e.g. SessionSelectorHeader's
+			// statusTimeout, which fires requestRender 2-4s after a rename/delete status)
+			// would keep firing on a detached component after the picker closes.
+			try {
+				selectorComponent?.dispose?.();
+			} catch {
+				// best-effort teardown — must not block restoring the editor.
+			}
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.editor);
 			this.ui.setFocus(this.editor);
 		};
 		const { component, focus } = create(done);
+		selectorComponent = component;
 		this.editorContainer.clear();
 		this.editorContainer.addChild(component);
 		this.ui.setFocus(focus);
@@ -4529,6 +4812,10 @@ export class InteractiveMode {
 				},
 				initialSelectedId,
 				initialFilterMode,
+				// opt #145: contain a rejecting async onSelect (the pre-navigateTree
+				// showExtensionSelector/showExtensionEditor awaits aren't in the
+				// handler's try/catch) → showError instead of unhandledRejection.
+				(err) => this.showError(`Select handler error: ${err instanceof Error ? err.message : String(err)}`),
 			);
 			return { component: selector, focus: selector };
 		});
@@ -4564,6 +4851,11 @@ export class InteractiveMode {
 					},
 					showRenameHint: true,
 					keybindings: this.keybindings,
+					// opt #145: contain a rejecting async onSelect (handleResumeSession
+					// can throw on switchSession / missing-cwd) → showError instead of
+					// unhandledRejection.
+					onSelectError: (err) =>
+						this.showError(`Select handler error: ${err instanceof Error ? err.message : String(err)}`),
 				},
 
 				this.sessionManager.getSessionFile(),
@@ -5249,18 +5541,34 @@ export class InteractiveMode {
 		};
 
 		try {
-			const result = await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve) => {
-				proc = spawn("gh", ["gist", "create", "--public=false", tmpFile]);
-				let stdout = "";
-				let stderr = "";
-				proc.stdout?.on("data", (data) => {
-					stdout += data.toString();
-				});
-				proc.stderr?.on("data", (data) => {
-					stderr += data.toString();
-				});
-				proc.on("close", (code) => resolve({ stdout, stderr, code }));
-			});
+			const result = await new Promise<{ stdout: string; stderr: string; code: number | null }>(
+				(resolve, reject) => {
+					proc = spawn("gh", ["gist", "create", "--public=false", tmpFile]);
+					let stdout = "";
+					let stderr = "";
+					proc.stdout?.on("data", (data) => {
+						stdout += data.toString();
+					});
+					proc.stderr?.on("data", (data) => {
+						stderr += data.toString();
+					});
+					// Stdio stream 'error' listeners: an abort (proc.kill mid-output) or
+					// a broken pipe can make the piped stdout/stderr emit 'error'
+					// (EIO/EPIPE) INDEPENDENTLY of the child's own 'error'/'close'. The
+					// child 'error' listener below covers ENOENT but NOT stream errors;
+					// without these that is an `Unhandled 'error' event` crash. Swallow
+					// — close/error still drive the promise. Same doctrine as #40.
+					proc.stdout?.on("error", () => {});
+					proc.stderr?.on("error", () => {});
+					// Attach an "error" listener so a spawn failure (gh not installed →
+					// ENOENT, EACCES, EMFILE) rejects into the surrounding catch instead
+					// of emitting an unhandled "error" event that crashes the agent. The
+					// existing close/error-less path only covers a successfully-spawned
+					// gh exiting non-zero; a missing gh binary never reaches "close".
+					proc.on("error", (err) => reject(err));
+					proc.on("close", (code) => resolve({ stdout, stderr, code }));
+				},
+			);
 
 			if (loader.signal.aborted) return;
 

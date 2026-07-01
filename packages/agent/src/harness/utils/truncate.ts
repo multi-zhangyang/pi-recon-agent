@@ -330,6 +330,46 @@ function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
 }
 
 /**
+ * Adjust a UTF-16 code-unit slice boundary so it does not split a surrogate pair
+ * (opt #60). Astral-plane characters (emoji, rare CJK ext B, math symbols) are
+ * encoded as a high+low surrogate pair; a slice that lands between the two
+ * yields a lone surrogate. JSON.stringify does NOT throw — it emits a `\udXXX`
+ * escape, so the corrupted text silently reaches the LLM (and Buffer.from /
+ * TextEncoder turn a lone surrogate into U+FFFD). CJK BMP and ASCII are single
+ * code units and pass through unchanged.
+ */
+/**
+ * `end` is an EXCLUSIVE upper bound for `slice(0, end)`. If the code unit just
+ * before `end` is a high surrogate paired with a low surrogate at `end`, the
+ * head would end on a lone high surrogate — back up one so the pair is excluded
+ * entirely. Returns a safe `end` ≤ the input.
+ */
+export function safeHeadEnd(text: string, end: number): number {
+	if (end <= 0 || end >= text.length) return end;
+	const prev = text.charCodeAt(end - 1);
+	if (prev >= 0xd800 && prev <= 0xdbff) {
+		const cur = text.charCodeAt(end);
+		if (cur >= 0xdc00 && cur <= 0xdfff) return end - 1;
+	}
+	return end;
+}
+/**
+ * `start` is an INCLUSIVE lower bound for `slice(start)` / a resolved `slice(-n)`.
+ * If the code unit just before `start` is a high surrogate paired with a low
+ * surrogate at `start`, the tail would begin on a lone low surrogate — advance
+ * one so the pair is excluded entirely. Returns a safe `start` ≥ the input.
+ */
+export function safeTailStart(text: string, start: number): number {
+	if (start <= 0 || start >= text.length) return start;
+	const prev = text.charCodeAt(start - 1);
+	if (prev >= 0xd800 && prev <= 0xdbff) {
+		const cur = text.charCodeAt(start);
+		if (cur >= 0xdc00 && cur <= 0xdfff) return start + 1;
+	}
+	return start;
+}
+
+/**
  * Truncate a single line to max characters, adding [truncated] suffix.
  * Used for grep match lines.
  */
@@ -340,5 +380,5 @@ export function truncateLine(
 	if (line.length <= maxChars) {
 		return { text: line, wasTruncated: false };
 	}
-	return { text: `${line.slice(0, maxChars)}... [truncated]`, wasTruncated: true };
+	return { text: `${line.slice(0, safeHeadEnd(line, maxChars))}... [truncated]`, wasTruncated: true };
 }

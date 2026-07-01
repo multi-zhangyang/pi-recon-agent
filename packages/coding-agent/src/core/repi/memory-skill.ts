@@ -7,6 +7,7 @@ import {
 	isMemoryExperienceClaimRowV8,
 	type MemoryExperienceClaimStatusV8,
 	type MemoryExperienceLessonActionV8,
+	type MemoryExperienceReportV8,
 } from "./memory-experience.ts";
 import { memoryTargetScope } from "./memory-scope.ts";
 import { readMemoryEvents } from "./memory-search.ts";
@@ -179,17 +180,19 @@ export function memorySkillCapsuleFrom(
 }
 
 export function buildMemorySkillCapsuleReport(
-	options: { route?: string; target?: string; write?: boolean } = {},
+	options: { route?: string; target?: string; write?: boolean; experience?: MemoryExperienceReportV8 } = {},
 ): MemorySkillCapsuleReportV9 {
 	ensureRepiStorage();
 	const generatedAt = new Date().toISOString();
 	const effectiveRoute =
 		options.route && !/(?:security|general|unknown)/i.test(options.route) ? options.route : undefined;
-	const experience = buildMemoryExperienceReport({
-		route: effectiveRoute,
-		target: options.target,
-		write: options.write,
-	});
+	const experience =
+		options.experience ??
+		buildMemoryExperienceReport({
+			route: effectiveRoute,
+			target: options.target,
+			write: options.write,
+		});
 	const distillation = distillMemoryPatterns({ route: effectiveRoute, target: options.target, now: generatedAt });
 	const claimRows = jsonlRecords(memoryExperienceClaimsPath(), isMemoryExperienceClaimRowV8);
 	const claimById = new Map(claimRows.map((claim) => [claim.id, claim]));

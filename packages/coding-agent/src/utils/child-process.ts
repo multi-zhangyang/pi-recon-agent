@@ -62,6 +62,8 @@ export function waitForChildProcess(child: ChildProcess): Promise<number | null>
 			child.removeListener("close", onClose);
 			child.stdout?.removeListener("end", onStdoutEnd);
 			child.stderr?.removeListener("end", onStderrEnd);
+			child.stdout?.removeListener("error", onStdioError);
+			child.stderr?.removeListener("error", onStdioError);
 		};
 
 		const finalize = (code: number | null) => {
@@ -90,6 +92,22 @@ export function waitForChildProcess(child: ChildProcess): Promise<number | null>
 			maybeFinalizeAfterExit();
 		};
 
+		// A piped stdio stream can emit 'error' (EBADF/EIO/EPIPE — the read end
+		// of the pipe closed, or a detached descendant holding the write end died
+		// abruptly) INDEPENDENTLY of the child's own 'error'/'exit'/'close'. With
+		// no listener that is `Unhandled 'error' event` → crash. Treat a stream
+		// error as "this stream is done producing" (set its ended flag so
+		// finalization can proceed without waiting on the post-exit grace timer)
+		// and swallow — the child 'exit'/'close' still drives the final result.
+		// Same defense-in-depth doctrine as opts #31/#36/#39.
+		const onStdioError = () => {
+			// Mark both streams ended: a pipe error usually means the whole stdio
+			// chain is broken, and finalizing promptly is safer than waiting.
+			stdoutEnded = true;
+			stderrEnded = true;
+			maybeFinalizeAfterExit();
+		};
+
 		const onError = (err: Error) => {
 			if (settled) return;
 			settled = true;
@@ -112,6 +130,8 @@ export function waitForChildProcess(child: ChildProcess): Promise<number | null>
 
 		child.stdout?.once("end", onStdoutEnd);
 		child.stderr?.once("end", onStderrEnd);
+		child.stdout?.once("error", onStdioError);
+		child.stderr?.once("error", onStdioError);
 		child.once("error", onError);
 		child.once("exit", onExit);
 		child.once("close", onClose);

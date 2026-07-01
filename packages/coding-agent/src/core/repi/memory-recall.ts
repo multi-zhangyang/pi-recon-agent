@@ -1,10 +1,14 @@
-import { writeFileSync } from "node:fs";
+import { statSync } from "node:fs";
 import { latestCaseMemoryBySignature } from "./case-memory.ts";
 import { memoryEventHashChainOk } from "./memory-event.ts";
 import { latestMemoryQualityByEvent } from "./memory-quality.ts";
 import { type RepiMemoryRuntimeSettings, repiMemorySettings } from "./memory-runtime.ts";
 import { currentMemoryScope, memoryRouteMatches, memoryScopeIsolationRow } from "./memory-scope.ts";
 import {
+	cachedArtifactSearchTokens,
+	cachedCaseSearchTokens,
+	cachedEventSearchTokens,
+	lexicalTokenGeneration,
 	type MemoryRetrievalHit,
 	memoryBlockingGovernanceBySource,
 	memoryHybridQueryTokens,
@@ -12,12 +16,10 @@ import {
 	memoryNormalizedRecallScore,
 	memoryRecallCardLines,
 	memoryRecallQuery,
-	memorySearchTokens,
-	memoryTextForSearch,
 	readMemoryEvents,
 } from "./memory-search.ts";
 import { formatCoreMemoryPacket, formatMemoryIsolationStatus, formatMemoryRuntimeStatus } from "./memory-ux.ts";
-import { searchMemoryVectors } from "./memory-vector.ts";
+import { type MemoryVectorSearchReportV1, searchMemoryVectors } from "./memory-vector.ts";
 import {
 	caseMemoryPath,
 	compactResumeLedgerV2ReportPath,
@@ -54,32 +56,91 @@ import {
 	memorySupervisorReportPath,
 	memoryUsefulnessEvalReportPath,
 	memoryVectorSearchReportPath,
-	readTextFile as readText,
+	readTextFileCached as readText,
+	writePrivateTextFile,
 } from "./storage.ts";
 import { sanitizeTargetForCommand } from "./target.ts";
 import { truncateMiddle, uniqueNonEmpty } from "./text.ts";
 
+// opt #84 — mtime+size-guarded cache of memoryEventHashChainOk for the per-tool-result recall
+// path. searchMemoryEvents (fired on every tool_result) writes hashChainOk into the retrieval
+// report; formatMemoryRetrieval + distillMemoryPatterns + buildMemorySemanticIndex each call
+// memoryEventHashChainOk(events) which loops EVERY event (JSON.stringify+sha256 each → O(N))
+// on EVERY call. Over R tool results with N events this is O(R·N) of pure re-derivation between
+// deposits (events.jsonl only changes on a deposit). The #77 memoryStoreVerificationCache
+// already computes hashChainOk with an mtime+size guard but these call sites bypass it. This
+// cache is keyed by memoryEventsPath(); on a hit (stat mtime+size unchanged) returns the cached
+// boolean; on a miss re-walks the chain and caches {result, mtimeMs, size}. Every events.jsonl
+// rewrite goes through atomic temp+rename (deposits) which bumps mtime+size → cache invalidates
+// automatically. Worst case is a false MISS (state unchanged but stat differs — correct but
+// slower), NEVER a false HIT. Path-keyed so a changed REPI_CODING_AGENT_DIR gets its own entry.
+const memoryEventHashChainCache = new Map<string, { result: boolean; mtimeMs: number; size: number }>();
+
+function memoryEventsStat(path: string): { mtimeMs: number; size: number } | undefined {
+	try {
+		const st = statSync(path);
+		return { mtimeMs: st.mtimeMs, size: st.size };
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * mtime+size-guarded cache of {@link memoryEventHashChainOk} keyed by
+ * {@link memoryEventsPath}. The per-tool-result recall path re-verified the events hash chain
+ * from genesis on EVERY call (O(N) JSON.stringify+sha256 per event); this skips the re-walk on a
+ * cache hit (stat mtime+size unchanged since the last verification). Invalidated automatically
+ * by atomic temp+rename rewrites (deposits) which bump mtime+size. Exported so the distillation
+ * call sites share the same cache.
+ */
+export function cachedMemoryEventHashChainOk(): boolean {
+	const path = memoryEventsPath();
+	const st = memoryEventsStat(path);
+	if (st) {
+		const cached = memoryEventHashChainCache.get(path);
+		if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+			return cached.result;
+		}
+	}
+	const events = readMemoryEvents();
+	const result = memoryEventHashChainOk(events);
+	if (st) memoryEventHashChainCache.set(path, { result, mtimeMs: st.mtimeMs, size: st.size });
+	else memoryEventHashChainCache.delete(path);
+	return result;
+}
+
+/** Drop the cached hash-chain verdict. Belt-and-suspenders for the stat guard — call after any
+ *  non-deposit rewrite of events.jsonl so the next call doesn't depend on a stat tick landing. */
+export function invalidateMemoryEventHashChainCache(): void {
+	memoryEventHashChainCache.delete(memoryEventsPath());
+}
+
 export function searchMemoryEvents(
 	query?: string,
-	options?: { route?: string; target?: string; limit?: number },
+	options?: { route?: string; target?: string; limit?: number; vectorReport?: MemoryVectorSearchReportV1 },
 ): MemoryRetrievalHit[] {
 	ensureRepiStorage();
 	const events = readMemoryEvents();
 	const caseMemory = latestCaseMemoryBySignature();
 	const qualityByEvent = latestMemoryQualityByEvent();
 	const governanceBlocked = memoryBlockingGovernanceBySource();
-	const vectorReport = searchMemoryVectors(query, options);
+	// opt #99 PERF-5 — reuse a pre-built vector report (the orchestrator builds searchMemoryVectors
+	// once and passes it here) instead of re-calling searchMemoryVectors (a 2nd embedding API call
+	// + 2nd O(N) cosine + 2nd vector-search-report write) on the same query/options.
+	const vectorReport = options?.vectorReport ?? searchMemoryVectors(query, options);
 	const vectorByEvent = new Map(vectorReport.hits.map((hit) => [hit.eventId, hit]));
 	const queryTokens = uniqueNonEmpty((query ?? "").toLowerCase().split(/[^a-z0-9一-鿿]+/), 24).filter(
 		(token) => token.length >= 2,
 	);
 	const semanticTokens = memoryHybridQueryTokens(queryTokens);
+	// opt #81 — lexical token-Set cache: compute the generation ONCE (2 stat(2)s), then per
+	// event reuse cached event/case/artifact token Sets instead of rebuilding 4 Sets/event.
+	const lexicalGeneration = lexicalTokenGeneration();
 	const hits = events.flatMap((event) => {
 		const governance = governanceBlocked.get(event.id);
 		if (governance) return [];
 		if (options?.route && !memoryRouteMatches(event.route, options.route)) return [];
-		const haystack = memoryTextForSearch(event);
-		const haystackTokens = memorySearchTokens(haystack);
+		const haystackTokens = cachedEventSearchTokens(event, lexicalGeneration);
 		const reasons: string[] = [];
 		let score = 0;
 		if (queryTokens.length === 0) {
@@ -119,7 +180,13 @@ export function searchMemoryEvents(
 			)
 				score -= 40;
 		}
-		score += memoryHybridSignalScore(event, caseRow, queryTokens, semanticTokens, reasons);
+		// opt #81 — pass the precomputed token Sets so memoryHybridSignalScore reuses them
+		// instead of rebuilding the event/case/artifact Sets a second time per event.
+		score += memoryHybridSignalScore(event, caseRow, queryTokens, semanticTokens, reasons, {
+			eventTokens: haystackTokens,
+			caseTokens: cachedCaseSearchTokens(caseRow, lexicalGeneration),
+			artifactTokens: cachedArtifactSearchTokens(event, lexicalGeneration),
+		});
 		const vectorHit = vectorByEvent.get(event.id);
 		if (vectorHit && vectorHit.score > 0) {
 			score += Math.min(18, vectorHit.score / 6);
@@ -159,7 +226,7 @@ export function searchMemoryEvents(
 	const result = hits
 		.sort((left, right) => right.score - left.score || right.event.seq - left.event.seq)
 		.slice(0, options?.limit ?? 12);
-	writeFileSync(
+	writePrivateTextFile(
 		memoryRetrievalReportPath(),
 		`${JSON.stringify(
 			{
@@ -169,7 +236,7 @@ export function searchMemoryEvents(
 				route: options?.route,
 				target: options?.target,
 				generatedAt: new Date().toISOString(),
-				hashChainOk: memoryEventHashChainOk(events),
+				hashChainOk: cachedMemoryEventHashChainOk(),
 				hits: result.map((hit) => ({
 					id: hit.event.id,
 					score: Number(hit.score.toFixed(2)),
@@ -183,7 +250,6 @@ export function searchMemoryEvents(
 			null,
 			2,
 		)}\n`,
-		"utf-8",
 	);
 	return result;
 }
@@ -196,7 +262,7 @@ export function formatMemoryRetrieval(query?: string, hits = searchMemoryEvents(
 		`case_memory_path: ${caseMemoryPath()}`,
 		`retrieval_report: ${memoryRetrievalReportPath()}`,
 		`vector_report: ${memoryVectorSearchReportPath()}`,
-		`hash_chain_ok: ${memoryEventHashChainOk(readMemoryEvents())}`,
+		`hash_chain_ok: ${cachedMemoryEventHashChainOk()}`,
 		"hits:",
 		...(hits.length
 			? hits.map(

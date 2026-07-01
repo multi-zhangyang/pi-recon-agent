@@ -489,8 +489,18 @@ export class ExtensionRunner {
 	}
 
 	emitError(error: ExtensionError): void {
+		// opt #56 — guard each error listener: a throwing error listener (a misbehaving
+		// diagnostics/telemetry consumer) used to (a) prevent all REMAINING error listeners from
+		// being notified and (b) propagate out of emitError into the calling emit method's catch
+		// block, aborting that emit (e.g. emitContext runs every turn — a throwing error listener
+		// there would abort the turn with []). Same doctrine as footer-data-provider's
+		// notifyBranchChange (opt #53): swallow per-listener, continue the loop.
 		for (const listener of this.errorListeners) {
-			listener(error);
+			try {
+				listener(error);
+			} catch {
+				// One bad error listener must not poison sibling listeners or propagate.
+			}
 		}
 	}
 
@@ -825,13 +835,31 @@ export class ExtensionRunner {
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
-				const handlerResult = await handler(event, ctx);
+				try {
+					const handlerResult = await handler(event, ctx);
 
-				if (handlerResult) {
-					result = handlerResult as ToolCallEventResult;
-					if (result.block) {
-						return result;
+					if (handlerResult) {
+						result = handlerResult as ToolCallEventResult;
+						if (result.block) {
+							return result;
+						}
 					}
+				} catch (err) {
+					// opt #56 — route the handler throw to errorListeners (matching every sibling
+					// emit method: emit/emitMessageEnd/emitToolResult/emitUserBash/emitContext/...)
+					// so extension error telemetry registered via runner.onError() sees tool_call
+					// handler failures. Then RE-THROW: the caller (agent-session beforeToolCall →
+					// agent-loop prepareToolCall catch) converts a throw into a blocked tool result,
+					// and that block-on-throw semantics must be preserved.
+					const message = err instanceof Error ? err.message : String(err);
+					const stack = err instanceof Error ? err.stack : undefined;
+					this.emitError({
+						extensionPath: ext.path,
+						event: "tool_call",
+						error: message,
+						stack,
+					});
+					throw err;
 				}
 			}
 		}
@@ -869,6 +897,21 @@ export class ExtensionRunner {
 	}
 
 	async emitContext(messages: AgentMessage[]): Promise<AgentMessage[]> {
+		// opt #84 — no-handler fast path. emitContext runs EVERY turn (sdk.ts transformContext
+		// → agent-loop.ts:387) AND on every retry attempt, and structuredClone(messages) is
+		// O(total message blocks) — it deep-traverses the full conversation history. With no
+		// "context" handlers registered (the default REPI install — none ship one), the clone
+		// exists only to give handlers a mutable copy and to protect the caller's array from
+		// handler mutation. With zero handlers there is no mutation, so the clone is pure waste:
+		// O(history) per turn × T turns = O(history·T) ≈ quadratic session growth for nothing.
+		// Skip it: return the caller's array directly. Behavior is identical — the downstream
+		// (convertToLlm at agent-loop.ts:389) reads messages read-only and builds fresh LLM
+		// messages; it never mutates the AgentMessage[] returned here. If an extension later
+		// registers a "context" handler, hasHandlers flips true and the clone+loop runs as
+		// before (additive: default behavior unchanged).
+		if (!this.hasHandlers("context")) {
+			return messages;
+		}
 		const ctx = this.createContext();
 		let currentMessages = structuredClone(messages);
 

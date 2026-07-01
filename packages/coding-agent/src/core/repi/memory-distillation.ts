@@ -1,8 +1,13 @@
-import { writeFileSync } from "node:fs";
 import { type CaseMemoryV1, latestCaseMemoryBySignature } from "./case-memory.ts";
-import { type MemoryArtifactHash, type MemoryEventV1, memoryEventHashChainOk } from "./memory-event.ts";
+import type { MemoryArtifactHash, MemoryEventV1 } from "./memory-event.ts";
 import { latestMemoryQualityByEvent, type MemoryQualityLedgerRowV11 } from "./memory-quality.ts";
-import { buildMemoryScopeIsolationReport, memoryRouteMatches, memoryTargetScope } from "./memory-scope.ts";
+import { cachedMemoryEventHashChainOk } from "./memory-recall.ts";
+import {
+	buildMemoryScopeIsolationReport,
+	type MemoryScopeIsolationReportV1,
+	memoryRouteMatches,
+	memoryTargetScope,
+} from "./memory-scope.ts";
 import {
 	memoryCaseTextForSearch,
 	memoryHybridQueryTokens,
@@ -20,6 +25,7 @@ import {
 	memoryRetrievalReportPath,
 	memorySedimentationReportPath,
 	memorySemanticIndexPath,
+	writePrivateTextFile,
 } from "./storage.ts";
 import { containsRepiPoison, looksLikeNaturalLanguageTarget } from "./target.ts";
 import { sha256Text, truncateMiddle, uniqueNonEmpty } from "./text.ts";
@@ -361,7 +367,7 @@ export function distillMemoryPatterns(options?: {
 		kind: "repi-memory-distillation-report",
 		schemaVersion: 1,
 		generatedAt: new Date().toISOString(),
-		hashChainOk: memoryEventHashChainOk(readMemoryEvents()),
+		hashChainOk: cachedMemoryEventHashChainOk(),
 		patterns,
 		quarantine: contamination.filter((finding) => finding.status === "quarantine"),
 		injectionPlan: {
@@ -375,13 +381,12 @@ export function distillMemoryPatterns(options?: {
 				.map((pattern) => pattern.id),
 		},
 	};
-	writeFileSync(memoryDistillationReportPath(), `${JSON.stringify(report, null, 2)}\n`, "utf-8");
-	writeFileSync(
+	writePrivateTextFile(memoryDistillationReportPath(), `${JSON.stringify(report, null, 2)}\n`);
+	writePrivateTextFile(
 		memoryQuarantinePath(),
 		`${JSON.stringify({ kind: "repi-memory-contamination-quarantine", schemaVersion: 1, findings: report.quarantine }, null, 2)}\n`,
-		"utf-8",
 	);
-	writeFileSync(
+	writePrivateTextFile(
 		memoryPatternBookPath(),
 		[
 			"# REPI Memory Pattern Book",
@@ -406,7 +411,6 @@ export function distillMemoryPatterns(options?: {
 				: ["- none"]),
 			"",
 		].join("\n"),
-		"utf-8",
 	);
 	return report;
 }
@@ -571,6 +575,13 @@ export function buildMemorySemanticIndex(options?: {
 	target?: string;
 	now?: string;
 	maxEntries?: number;
+	// opt #99 PERF-3 — reuse the orchestrator's in-hand scope-isolation report instead of
+	// rebuilding it (a 3rd/4th uncached buildMemoryScopeIsolationReport call). Each scope row is
+	// a pure function of (event, currentScope), so scopeByEvent.get(event.id) returns the same
+	// row whether the report was built from all-events or filtered-events → sedimentation result
+	// is identical; only the disposable report-level aggregates (eventCount/blockedEventIds) differ
+	// and sedimentation does not read those.
+	scope?: MemoryScopeIsolationReportV1;
 }): MemorySedimentationReportV1 {
 	ensureRepiStorage();
 	const events = readMemoryEvents().filter((event) => {
@@ -588,7 +599,8 @@ export function buildMemorySemanticIndex(options?: {
 	const contamination = detectMemoryContamination(events, { now: options?.now });
 	const quarantineByCase = new Map(contamination.map((finding) => [finding.caseSignature, finding]));
 	const qualityByEvent = latestMemoryQualityByEvent();
-	const scopeIsolation = buildMemoryScopeIsolationReport({ route: options?.route, target: options?.target, events });
+	const scopeIsolation =
+		options?.scope ?? buildMemoryScopeIsolationReport({ route: options?.route, target: options?.target, events });
 	const scopeByEvent = new Map(scopeIsolation.rows.map((row) => [row.eventId, row]));
 	const entries = events
 		.map((event) => {
@@ -678,7 +690,7 @@ export function buildMemorySemanticIndex(options?: {
 		kind: "repi-memory-sedimentation-report",
 		schemaVersion: 1,
 		generatedAt: new Date().toISOString(),
-		hashChainOk: memoryEventHashChainOk(readMemoryEvents()),
+		hashChainOk: cachedMemoryEventHashChainOk(),
 		semanticIndexPath: memorySemanticIndexPath(),
 		contradictionLedgerPath: memoryContradictionLedgerPath(),
 		injectionPacketPath: memoryInjectionPacketPath(),
@@ -694,18 +706,16 @@ export function buildMemorySemanticIndex(options?: {
 			failureFeedbackDemotes: true,
 		},
 	};
-	writeFileSync(
+	writePrivateTextFile(
 		memorySemanticIndexPath(),
 		`${JSON.stringify({ kind: "repi-memory-semantic-index", schemaVersion: 1, generatedAt: report.generatedAt, entries }, null, 2)}\n`,
-		"utf-8",
 	);
-	writeFileSync(
+	writePrivateTextFile(
 		memoryContradictionLedgerPath(),
 		`${contradictions.map((entry) => JSON.stringify(entry)).join("\n")}${contradictions.length ? "\n" : ""}`,
-		"utf-8",
 	);
-	writeFileSync(memoryInjectionPacketPath(), `${JSON.stringify(injectionPacket, null, 2)}\n`, "utf-8");
-	writeFileSync(memorySedimentationReportPath(), `${JSON.stringify(report, null, 2)}\n`, "utf-8");
+	writePrivateTextFile(memoryInjectionPacketPath(), `${JSON.stringify(injectionPacket, null, 2)}\n`);
+	writePrivateTextFile(memorySedimentationReportPath(), `${JSON.stringify(report, null, 2)}\n`);
 	return report;
 }
 

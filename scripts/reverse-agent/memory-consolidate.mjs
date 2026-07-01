@@ -1,13 +1,20 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { atomicWriteFile, scopedMemoryRootFor } from "./lib/memory-purge-helpers.mjs";
 
 const root = resolve(process.argv[2] && !process.argv[2].startsWith("--") ? process.argv[2] : process.cwd());
 const dryRun = process.argv.includes("--dry-run");
 const json = process.argv.includes("--json");
+// opt #273: --cwd <dir> scopes consolidation to a specific project's memory.
+function valueAfterFlag(args, flag) {
+	const index = args.indexOf(flag);
+	return index >= 0 && index + 1 < args.length ? args[index + 1] : undefined;
+}
+const cwdScope = valueAfterFlag(process.argv.slice(2), "--cwd");
 const agentDir = process.env.REPI_CODING_AGENT_DIR || process.env.REPI_AGENT_DIR || join(homedir(), ".repi", "agent");
-const memoryDir = join(agentDir, "recon", "memory");
+const memoryDir = scopedMemoryRootFor(agentDir, cwdScope);
 const eventsPath = join(memoryDir, "events.jsonl");
 const reportPath = join(memoryDir, "consolidation-report.json");
 const targets = {
@@ -128,9 +135,9 @@ const report = {
 };
 
 if (!dryRun) {
-	writeFileSync(targets.project, nextProject, "utf8");
-	writeFileSync(targets.procedural, nextProcedural, "utf8");
-	writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+	atomicWriteFile(targets.project, nextProject, 0o600);
+	atomicWriteFile(targets.procedural, nextProcedural, 0o600);
+	atomicWriteFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 0o600);
 }
 
 if (json) console.log(JSON.stringify(report, null, 2));

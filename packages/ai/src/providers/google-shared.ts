@@ -330,7 +330,8 @@ export function mapStopReason(reason: FinishReason): StopReason {
 			return "error";
 		default: {
 			const _exhaustive: never = reason;
-			throw new Error(`Unhandled stop reason: ${_exhaustive}`);
+			void _exhaustive; // compile-time exhaustiveness witness (errors at compile time if a new enum member is added and unhandled)
+			return "error"; // graceful runtime default for unknown/future finish reasons (SDK types may lag the server — Gemini has added IMAGE_SAFETY/LANGUAGE/etc. mid-stream); matches mapStopReasonString below
 		}
 	}
 }

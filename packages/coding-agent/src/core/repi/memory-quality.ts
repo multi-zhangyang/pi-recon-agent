@@ -1,15 +1,21 @@
 import { existsSync } from "node:fs";
-import { jsonlRecords } from "./jsonl.ts";
+import { cachedJsonlDerived, jsonlRecords } from "./jsonl.ts";
 import type { MemoryInjectionPacketV1 } from "./memory-distillation.ts";
 import type { MemoryEventV1 } from "./memory-event.ts";
 import { buildMemoryFeedbackClosureReport, type MemoryFeedbackClosureReportV1 } from "./memory-feedback.ts";
 import { type MemoryReplayEvaluatorReportV12, memoryReplayCausalSignals } from "./memory-replay.ts";
-import { buildMemoryScopeIsolationReport, memoryRouteMatches, memoryTargetScope } from "./memory-scope.ts";
+import {
+	buildMemoryScopeIsolationReport,
+	type MemoryScopeIsolationReportV1,
+	memoryRouteMatches,
+	memoryTargetScope,
+} from "./memory-scope.ts";
 import { type MemoryRetrievalHit, readMemoryEvents } from "./memory-search.ts";
 import { writeFileAtomic } from "./memory-store.ts";
 import type { MemoryUsefulnessEvalReportV1 } from "./memory-usefulness.ts";
 import type { MemoryVectorSearchHitV1 } from "./memory-vector.ts";
 import {
+	appendPrivateTextFile,
 	ensureRepiStorage,
 	memoryFeedbackClosureReportPath,
 	memoryInjectionPacketPath,
@@ -21,7 +27,7 @@ import {
 	memoryUsefulnessEvalReportPath,
 	memoryVectorSearchReportPath,
 	readJsonObjectFile,
-	readTextFile as readText,
+	readJsonObjectFileCached,
 } from "./storage.ts";
 import { sha256Text, uniqueNonEmpty } from "./text.ts";
 
@@ -254,7 +260,12 @@ export function readMemoryQualityLedgerRows(): MemoryQualityLedgerRowV11[] {
 }
 
 export function latestMemoryQualityByEvent(): Map<string, MemoryQualityLedgerRowV11> {
-	return latestMemoryQualityRowsByEvent(readMemoryQualityLedgerRows());
+	// opt #83 — the Map is a pure function of the quality ledger rows (last row per eventId),
+	// which only change on a quality op. Cache it keyed by (path, mtime+size) so the per-
+	// tool_result recall path skips the O(rows) Map rebuild on a hit. Shared rows from #74.
+	return cachedJsonlDerived(memoryQualityLedgerPath(), () =>
+		latestMemoryQualityRowsByEvent(readMemoryQualityLedgerRows()),
+	);
 }
 
 export function memoryQualityReportIds(path: string, key: "id" | "eventId" = "id"): string[] {
@@ -263,6 +274,66 @@ export function memoryQualityReportIds(path: string, key: "id" | "eventId" = "id
 		(report?.hits ?? []).map((hit) => hit[key]).filter((id): id is string => typeof id === "string"),
 		120,
 	);
+}
+
+// opt F4 — quality ledger rotation (sibling of #88 deposition bus rotation + #48 tool-trace
+// ledger rotation). The quality ledger (quality-ledger.jsonl) is append-only with a contiguous
+// prevHash chain, but unlike the deposition bus it has NO genesis-strict verifier
+// (isMemoryQualityLedgerRow is structural only; no memoryQualityHashChainOk exists) and the
+// seq+prevHash for the next append are derived from readMemoryQualityLedgerRows() each call
+// (no #73-style chain cache). buildMemoryQualityLedgerReport({write:true}) appends a fresh row
+// for EVERY event (rows = events.map(...)) on every orchestration call → the file grows
+// O(D·N) rows and never rotates; readMemoryQualityLedgerRows reads the whole file on every
+// cold read. Readers (latestMemoryQualityByEvent) take the latest row per eventId → HEAD IS
+// DISPOSABLE → rotation-safe (same contract as #88). Cap at REPI_QUALITY_LEDGER_MAX_ROWS
+// (default 500, 0=disable); when the just-appended batch's last seq exceeds maxRows +
+// REPI_QUALITY_LEDGER_ROTATE_BATCH (default 50), rotateQualityLedgerIfNeeded drops the head
+// rows, keeps the last maxRows, RENUMBERS seq to 1..kept (seq IS part of entryHash via
+// memoryQualityLedgerRowHash, which hashes every field except entryHash), recomputes prevHash
+// from "0".repeat(64) and entryHash via the row-hash function over the kept tail, and
+// atomically rewrites the ledger (writeFileAtomic temp+rename 0o600, matching the existing
+// write path). The batch trigger fires once per orchestration call (not per row) so the
+// hot-path write stays a single read-modify-write; the O(maxRows) rotation read+rewrite+rehash
+// amortizes to O(maxRows/batch) per call. The #83 latestMemoryQualityByEvent cache is
+// mtime+size guarded (cachedJsonlDerived) → the atomic rewrite bumps mtime → auto-invalidates;
+// no explicit re-warm is needed (there is no #73-style seq/prevHash chain cache for this
+// ledger). Returns the rotated rows when it rewrote the file, else null.
+function qualityLedgerMaxRows(): number {
+	const raw = Number(process.env.REPI_QUALITY_LEDGER_MAX_ROWS);
+	if (Number.isFinite(raw) && raw >= 0) return Math.floor(raw);
+	return 500;
+}
+
+function qualityLedgerRotateBatch(): number {
+	const raw = Number(process.env.REPI_QUALITY_LEDGER_ROTATE_BATCH);
+	if (Number.isFinite(raw) && raw >= 0) return Math.floor(raw);
+	return 50;
+}
+
+function rotateQualityLedgerIfNeeded(): MemoryQualityLedgerRowV11[] | null {
+	const maxRows = qualityLedgerMaxRows();
+	if (maxRows <= 0) return null;
+	const rows = readMemoryQualityLedgerRows();
+	if (rows.length <= maxRows) return null;
+	const kept = rows.slice(-maxRows);
+	if (kept.length === 0) return null;
+	let prevHash = "0".repeat(64);
+	const rotated: MemoryQualityLedgerRowV11[] = [];
+	for (let i = 0; i < kept.length; i++) {
+		// Renumber seq to 1..kept.length — the next buildMemoryQualityLedgerReport call derives
+		// seq from readMemoryQualityLedgerRows().length, so leaving the original (large) seq
+		// values would make the next appended row's seq go backwards. seq is part of the
+		// entryHash (memoryQualityLedgerRowHash hashes every field except entryHash), so the
+		// renumber is correctly reflected in the recomputed hash + genesis-reset chain.
+		const { entryHash: _omitHash, ...withoutHash } = kept[i];
+		const rebuilt = { ...withoutHash, prevHash, seq: i + 1 };
+		const newEntryHash = memoryQualityLedgerRowHash({ ...rebuilt, entryHash: "" });
+		rotated.push({ ...rebuilt, entryHash: newEntryHash });
+		prevHash = newEntryHash;
+	}
+	const body = `${rotated.map((row) => JSON.stringify(row)).join("\n")}\n`;
+	writeFileAtomic(memoryQualityLedgerPath(), body);
+	return rotated;
 }
 
 export function buildMemoryQualityLedgerReport(
@@ -274,6 +345,12 @@ export function buildMemoryQualityLedgerReport(
 		injectionEventIds?: string[];
 		feedback?: MemoryFeedbackClosureReportV1;
 		usefulness?: MemoryUsefulnessEvalReportV1;
+		// opt #99 PERF-3 — reuse the orchestrator's in-hand scope-isolation report instead of
+		// rebuilding it (a 4th uncached buildMemoryScopeIsolationReport call). Each scope row is a
+		// pure function of (event, currentScope), so scopeByEvent.get(event.id) returns the same
+		// row whether the report was built from all-events or filtered-events → quality result
+		// identical; only disposable report-level aggregates differ and quality does not read those.
+		scope?: MemoryScopeIsolationReportV1;
 		write?: boolean;
 	} = {},
 ): MemoryQualityLedgerReportV11 {
@@ -312,16 +389,18 @@ export function buildMemoryQualityLedgerReport(
 		buildMemoryFeedbackClosureReport({ write: options.write });
 	const feedbackByEvent = new Map((feedback.rows ?? []).map((row) => [row.eventId, row]));
 	const usefulness =
-		options.usefulness ?? readJsonObjectFile<MemoryUsefulnessEvalReportV1>(memoryUsefulnessEvalReportPath());
+		options.usefulness ?? readJsonObjectFileCached<MemoryUsefulnessEvalReportV1>(memoryUsefulnessEvalReportPath());
 	const usefulnessByEvent = memoryQualityUsefulnessSignals(usefulness);
 	const replayByEvent = memoryReplayCausalSignals(
-		readJsonObjectFile<MemoryReplayEvaluatorReportV12>(memoryReplayEvaluatorReportPath()),
+		readJsonObjectFileCached<MemoryReplayEvaluatorReportV12>(memoryReplayEvaluatorReportPath()),
 	);
-	const scope = buildMemoryScopeIsolationReport({
-		route: options.route,
-		target: options.target,
-		write: options.write,
-	});
+	const scope =
+		options.scope ??
+		buildMemoryScopeIsolationReport({
+			route: options.route,
+			target: options.target,
+			write: options.write,
+		});
 	const scopeByEvent = new Map(scope.rows.map((row) => [row.eventId, row]));
 	const rows: MemoryQualityLedgerRowV11[] = events.map((event) => {
 		const prev = previous.get(event.id);
@@ -557,12 +636,17 @@ export function buildMemoryQualityLedgerReport(
 		),
 	};
 	if (options.write !== false) {
-		const before = readText(memoryQualityLedgerPath());
+		// opt #99 PERF-6 — true-append (O(chunk) write + 1-byte tail read) instead of
+		// read-modify-write (O(file) readText + O(file) atomic rewrite on every orchestration).
+		// appendPrivateTextFile prepends "\n" unless the file ends with "\n" (matching the old
+		// `${before}${before && !before.endsWith("\n") ? "\n" : ""}${body}` separator contract for
+		// a non-empty file; the only divergence is a leading "\n" on the FIRST append to an
+		// empty/missing file, which jsonlRecords skips via `if (!trimmed) return` → parsed rows
+		// identical → prevHash/seq/report bytes identical). The first new row's prevHash already
+		// chains to the existing tail's entryHash (previousRows.at(-1) above). Rotation still
+		// fires afterward.
 		const body = rows.map((row) => JSON.stringify(row)).join("\n");
-		writeFileAtomic(
-			memoryQualityLedgerPath(),
-			`${before}${before && !before.endsWith("\n") ? "\n" : ""}${body}${body ? "\n" : ""}`,
-		);
+		appendPrivateTextFile(memoryQualityLedgerPath(), body + (body ? "\n" : ""));
 		writeFileAtomic(memoryQualityReportPath(), `${JSON.stringify(report, null, 2)}\n`);
 		writeFileAtomic(
 			memoryQualityBoardPath(),
@@ -601,6 +685,18 @@ export function buildMemoryQualityLedgerReport(
 				"",
 			].join("\n"),
 		);
+		// opt F4 — rotate the quality ledger when it exceeds the row cap. Batched via
+		// qualityLedgerRotateBatch() so this only fires every `batch` rows past the cap (the
+		// last appended row's seq is the new total row count; after a rotation rewrites the
+		// ledger to maxRows rows with seq 1..maxRows, the next call's seq starts at maxRows+1,
+		// so the trigger re-arms and fires once per batch). The kept tail is re-hashed from
+		// genesis → the prevHash chain stays contiguous; latestMemoryQualityByEvent takes the
+		// latest row per eventId so the dropped head is disposable.
+		const _qualityMaxRows = qualityLedgerMaxRows();
+		const _qualityLastSeq = rows.at(-1)?.seq ?? 0;
+		if (_qualityMaxRows > 0 && _qualityLastSeq > _qualityMaxRows + qualityLedgerRotateBatch()) {
+			rotateQualityLedgerIfNeeded();
+		}
 	}
 	return report;
 }

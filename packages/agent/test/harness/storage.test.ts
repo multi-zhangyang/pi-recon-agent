@@ -98,6 +98,34 @@ describe("InMemorySessionStorage", () => {
 		expect((await storage.getPathToRoot("child")).map((entry) => entry.id)).toEqual(["root", "child"]);
 		expect(await storage.getPathToRoot(null)).toEqual([]);
 	});
+
+	it("walks a deep linear chain to root in order (regression: unshift→push+reverse)", async () => {
+		// getPathToRoot builds leaf→root then reverses once (O(n)) instead of
+		// unshift-per-step (O(n²)). A deep linear chain (depth ≈ total session
+		// entries, since every appendEntry advances the leaf) is the pessimistic
+		// case: assert the result is root→leaf ordered and complete, which a
+		// broken reverse (e.g. forgotten reverse, or wrong direction) would fail.
+		const depth = 1000;
+		const entries: MessageEntry[] = [];
+		for (let i = 0; i < depth; i++) {
+			entries.push({
+				type: "message",
+				id: `entry-${i}`,
+				parentId: i === 0 ? null : `entry-${i - 1}`,
+				timestamp: "2026-01-01T00:00:00.000Z",
+				message: i % 2 === 0 ? createUserMessage(`m${i}`) : createAssistantMessage(`m${i}`),
+			});
+		}
+		const storage = new InMemorySessionStorage({ entries });
+		const path = await storage.getPathToRoot(`entry-${depth - 1}`);
+		expect(path.length).toBe(depth);
+		expect(path[0]!.id).toBe("entry-0"); // root first
+		expect(path[depth - 1]!.id).toBe(`entry-${depth - 1}`); // leaf last
+		// Root→leaf ordering: every element's parentId matches the predecessor's id.
+		for (let i = 1; i < depth; i++) {
+			expect(path[i]!.parentId).toBe(path[i - 1]!.id);
+		}
+	});
 });
 
 describe("JsonlSessionStorage", () => {

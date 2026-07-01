@@ -182,6 +182,13 @@ export class AgentHarness<
 	private runAbortController?: AbortController;
 	private runPromise?: Promise<void>;
 	private pendingSessionWrites: PendingSessionWrite[] = [];
+	// Per-turn terminal-event tracking for emitRunFailure: if a real assistant
+	// message was already committed (message_end fired) before a throw, we must
+	// not synthesize a phantom message_start/message_end on top of it. Reset at
+	// turn start; set as the corresponding events flow through handleAgentEvent.
+	private turnMessageEndEmitted = false;
+	private turnEndEmitted = false;
+	private lastCommittedAssistant?: AssistantMessage;
 	private model: Model<any>;
 	private thinkingLevel: ThinkingLevel;
 	private systemPrompt: AgentHarnessOptions<TSkill, TPromptTemplate, TTool>["systemPrompt"];
@@ -196,6 +203,7 @@ export class AgentHarness<
 	private followUpQueueMode: QueueMode;
 	private nextTurnQueue: AgentMessage[] = [];
 	private handlers = new Map<string, Set<AgentHarnessHandler>>();
+	private disposed = false;
 
 	constructor(options: AgentHarnessOptions<TSkill, TPromptTemplate, TTool>) {
 		this.env = options.env;
@@ -227,7 +235,14 @@ export class AgentHarness<
 	}
 
 	private async emitOwn(event: AgentHarnessOwnEvent<TSkill, TPromptTemplate>, signal?: AbortSignal): Promise<void> {
-		for (const listener of this.getHandlers(SUBSCRIBER_EVENT_TYPE) ?? []) {
+		// Foundational opt #135: snapshot the subscriber Set before iterating.
+		// getHandlers returns the LIVE Set; a listener that calls subscribe() /
+		// the returned unsubscribe() during its own `await` would mutate that Set
+		// mid-iteration (and concurrent emitAny invocations from the parallel
+		// tool batch expose two iterators to each other's mutations) → skipped /
+		// double-fired handlers or a thrown `Set modified during iteration`.
+		// Array.from snapshots insertion order without the live-mutation hazard.
+		for (const listener of Array.from(this.getHandlers(SUBSCRIBER_EVENT_TYPE) ?? [])) {
 			try {
 				await listener(event, signal);
 			} catch (error) {
@@ -237,7 +252,8 @@ export class AgentHarness<
 	}
 
 	private async emitAny(event: AgentHarnessEvent<TSkill, TPromptTemplate>, signal?: AbortSignal): Promise<void> {
-		for (const listener of this.getHandlers(SUBSCRIBER_EVENT_TYPE) ?? []) {
+		// opt #135: see emitOwn — snapshot before iterating the live subscriber Set.
+		for (const listener of Array.from(this.getHandlers(SUBSCRIBER_EVENT_TYPE) ?? [])) {
 			try {
 				await listener(event, signal);
 			} catch (error) {
@@ -249,8 +265,10 @@ export class AgentHarness<
 	private async emitHook<TType extends keyof AgentHarnessEventResultMap>(
 		event: Extract<AgentHarnessOwnEvent, { type: TType }>,
 	): Promise<AgentHarnessEventResultMap[TType] | undefined> {
-		const handlers = this.getHandlers(event.type as TType);
-		if (!handlers || handlers.size === 0) return undefined;
+		// opt #135: snapshot the handler Set before iterating so a handler that
+		// (un)subscribes during its own await cannot corrupt this iteration.
+		const handlers = Array.from(this.getHandlers(event.type as TType) ?? []);
+		if (handlers.length === 0) return undefined;
 		let lastResult: AgentHarnessEventResultMap[TType] | undefined;
 		for (const handler of handlers) {
 			try {
@@ -315,6 +333,12 @@ export class AgentHarness<
 			followUp: [...this.followUpQueue],
 			nextTurn: [...this.nextTurnQueue],
 		});
+	}
+
+	private assertNotDisposed(method: string): void {
+		if (this.disposed) {
+			throw new AgentHarnessError("invalid_state", `AgentHarness.${method}() called after dispose()`);
+		}
 	}
 
 	private startRunPromise(): () => void {
@@ -428,6 +452,13 @@ export class AgentHarness<
 			reasoning: turnState.thinkingLevel === "off" ? undefined : turnState.thinkingLevel,
 			convertToLlm,
 			transformContext: async (messages) => {
+				// Skip the O(n) [...messages] spread + hook dispatch when no "context" handler is
+				// registered (the common case). emitHook would early-return undefined anyway, but the
+				// spread is evaluated as an argument BEFORE emitHook runs — so without this guard every
+				// turn paid an O(n) copy (n = total messages) for nothing (O(n²) cumulative over a long
+				// session). With handlers present the spread + dispatch are identical to before.
+				const handlers = this.getHandlers("context");
+				if (!handlers || handlers.size === 0) return messages;
 				const result = await this.emitHook({ type: "context", messages: [...messages] });
 				return result?.messages ?? messages;
 			},
@@ -510,19 +541,22 @@ export class AgentHarness<
 	private async handleAgentEvent(event: AgentEvent, signal?: AbortSignal): Promise<void> {
 		if (event.type === "message_end") {
 			await this.session.appendMessage(event.message);
+			if (event.message.role === "assistant") {
+				this.lastCommittedAssistant = event.message as AssistantMessage;
+			}
+			this.turnMessageEndEmitted = true;
 			await this.emitAny(event, signal);
 			return;
 		}
 		if (event.type === "turn_end") {
-			let eventError: unknown;
-			try {
-				await this.emitAny(event, signal);
-			} catch (error) {
-				eventError = error;
-			}
+			// Flush pending session writes BEFORE notifying subscribers, matching
+			// the message_end persist-then-emit order above. The prior emit-then-
+			// flush order left a window where a subscriber (or a crash) observed
+			// turn_end while the turn's pending mutations were still un-persisted.
 			const hadPendingMutations = this.pendingSessionWrites.length > 0;
 			await this.flushPendingSessionWrites();
-			if (eventError) throw eventError;
+			this.turnEndEmitted = true;
+			await this.emitAny(event, signal);
 			await this.emitOwn({ type: "save_point", hadPendingMutations });
 			return;
 		}
@@ -542,6 +576,23 @@ export class AgentHarness<
 		aborted: boolean,
 		signal: AbortSignal,
 	): Promise<AgentMessage[]> {
+		// If a real assistant message was already committed this turn (message_end
+		// fired) before the throw — e.g. the throw came from a post-message hook
+		// like shouldStopAfterTurn / getSteeringMessages / prepareNextTurn — do NOT
+		// synthesize a fresh message_start/message_end. Doing so would double-push
+		// a SECOND message_end and a PHANTOM assistant message into the durable
+		// transcript on top of the real one. Only emit the terminal events that
+		// haven't fired yet (turn_end / agent_end), referencing the REAL committed
+		// message. The thrown error is surfaced to the caller via the returned
+		// message's stopReason/errorMessage only when no real message exists.
+		const committed = this.turnMessageEndEmitted ? this.lastCommittedAssistant : undefined;
+		if (committed) {
+			if (!this.turnEndEmitted) {
+				await this.handleAgentEvent({ type: "turn_end", message: committed, toolResults: [] }, signal);
+			}
+			await this.handleAgentEvent({ type: "agent_end", messages: [committed] }, signal);
+			return [committed];
+		}
 		const failureMessage = createFailureMessage(model, error, aborted);
 		await this.handleAgentEvent({ type: "message_start", message: failureMessage }, signal);
 		await this.handleAgentEvent({ type: "message_end", message: failureMessage }, signal);
@@ -553,8 +604,15 @@ export class AgentHarness<
 	private async executeTurn(
 		turnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>,
 		text: string,
-		options?: { images?: ImageContent[] },
+		options: { images?: ImageContent[] } | undefined,
+		abortController: AbortController,
 	): Promise<AssistantMessage> {
+		// Reset per-turn terminal-event tracking so emitRunFailure starts clean
+		// (a prior turn's committed message must not suppress this turn's failure
+		// lifecycle, and a prior turn_end must not skip this turn's turn_end).
+		this.turnMessageEndEmitted = false;
+		this.turnEndEmitted = false;
+		this.lastCommittedAssistant = undefined;
 		let activeTurnState = turnState;
 		let messages: AgentMessage[] = [createUserMessage(text, options?.images)];
 		if (this.nextTurnQueue.length > 0) {
@@ -576,12 +634,15 @@ export class AgentHarness<
 		});
 		if (beforeResult?.messages) messages = [...messages, ...beforeResult.messages];
 
-		const abortController = new AbortController();
+		// abortController is created by the caller (prompt/skill/promptFromTemplate)
+		// and assigned to this.runAbortController BEFORE createTurnState, so abort()
+		// during the createTurnState/emitQueueUpdate/before_agent_start window is not
+		// a no-op (without this, runAbortController was undefined until this point →
+		// an abort in that window left the run to issue a real provider request).
 		const getTurnState = () => activeTurnState;
 		const setTurnState = (nextTurnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>) => {
 			activeTurnState = nextTurnState;
 		};
-		this.runAbortController = abortController;
 		const runResultPromise = (async () => {
 			try {
 				return await runAgentLoop(
@@ -593,13 +654,18 @@ export class AgentHarness<
 					this.createStreamFn(getTurnState),
 				);
 			} catch (error) {
+				// Abort the in-flight fetch on a mid-turn throw (listener throw / stream
+				// error) unless already aborted — same cost-leak / EventStream-buffer-
+				// growth rationale as Agent.runWithLifecycle (opt #116). The provider
+				// IIFE catches the AbortError and stream.end()s cleanly. Capture the
+				// ORIGINAL wasAborted first so emitRunFailure labels the failure
+				// (aborted vs error) correctly; the signal is still passed through to
+				// the failure lifecycle events (handleAgentEvent does not gate emission
+				// on signal.aborted).
+				const wasAborted = abortController.signal.aborted;
+				if (!wasAborted) abortController.abort();
 				try {
-					return await this.emitRunFailure(
-						activeTurnState.model,
-						error,
-						abortController.signal.aborted,
-						abortController.signal,
-					);
+					return await this.emitRunFailure(activeTurnState.model, error, wasAborted, abortController.signal);
 				} catch (failureError) {
 					const cause = new AggregateError(
 						[toError(error), toError(failureError)],
@@ -628,14 +694,18 @@ export class AgentHarness<
 	}
 
 	async prompt(text: string, options?: { images?: ImageContent[] }): Promise<AssistantMessage> {
+		this.assertNotDisposed("prompt");
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "AgentHarness is busy");
 		this.phase = "turn";
 		const finishRunPromise = this.startRunPromise();
+		const abortController = new AbortController();
+		this.runAbortController = abortController;
 		try {
 			const turnState = await this.createTurnState();
-			return await this.executeTurn(turnState, text, options);
+			return await this.executeTurn(turnState, text, options, abortController);
 		} catch (error) {
 			this.phase = "idle";
+			this.runAbortController = undefined;
 			throw normalizeHarnessError(error, "unknown");
 		} finally {
 			finishRunPromise();
@@ -643,16 +713,25 @@ export class AgentHarness<
 	}
 
 	async skill(name: string, additionalInstructions?: string): Promise<AssistantMessage> {
+		this.assertNotDisposed("skill");
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "AgentHarness is busy");
 		this.phase = "turn";
 		const finishRunPromise = this.startRunPromise();
+		const abortController = new AbortController();
+		this.runAbortController = abortController;
 		try {
 			const turnState = await this.createTurnState();
 			const skill = (turnState.resources.skills ?? []).find((candidate) => candidate.name === name);
 			if (!skill) throw new AgentHarnessError("invalid_argument", `Unknown skill: ${name}`);
-			return await this.executeTurn(turnState, formatSkillInvocation(skill, additionalInstructions));
+			return await this.executeTurn(
+				turnState,
+				formatSkillInvocation(skill, additionalInstructions),
+				undefined,
+				abortController,
+			);
 		} catch (error) {
 			this.phase = "idle";
+			this.runAbortController = undefined;
 			throw normalizeHarnessError(error, "unknown");
 		} finally {
 			finishRunPromise();
@@ -660,16 +739,25 @@ export class AgentHarness<
 	}
 
 	async promptFromTemplate(name: string, args: string[] = []): Promise<AssistantMessage> {
+		this.assertNotDisposed("promptFromTemplate");
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "AgentHarness is busy");
 		this.phase = "turn";
 		const finishRunPromise = this.startRunPromise();
+		const abortController = new AbortController();
+		this.runAbortController = abortController;
 		try {
 			const turnState = await this.createTurnState();
 			const template = (turnState.resources.promptTemplates ?? []).find((candidate) => candidate.name === name);
 			if (!template) throw new AgentHarnessError("invalid_argument", `Unknown prompt template: ${name}`);
-			return await this.executeTurn(turnState, formatPromptTemplateInvocation(template, args));
+			return await this.executeTurn(
+				turnState,
+				formatPromptTemplateInvocation(template, args),
+				undefined,
+				abortController,
+			);
 		} catch (error) {
 			this.phase = "idle";
+			this.runAbortController = undefined;
 			throw normalizeHarnessError(error, "unknown");
 		} finally {
 			finishRunPromise();
@@ -709,7 +797,11 @@ export class AgentHarness<
 		customInstructions?: string,
 	): Promise<{ summary: string; firstKeptEntryId: string; tokensBefore: number; details?: unknown }> {
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "compact() requires idle harness");
+		this.assertNotDisposed("compact");
 		this.phase = "compaction";
+		const finishRunPromise = this.startRunPromise();
+		const abortController = new AbortController();
+		this.runAbortController = abortController;
 		try {
 			const model = this.model;
 			if (!model) throw new AgentHarnessError("invalid_state", "No model set for compaction");
@@ -725,7 +817,7 @@ export class AgentHarness<
 				preparation,
 				branchEntries,
 				customInstructions,
-				signal: new AbortController().signal,
+				signal: abortController.signal,
 			});
 			if (hookResult?.cancel) throw new AgentHarnessError("compaction", "Compaction cancelled");
 			const provided = hookResult?.compaction;
@@ -737,7 +829,7 @@ export class AgentHarness<
 						auth.apiKey,
 						auth.headers,
 						customInstructions,
-						undefined,
+						abortController.signal,
 						this.thinkingLevel,
 					);
 			if (!compactResult.ok) throw compactResult.error;
@@ -757,7 +849,9 @@ export class AgentHarness<
 		} catch (error) {
 			throw normalizeHarnessError(error, "compaction");
 		} finally {
+			this.runAbortController = undefined;
 			this.phase = "idle";
+			finishRunPromise();
 		}
 	}
 
@@ -766,7 +860,11 @@ export class AgentHarness<
 		options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string },
 	): Promise<NavigateTreeResult> {
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "navigateTree() requires idle harness");
+		this.assertNotDisposed("navigateTree");
 		this.phase = "branch_summary";
+		const finishRunPromise = this.startRunPromise();
+		const abortController = new AbortController();
+		this.runAbortController = abortController;
 		try {
 			const oldLeafId = await this.session.getLeafId();
 			if (oldLeafId === targetId) return { cancelled: false };
@@ -783,7 +881,7 @@ export class AgentHarness<
 				replaceInstructions: options?.replaceInstructions,
 				label: options?.label,
 			};
-			const signal = new AbortController().signal;
+			const signal = abortController.signal;
 			const hookResult = await this.emitHook({ type: "session_before_tree", preparation, signal });
 			if (hookResult?.cancel) return { cancelled: true };
 			let summaryEntry: NavigateTreeResult["summaryEntry"];
@@ -798,7 +896,7 @@ export class AgentHarness<
 					model,
 					apiKey: auth.apiKey,
 					headers: auth.headers,
-					signal: new AbortController().signal,
+					signal: abortController.signal,
 					customInstructions: hookResult?.customInstructions ?? options?.customInstructions,
 					replaceInstructions: hookResult?.replaceInstructions ?? options?.replaceInstructions,
 				});
@@ -857,7 +955,9 @@ export class AgentHarness<
 		} catch (error) {
 			throw normalizeHarnessError(error, "branch_summary");
 		} finally {
+			this.runAbortController = undefined;
 			this.phase = "idle";
+			finishRunPromise();
 		}
 	}
 
@@ -1033,6 +1133,29 @@ export class AgentHarness<
 
 	async waitForIdle(): Promise<void> {
 		await this.runPromise;
+	}
+
+	/**
+	 * Tear down the harness: abort any in-flight run/compaction/tree-navigation,
+	 * drop all subscribers + hook handlers so no late callbacks fire on a dead
+	 * session/env, clear queued messages, and release the execution env. Safe to
+	 * call multiple times (idempotent). After dispose(), the run entry points
+	 * (prompt/skill/promptFromTemplate/compact/navigateTree) throw invalid_state.
+	 */
+	async dispose(): Promise<void> {
+		if (this.disposed) return;
+		this.disposed = true;
+		this.runAbortController?.abort();
+		this.handlers.clear();
+		this.steerQueue = [];
+		this.followUpQueue = [];
+		this.nextTurnQueue = [];
+		this.runAbortController = undefined;
+		try {
+			await this.env.cleanup();
+		} catch {
+			// Best-effort: never let env cleanup failure mask disposal.
+		}
 	}
 
 	subscribe(

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { RoutePlan } from "./routes.ts";
-import { currentMissionPath, ensureRepiStorage, readTextFile } from "./storage.ts";
+import { currentMissionPath, ensureRepiStorage, readJsonObjectFileCached } from "./storage.ts";
 
 export type MissionCheckpointStatus = "pending" | "done" | "blocked";
 export type MissionLaneStatus = "pending" | "in_progress" | "done" | "blocked";
@@ -530,10 +530,19 @@ export function normalizeMission(mission: MissionState): MissionState {
 
 export function readCurrentMission(): MissionState | undefined {
 	ensureRepiStorage();
-	const text = readTextFile(currentMissionPath()).trim();
-	if (!text) return undefined;
+	// opt #75 — mtime+size-keyed cache (readJsonObjectFileCached, the #65 primitive) instead
+	// of an uncached readTextFile + JSON.parse on every call. readCurrentMission is called
+	// 3-4× per deposit tool_result (recall buildPerTurnMemoryRecall + appendMemoryEvent
+	// Transaction + appendMemoryDepositionRuntimeEvent + currentMemoryScope) plus once per
+	// most re_* command handlers — each was a readFileSync + JSON.parse of current-mission
+	// .json, a file that only changes on re_mission ops (writeCurrentMission atomic temp+
+	// rename bumps mtime+size → auto-invalidate). normalizeMission does NOT mutate its input
+	// (it builds a fresh lanes array via .map + spreads), so it is safe to call on the shared
+	// cached raw object; each caller still gets a fresh normalized copy it can mutate freely.
+	const raw = readJsonObjectFileCached<MissionState>(currentMissionPath());
+	if (!raw) return undefined;
 	try {
-		return normalizeMission(JSON.parse(text) as MissionState);
+		return normalizeMission(raw);
 	} catch {
 		return undefined;
 	}

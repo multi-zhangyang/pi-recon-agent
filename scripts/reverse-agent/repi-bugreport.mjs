@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync } from "node:fs";
+import { safeWriteReport } from "./lib/report-write-helpers.mjs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 const rawArgs = process.argv.slice(2);
 let root = process.cwd();
@@ -260,12 +261,16 @@ const finalReport = {
 serialized = JSON.stringify(finalReport, null, 2);
 
 if (outputPath) {
-	mkdirSync(dirname(outputPath), { recursive: true, mode: 0o700 });
-	writeFileSync(outputPath, `${serialized}\n`, { encoding: "utf8", mode: 0o600 });
-	try {
-		chmodSync(outputPath, 0o600);
-	} catch {
-		// best effort
+	// opt #177: wrap the final report write so an ENOSPC/EACCES mid-write does
+	// not discard the ENTIRE gathered diagnostics with no partial output.
+	// fallbackToStdout salvages the collection to stdout (redirect to recover).
+	const written = safeWriteReport(outputPath, `${serialized}\n`, { fallbackToStdout: true });
+	if (written) {
+		try {
+			chmodSync(outputPath, 0o600);
+		} catch {
+			// best effort
+		}
 	}
 }
 

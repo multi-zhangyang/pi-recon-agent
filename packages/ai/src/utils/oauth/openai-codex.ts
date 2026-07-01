@@ -316,12 +316,13 @@ async function createAuthorizationFlow(
 }
 
 type OAuthServerInfo = {
+	server: import("node:http").Server;
 	close: () => void;
 	cancelWait: () => void;
 	waitForCode: () => Promise<{ code: string } | null>;
 };
 
-function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
+export function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
 	if (!_http) {
 		throw new Error("OpenAI Codex OAuth is only available in Node.js environments");
 	}
@@ -337,6 +338,12 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
 	});
 
 	const server = _http.createServer((req, res) => {
+		// Defense-in-depth (opt #146): a callback GET whose socket is reset by
+		// the browser/proxy before res.end() lands surfaces ECONNRESET/EPIPE on
+		// the connection socket (and a write-after-close 'error' on res) with no
+		// listener → `Unhandled 'error' event` crashes the OAuth login mid-flow.
+		req.on("error", () => {});
+		res.on("error", () => {});
 		try {
 			const url = new URL(req.url || "", "http://localhost");
 			if (url.pathname !== "/auth/callback") {
@@ -370,9 +377,18 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
 	});
 
 	return new Promise((resolve) => {
+		// opt #146: defense-in-depth cover for connection-socket errors
+		// (ECONNRESET/EPIPE). Modern Node attaches an internal socket 'error'
+		// listener via the HTTP server, but this is the documented belt-and-
+		// suspenders guard for older Node / edge cases; the req/res listeners
+		// inside the handler are the primary guard for write-failure stream errors.
+		server.on("connection", (socket) => {
+			socket.on("error", () => {});
+		});
 		server
 			.listen(1455, getCallbackHost(), () => {
 				resolve({
+					server,
 					close: () => server.close(),
 					cancelWait: () => {
 						settleWait?.(null);
@@ -383,6 +399,7 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
 			.on("error", (_err: NodeJS.ErrnoException) => {
 				settleWait?.(null);
 				resolve({
+					server,
 					close: () => {
 						try {
 							server.close();

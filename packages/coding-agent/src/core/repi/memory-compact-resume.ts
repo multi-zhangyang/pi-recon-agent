@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { normalizeReconCommand } from "./memory-command.ts";
 import { writeFileAtomic } from "./memory-store.ts";
@@ -11,6 +11,7 @@ import {
 	memoryPath,
 	readTextFile as readText,
 	reconArchiveDir,
+	writePrivateTextFile,
 } from "./storage.ts";
 import { sha256Text } from "./text.ts";
 
@@ -253,9 +254,78 @@ export function contextCompactionLedger(timestamp: string): {
 } {
 	const path = memoryPath("compaction-resume-ledger.jsonl");
 	const previous = readText(path);
-	const prevHash = previous.trim() ? createHash("sha256").update(previous).digest("hex") : "0".repeat(64);
-	const entryHash = createHash("sha256").update(`${prevHash}\n${timestamp}\ncontext-pack`).digest("hex");
+	// Match verifyCompactionResumeLedger's empty-line-skipping accumulation
+	// EXACTLY: the verifier recomputes prevHash from the non-empty lines (each +
+	// "\n"), NOT the raw file text. The ledger is appended via appendPrivateTextFile,
+	// which prepends a leading "\n" on a fresh/empty file; hashing `previous` raw
+	// included that leading "\n" while the verifier skipped it → prevHash desynced
+	// at row 1+ → every verifyCompactionResumeLedger call archived the ledger as
+	// corrupt and reset it to empty (the ledger was effectively non-functional).
+	// Hashing the same previousText the verifier uses keeps the chain contiguous.
+	const previousText = previous
+		.split(/\r?\n/)
+		.filter((line) => line.trim())
+		.map((line) => `${line}\n`)
+		.join("");
+	const prevHash = previousText.trim() ? sha256Text(previousText) : "0".repeat(64);
+	const entryHash = sha256Text(`${prevHash}\n${timestamp}\ncontext-pack`);
 	return { path, appendOnly: true, prevHash, entryHash };
+}
+
+const COMPACTION_RESUME_LEDGER_DEFAULT_MAX_ROWS = 500;
+
+function compactionResumeLedgerMaxRows(): number {
+	const raw = Number(process.env.REPI_COMPACTION_LEDGER_MAX_ROWS);
+	if (Number.isFinite(raw) && raw >= 0) return Math.floor(raw);
+	return COMPACTION_RESUME_LEDGER_DEFAULT_MAX_ROWS;
+}
+
+/**
+ * Cap the compaction-resume ledger on-disk size. The ledger is an append-only
+ * hash chain where each row's prevHash = sha256 of ALL prior raw lines (a running
+ * prefix hash, not a per-record link), so verifyCompactionResumeLedger is O(N²)
+ * in hashing and the file grows by one row per context-pack with no bound. This
+ * mirrors the tool-trace ledger rotation (opt #48): if the row count exceeds the
+ * cap (REPI_COMPACTION_LEDGER_MAX_ROWS, default 500, 0=disable), keep the last
+ * `cap` rows and RE-HASH the kept tail forward from a fresh genesis
+ * ("0".repeat(64)). Truncation breaks every surviving record (each prevHash no
+ * longer matches the recomputed prefix hash), so the tail is re-serialized with
+ * recomputed prevHash + entryHash; the verifier walks from genesis, so a
+ * genesis-reset head + re-hashed tail verifies CLEANLY. Atomic rewrite via
+ * writePrivateTextFile (temp+rename, 0o600) — a crash mid-rotation cannot leave a
+ * half-written ledger. Unparseable rows are preserved verbatim (the verifier
+ * flags them) rather than dropped, so audit history is not silently lost.
+ */
+export function rotateCompactionResumeLedgerIfNeeded(): void {
+	const maxRows = compactionResumeLedgerMaxRows();
+	if (maxRows <= 0) return;
+	const path = memoryPath("compaction-resume-ledger.jsonl");
+	const text = readText(path);
+	if (!text.trim()) return;
+	const lines = text.split(/\r?\n/).filter((line) => line.trim());
+	if (lines.length <= maxRows) return;
+	const keep = lines.slice(-maxRows);
+	let previousText = "";
+	const rehashed: string[] = [];
+	for (const line of keep) {
+		let row: Record<string, unknown>;
+		try {
+			row = JSON.parse(line) as Record<string, unknown>;
+		} catch {
+			rehashed.push(line);
+			previousText += `${line}\n`;
+			continue;
+		}
+		const prevHash = previousText.trim() ? sha256Text(previousText) : "0".repeat(64);
+		const ts = typeof row.ts === "string" ? row.ts : "";
+		const entryHash = sha256Text(`${prevHash}\n${ts}\ncontext-pack`);
+		row.prevHash = prevHash;
+		row.entryHash = entryHash;
+		const serialized = JSON.stringify(row);
+		rehashed.push(serialized);
+		previousText += `${serialized}\n`;
+	}
+	writePrivateTextFile(path, `${rehashed.join("\n")}\n`);
 }
 
 export function readCompactResumeTransitions(): {
@@ -267,6 +337,83 @@ export function readCompactResumeTransitions(): {
 	const path = compactResumeTransitionLedgerPath();
 	const text = readText(path);
 	return compactResumeTransitionsFromText(path, text);
+}
+
+// opt #85 — compaction-resume transition ledger append cache (the read-side analog of #73's
+// deposition chain cache). appendCompactResumeTransition did an O(file) read-modify-write on
+// EVERY append: readText(whole ledger) → parse → sha256(previousText) for prevHash → rewrite the
+// whole file with the new row appended. The ledger is a hash chain verified from genesis
+// (compactResumeLedgerV2ReportFromText recomputes prevHash=sha256(previousText) for EVERY row),
+// so it is NOT rotation-safe and must be rewritten in full (atomic temp+rename, F3) — unlike the
+// deposition bus (#72 true-append), appendPrivateTextFile CANNOT be used here: its leading-"\n"
+// separator on a fresh file would make the stored prevHash (sha256 of raw text WITH the leading
+// "\n") diverge from the verifier's prevHash (which skips empty lines) → invalidTransitions.
+// So the WRITE stays an atomic full rewrite (writePrivateTextFile, F3), but the READ is cached:
+// a path-keyed {text, prevHash, mtimeMs, size} entry, mtime+size-guarded. On a hit the O(file)
+// read + O(file) sha256 are skipped (the cached text feeds the write body + duplicate scan, the
+// cached prevHash feeds the new row); the append commits the new text + stat so the next append
+// hits. The cached prevHash is sha256Text(text) — a pure function of the file content, so the
+// mtime+size guard is a valid invalidation (atomic rewrites bump both). Worst case is a false
+// MISS (correct but slower), never a false HIT. Path-keyed per REPI_CODING_AGENT_DIR.
+const compactionResumeChainCache = new Map<string, { text: string; prevHash: string; mtimeMs: number; size: number }>();
+
+function compactionResumeLedgerStat(path: string): { mtimeMs: number; size: number } | undefined {
+	try {
+		const st = statSync(path);
+		return { mtimeMs: st.mtimeMs, size: st.size };
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Returns { text, prevHash, transitions } for the next ledger append. Cache hit (stat
+ * mtime+size unchanged) → the O(file) read + O(file) sha256 are skipped (cached text feeds the
+ * write body + duplicate scan; cached prevHash feeds the new row). Miss → cold read. The caller
+ * MUST commitCompactionResumeChain(newText) after the atomic write succeeds so the next append
+ * cache-hits.
+ */
+export function nextCompactionResumeChain(): {
+	text: string;
+	prevHash: string;
+	transitions: CompactResumeLedgerTransitionV2[];
+} {
+	const path = compactResumeTransitionLedgerPath();
+	const cached = compactionResumeChainCache.get(path);
+	if (cached) {
+		const st = compactionResumeLedgerStat(path);
+		if (st && st.mtimeMs === cached.mtimeMs && st.size === cached.size) {
+			const { transitions } = compactResumeTransitionsFromText(path, cached.text);
+			return { text: cached.text, prevHash: cached.prevHash, transitions };
+		}
+	}
+	const text = readText(path);
+	const prevHash = text.trim() ? sha256Text(text) : "0".repeat(64);
+	const { transitions } = compactResumeTransitionsFromText(path, text);
+	return { text, prevHash, transitions };
+}
+
+/** Record the post-append chain state (new full text + stat) so the next append cache-hits.
+ *  If the stat fails (file vanished), drop the entry → next append cold-reads. */
+export function commitCompactionResumeChain(newText: string): void {
+	const path = compactResumeTransitionLedgerPath();
+	const st = compactionResumeLedgerStat(path);
+	if (st) {
+		compactionResumeChainCache.set(path, {
+			text: newText,
+			prevHash: newText.trim() ? sha256Text(newText) : "0".repeat(64),
+			mtimeMs: st.mtimeMs,
+			size: st.size,
+		});
+	} else {
+		compactionResumeChainCache.delete(path);
+	}
+}
+
+/** Drop the cached chain state. Belt-and-suspenders for the stat guard — call after any non-append
+ *  rewrite of the ledger (archive/reset) so the next append doesn't depend on a stat tick landing. */
+export function invalidateCompactionResumeChainCache(): void {
+	compactionResumeChainCache.delete(compactResumeTransitionLedgerPath());
 }
 
 export function appendCompactResumeTransition(params: {
@@ -281,14 +428,15 @@ export function appendCompactResumeTransition(params: {
 	maxAttempts?: number;
 }): CompactResumeLedgerTransitionV2 {
 	ensureRepiStorage();
-	const ledger = readCompactResumeTransitions();
+	const path = compactResumeTransitionLedgerPath();
+	const chain = nextCompactionResumeChain();
 	const idempotencyKey =
 		params.idempotencyKey ??
 		createHash("sha256")
 			.update([params.contextPath ?? "no-context", params.command ?? "", params.reason].join("\n"))
 			.digest("hex");
 	const normalizedCommand = normalizeReconCommand(params.command ?? "");
-	const duplicate = ledger.transitions.find(
+	const duplicate = chain.transitions.find(
 		(row) =>
 			row.idempotencyKey === idempotencyKey &&
 			row.to === params.to &&
@@ -296,9 +444,9 @@ export function appendCompactResumeTransition(params: {
 			(row.contextPath ?? "") === (params.contextPath ?? ""),
 	);
 	if (duplicate) return duplicate;
-	const previousText = ledger.text;
-	const prevHash = previousText.trim() ? createHash("sha256").update(previousText).digest("hex") : "0".repeat(64);
-	const from = params.from ?? compactResumeStateForKey(ledger.transitions, idempotencyKey);
+	const previousText = chain.text;
+	const prevHash = chain.prevHash;
+	const from = params.from ?? compactResumeStateForKey(chain.transitions, idempotencyKey);
 	const base: Omit<CompactResumeLedgerTransitionV2, "entryHash"> = {
 		kind: "repi-compact-resume-ledger-transition",
 		schemaVersion: 1,
@@ -310,7 +458,7 @@ export function appendCompactResumeTransition(params: {
 		idempotencyKey,
 		contextPath: params.contextPath,
 		contextSha256: params.contextSha256,
-		attempt: params.attempt ?? compactResumeAttemptForKey(ledger.transitions, idempotencyKey),
+		attempt: params.attempt ?? compactResumeAttemptForKey(chain.transitions, idempotencyKey),
 		maxAttempts: params.maxAttempts ?? 3,
 		prevHash,
 	};
@@ -318,11 +466,9 @@ export function appendCompactResumeTransition(params: {
 		...base,
 		entryHash: compactResumeTransitionEntryHash(base, { normalizeCommand: normalizeReconCommand }),
 	};
-	writeFileSync(
-		compactResumeTransitionLedgerPath(),
-		`${previousText}${previousText && !previousText.endsWith("\n") ? "\n" : ""}${JSON.stringify(row)}\n`,
-		"utf-8",
-	);
+	const newText = `${previousText}${previousText && !previousText.endsWith("\n") ? "\n" : ""}${JSON.stringify(row)}\n`;
+	writePrivateTextFile(path, newText);
+	commitCompactionResumeChain(newText);
 	return row;
 }
 
@@ -351,8 +497,8 @@ export function archiveCorruptCompactionResumeLedger(
 		const dir = join(reconArchiveDir(), `compact-ledger-corrupt-${timestamp.replace(/[:.]/g, "-")}`);
 		mkdirSync(dir, { recursive: true });
 		const archivedPath = join(dir, artifactBasename(path));
-		writeFileSync(archivedPath, text, "utf-8");
-		writeFileSync(
+		writePrivateTextFile(archivedPath, text);
+		writePrivateTextFile(
 			join(dir, "repair.json"),
 			`${JSON.stringify(
 				{
@@ -367,9 +513,9 @@ export function archiveCorruptCompactionResumeLedger(
 				null,
 				2,
 			)}\n`,
-			"utf-8",
 		);
-		writeFileSync(path, "", "utf-8");
+		writePrivateTextFile(path, "");
+		invalidateCompactionResumeChainCache();
 		return archivedPath;
 	} catch {
 		return undefined;

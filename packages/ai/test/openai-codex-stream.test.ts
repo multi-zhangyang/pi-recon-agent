@@ -1374,6 +1374,101 @@ describe("openai-codex streaming", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
+	it("applies a fallback idle timeout when timeoutMs is not provided (opt #124)", async () => {
+		// parseWebSocket's idle guard only fired when idleTimeoutMs > 0 — a caller
+		// that omits timeoutMs left a stalled socket hanging forever. opt #124 adds
+		// a DEFAULT_WEBSOCKET_IDLE_TIMEOUT_MS (600_000) fallback. Fake-timer test:
+		// no timeoutMs, a socket that opens + emits one non-terminal event then goes
+		// idle; advancing past 600_000ms must surface the idle-timeout error.
+		vi.useFakeTimers();
+		const token = mockToken();
+
+		const fetchMock = vi.fn(async () => new Response("unexpected fetch", { status: 500 }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		class IdleMockWebSocket {
+			static OPEN = 1;
+			readyState = IdleMockWebSocket.OPEN;
+			private listeners = new Map<string, Set<(event: unknown) => void>>();
+
+			constructor(_url: string, _protocols?: string | string[] | { headers?: Record<string, string> }) {
+				queueMicrotask(() => this.dispatch("open", {}));
+			}
+
+			addEventListener(type: string, listener: (event: unknown) => void): void {
+				let listeners = this.listeners.get(type);
+				if (!listeners) {
+					listeners = new Set();
+					this.listeners.set(type, listeners);
+				}
+				listeners.add(listener);
+			}
+
+			removeEventListener(type: string, listener: (event: unknown) => void): void {
+				this.listeners.get(type)?.delete(listener);
+			}
+
+			send(): void {
+				queueMicrotask(() => {
+					// One non-terminal event, then the socket goes idle (no close, no
+					// completion) — the exact stall the fallback must bound.
+					this.dispatch("message", {
+						data: JSON.stringify({
+							type: "response.output_item.added",
+							item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
+						}),
+					});
+				});
+			}
+
+			close(): void {
+				this.readyState = 3;
+			}
+
+			private dispatch(type: string, event: unknown): void {
+				for (const listener of this.listeners.get(type) ?? []) {
+					listener(event);
+				}
+			}
+		}
+
+		vi.stubGlobal("WebSocket", IdleMockWebSocket);
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+		const context: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Say hello", timestamp: 1 }],
+		};
+
+		// NOTE: no timeoutMs — exercises the fallback.
+		const resultPromise = streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			transport: "auto",
+		}).result();
+
+		await vi.advanceTimersByTimeAsync(0);
+		// Just under the fallback must still be pending (no hang-adjacent flakiness).
+		await vi.advanceTimersByTimeAsync(599_000);
+		// Advance past the 600_000ms fallback to trip the idle guard.
+		await vi.advanceTimersByTimeAsync(2_000);
+
+		const result = await resultPromise;
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toBe("WebSocket idle timeout after 600000ms");
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
 	it("sends only response input deltas in websocket-cached mode", async () => {
 		const token = mockToken();
 		const sentBodies: unknown[] = [];

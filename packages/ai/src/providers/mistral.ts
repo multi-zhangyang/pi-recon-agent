@@ -83,8 +83,19 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
 				throw new Error("Request was aborted");
 			}
 
+			// Terminal stop-reason handling. Previously this was a single
+			// `if (aborted || error) throw new Error("An unknown error occurred")`
+			// — which discarded any errorMessage captured during streaming and
+			// diverged from the openai-completions path (`output.errorMessage ||
+			// "Provider returned an error stop reason"`). mapChatStopReason
+			// returns "error" without setting errorMessage, so the fallback is a
+			// descriptive finish-reason string. The message decision is extracted
+			// to mistralTerminalErrorMessage for unit testing; the inline
+			// `stopReason === "aborted" || "error"` guard is kept (not replaced by
+			// a `terminalMessage !== null` check) so TypeScript narrows
+			// stopReason to "length"|"stop"|"toolUse" for the `done` push below.
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error("An unknown error occurred");
+				throw new Error(mistralTerminalErrorMessage(output.stopReason, output.errorMessage) as string);
 			}
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
@@ -266,7 +277,7 @@ function buildChatPayload(
 	return payload;
 }
 
-async function consumeChatStream(
+export async function consumeChatStream(
 	model: Model<"mistral-conversations">,
 	output: AssistantMessage,
 	stream: AssistantMessageEventStream,
@@ -313,7 +324,13 @@ async function consumeChatStream(
 			calculateCost(model, output.usage);
 		}
 
-		const choice = chunk.choices[0];
+		// opt #258: guard `chunk.choices` itself being undefined/absent. The SDK
+		// types `choices` as required, but a usage-only terminal chunk (the
+		// include_usage pattern) or a Mistral-compatible proxy can emit `{ usage }`
+		// with no `choices` field — `chunk.choices[0]` would throw TypeError →
+		// caught by the outer catch → the ENTIRE accumulated response discarded as a
+		// stream error. Sibling openai-completions.ts:301 guards the same way.
+		const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
 		if (!choice) continue;
 
 		if (choice.finishReason) {
@@ -321,6 +338,14 @@ async function consumeChatStream(
 		}
 
 		const delta = choice.delta;
+		// Some Mistral-compatible providers omit `delta` on the terminal chunk
+		// ({ choices: [{ finish_reason: "stop", delta: null }] }). The SDK type
+		// says `delta: DeltaMessage` (non-nullable), but the server can emit null
+		// at runtime — without this guard, `delta.content` below throws TypeError
+		// → caught by the stream fn's outer catch → the ENTIRE accumulated
+		// response (text/thinking/tool calls) is discarded as a stream error.
+		// Sibling openai-completions.ts guards with `if (choice.delta)`.
+		if (!delta) continue;
 		if (delta.content !== null && delta.content !== undefined) {
 			const contentItems = typeof delta.content === "string" ? [delta.content] : delta.content;
 			for (const item of contentItems) {
@@ -416,6 +441,19 @@ async function consumeChatStream(
 				output.content.push(block);
 				toolBlocksByKey.set(key, output.content.length - 1);
 				stream.push({ type: "toolcall_start", contentIndex: output.content.length - 1, partial: output });
+			}
+
+			// Late-name / late-id update: some Mistral-compatible streams split a tool
+			// call across deltas where the first delta for an index carries only
+			// `index` + partial `arguments` and the `function.name` (and/or id) arrives
+			// on a LATER delta. Mirrors the openai-completions.ts late-update pattern:
+			// update on EVERY delta for this index, not just at block creation, so a
+			// nameless toolcall_end is never emitted.
+			if (!block.name && toolCall.function.name) {
+				block.name = toolCall.function.name;
+			}
+			if (!block.id && toolCall.id && toolCall.id !== "null") {
+				block.id = toolCall.id;
 			}
 
 			const argsDelta =
@@ -613,6 +651,22 @@ function mapToolChoice(
 		type: "function",
 		function: { name: choice.function.name },
 	};
+}
+
+/**
+ * Terminal stop-reason → thrown-error message for the mistral stream's
+ * post-consume check. Returns null for non-terminal stop reasons (the stream
+ * completed normally). Exported for unit testing.
+ *
+ * - "aborted" → "Request was aborted" (matches openai-completions).
+ * - "error" → preserves any errorMessage captured during streaming, else a
+ *   descriptive finish-reason string (the previous code threw a bare
+ *   "An unknown error occurred" that discarded provider context).
+ */
+export function mistralTerminalErrorMessage(stopReason: StopReason, errorMessage: string | undefined): string | null {
+	if (stopReason === "aborted") return "Request was aborted";
+	if (stopReason === "error") return errorMessage || "Mistral returned an error finish reason";
+	return null;
 }
 
 function mapChatStopReason(reason: string | null): StopReason {

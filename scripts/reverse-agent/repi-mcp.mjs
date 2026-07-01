@@ -3,6 +3,18 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { capStdioBuffer, killWithGrace, safeWriteLine, drainHttpBody, readHttpTextBounded } from "./lib/mcp-stdio-helpers.mjs";
+
+// REPI opt #173: stdio MCP child hardening knobs.
+// REPI_MCP_STDIO_MAX_BYTES caps the accumulated stdout buffer (rolling tail).
+// 0 disables the cap. Default 8MB — comfortably fits normal JSON-RPC frames
+// while bounding a runaway/misbehaving server before the 10s timeout OOMs us.
+const STDIO_MAX_BYTES = Number(process.env.REPI_MCP_STDIO_MAX_BYTES ?? 0) || (8 * 1024 * 1024);
+// SIGTERM→SIGKILL grace window for stdio MCP children that ignore SIGTERM.
+const STDIO_KILL_GRACE_MS = Number(process.env.REPI_MCP_STDIO_KILL_GRACE_MS ?? 0) || 2000;
+// HTTP MCP body cap. `Response.text()` is all-or-nothing; keep remote MCP
+// failures from turning into CLI OOMs while leaving room for normal resources.
+const HTTP_BODY_MAX_BYTES = Number(process.env.REPI_MCP_HTTP_BODY_MAX_BYTES ?? 0) || (8 * 1024 * 1024);
 
 const root = process.argv[2] && !process.argv[2].startsWith("-") ? process.argv[2] : process.cwd();
 const argv = process.argv.slice(process.argv[2] && !process.argv[2].startsWith("-") ? 3 : 2);
@@ -110,6 +122,10 @@ async function authInfo(entry) {
 				wwwAuthenticate = redact(response.headers.get("www-authenticate") || "");
 				const raw = parseBearerParam(response.headers.get("www-authenticate"), "resource_metadata") || parseBearerParam(response.headers.get("www-authenticate"), "resource_metadata_uri");
 				if (raw) resourceMetadataUrl = new URL(raw, cfg.url).toString();
+				// opt #173 / #49: we only read headers here — drain the body so
+				// the keep-alive socket is released back to the pool instead of
+				// being stranded until GC.
+				await drainHttpBody(response);
 			} finally { clearTimeout(timer); }
 		}
 		if (resourceMetadataUrl) {
@@ -117,7 +133,7 @@ async function authInfo(entry) {
 			try {
 				const response = await fetch(resourceMetadataUrl, { headers: { Accept: "application/json" }, signal: controller.signal });
 				status = status || response.status;
-				const text = await response.text();
+				const text = await readHttpTextBounded(response, HTTP_BODY_MAX_BYTES, "mcp_oauth_metadata_body");
 				try { resourceMetadata = JSON.parse(text); } catch { resourceMetadata = redact(text.slice(0, 2000)); }
 			} finally { clearTimeout(timer); }
 		}
@@ -136,7 +152,11 @@ async function httpJsonRpcPost(entry, state, message, expectId) {
 		const response = await fetch(cfg.url, { method: "POST", headers: headerMap(cfg, state.sessionId, state.protocolVersion), body: JSON.stringify(message), signal: controller.signal });
 		const sessionId = response.headers.get("mcp-session-id");
 		if (sessionId) state.sessionId = sessionId;
-		const bodyText = await response.text();
+		if (!expectId && response.ok) {
+			await drainHttpBody(response);
+			return undefined;
+		}
+		const bodyText = await readHttpTextBounded(response, HTTP_BODY_MAX_BYTES, "mcp_http_response_body");
 		if (!response.ok) throw new Error(`MCP HTTP ${response.status}${bodyText ? `: ${redact(bodyText).slice(0,1000)}` : ""}`);
 		if (!expectId) return undefined;
 		const contentType = response.headers.get("content-type") || "";
@@ -184,7 +204,7 @@ async function httpMcpRequest(entry, method, params, mapResult) {
 		return { serverId: entry.id, ok: false, transport: "http", url: cfg.url, error: redact(message) };
 	}
 }
-function writeLine(child, msg) { child.stdin.write(`${JSON.stringify(msg)}\n`, "utf8"); }
+function writeLine(child, msg) { safeWriteLine(child.stdin, `${JSON.stringify(msg)}\n`); }
 function toolAllowed(cfg, toolName) {
 	const allowed = new Set(cfg.allowedTools || []);
 	const blocked = new Set(cfg.blockedTools || []);
@@ -254,14 +274,24 @@ function simpleMcpRequest(entry, method, params, mapResult) {
 		const timeoutMs = cfg.timeoutMs || 10000;
 		const child = spawn(cfg.command, cfg.args || [], { cwd: cfg.cwd ? resolve(cfg.cwd) : root, env: envMap(cfg.env), stdio: ["pipe", "pipe", "pipe"] });
 		let buffer = ""; let stderr = ""; let stage = "init"; let done = false; let id = 1;
-		function finish(result) { if (done) return; done = true; clearTimeout(timer); try { child.kill("SIGTERM"); } catch {} resolveRequest({ ...result, stderrTail: stderr.slice(-1000) }); }
+		function finish(result) { if (done) return; done = true; clearTimeout(timer); killWithGrace(child, STDIO_KILL_GRACE_MS).then(() => resolveRequest({ ...result, stderrTail: stderr.slice(-1000) })); }
 		function req(reqMethod, reqParams) { const rid = id++; writeLine(child, { jsonrpc: "2.0", id: rid, method: reqMethod, ...(reqParams ? { params: reqParams } : {}) }); return rid; }
 		const timer = setTimeout(() => finish({ serverId: entry.id, ok: false, transport: "stdio", error: `timeout_${stage}` }), timeoutMs);
 		child.stderr.on("data", c => { stderr += redact(String(c)); if (stderr.length > 4000) stderr = stderr.slice(-4000); });
 		child.on("error", e => finish({ serverId: entry.id, ok: false, transport: "stdio", error: redact(e.message) }));
 		child.on("close", (code, signal) => { if (!done) finish({ serverId: entry.id, ok: false, transport: "stdio", error: `server_exited code=${code} signal=${signal}` }); });
+		// Foundational opt #272: piped child stdio emits 'error' (EIO/EPIPE)
+		// independent of the child's own 'error'/'close' — finish() calls
+		// killWithGrace (SIGTERM→SIGKILL) on timeout/server_exited, and killing a
+		// child mid-write to its stdout/stderr pipe tears the pipe → the parent-
+		// side Readable emits 'error' with NO listener → Unhandled 'error' event
+		// crashes the whole `repi mcp` run. Swallow so the close handler still
+		// resolves with whatever was captured. Same doctrine as opt #188
+		// (repi-swarm-llm-run) / #36 (mcp-manager) / #40 (waitForChildProcess).
+		child.stdout?.on("error", () => {});
+		child.stderr?.on("error", () => {});
 		child.stdout.on("data", chunk => {
-			buffer += String(chunk);
+			buffer = capStdioBuffer(buffer, chunk, STDIO_MAX_BYTES);
 			while (buffer.includes("\n")) {
 				const idx = buffer.indexOf("\n"); const line = buffer.slice(0, idx).trim(); buffer = buffer.slice(idx + 1);
 				if (!line) continue;
@@ -292,14 +322,18 @@ function probe(entry) {
 		const timeoutMs = cfg.timeoutMs || 10000;
 		const child = spawn(cfg.command, cfg.args || [], { cwd: cfg.cwd ? resolve(cfg.cwd) : root, env: envMap(cfg.env), stdio: ["pipe", "pipe", "pipe"] });
 		let buffer = ""; let stderr = ""; let stage = "init"; let done = false; const pending = new Map(); let id = 1;
-		function finish(result) { if (done) return; done = true; clearTimeout(timer); try { child.kill("SIGTERM"); } catch {} resolveProbe({ ...result, stderrTail: stderr.slice(-1000) }); }
+		function finish(result) { if (done) return; done = true; clearTimeout(timer); killWithGrace(child, STDIO_KILL_GRACE_MS).then(() => resolveProbe({ ...result, stderrTail: stderr.slice(-1000) })); }
 		function req(method, params) { const rid = id++; writeLine(child, { jsonrpc: "2.0", id: rid, method, ...(params ? { params } : {}) }); return rid; }
 		const timer = setTimeout(() => finish({ serverId: entry.id, ok: false, transport: "stdio", tools: [], error: `timeout_${stage}` }), timeoutMs);
 		child.stderr.on("data", c => { stderr += redact(String(c)); if (stderr.length > 4000) stderr = stderr.slice(-4000); });
 		child.on("error", e => finish({ serverId: entry.id, ok: false, transport: "stdio", tools: [], error: redact(e.message) }));
 		child.on("close", (code, signal) => { if (!done) finish({ serverId: entry.id, ok: false, transport: "stdio", tools: [], error: `server_exited code=${code} signal=${signal}` }); });
+		// Foundational opt #272: swallow piped-stdio 'error' (EIO/EPIPE on kill)
+		// so it doesn't crash the run. See simpleMcpRequest for the full rationale.
+		child.stdout?.on("error", () => {});
+		child.stderr?.on("error", () => {});
 		child.stdout.on("data", chunk => {
-			buffer += String(chunk);
+			buffer = capStdioBuffer(buffer, chunk, STDIO_MAX_BYTES);
 			while (buffer.includes("\n")) {
 				const idx = buffer.indexOf("\n"); const line = buffer.slice(0, idx).trim(); buffer = buffer.slice(idx + 1);
 				if (!line) continue;
@@ -338,14 +372,18 @@ function callTool(entry, toolName, args) {
 		const timeoutMs = cfg.timeoutMs || 10000;
 		const child = spawn(cfg.command, cfg.args || [], { cwd: cfg.cwd ? resolve(cfg.cwd) : root, env: envMap(cfg.env), stdio: ["pipe", "pipe", "pipe"] });
 		let buffer = ""; let stderr = ""; let stage = "init"; let done = false; let id = 1;
-		function finish(result) { if (done) return; done = true; clearTimeout(timer); try { child.kill("SIGTERM"); } catch {} resolveCall({ ...result, stderrTail: stderr.slice(-1000) }); }
+		function finish(result) { if (done) return; done = true; clearTimeout(timer); killWithGrace(child, STDIO_KILL_GRACE_MS).then(() => resolveCall({ ...result, stderrTail: stderr.slice(-1000) })); }
 		function req(method, params) { const rid = id++; writeLine(child, { jsonrpc: "2.0", id: rid, method, ...(params ? { params } : {}) }); return rid; }
 		const timer = setTimeout(() => finish({ serverId: entry.id, toolName, ok: false, transport: "stdio", error: `timeout_${stage}` }), timeoutMs);
 		child.stderr.on("data", c => { stderr += redact(String(c)); if (stderr.length > 4000) stderr = stderr.slice(-4000); });
 		child.on("error", e => finish({ serverId: entry.id, toolName, ok: false, transport: "stdio", error: redact(e.message) }));
 		child.on("close", (code, signal) => { if (!done) finish({ serverId: entry.id, toolName, ok: false, transport: "stdio", error: `server_exited code=${code} signal=${signal}` }); });
+		// Foundational opt #272: swallow piped-stdio 'error' (EIO/EPIPE on kill)
+		// so it doesn't crash the run. See simpleMcpRequest for the full rationale.
+		child.stdout?.on("error", () => {});
+		child.stderr?.on("error", () => {});
 		child.stdout.on("data", chunk => {
-			buffer += String(chunk);
+			buffer = capStdioBuffer(buffer, chunk, STDIO_MAX_BYTES);
 			while (buffer.includes("\n")) {
 				const idx = buffer.indexOf("\n"); const line = buffer.slice(0, idx).trim(); buffer = buffer.slice(idx + 1);
 				if (!line) continue;

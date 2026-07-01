@@ -1,8 +1,22 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import {
+	capWorkerBuffer,
+	killWorkerWithGrace,
+	resolveWorkerMaxBytes,
+	DEFAULT_WORKER_KILL_GRACE_MS,
+} from "./lib/worker-spawn-helpers.mjs";
+
+const workerMaxBytes = resolveWorkerMaxBytes();
+const workerKillGraceMs = (() => {
+	const raw = process.env.REPI_SELFCHECK_WORKER_KILL_GRACE_MS;
+	if (raw === undefined || raw === null || raw === "") return DEFAULT_WORKER_KILL_GRACE_MS;
+	const n = Number(raw);
+	return Number.isFinite(n) && n >= 0 ? Math.floor(n) : DEFAULT_WORKER_KILL_GRACE_MS;
+})();
 
 const root = resolve(process.argv[2] && !process.argv[2].startsWith("--") ? process.argv[2] : process.cwd());
 const args = process.argv.slice(process.argv[2] && !process.argv[2].startsWith("--") ? 3 : 2);
@@ -104,14 +118,28 @@ function runWorker(index) {
 		let stdout = "";
 		let stderr = "";
 		const timer = setTimeout(() => {
-			child.kill("SIGTERM");
+			// SIGTERM, then escalate to SIGKILL after a short grace so a
+			// SIGTERM-ignoring worker cannot hang Promise.all. The child's
+			// "close" handler below resolves the worker; killWorkerWithGrace
+			// only guarantees reaping.
+			void killWorkerWithGrace(child, workerKillGraceMs);
 		}, timeoutMs);
 		child.stdout.on("data", (chunk) => {
-			stdout += chunk;
+			stdout = capWorkerBuffer(stdout, chunk, workerMaxBytes);
 		});
 		child.stderr.on("data", (chunk) => {
-			stderr += chunk;
+			stderr = capWorkerBuffer(stderr, chunk, workerMaxBytes);
 		});
+		// Foundational opt #272: piped child stdio emits 'error' (EIO/EPIPE)
+		// independent of the child's own 'error'/'close' — the timeout path calls
+		// killWorkerWithGrace (SIGTERM→SIGKILL), and killing a worker mid-output
+		// tears the pipe → the parent-side Readable emits 'error' with NO listener
+		// → Unhandled 'error' event crashes the whole `repi selfcheck` parallel
+		// pool (the Promise.all never resolves). Swallow so the close handler still
+		// resolves the worker with whatever was captured. Same doctrine as opt
+		// #188 (repi-swarm-llm-run) / #36 (mcp-manager) / #40 (waitForChildProcess).
+		child.stdout?.on("error", () => {});
+		child.stderr?.on("error", () => {});
 		child.on("close", (code, signal) => {
 			clearTimeout(timer);
 			const expected = new RegExp(`REPI_PARALLEL_WORKER_${index}_OK`);
@@ -213,40 +241,49 @@ rows.push(...(await Promise.all([runWorker(1), runWorker(2), runWorker(3)])));
 rows.push(orchestrationSourceCheck());
 
 if (deep) {
-	const isolatedAgentDir = join(mkdtempSync(join(tmpdir(), "repi-selfcheck-")), "agent");
-	mkdirSync(isolatedAgentDir, { recursive: true });
-	const sourceAgentDir = process.env.REPI_CODING_AGENT_DIR || join(homedir(), ".repi", "agent");
-	for (const name of ["models.json"]) {
-		const source = join(sourceAgentDir, name);
-		if (existsSync(source)) copyFileSync(source, join(isolatedAgentDir, name));
+	const isolatedProfileRoot = mkdtempSync(join(tmpdir(), "repi-selfcheck-"));
+	const isolatedAgentDir = join(isolatedProfileRoot, "agent");
+	try {
+		mkdirSync(isolatedAgentDir, { recursive: true });
+		const sourceAgentDir = process.env.REPI_CODING_AGENT_DIR || join(homedir(), ".repi", "agent");
+		for (const name of ["models.json"]) {
+			const source = join(sourceAgentDir, name);
+			if (existsSync(source)) copyFileSync(source, join(isolatedAgentDir, name));
+		}
+		rows.push(
+			runRepi(
+				"swarm-llm-run",
+				[
+					"swarm",
+					"llm-run",
+					"local-selfcheck",
+					"--workers",
+					"3",
+					...modelArgs,
+					"--prompt",
+					"Reply exactly: REPI_SWARM_WORKER_{id}_OK",
+					"--expect",
+					"REPI_SWARM_WORKER_{id}_OK",
+					"--timeout-ms",
+					String(timeoutMs),
+				],
+				{ timeoutMs: Math.max(timeoutMs + 15_000, timeoutMs * 2) },
+			),
+		);
+		rows.push(
+			runRepi(
+				"re-swarm-slash",
+				[...modelArgs, "--no-session", "--mode", "json", "/re-swarm run local-selfcheck 1 1"],
+				{
+					timeoutMs,
+					expectStdout: /re_swarm|swarm|worker/i,
+					env: { REPI_CODING_AGENT_DIR: isolatedAgentDir, PI_CODING_AGENT_DIR: isolatedAgentDir },
+				},
+			),
+		);
+	} finally {
+		rmSync(isolatedProfileRoot, { recursive: true, force: true });
 	}
-	rows.push(
-		runRepi(
-			"swarm-llm-run",
-			[
-				"swarm",
-				"llm-run",
-				"local-selfcheck",
-				"--workers",
-				"3",
-				...modelArgs,
-				"--prompt",
-				"Reply exactly: REPI_SWARM_WORKER_{id}_OK",
-				"--expect",
-				"REPI_SWARM_WORKER_{id}_OK",
-				"--timeout-ms",
-				String(timeoutMs),
-			],
-			{ timeoutMs: Math.max(timeoutMs + 15_000, timeoutMs * 2) },
-		),
-	);
-	rows.push(
-		runRepi("re-swarm-slash", [...modelArgs, "--no-session", "--mode", "json", "/re-swarm run local-selfcheck 1 1"], {
-			timeoutMs,
-			expectStdout: /re_swarm|swarm|worker/i,
-			env: { REPI_CODING_AGENT_DIR: isolatedAgentDir, PI_CODING_AGENT_DIR: isolatedAgentDir },
-		}),
-	);
 }
 
 const report = {

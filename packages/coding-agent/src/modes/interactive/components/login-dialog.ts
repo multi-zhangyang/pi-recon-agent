@@ -211,4 +211,27 @@ export class LoginDialogComponent extends Container implements Focusable {
 		// Pass to input
 		this.input.handleInput(data);
 	}
+
+	/**
+	 * Teardown: reject any pending showPrompt/showManualInput promise so a caller
+	 * awaiting the dialog doesn't hang forever when the dialog is discarded
+	 * (session switch / rewind / mode teardown) without an explicit cancel.
+	 * Same settle-on-teardown doctrine as opt #44/#120. (opt #125)
+	 */
+	dispose(): void {
+		// Abort first so any OAuth polling loop observing the signal stops.
+		try {
+			this.abortController.abort();
+		} catch {}
+		if (this.inputRejecter) {
+			this.inputRejecter(new Error("Login dialog closed"));
+			this.inputResolver = undefined;
+			this.inputRejecter = undefined;
+		} else if (this.inputResolver) {
+			// No rejecter registered yet (e.g. promise created but resolver not
+			// wired) — clear so a later settle is a no-op.
+			this.inputResolver = undefined;
+		}
+		super.dispose?.();
+	}
 }

@@ -163,6 +163,44 @@ describe("re_subagent tool", () => {
 			}
 		});
 
+		it("specialists are empowered with orchestration tools but never recursion-gated ones", () => {
+			const recursionGated = new Set(["re_subagent", "re_reason", "re_challenge"]);
+			const byName = Object.fromEntries(BUILTIN_AGENT_THREAD_SPECS.map((spec) => [spec.name, spec]));
+			// No specialist may expose a recursion-gated tool (would no-op inside REPI_AGENT_THREAD=1).
+			for (const spec of BUILTIN_AGENT_THREAD_SPECS) {
+				for (const tool of spec.tools) {
+					expect(recursionGated.has(tool), `${spec.name} exposes gated tool ${tool}`).toBe(false);
+				}
+			}
+			// Each specialist is empowered with the ungated orchestration tools that match its job.
+			expect(byName.verifier.tools).toContain("re_verifier");
+			expect(byName.verifier.tools).toContain("re_replayer");
+			expect(byName.verifier.tools).toContain("re_techniques");
+			expect(byName.reverser.tools).toContain("re_kernel");
+			expect(byName.reverser.tools).toContain("re_native_runtime");
+			expect(byName.reverser.tools).toContain("re_exploit_chain");
+			expect(byName.reverser.tools).toContain("re_bootstrap");
+			expect(byName.explorer.tools).toContain("re_map");
+			expect(byName.explorer.tools).toContain("re_route");
+			expect(byName.planner.tools).toContain("re_lane");
+			expect(byName.planner.tools).toContain("re_route");
+			expect(byName.planner.tools).toContain("re_mission");
+			expect(byName.operator.tools).toContain("re_bootstrap");
+			// Doctrines reference the new tools so specialists actually use them.
+			expect(byName.verifier.systemPrompt).toContain("re_verifier");
+			expect(byName.verifier.systemPrompt).toContain("re_replayer");
+			expect(byName.reverser.systemPrompt).toContain("re_kernel");
+			expect(byName.reverser.systemPrompt).toContain("re_exploit_chain");
+			expect(byName.explorer.systemPrompt).toContain("re_map");
+			expect(byName.planner.systemPrompt).toContain("re_lane");
+			expect(byName.operator.systemPrompt).toContain("re_bootstrap");
+			// Tight maxTurns lifted so specialists can actually call the tools + synthesize.
+			expect(byName.explorer.maxTurns).toBeGreaterThanOrEqual(6);
+			expect(byName.planner.maxTurns).toBeGreaterThanOrEqual(5);
+			expect(byName.verifier.maxTurns).toBeGreaterThanOrEqual(8);
+			expect(byName.reverser.maxTurns).toBeGreaterThanOrEqual(16);
+		});
+
 		it("awaitRun rejects for an unknown run id", async () => {
 			const agentDir = makeTempAgentDir("re-subagent-unit");
 			tempDirs.push(agentDir);

@@ -14,12 +14,13 @@ import {
 	type OAuthProviderId,
 } from "@pi-recon/repi-ai";
 import { getOAuthApiKey, getOAuthProvider, getOAuthProviders } from "@pi-recon/repi-ai/oauth";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { getAgentDir } from "../config.ts";
 import { normalizePath } from "../utils/paths.ts";
 import { resolveConfigValue } from "./resolve-config-value.ts";
+import { atomicWriteFileSync } from "./tools/atomic-write.ts";
 
 export type ApiKeyCredential = {
 	type: "api_key";
@@ -45,8 +46,6 @@ type LockResult<T> = {
 	next?: string;
 };
 
-const AUTH_FILE_WRITE_OPTIONS = { encoding: "utf-8", mode: 0o600 } as const;
-
 export interface AuthStorageBackend {
 	withLock<T>(fn: (current: string | undefined) => LockResult<T>): T;
 	withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T>;
@@ -68,8 +67,10 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 
 	private ensureFileExists(): void {
 		if (!existsSync(this.authPath)) {
-			writeFileSync(this.authPath, "{}", AUTH_FILE_WRITE_OPTIONS);
-			chmodSync(this.authPath, 0o600);
+			// Atomic create: temp+rename (mode 0o600). A plain writeFileSync here is
+			// create-only and would self-heal on reload, but using the atomic helper
+			// keeps the create path consistent with the rewrite path below.
+			atomicWriteFileSync(this.authPath, "{}", 0o600);
 		}
 	}
 
@@ -110,8 +111,14 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 			const current = existsSync(this.authPath) ? readFileSync(this.authPath, "utf-8") : undefined;
 			const { result, next } = fn(current);
 			if (next !== undefined) {
-				writeFileSync(this.authPath, next, AUTH_FILE_WRITE_OPTIONS);
-				chmodSync(this.authPath, 0o600);
+				// Atomic temp+rename (mode 0o600): the file lock serializes concurrent
+				// writers across processes, but a plain writeFileSync truncates the
+				// auth file first — a crash (SIGKILL/OOM/SIGTERM) mid-write leaves a
+				// truncated/partial auth.json → reload() JSON.parse throws → loadError
+				// → every provider's getApiKey() returns undefined → the user must
+				// re-login every provider. temp+rename means reload sees either the
+				// complete prior credentials or the complete new ones, never a partial.
+				atomicWriteFileSync(this.authPath, next, 0o600);
 			}
 			return result;
 		} finally {
@@ -155,8 +162,8 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 			const { result, next } = await fn(current);
 			throwIfCompromised();
 			if (next !== undefined) {
-				writeFileSync(this.authPath, next, AUTH_FILE_WRITE_OPTIONS);
-				chmodSync(this.authPath, 0o600);
+				// Atomic temp+rename (mode 0o600) — see withLock for the rationale.
+				atomicWriteFileSync(this.authPath, next, 0o600);
 			}
 			throwIfCompromised();
 			return result;

@@ -84,7 +84,10 @@ describe("edit tool prepareArguments", () => {
 		});
 
 		const result = await definition.execute("tool-1", prepared, undefined, undefined, {} as ExtensionContext);
-		expect(result.content).toEqual([{ type: "text", text: "Successfully replaced 1 block(s) in legacy.txt." }]);
+		// opt #16 appends the first-changed-line location note to the success text.
+		expect(result.content).toEqual([
+			{ type: "text", text: "Successfully replaced 1 block(s) in legacy.txt. (first change at line 1)" },
+		]);
 		expect(await readFile(filePath, "utf8")).toBe("after\n");
 	});
 });

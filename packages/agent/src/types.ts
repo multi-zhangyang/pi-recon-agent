@@ -208,6 +208,112 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	shouldStopAfterTurn?: (context: ShouldStopAfterTurnContext) => boolean | Promise<boolean>;
 
 	/**
+	 * Optional hard cap on the number of assistant turns (provider requests) in a
+	 * single run. A "turn" is one streamed assistant response (possibly containing
+	 * tool calls that are then executed). When the cap is reached after a turn
+	 * completes (turn_end emitted), the loop stops gracefully via `agent_end`
+	 * before starting another provider request — the in-flight turn is never cut.
+	 *
+	 * Undefined / non-positive = unbounded (preserves the default behavior; the
+	 * only other turn cap is the `shouldStopAfterTurn` compaction hook).
+	 *
+	 * Use this as a foundational guard against runaway tool-call loops. To observe
+	 * that a run stopped because of the budget (rather than naturally), supply
+	 * `onRunBudgetExceeded`.
+	 */
+	maxTurns?: number;
+
+	/**
+	 * Called when the loop stops because `maxTurns` was reached, after the final
+	 * `turn_end` and before `agent_end`. Pure side-effect channel (e.g. surface a
+	 * "max_turns_exceeded" notice to the consumer); the loop has already decided
+	 * to stop. Contract: must not throw or reject.
+	 */
+	onRunBudgetExceeded?: (info: { turns: number; maxTurns: number }) => void;
+
+	/**
+	 * Maximum number of automatic continuation re-prompts when the model stops
+	 * with `stopReason === "length"` (output hit the model's `maxTokens` limit)
+	 * and the assistant message contains no tool calls.
+	 *
+	 * When enabled (>0) and a length stop occurs, the loop injects a short
+	 * continuation user message and streams another response so the model resumes
+	 * its cut-off output instead of ending the turn. Each continuation is a full
+	 * provider request that counts toward {@link maxTurns}. The cap bounds the
+	 * total continuations per run (0 = disabled, the default — a length stop
+	 * ends the turn as before).
+	 *
+	 * Use {@link lengthContinuePrompt} to customize the injected message.
+	 */
+	lengthContinueMaxTurns?: number;
+
+	/**
+	 * Override the user message injected on a length auto-continue. Defaults to a
+	 * concise "continue where you left off" instruction. Ignored when
+	 * {@link lengthContinueMaxTurns} is 0/unset.
+	 */
+	lengthContinuePrompt?: string;
+
+	/**
+	 * Maximum number of times to retry a single assistant stream request when the
+	 * provider fails BEFORE emitting any content (the common transient case:
+	 * connection reset, DNS, 429, 5xx — all surface as `stopReason === "error"`
+	 * with no `start`/content event having reached the loop).
+	 *
+	 * Retries are safe because nothing has been emitted to the consumer yet: no
+	 * `message_start`, no deltas. The loop discards the empty error message,
+	 * waits with exponential backoff, and re-issues the same request. A retry is
+	 * NOT a new turn — it does not count toward {@link maxTurns}.
+	 *
+	 * Once the stream has started (`message_start` emitted), an error is surfaced
+	 * immediately without retry, so partial output is never duplicated or lost.
+	 *
+	 * 0 / undefined = disabled (default — a stream error ends the turn as before).
+	 * Use {@link isRetryableStreamError} to filter which errors are worth retrying,
+	 * and {@link streamRetryBaseDelayMs} / {@link streamRetryMaxDelayMs} to shape
+	 * the backoff.
+	 */
+	streamMaxRetries?: number;
+
+	/**
+	 * Base delay in ms for stream-request retry backoff. The n-th retry waits
+	 * `min(baseDelay * 2^n, maxDelay)`. Default 1000ms. Ignored when
+	 * {@link streamMaxRetries} is 0/unset.
+	 */
+	streamRetryBaseDelayMs?: number;
+
+	/**
+	 * Cap in ms for stream-request retry backoff. Default 30000ms. Ignored when
+	 * {@link streamMaxRetries} is 0/unset.
+	 */
+	streamRetryMaxDelayMs?: number;
+
+	/**
+	 * Predicate deciding whether a pre-stream error is worth retrying. Receives
+	 * the final assistant message (with `stopReason === "error"` and
+	 * `errorMessage`). Defaults to a conservative heuristic that skips obvious
+	 * permanent failures (auth, quota, model-not-found) and retries everything
+	 * else. Ignored when {@link streamMaxRetries} is 0/unset.
+	 */
+	isRetryableStreamError?: (message: AssistantMessage) => boolean;
+
+	/**
+	 * Defense-in-depth cap on the size of a tool result's TEXT content blocks
+	 * before it enters the model's context. When a block exceeds this many
+	 * characters it is head+tail truncated with an elided-char-count marker.
+	 * Non-text (image) blocks are never touched.
+	 *
+	 * Built-in tools already self-truncate (read/bash/grep ~50KB), so this only
+	 * catches misbehaving custom/MCP extension tools that return huge results
+	 * and would otherwise blow the context window. Default 262144 chars
+	 * (256K) — well above the built-in limits, so well-behaved results are
+	 * untouched. Set to 0 to disable the cap. Applied at the context boundary
+	 * only (the persisted tool result message); tool-execution events for the
+	 * UI keep the original.
+	 */
+	maxToolResultChars?: number;
+
+	/**
 	 * Called after `turn_end` and before the loop decides whether another provider request should start.
 	 * Return replacement context/model/thinking state to affect the next turn in this run.
 	 * Return undefined to keep using the current context/config.

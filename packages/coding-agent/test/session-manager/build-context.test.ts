@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	type BranchSummaryEntry,
 	buildSessionContext,
@@ -8,6 +8,24 @@ import {
 	type SessionMessageEntry,
 	type ThinkingLevelChangeEntry,
 } from "../../src/core/session-manager.ts";
+
+/** Compaction entry whose firstKeptEntryId may be undefined (v1-header migration case). */
+function compactionAny(
+	id: string,
+	parentId: string | null,
+	summary: string,
+	firstKeptEntryId: string | undefined,
+): CompactionEntry {
+	return {
+		type: "compaction",
+		id,
+		parentId,
+		timestamp: "2025-01-01T00:00:00Z",
+		summary,
+		firstKeptEntryId: firstKeptEntryId as string,
+		tokensBefore: 1000,
+	};
+}
 
 function msg(id: string, parentId: string | null, role: "user" | "assistant", text: string): SessionMessageEntry {
 	const base = { type: "message" as const, id, parentId, timestamp: "2025-01-01T00:00:00Z" };
@@ -263,6 +281,113 @@ describe("buildSessionContext", () => {
 			const ctx = buildSessionContext(entries, "2");
 			// Should only get the orphan since parent chain is broken
 			expect(ctx.messages).toHaveLength(1);
+		});
+	});
+
+	describe("opt #222: firstKeptEntryId missing/orphaned fallback (no silent context loss)", () => {
+		it("emits all pre-compaction messages when firstKeptEntryId is undefined (v1-header migration)", () => {
+			// A v1 compaction whose firstKeptEntryIndex pointed at the session header
+			// gets firstKeptEntryId left undefined by migrateV1ToV2. Pre-fix, the
+			// kept-window loop matched nothing → only the summary + post-compaction
+			// messages were emitted, silently dropping the entire kept window.
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "first"),
+				msg("2", "1", "assistant", "response1"),
+				msg("3", "2", "user", "second"),
+				compactionAny("4", "3", "Summary", undefined),
+				msg("5", "4", "user", "after"),
+			];
+			const ctx = buildSessionContext(entries, "5");
+
+			// summary + all 3 pre-compaction (1,2,3) + post-compaction (5) = 5
+			expect(ctx.messages).toHaveLength(5);
+			expect((ctx.messages[0] as any).summary).toContain("Summary");
+			expect((ctx.messages[1] as any).content).toBe("first");
+			expect((ctx.messages[2] as any).content[0].text).toBe("response1");
+			expect((ctx.messages[3] as any).content).toBe("second");
+			expect((ctx.messages[4] as any).content).toBe("after");
+		});
+
+		it("emits all pre-compaction messages + warns when firstKeptEntryId is present but not on path", () => {
+			// firstKeptEntryId points at an entry on a different branch (orphaned by
+			// branching compaction) or a corrupt/unknown id. Pre-fix: silent drop.
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "first"),
+				msg("2", "1", "assistant", "response1"),
+				compactionAny("3", "2", "Summary", "nonexistent-id"),
+				msg("4", "3", "user", "after"),
+			];
+			const warnSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			try {
+				const ctx = buildSessionContext(entries, "4");
+
+				// summary + all pre-compaction (1,2) + post-compaction (4) = 4
+				expect(ctx.messages).toHaveLength(4);
+				expect((ctx.messages[1] as any).content).toBe("first");
+				expect((ctx.messages[2] as any).content[0].text).toBe("response1");
+				expect((ctx.messages[3] as any).content).toBe("after");
+
+				// A warning was surfaced naming the unresolvable id.
+				const warned = warnSpy.mock.calls.some((c) => String(c[0]).includes('"nonexistent-id"'));
+				expect(warned).toBe(true);
+			} finally {
+				warnSpy.mockRestore();
+			}
+		});
+
+		it("regression guard: normal firstKeptEntryId still emits only the kept window (no over-inclusion)", () => {
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "first"),
+				msg("2", "1", "assistant", "response1"),
+				msg("3", "2", "user", "second"),
+				compactionAny("4", "3", "Summary", "2"),
+				msg("5", "4", "user", "after"),
+			];
+			const ctx = buildSessionContext(entries, "5");
+
+			// summary + kept(2,3) + post(5) = 4; msg 1 is before the kept window → dropped
+			expect(ctx.messages).toHaveLength(4);
+			expect((ctx.messages[1] as any).content[0].text).toBe("response1");
+			expect((ctx.messages[2] as any).content).toBe("second");
+			expect((ctx.messages[3] as any).content).toBe("after");
+			expect(ctx.messages.some((m) => (m as any).content === "first")).toBe(false);
+		});
+	});
+
+	describe("opt #223: dangling parentId truncation is surfaced (not silent)", () => {
+		it("warns when a mid-chain parentId resolves to no entry (ancestor messages dropped)", () => {
+			// 2's parent is "1", but entry "1" is NOT in the loaded set — the walk
+			// stops at 2 and the (here absent) ancestor chain is silently dropped.
+			const entries: SessionEntry[] = [msg("2", "1", "user", "orphaned-leaf"), msg("3", "2", "assistant", "child")];
+			const warnSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			try {
+				const ctx = buildSessionContext(entries, "3");
+
+				// Truncation behavior preserved: only 2 and 3 are on the path.
+				expect(ctx.messages).toHaveLength(2);
+				expect((ctx.messages[0] as any).content).toBe("orphaned-leaf");
+				expect((ctx.messages[1] as any).content[0].text).toBe("child");
+
+				// But a warning naming the dangling parentId is surfaced.
+				const warned = warnSpy.mock.calls.some(
+					(c) => String(c[0]).includes('"1"') && String(c[0]).includes("truncated"),
+				);
+				expect(warned).toBe(true);
+			} finally {
+				warnSpy.mockRestore();
+			}
+		});
+
+		it("does not warn for a well-formed chain rooted at parentId null", () => {
+			const entries: SessionEntry[] = [msg("1", null, "user", "root"), msg("2", "1", "assistant", "ok")];
+			const warnSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			try {
+				buildSessionContext(entries, "2");
+				const warned = warnSpy.mock.calls.some((c) => String(c[0]).includes("truncated"));
+				expect(warned).toBe(false);
+			} finally {
+				warnSpy.mockRestore();
+			}
 		});
 	});
 });

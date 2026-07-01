@@ -129,12 +129,32 @@ export function setBedrockProviderModule(module: BedrockProviderModule): void {
 	};
 }
 
-function forwardStream(target: AssistantMessageEventStream, source: AsyncIterable<AssistantMessageEvent>): void {
+function forwardStream<TApi extends Api>(
+	target: AssistantMessageEventStream,
+	source: AsyncIterable<AssistantMessageEvent>,
+	model: Model<TApi>,
+): void {
+	// The fire-and-forget IIFE bridges an inner provider/extension stream into the
+	// outer stream returned to the agent loop. Without a try/catch, a throw from
+	// `source`'s async iterator (a misbehaving custom extension streamSimple that
+	// throws mid-iteration instead of pushing a terminal event) OR a sync throw
+	// inside the loop body escapes the IIFE → the dropped IIFE promise rejects →
+	// `unhandledRejection` (there is NO global handler) → crash; AND no terminal
+	// event is forwarded so `target.result()` hangs forever. On throw, synthesize
+	// an error AssistantMessage (reusing the lazy-load error shape), push the
+	// "error" event, and end the target so `.result()` resolves with the error.
+	// (opt #131)
 	(async () => {
-		for await (const event of source) {
-			target.push(event);
+		try {
+			for await (const event of source) {
+				target.push(event);
+			}
+			target.end();
+		} catch (error) {
+			const message = createLazyLoadErrorMessage(model, error);
+			target.push({ type: "error", reason: "error", error: message });
+			target.end(message);
 		}
-		target.end();
 	})();
 }
 
@@ -168,7 +188,7 @@ function createLazyStream<TApi extends Api, TOptions extends StreamOptions, TSim
 		loadModule()
 			.then((module) => {
 				const inner = module.stream(model, context, options);
-				forwardStream(outer, inner);
+				forwardStream(outer, inner, model);
 			})
 			.catch((error) => {
 				const message = createLazyLoadErrorMessage(model, error);
@@ -191,7 +211,7 @@ function createLazySimpleStream<
 		loadModule()
 			.then((module) => {
 				const inner = module.streamSimple(model, context, options);
-				forwardStream(outer, inner);
+				forwardStream(outer, inner, model);
 			})
 			.catch((error) => {
 				const message = createLazyLoadErrorMessage(model, error);

@@ -3,7 +3,45 @@
  */
 
 import type { AgentMessage } from "@pi-recon/repi-agent-core";
-import type { Message } from "@pi-recon/repi-ai";
+import type { AssistantMessage, Message } from "@pi-recon/repi-ai";
+import { safeHeadEnd, safeTailStart } from "../tools/truncate.ts";
+
+// ============================================================================
+// Trailing error/aborted assistant stripping
+// ============================================================================
+
+/**
+ * Return a new message array with ALL trailing assistant messages whose
+ * `stopReason` is "error" or "aborted" removed.
+ *
+ * Why a loop and not a single pop: after `buildSessionContext()` rebuilds
+ * `agent.state.messages` from the session log, the array can contain several
+ * trailing error assistants — every retryable failure is removed from live
+ * state by `_prepareRetry` but KEPT in the session for history, so a rebuild
+ * brings them all back. Stripping only the last one (a single `if`) leaves an
+ * earlier error assistant as the new last message, and the next
+ * `runAgentLoopContinue` throws "Cannot continue from message role: assistant",
+ * defeating overflow recovery whenever retries precede an overflow. Stripping
+ * all of them ensures the array ends on a non-error message (user/toolResult,
+ * or a healthy assistant) so continuation is always valid.
+ *
+ * Non-mutating: returns a new array (or the same reference if nothing changed).
+ */
+export function stripTrailingErrorAssistants(messages: AgentMessage[]): AgentMessage[] {
+	let end = messages.length;
+	while (end > 0) {
+		const last = messages[end - 1];
+		if (
+			last?.role === "assistant" &&
+			((last as AssistantMessage).stopReason === "error" || (last as AssistantMessage).stopReason === "aborted")
+		) {
+			end--;
+		} else {
+			break;
+		}
+	}
+	return end === messages.length ? messages : messages.slice(0, end);
+}
 
 // ============================================================================
 // File Operation Tracking
@@ -89,13 +127,33 @@ export function formatFileOperations(readFiles: string[], modifiedFiles: string[
 const TOOL_RESULT_MAX_CHARS = 2000;
 
 /**
- * Truncate text to a maximum character length for summarization.
- * Keeps the beginning and appends a truncation marker.
+ * Placeholder emitted for image content blocks during summarization. opt #219.
+ * Pre-fix, serializeConversation filtered to `type === "text"` only, so an
+ * image attached to a user turn ("what's in this screenshot?") or returned by
+ * a tool vanished from the serialized summary with NO trace — the summarizing
+ * model lost the fact that the turn involved an image at all and could produce
+ * a summary that misrepresents the turn. The image data itself can't go into a
+ * text summary, but recording that an image was present preserves turn shape.
  */
-function truncateForSummary(text: string, maxChars: number): string {
+const IMAGE_PLACEHOLDER = "[image content omitted]";
+
+/**
+ * Truncate text to a maximum character length for summarization.
+ *
+ * Keeps BOTH the head and the tail with a middle-ellipsis marker, so the
+ * summarizer sees the start of the tool output AND the final result/error/exit
+ * context (the tail is usually the most decision-relevant part). Head-only
+ * truncation would lose the tail entirely.
+ */
+export function truncateForSummary(text: string, maxChars: number): string {
 	if (text.length <= maxChars) return text;
-	const truncatedChars = text.length - maxChars;
-	return `${text.slice(0, maxChars)}\n\n[... ${truncatedChars} more characters truncated]`;
+	// Split the budget roughly evenly, reserving a small slice for the marker.
+	const head = Math.floor(maxChars * 0.45);
+	const tail = Math.floor(maxChars * 0.45);
+	const elidedChars = text.length - head - tail;
+	const headEnd = safeHeadEnd(text, head);
+	const tailStart = safeTailStart(text, text.length - tail);
+	return `${text.slice(0, headEnd)}\n\n[... ${elidedChars} more characters truncated ...]\n\n${text.slice(tailStart)}`;
 }
 
 /**
@@ -111,13 +169,22 @@ export function serializeConversation(messages: Message[]): string {
 
 	for (const msg of messages) {
 		if (msg.role === "user") {
-			const content =
-				typeof msg.content === "string"
-					? msg.content
-					: msg.content
-							.filter((c): c is { type: "text"; text: string } => c.type === "text")
-							.map((c) => c.text)
-							.join("");
+			// opt #219: surface image blocks as a placeholder instead of dropping
+			// them silently, so the summary records that the turn included an image.
+			let content: string;
+			if (typeof msg.content === "string") {
+				content = msg.content;
+			} else {
+				const pieces: string[] = [];
+				for (const block of msg.content) {
+					if (block.type === "text") {
+						pieces.push(block.text);
+					} else if (block.type === "image") {
+						pieces.push(IMAGE_PLACEHOLDER);
+					}
+				}
+				content = pieces.join("");
+			}
 			if (content) parts.push(`[User]: ${content}`);
 		} else if (msg.role === "assistant") {
 			const textParts: string[] = [];
@@ -130,7 +197,18 @@ export function serializeConversation(messages: Message[]): string {
 				} else if (block.type === "thinking") {
 					thinkingParts.push(block.thinking);
 				} else if (block.type === "toolCall") {
-					const args = block.arguments as Record<string, unknown>;
+					// opt #241: `arguments` can be absent (corrupt/migrated session
+					// log, a misbehaving custom extension, a future message-type
+					// change). `Object.entries(null)` throws TypeError, and this
+					// runs BEFORE the LLM call — outside completeSummarization's
+					// try/catch — so the throw propagated out of generateSummary /
+					// compact() and aborted compaction. The sibling
+					// extractFileOpsFromMessage guards this same way (utils.ts:76).
+					const args = block.arguments as Record<string, unknown> | undefined;
+					if (!args) {
+						toolCalls.push(`${block.name}()`);
+						continue;
+					}
 					const argsStr = Object.entries(args)
 						.map(([k, v]) => `${k}=${JSON.stringify(v)}`)
 						.join(", ");
@@ -148,10 +226,17 @@ export function serializeConversation(messages: Message[]): string {
 				parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
 			}
 		} else if (msg.role === "toolResult") {
-			const content = msg.content
-				.filter((c): c is { type: "text"; text: string } => c.type === "text")
-				.map((c) => c.text)
-				.join("");
+			// opt #219: surface image blocks as a placeholder instead of dropping
+			// them silently (a tool may return an image — e.g. a screenshot read).
+			const pieces: string[] = [];
+			for (const block of msg.content) {
+				if (block.type === "text") {
+					pieces.push(block.text);
+				} else if (block.type === "image") {
+					pieces.push(IMAGE_PLACEHOLDER);
+				}
+			}
+			const content = pieces.join("");
 			if (content) {
 				parts.push(`[Tool result]: ${truncateForSummary(content, TOOL_RESULT_MAX_CHARS)}`);
 			}

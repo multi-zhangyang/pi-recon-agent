@@ -86,7 +86,19 @@ export async function collectEntriesForBranchSummary(
 	const entries: SessionTreeEntry[] = [];
 	let current: string | null = oldLeafId;
 
+	// Cycle guard: oldPath was built from getBranch(oldLeafId) whose getPathToRoot
+	// already cycle-guards, but this walker follows parentId upward via getEntry
+	// independently — a storage whose getPathToRoot lacks the visited Set (or data
+	// mutated between the getBranch call and this loop) with A.parentId=B,
+	// B.parentId=A would spin forever (event-loop-blocking CPU spin → OOM).
+	// Convert a cycle into a typed invalid_session error instead of a hang,
+	// mirroring the getPathToRoot cycle idiom (jsonl-storage / memory-storage).
+	const visited = new Set<string>();
 	while (current && current !== commonAncestorId) {
+		if (visited.has(current)) {
+			throw new SessionError("invalid_session", `Cycle detected at entry ${current}`);
+		}
+		visited.add(current);
 		const entry = await session.getEntry(current);
 		if (!entry) throw new SessionError("invalid_session", `Entry ${current} not found`);
 		entries.push(entry as SessionTreeEntry);

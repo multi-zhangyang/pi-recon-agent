@@ -14,13 +14,19 @@ export async function convertToPng(
 		return { data: base64Data, mimeType };
 	}
 
-	const photon = await loadPhoton();
-	if (!photon) {
-		// Photon not available, can't convert
-		return null;
-	}
-
+	// opt #54 — the whole conversion path (including the `await loadPhoton()` that was
+	// previously OUTSIDE this try) is wrapped so a photon load/initialization failure resolves
+	// to null instead of rejecting. convertToPng is called fire-and-forget from tool-execution's
+	// image render (`convertToPng(...).then(...)` with no `.catch`) — a rejection here would drop
+	// to `unhandledRejection` and crash the agent (no global unhandledRejection handler exists).
+	// The contract is "returns null when unavailable"; honoring it for the load step too.
 	try {
+		const photon = await loadPhoton();
+		if (!photon) {
+			// Photon not available, can't convert
+			return null;
+		}
+
 		const bytes = new Uint8Array(Buffer.from(base64Data, "base64"));
 		const rawImage = photon.PhotonImage.new_from_byteslice(bytes);
 		const image = applyExifOrientation(photon, rawImage, bytes);
@@ -35,7 +41,7 @@ export async function convertToPng(
 			image.free();
 		}
 	} catch {
-		// Conversion failed
+		// Photon load or conversion failed
 		return null;
 	}
 }

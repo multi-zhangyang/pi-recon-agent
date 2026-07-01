@@ -107,6 +107,16 @@ export class ProcessTerminal implements Terminal {
 	private keyboardProtocolBufferFlushTimer?: ReturnType<typeof setTimeout>;
 	private stdinBuffer?: StdinBuffer;
 	private stdinDataHandler?: (data: string) => void;
+	/**
+	 * Swallow listeners for process.stdin/stdout 'error' events (opt #40 doctrine:
+	 * a piped/tty stream emits 'error' independent of 'close'/'end'; with no
+	 * listener Node throws it as an uncaught exception). The tty closing without
+	 * SIGHUP (detached pgrp, ignored SIGHUP, or piped stdin whose write end
+	 * closes) surfaces as EIO/EPIPE here. Routing the stdin error to clearing
+	 * inputHandler stops forwarding input on a dead tty instead of crashing.
+	 */
+	private stdinErrorHandler?: () => void;
+	private stdoutErrorHandler?: () => void;
 	private progressInterval?: ReturnType<typeof setInterval>;
 	private writeLogPath = (() => {
 		const env = process.env.PI_TUI_WRITE_LOG || "";
@@ -148,6 +158,16 @@ export class ProcessTerminal implements Terminal {
 
 		// Set up resize handler immediately
 		process.stdout.on("resize", this.resizeHandler);
+
+		// Swallow 'error' events on the long-lived tty streams (see field doc).
+		this.stdinErrorHandler = () => {
+			this.inputHandler = undefined;
+		};
+		this.stdoutErrorHandler = () => {
+			// write() no-ops once stdout is gone; nothing else to drain.
+		};
+		process.stdin.on("error", this.stdinErrorHandler);
+		process.stdout.on("error", this.stdoutErrorHandler);
 
 		// Refresh terminal dimensions - they may be stale after suspend/resume
 		// (SIGWINCH is lost while process is stopped). Unix only.
@@ -439,6 +459,14 @@ export class ProcessTerminal implements Terminal {
 			process.stdout.removeListener("resize", this.resizeHandler);
 			this.resizeHandler = undefined;
 		}
+		if (this.stdinErrorHandler) {
+			process.stdin.removeListener("error", this.stdinErrorHandler);
+			this.stdinErrorHandler = undefined;
+		}
+		if (this.stdoutErrorHandler) {
+			process.stdout.removeListener("error", this.stdoutErrorHandler);
+			this.stdoutErrorHandler = undefined;
+		}
 
 		// Pause stdin to prevent any buffered input (e.g., Ctrl+D) from being
 		// re-interpreted after raw mode is disabled. This fixes a race condition
@@ -514,6 +542,7 @@ export class ProcessTerminal implements Terminal {
 				this.progressInterval = setInterval(() => {
 					process.stdout.write(TERMINAL_PROGRESS_ACTIVE_SEQUENCE);
 				}, TERMINAL_PROGRESS_KEEPALIVE_MS);
+				this.progressInterval.unref();
 			}
 		} else {
 			this.clearProgressInterval();

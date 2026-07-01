@@ -8,6 +8,22 @@ interface ResizeImageWorkerResponse {
 	error?: string;
 }
 
+// Wall-clock cap on a single image resize in a worker (opt #63). Photon WASM
+// decoding/resizing/encoding runs in the worker and does NOT yield to the event
+// loop; a crafted/malformed image can drive it into a tight loop that never
+// posts a result and never errors/exits → the Read tool's `await resizeImage`
+// never settles → the agent loop freezes forever. `worker.terminate()` is a
+// host-level forced kill that works even when the worker is stuck in WASM (it
+// fires the 'exit' event from the main thread), so a bounded timeout recovers
+// the agent. 0 disables (Infinity) for users who want no ceiling.
+const IMAGE_RESIZE_TIMEOUT_MS = (() => {
+	const raw = process.env.REPI_IMAGE_RESIZE_TIMEOUT_MS;
+	if (raw === undefined) return 30_000;
+	const n = Number(raw);
+	if (!Number.isFinite(n) || n < 0) return 30_000;
+	return n === 0 ? Infinity : n;
+})();
+
 function toTransferableBytes(input: Uint8Array): Uint8Array<ArrayBuffer> {
 	// Transfer detaches the buffer, so transfer a worker-owned copy and leave the
 	// caller's bytes intact.
@@ -22,27 +38,45 @@ function createResizeWorker(workerSpecifier: string | URL): Worker {
 	return new Worker(workerSpecifier);
 }
 
-async function resizeImageInWorker(
+export async function resizeImageInWorker(
 	workerSpecifier: string | URL,
 	inputBytes: Uint8Array,
 	mimeType: string,
 	options?: ImageResizeOptions,
+	signal?: AbortSignal,
+	timeoutMs?: number,
 ): Promise<ResizedImage | null> {
+	const wallTimeoutMs = timeoutMs ?? IMAGE_RESIZE_TIMEOUT_MS;
 	const worker = createResizeWorker(workerSpecifier);
 	try {
 		const inputBytesForWorker = toTransferableBytes(inputBytes);
 		return await new Promise<ResizedImage | null>((resolve, reject) => {
 			let settled = false;
+			let timer: NodeJS.Timeout | undefined;
+			const cleanup = (): void => {
+				if (timer) {
+					clearTimeout(timer);
+					timer = undefined;
+				}
+				if (signal) signal.removeEventListener("abort", onAbort);
+			};
 			const settle = (result: ResizedImage | null): void => {
 				if (settled) return;
 				settled = true;
+				cleanup();
 				resolve(result);
 			};
-			const fail = (error: Error): void => {
+			// `terminate` forces the worker to exit (host-level kill that works even
+			// when the worker is stuck in a WASM tight loop); the resulting 'exit'
+			// event is swallowed by the `settled` guard. Idempotent with the finally.
+			const fail = (error: Error, terminate?: boolean): void => {
 				if (settled) return;
 				settled = true;
+				cleanup();
+				if (terminate) void worker.terminate().catch(() => undefined);
 				reject(error);
 			};
+			const onAbort = (): void => fail(new Error("Image resize worker aborted"), true);
 
 			worker.once("message", (message: unknown) => {
 				if (!isResizeImageWorkerResponse(message)) {
@@ -55,12 +89,33 @@ async function resizeImageInWorker(
 				}
 				settle(message.result ?? null);
 			});
-			worker.once("error", fail);
+			worker.once("error", (error) => fail(error));
 			worker.once("exit", (code) => {
 				if (!settled) {
 					fail(new Error(`Image resize worker exited with code ${code}`));
 				}
 			});
+
+			// Wall timeout: WASM can tight-loop without yielding, so none of the
+			// listeners above may ever fire for a crafted image. The timer forcibly
+			// terminates the worker (which fires 'exit') and rejects. Only arm for a
+			// finite positive ms (0 / Infinity = disabled).
+			if (Number.isFinite(wallTimeoutMs) && wallTimeoutMs > 0) {
+				timer = setTimeout(
+					() => fail(new Error(`Image resize worker timed out after ${wallTimeoutMs}ms`), true),
+					wallTimeoutMs,
+				);
+			}
+			// Abort coverage: thread the Read tool's abort signal so an agent-level
+			// abort terminates the worker instead of waiting for the wall timeout.
+			if (signal) {
+				if (signal.aborted) {
+					fail(new Error("Image resize worker aborted"), true);
+					return;
+				}
+				signal.addEventListener("abort", onAbort, { once: true });
+			}
+
 			worker.postMessage(
 				{
 					inputBytes: inputBytesForWorker,
@@ -86,6 +141,7 @@ export async function resizeImage(
 	inputBytes: Uint8Array,
 	mimeType: string,
 	options?: ImageResizeOptions,
+	signal?: AbortSignal,
 ): Promise<ResizedImage | null> {
 	const isTypeScriptRuntime = import.meta.url.endsWith(".ts");
 	const workerUrl = new URL(
@@ -98,12 +154,12 @@ export async function resizeImage(
 	// release binary uses the embedded worker instead of falling back in-process.
 	if (typeof process.versions.bun === "string") {
 		try {
-			return await resizeImageInWorker("./src/utils/image-resize-worker.ts", inputBytes, mimeType, options);
+			return await resizeImageInWorker("./src/utils/image-resize-worker.ts", inputBytes, mimeType, options, signal);
 		} catch {}
 	}
 
 	try {
-		return await resizeImageInWorker(workerUrl, inputBytes, mimeType, options);
+		return await resizeImageInWorker(workerUrl, inputBytes, mimeType, options, signal);
 	} catch {
 		return resizeImageInProcess(inputBytes, mimeType, options);
 	}

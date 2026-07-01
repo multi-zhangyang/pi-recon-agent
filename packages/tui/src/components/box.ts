@@ -71,6 +71,26 @@ export class Box implements Component {
 		}
 	}
 
+	/**
+	 * Propagate teardown to children (mirrors Container.dispose). Without this,
+	 * Container.dispose() reaching a Box short-circuits on `child.dispose?.()`
+	 * === undefined and a resource-owning descendant (e.g. a Loader with a live
+	 * setInterval nested in the Box for padding/background) is never torn down —
+	 * the interval keeps the event loop alive and fires requestRender() on a
+	 * detached component (the opt #47 leak class, reached through Box).
+	 */
+	dispose(): void {
+		for (const child of this.children) {
+			try {
+				child.dispose?.();
+			} catch {
+				// A failing child teardown must not skip the remaining children.
+			}
+		}
+		this.children = [];
+		this.cache = undefined;
+	}
+
 	render(width: number): string[] {
 		if (this.children.length === 0) {
 			return [];

@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { safeWriteReport } from "./lib/report-write-helpers.mjs";
 
 const rawArgs = process.argv.slice(2);
 const knownCommands = new Set(["doctor", "status", "list", "cost", "add", "edit", "remove", "login", "test", "default", "export", "import", "help"]);
@@ -60,12 +61,17 @@ function readJsonObject(path, fallback = {}) {
 }
 
 function writeJsonFile(path, data, mode = 0o600) {
-	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-	writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`, { encoding: "utf8", mode });
-	try {
-		chmodSync(path, mode);
-	} catch {
-		// Best-effort on non-POSIX filesystems.
+	// opt #177: route through safeWriteReport so an ENOSPC/EACCES mid-write
+	// (models.json / auth.json / settings.json / export output) is an
+	// observable stderr diagnostic + non-zero exit instead of a bare uncaught
+	// throw that aborts the model-inspect output with no partial result.
+	const written = safeWriteReport(path, `${JSON.stringify(data, null, 2)}\n`, { mode });
+	if (written) {
+		try {
+			chmodSync(path, mode);
+		} catch {
+			// Best-effort on non-POSIX filesystems.
+		}
 	}
 }
 
@@ -127,8 +133,62 @@ function maybeIntFlag(args, names, min, max) {
 	return Math.max(min, Math.min(max, parsed));
 }
 
+const valueFlags = new Set([
+	"--provider",
+	"--model",
+	"--api",
+	"--base-url",
+	"--baseUrl",
+	"--api-key-env",
+	"--env",
+	"--api-key",
+	"--provider-name",
+	"--model-name",
+	"--name",
+	"--id",
+	"--input",
+	"-i",
+	"--output",
+	"-o",
+	"--timeout-ms",
+	"--input-tokens",
+	"--output-tokens",
+	"--cache-read-tokens",
+	"--cache-write-tokens",
+	"--input-cost",
+	"--cost-input",
+	"--output-cost",
+	"--cost-output",
+	"--cache-read-cost",
+	"--cost-cache-read",
+	"--cache-write-cost",
+	"--cost-cache-write",
+	"--context-window",
+	"--context",
+	"--max-tokens",
+	"--max-output",
+]);
+
 function positional(args, offset = 0) {
-	return args.filter((arg) => !arg.startsWith("--"))[offset];
+	const out = [];
+	for (let index = 0; index < args.length; index++) {
+		const arg = args[index];
+		if (arg === "--") {
+			out.push(...args.slice(index + 1));
+			break;
+		}
+		if (arg.startsWith("--")) {
+			const flag = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+			if (!arg.includes("=") && valueFlags.has(flag)) index += 1;
+			continue;
+		}
+		if (arg.startsWith("-") && valueFlags.has(arg)) {
+			index += 1;
+			continue;
+		}
+		out.push(arg);
+	}
+	return out[offset];
 }
 
 function redact(value) {
@@ -573,7 +633,7 @@ function upsertDefaultSetting(providerId, modelId) {
 }
 
 function buildAddReport() {
-	const providerId = flagValue(rawArgs, "--provider") ?? positional(rawArgs, 0);
+	const providerId = flagValue(rawArgs, "--provider") || positional(rawArgs, 0);
 	const modelId = flagValue(rawArgs, "--model");
 	const api = flagValue(rawArgs, "--api", "openai-completions");
 	const baseUrl = flagValue(rawArgs, ["--base-url", "--baseUrl"]);
@@ -682,7 +742,7 @@ function buildAddReport() {
 }
 
 function buildEditReport() {
-	const providerId = flagValue(rawArgs, "--provider") ?? positional(rawArgs, 0);
+	const providerId = flagValue(rawArgs, "--provider") || positional(rawArgs, 0);
 	const modelId = flagValue(rawArgs, "--model");
 	if (!providerId) {
 		return {
@@ -786,8 +846,8 @@ function buildEditReport() {
 }
 
 function buildRemoveReport() {
-	const providerId = flagValue(rawArgs, "--provider") ?? positional(rawArgs, 0);
-	const modelId = flagValue(rawArgs, "--model") ?? positional(rawArgs, providerId && positional(rawArgs, 0) === providerId ? 1 : 0);
+	const providerId = flagValue(rawArgs, "--provider") || positional(rawArgs, 0);
+	const modelId = flagValue(rawArgs, "--model") || positional(rawArgs, providerId && positional(rawArgs, 0) === providerId ? 1 : 0);
 	if (!providerId) {
 		return {
 			kind: "repi-model-remove-report",
@@ -899,7 +959,7 @@ function buildExportReport() {
 }
 
 function buildImportReport() {
-	const input = flagValue(rawArgs, ["--input", "-i"]) ?? positional(rawArgs, 0);
+	const input = flagValue(rawArgs, ["--input", "-i"]) || positional(rawArgs, 0);
 	if (!input) {
 		return {
 			kind: "repi-model-import-report",
@@ -953,7 +1013,7 @@ function buildImportReport() {
 }
 
 function buildLoginReport() {
-	const providerId = flagValue(rawArgs, "--provider") ?? positional(rawArgs, 0);
+	const providerId = flagValue(rawArgs, "--provider") || positional(rawArgs, 0);
 	if (!providerId) {
 		return {
 			kind: "repi-model-login-report",
@@ -1001,8 +1061,8 @@ function buildLoginReport() {
 }
 
 function buildDefaultReport() {
-	const providerId = flagValue(rawArgs, "--provider") ?? positional(rawArgs, 0);
-	const modelId = flagValue(rawArgs, "--model") ?? positional(rawArgs, providerId && positional(rawArgs, 0) === providerId ? 1 : 0);
+	const providerId = flagValue(rawArgs, "--provider") || positional(rawArgs, 0);
+	const modelId = flagValue(rawArgs, "--model") || positional(rawArgs, providerId && positional(rawArgs, 0) === providerId ? 1 : 0);
 	if (!providerId || !modelId) {
 		return {
 			kind: "repi-model-default-report",
@@ -1038,8 +1098,8 @@ function buildDefaultReport() {
 }
 
 function buildTestReport() {
-	const providerId = flagValue(rawArgs, "--provider") ?? positional(rawArgs, 0);
-	const modelId = flagValue(rawArgs, "--model") ?? positional(rawArgs, providerId && positional(rawArgs, 0) === providerId ? 1 : 0);
+	const providerId = flagValue(rawArgs, "--provider") || positional(rawArgs, 0);
+	const modelId = flagValue(rawArgs, "--model") || positional(rawArgs, providerId && positional(rawArgs, 0) === providerId ? 1 : 0);
 	const testTimeoutMs = intFlag(rawArgs, "--timeout-ms", 120_000, 5000, 30 * 60 * 1000);
 	if (!providerId || !modelId) {
 		return {

@@ -157,6 +157,13 @@ export function transformMessages<TApi extends Api>(
 	const result: Message[] = [];
 	let pendingToolCalls: ToolCall[] = [];
 	let existingToolResultIds = new Set<string>();
+	// opt #216: tool-call ids from skipped errored/aborted assistants. A later
+	// toolResult for one of these would be replayed with NO preceding tool_use
+	// (the assistant that issued it was dropped) → provider rejection ("tool
+	// result without matching tool call"). The agent normally doesn't execute
+	// tools from errored turns, but a partial execution may commit a toolResult
+	// to persisted history before the error — drop those orphaned results.
+	const droppedToolCallIds = new Set<string>();
 	const insertSyntheticToolResults = () => {
 		if (pendingToolCalls.length > 0) {
 			for (const tc of pendingToolCalls) {
@@ -190,6 +197,13 @@ export function transformMessages<TApi extends Api>(
 			// - The model should retry from the last valid state
 			const assistantMsg = msg as AssistantMessage;
 			if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
+				// opt #216: record this skipped assistant's tool-call ids so a
+				// following toolResult for one of them is dropped (see comment above).
+				for (const block of assistantMsg.content) {
+					if (block.type === "toolCall") {
+						droppedToolCallIds.add((block as ToolCall).id);
+					}
+				}
 				continue;
 			}
 
@@ -202,6 +216,12 @@ export function transformMessages<TApi extends Api>(
 
 			result.push(msg);
 		} else if (msg.role === "toolResult") {
+			// opt #216: the tool_use this result answers was dropped (errored
+			// assistant) — drop the orphaned result too so the provider doesn't
+			// see a toolResult with no matching tool_use.
+			if (droppedToolCallIds.has(msg.toolCallId)) {
+				continue;
+			}
 			existingToolResultIds.add(msg.toolCallId);
 			result.push(msg);
 		} else if (msg.role === "user") {

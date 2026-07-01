@@ -172,8 +172,19 @@ export function convertResponsesMessages<TApi extends Api>(
 			for (const block of msg.content) {
 				if (block.type === "thinking") {
 					if (block.thinkingSignature) {
-						const reasoningItem = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
-						output.push(reasoningItem);
+						// Guard the parse: a corrupt/truncated thinkingSignature in persisted history
+						// (torn write, manual edit, schema/version mismatch) would throw SyntaxError.
+						// convertResponsesMessages runs inside the stream fn's outer try/catch, so a
+						// throw here sets stopReason="error" and aborts the ENTIRE turn before the
+						// request even reaches the provider (silent turn loss). Skip the reasoning
+						// item on parse failure instead - graceful degradation, matching the sibling
+						// parseTextSignature guard at line 52 and openai-completions.ts:888.
+						try {
+							const reasoningItem = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
+							output.push(reasoningItem);
+						} catch {
+							// Skip the unparseable reasoning item; the rest of the turn proceeds.
+						}
 					}
 				} else if (block.type === "text") {
 					const textBlock = block as TextContent;
@@ -227,6 +238,10 @@ export function convertResponsesMessages<TApi extends Api>(
 			const hasImages = msg.content.some((c): c is ImageContent => c.type === "image");
 			const hasText = textResult.length > 0;
 			const [callId] = msg.toolCallId.split("|");
+			// The Responses function_call_output has no is_error field; prefix a marker
+			// so the model can tell a failed tool from a successful one (same convention
+			// as the mistral provider's [tool error] prefix).
+			const errorPrefix = msg.isError ? "[tool error] " : "";
 
 			let output: string | ResponseFunctionCallOutputItemList;
 			if (hasImages && model.input.includes("image")) {
@@ -235,7 +250,7 @@ export function convertResponsesMessages<TApi extends Api>(
 				if (hasText) {
 					contentParts.push({
 						type: "input_text",
-						text: sanitizeSurrogates(textResult),
+						text: sanitizeSurrogates(`${errorPrefix}${textResult}`),
 					});
 				}
 
@@ -251,7 +266,14 @@ export function convertResponsesMessages<TApi extends Api>(
 
 				output = contentParts;
 			} else {
-				output = sanitizeSurrogates(hasText ? textResult : "(see attached image)");
+				// opt #215: only claim an attached image when one is actually present
+				// but couldn't be sent (model lacks image input). Pre-fix this branch
+				// emitted "(see attached image)" whenever there was no text — including
+				// for genuinely-empty results (no text, no images) — misleading the
+				// model into hallucinating image content. When there is neither text
+				// nor an image, emit just the error prefix (empty for success).
+				const placeholder = hasImages ? "(see attached image)" : "";
+				output = sanitizeSurrogates(`${errorPrefix}${hasText ? textResult : placeholder}`);
 			}
 
 			messages.push({
@@ -425,11 +447,20 @@ export async function processResponsesStream<TApi extends Api>(
 		} else if (event.type === "response.function_call_arguments.done") {
 			if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
 				const previousPartialJson = currentBlock.partialJson;
-				currentBlock.partialJson = event.arguments;
+				// opt #259: the SDK types `arguments` as required, but a
+				// Responses-compatible proxy/gateway can emit `.done` with
+				// `arguments` missing/undefined. Pre-fix line 453
+				// `event.arguments.startsWith(...)` threw TypeError → outer catch →
+				// the ENTIRE tool-call turn (any already-streamed text/thinking)
+				// discarded as stopReason:"error". Fall back to the accumulated
+				// partial json (the `.delta` path built it up) when the done event
+				// omits the final arguments string.
+				const doneArgs = typeof event.arguments === "string" ? event.arguments : currentBlock.partialJson;
+				currentBlock.partialJson = doneArgs;
 				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
 
-				if (event.arguments.startsWith(previousPartialJson)) {
-					const delta = event.arguments.slice(previousPartialJson.length);
+				if (doneArgs.startsWith(previousPartialJson)) {
+					const delta = doneArgs.slice(previousPartialJson.length);
 					if (delta.length > 0) {
 						stream.push({
 							type: "toolcall_delta",
@@ -485,6 +516,16 @@ export async function processResponsesStream<TApi extends Api>(
 						name: item.name,
 						arguments: args,
 					};
+					// Some proxies/gateways drop `response.output_item.added` for a
+					// function_call and emit only `output_item.done`. In that case
+					// currentBlock is not a toolCall, so the tool call was never
+					// pushed to output.content by the added-handler. Push it here
+					// BEFORE computing blockIndex() below — otherwise the tool call
+					// is silently lost from the AssistantMessage (the agent loop
+					// never executes it → transcript imbalance) and the
+					// toolcall_end contentIndex points at the wrong (last existing)
+					// block. (#206)
+					output.content.push(toolCall);
 				}
 
 				currentBlock = null;
@@ -498,8 +539,11 @@ export async function processResponsesStream<TApi extends Api>(
 			if (response?.usage) {
 				const cachedTokens = response.usage.input_tokens_details?.cached_tokens || 0;
 				output.usage = {
-					// OpenAI includes cached tokens in input_tokens, so subtract to get non-cached input
-					input: (response.usage.input_tokens || 0) - cachedTokens,
+					// OpenAI includes cached tokens in input_tokens, so subtract to get non-cached input.
+					// opt #260: floor at 0 — a proxy/gateway that double-counts or reports
+					// cached_tokens > input_tokens would otherwise produce a NEGATIVE input
+					// token count (and negative input cost). Sibling google.ts mirrors.
+					input: Math.max(0, (response.usage.input_tokens || 0) - cachedTokens),
 					output: response.usage.output_tokens || 0,
 					cacheRead: cachedTokens,
 					cacheWrite: 0,
@@ -520,7 +564,13 @@ export async function processResponsesStream<TApi extends Api>(
 				output.stopReason = "toolUse";
 			}
 		} else if (event.type === "error") {
-			throw new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error");
+			// `Error Code ${code}: ${message}` is always a truthy string, so the
+			// previous `|| "Unknown error"` was dead — a provider/proxy that emits
+			// an error event with undefined code/message rendered as the garbled
+			// "Error Code undefined: undefined" instead of "Unknown error". Mirror
+			// the sibling response.failed handler's field-aware fallback.
+			const msg = event.code || event.message ? `Error Code ${event.code}: ${event.message}` : "Unknown error";
+			throw new Error(msg);
 		} else if (event.type === "response.failed") {
 			const error = event.response?.error;
 			const details = event.response?.incomplete_details;
@@ -534,7 +584,7 @@ export async function processResponsesStream<TApi extends Api>(
 	}
 }
 
-function mapStopReason(status: OpenAI.Responses.ResponseStatus | undefined): StopReason {
+export function mapStopReason(status: OpenAI.Responses.ResponseStatus | undefined): StopReason {
 	if (!status) return "stop";
 	switch (status) {
 		case "completed":
@@ -550,7 +600,8 @@ function mapStopReason(status: OpenAI.Responses.ResponseStatus | undefined): Sto
 			return "stop";
 		default: {
 			const _exhaustive: never = status;
-			throw new Error(`Unhandled stop reason: ${_exhaustive}`);
+			void _exhaustive; // compile-time exhaustiveness witness (errors at compile time if a new enum member is added and unhandled)
+			return "stop"; // graceful runtime default for unknown/future statuses (SDK types may lag the server)
 		}
 	}
 }

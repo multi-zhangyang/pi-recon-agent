@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { getAgentDir } from "../../config.ts";
-import { readJsonObjectFile } from "./storage.ts";
+import { readJsonObjectFileCached } from "./storage.ts";
 
 export type RepiMemoryStartupDigestMode = "off" | "status" | "scoped" | "full";
 export type RepiMemoryAutoDepositMode = "off" | "high-value" | "all";
@@ -125,7 +125,7 @@ function boundedScore(value: unknown, fallback: number): number {
 }
 
 export function repiMemorySettings(): RepiMemoryRuntimeSettings {
-	const settings = readJsonObjectFile<Record<string, unknown>>(join(getAgentDir(), "settings.json")) ?? {};
+	const settings = readJsonObjectFileCached<Record<string, unknown>>(join(getAgentDir(), "settings.json")) ?? {};
 	const memory = isPlainRecord(settings.memory) ? settings.memory : {};
 	const mode = normalizeMemoryMode(envString("REPI_MEMORY_MODE") ?? stringSetting(memory.mode));
 	const includeGlobalMemoryInContextPack =

@@ -83,6 +83,10 @@ export class DaxnutsComponent implements Component {
 			this.cachedWidth = 0;
 			this.ui.requestRender();
 		}, 80);
+		// opt #152: defense-in-depth — dispose() clears the interval, but unref
+		// ensures a missed dispose (or a detach without dispose) can't keep the
+		// Node event loop alive for the animation's lifetime.
+		this.interval.unref();
 	}
 
 	private stopAnimation(): void {

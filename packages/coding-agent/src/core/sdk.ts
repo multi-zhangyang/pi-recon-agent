@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { Agent, type AgentMessage, type ThinkingLevel } from "@pi-recon/repi-agent-core";
+import { Agent, type AgentMessage, DEFAULT_MAX_TOOL_RESULT_CHARS, type ThinkingLevel } from "@pi-recon/repi-agent-core";
 import { clampThinkingLevel, type Message, type Model, streamSimple } from "@pi-recon/repi-ai";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -80,6 +80,147 @@ export interface CreateAgentSessionOptions {
 	settingsManager?: SettingsManager;
 	/** Session start event metadata for extension runtime startup. */
 	sessionStartEvent?: SessionStartEvent;
+	/**
+	 * Optional hard cap on assistant turns (provider requests) per run. A "turn"
+	 * is one streamed assistant response, possibly followed by tool execution.
+	 * When the cap is reached after a turn completes, the run stops gracefully
+	 * instead of starting another provider request — the in-flight turn is never
+	 * cut. Undefined / non-positive = unbounded (default).
+	 *
+	 * Falls back to the `REPI_MAX_TURNS` environment variable when omitted. Use as
+	 * a foundational guard against runaway tool-call loops.
+	 */
+	maxTurns?: number;
+	/**
+	 * Max auto-continue re-prompts when the model stops with `stopReason`
+	 * "length" (output hit maxTokens) and no tool calls. 0 = disabled.
+	 *
+	 * Falls back to the `REPI_LENGTH_CONTINUE_MAX` env var, then a product-mode
+	 * default of 3 (else 0). Each continuation counts toward {@link maxTurns}.
+	 */
+	lengthContinueMaxTurns?: number;
+	/**
+	 * Max retries of a single assistant stream request when the provider fails
+	 * before emitting any content (network/429/5xx). 0 = disabled.
+	 *
+	 * Falls back to the `REPI_STREAM_MAX_RETRIES` env var, then a product-mode
+	 * default of 2 (else 0). A retry is the same turn re-attempted and does not
+	 * count toward {@link maxTurns}.
+	 */
+	streamMaxRetries?: number;
+	/**
+	 * Defense-in-depth cap (chars) on tool result text blocks before they enter
+	 * the model's context. Catches custom/MCP extension tools that return huge
+	 * results and would blow the context window. Built-in tools already
+	 * self-truncate (~50KB) so they are unaffected.
+	 *
+	 * Falls back to the `REPI_MAX_TOOL_RESULT_CHARS` env var, then the agent-loop
+	 * default (262144 = 256K). Set to 0 to disable the cap.
+	 */
+	maxToolResultChars?: number;
+}
+
+function isRepiProductMode(): boolean {
+	return process.env.REPI_PRODUCT === "1" || process.env.REPI_PRIMARY === "1";
+}
+
+/**
+ * Resolve the per-run assistant-turn cap.
+ *
+ * Priority: explicit option > `REPI_MAX_TURNS` env var. Non-positive or
+ * unparseable values resolve to undefined (unbounded), preserving the default.
+ */
+function resolveMaxTurns(option?: number): number | undefined {
+	if (typeof option === "number" && Number.isFinite(option) && option > 0) {
+		return Math.floor(option);
+	}
+	const raw = process.env.REPI_MAX_TURNS;
+	if (raw !== undefined && raw !== "") {
+		const parsed = Number(raw);
+		if (Number.isFinite(parsed) && parsed > 0) {
+			return Math.floor(parsed);
+		}
+	}
+	return undefined;
+}
+
+/**
+ * Resolve the length auto-continue cap.
+ *
+ * Priority: explicit option > `REPI_LENGTH_CONTINUE_MAX` env > product-mode
+ * default (3) / 0. Non-positive or unparseable values disable the feature.
+ */
+function resolveLengthContinueMax(option?: number): number | undefined {
+	if (typeof option === "number" && Number.isFinite(option)) {
+		return option > 0 ? Math.floor(option) : undefined;
+	}
+	const raw = process.env.REPI_LENGTH_CONTINUE_MAX;
+	if (raw !== undefined && raw !== "") {
+		const parsed = Number(raw);
+		if (Number.isFinite(parsed)) {
+			return parsed > 0 ? Math.floor(parsed) : undefined;
+		}
+	}
+	return isRepiProductMode() ? 3 : undefined;
+}
+
+/**
+ * Resolve the pre-stream transient-error retry cap.
+ *
+ * Priority: explicit option > `REPI_STREAM_MAX_RETRIES` env > product-mode
+ * default (2) / 0. Non-positive or unparseable values disable the feature.
+ */
+function resolveStreamMaxRetries(option?: number): number | undefined {
+	if (typeof option === "number" && Number.isFinite(option)) {
+		return option > 0 ? Math.floor(option) : undefined;
+	}
+	const raw = process.env.REPI_STREAM_MAX_RETRIES;
+	if (raw !== undefined && raw !== "") {
+		const parsed = Number(raw);
+		if (Number.isFinite(parsed)) {
+			return parsed > 0 ? Math.floor(parsed) : undefined;
+		}
+	}
+	return isRepiProductMode() ? 2 : undefined;
+}
+
+/**
+ * Resolve the defense-in-depth tool-result text cap.
+ *
+ * Priority: explicit option > `REPI_MAX_TOOL_RESULT_CHARS` env > context-scaled
+ * default (10% of the active model's context window in chars, capped at the
+ * agent-loop's 256K ceiling) > undefined (the agent-loop then applies its 256K
+ * default). 0 disables the cap. Unlike the retry/continue resolvers this is NOT
+ * product-mode-gated — it is a safety net, on by default for every session.
+ *
+ * The context-scaled default matters for un-truncating tools (MCP/custom
+ * extension tools — the built-in bash/grep/read/find/ls tools self-truncate to
+ * ~50KB and hit that first). A fixed 256K (~64K-token) cap on a 128K-window
+ * model lets a single un-truncating tool result push an already-full context
+ * over the window. Scaling to ~10% of the window means one tool result can add
+ * at most ~10% of context, so even at the 85% compaction threshold the next
+ * request stays under the window. Large-window models (≥2.56M tokens) keep the
+ * 256K ceiling, so nothing tightens for them.
+ */
+function resolveMaxToolResultChars(option?: number, contextWindow?: number): number | undefined {
+	if (typeof option === "number" && Number.isFinite(option)) {
+		return option >= 0 ? Math.floor(option) : undefined;
+	}
+	const raw = process.env.REPI_MAX_TOOL_RESULT_CHARS;
+	if (raw !== undefined && raw !== "") {
+		const parsed = Number(raw);
+		if (Number.isFinite(parsed)) {
+			return parsed >= 0 ? Math.floor(parsed) : undefined;
+		}
+	}
+	if (typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0) {
+		// 10% of the window in tokens, ×4 chars/token. Capped at the agent-loop's
+		// 256K ceiling so large-window models are not loosened beyond the existing
+		// default. Math.max(1, ...) guards tiny/zero after flooring.
+		const scaled = Math.floor(contextWindow * 0.1 * 4);
+		return Math.max(1, Math.min(scaled, DEFAULT_MAX_TOOL_RESULT_CHARS));
+	}
+	return undefined;
 }
 
 /** Result from createAgentSession */
@@ -120,6 +261,8 @@ export {
 	createGrepTool,
 	createFindTool,
 	createLsTool,
+	// Pure resolvers (exported for unit testing)
+	resolveMaxToolResultChars,
 };
 
 // Helper Functions
@@ -356,6 +499,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		transport: settingsManager.getTransport(),
 		thinkingBudgets: settingsManager.getThinkingBudgets(),
 		maxRetryDelayMs: settingsManager.getProviderRetrySettings().maxRetryDelayMs,
+		maxTurns: resolveMaxTurns(options?.maxTurns),
+		lengthContinueMaxTurns: resolveLengthContinueMax(options?.lengthContinueMaxTurns),
+		streamMaxRetries: resolveStreamMaxRetries(options?.streamMaxRetries),
+		maxToolResultChars: resolveMaxToolResultChars(options?.maxToolResultChars, model?.contextWindow),
+		onRunBudgetExceeded: ({ turns, maxTurns }) => {
+			// Pure side-effect channel: surface the budget stop so consumers know
+			// the run ended because of the cap rather than finishing naturally.
+			process.stderr.write(
+				`repi: reached max-turns budget (${turns}/${maxTurns}); stopping before next provider request.\n`,
+			);
+		},
 	});
 
 	// Restore messages if session has existing data

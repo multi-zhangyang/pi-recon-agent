@@ -10,8 +10,10 @@ import type {
 	StreamFunction,
 	StreamOptions,
 } from "../types.ts";
+import { terminalErrorMessage } from "../utils/error-stringify.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
+import { callOnResponseWithDrain } from "../utils/response-drain.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.ts";
 import { buildBaseOptions } from "./simple-options.ts";
@@ -116,7 +118,9 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				maxRetries: options?.maxRetries ?? 0,
 			};
 			const { data: openaiStream, response } = await client.responses.create(params, requestOptions).withResponse();
-			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+			await callOnResponseWithDrain(response.body, () =>
+				options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model),
+			);
 			stream.push({ type: "start", partial: output });
 
 			await processResponsesStream(openaiStream, output, stream, model);
@@ -126,7 +130,10 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			}
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error("An unknown error occurred");
+				// opt #275: surface the captured errorMessage / abort label
+				// instead of a generic "An unknown error occurred". Inline
+				// guard kept so TS narrows stopReason for the `done` push.
+				throw new Error(terminalErrorMessage(output.stopReason, output.errorMessage) as string);
 			}
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });

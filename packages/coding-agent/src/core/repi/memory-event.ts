@@ -1,7 +1,5 @@
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
 import type { RepiMemoryScope } from "./memory-scope.ts";
-import { sha256Text, uniqueNonEmpty } from "./text.ts";
+import { hashFileSha256, sha256Text, uniqueNonEmpty } from "./text.ts";
 
 export type MemoryEventSource =
 	| "reflect"
@@ -151,7 +149,13 @@ export function memoryArtifactHashes(paths: string[], limit = 80): MemoryArtifac
 	return uniqueNonEmpty(paths, limit).map((path) => {
 		let sha256: string | null = null;
 		try {
-			sha256 = createHash("sha256").update(readFileSync(path)).digest("hex");
+			// opt #159: stream the hash (shared hashFileSha256) instead of
+			// readFileSync-whole — runtime_artifact paths (evidence/{browser,
+			// web-authz,mobile-runtime,native-runtime,exploit-lab,runs,proof-
+			// loops,replayers}) are captured dumps/coredumps/binary replays that
+			// routinely reach multi-GB and OOM-crashed the parent before the
+			// digest ran. Try/catch → null preserved (missing/unreadable file).
+			sha256 = hashFileSha256(path);
 		} catch {
 			sha256 = null;
 		}

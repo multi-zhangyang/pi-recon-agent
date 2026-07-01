@@ -227,6 +227,10 @@ Usage:
   repi memory sanitize [--dry-run|--apply --yes] [--include-evidence] [--include-sessions] [--backup]
   repi memory repair [--dry-run|--apply --yes]    # repair invalid JSONL and event hash-chain drift
   repi memory consolidate [--dry-run] [--json]
+
+  All memory commands accept [--cwd <dir>] to scope to a specific project's memory
+  (per-cwd isolation; default: legacy global root). The agent runtime auto-scopes
+  to the session cwd.
 MSG
         exit 0
         ;;

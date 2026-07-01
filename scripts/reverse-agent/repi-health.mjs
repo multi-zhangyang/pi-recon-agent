@@ -15,12 +15,15 @@ const selfcheck = args.includes("--selfcheck") || args.includes("--deep");
 const deep = args.includes("--deep");
 const includeEvidence = args.includes("--include-evidence") || args.includes("--deep-sanitize");
 const includeSessions = args.includes("--include-sessions") || args.includes("--deep-sanitize");
+const selfcheckProvider = flagValue(args, "--provider") || process.env.REPI_SELFCHECK_PROVIDER || "";
+const selfcheckModel = flagValue(args, "--model") || process.env.REPI_SELFCHECK_MODEL || "";
+const selfcheckTimeoutMs = flagValue(args, "--timeout-ms") || process.env.REPI_SELFCHECK_TIMEOUT_MS || "";
 const agentDir = process.env.REPI_CODING_AGENT_DIR || process.env.REPI_AGENT_DIR || join(homedir(), ".repi", "agent");
 const localScriptsDir = dirname(fileURLToPath(import.meta.url));
 
 function usage() {
 	return `Usage:
-  repi health [--json] [--fix] [--selfcheck|--deep] [--include-evidence] [--include-sessions]
+  repi health [--json] [--fix] [--selfcheck|--deep] [--provider <id>] [--model <id>] [--timeout-ms N] [--include-evidence] [--include-sessions]
 
 Health is the operator dashboard for release/open-source readiness:
 - aggregates doctor/model/memory/swarm/storage state
@@ -34,6 +37,17 @@ Health is the operator dashboard for release/open-source readiness:
 if (args.includes("--help") || args.includes("-h")) {
 	console.log(usage());
 	process.exit(0);
+}
+
+function flagValue(values, names, fallback = "") {
+	const list = Array.isArray(names) ? names : [names];
+	for (let index = 0; index < values.length; index++) {
+		for (const name of list) {
+			if (values[index] === name) return values[index + 1] ?? fallback;
+			if (values[index].startsWith(`${name}=`)) return values[index].slice(name.length + 1);
+		}
+	}
+	return fallback;
 }
 
 function redact(value) {
@@ -170,12 +184,15 @@ const memorySanitize = runNode("scripts/reverse-agent/memory-inspect.mjs", sanit
 const missionStatus = runNode("scripts/reverse-agent/repi-mission.mjs", ["status", "--json"], { timeout: 30_000 });
 const swarmStatus = runNode("scripts/reverse-agent/repi-swarm-llm-run.mjs", ["status", "latest", "--json"], { timeout: 45_000 });
 const latestEngagement = readJsonFile(join(agentDir, "recon", "evidence", "engagements", "latest.json"));
+const selfcheckArgs = [
+	...(deep ? ["--deep"] : []),
+	...(selfcheckProvider ? ["--provider", selfcheckProvider] : []),
+	...(selfcheckModel ? ["--model", selfcheckModel] : []),
+	...(selfcheckTimeoutMs ? ["--timeout-ms", selfcheckTimeoutMs] : []),
+	"--json",
+];
 const selfcheckReport = selfcheck
-	? runNode(
-		"scripts/reverse-agent/repi-selfcheck.mjs",
-		[...(deep ? ["--deep"] : []), "--json"],
-		{ timeout: deep ? 300_000 : 180_000 },
-	)
+	? runNode("scripts/reverse-agent/repi-selfcheck.mjs", selfcheckArgs, { timeout: deep ? 300_000 : 180_000 })
 	: undefined;
 
 const items = [];
@@ -306,7 +323,14 @@ if (selfcheckReport) {
 			"live-selfcheck",
 			selfcheckReport.parsed?.ok ? "pass" : "fail",
 			selfcheckReport.parsed?.ok ? "model/tool/memory/parallel selfcheck pass" : `${failedRows.length} selfcheck rows failed`,
-			{ failedRows: failedRows.map((row) => row.id), exit: selfcheckReport.code, deep },
+			{
+				failedRows: failedRows.map((row) => row.id),
+				exit: selfcheckReport.code,
+				deep,
+				provider: selfcheckProvider || null,
+				model: selfcheckModel || null,
+				timeoutMs: selfcheckTimeoutMs || null,
+			},
 			["repi selfcheck --provider <id> --model <model>", "repi selfcheck --deep --provider <id> --model <model>"],
 		),
 	);

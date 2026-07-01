@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
+import { atomicWriteFile } from "./lib/memory-purge-helpers.mjs";
 
 const argv = process.argv.slice(2);
 let root = process.cwd();
@@ -104,8 +105,37 @@ function parseIntFlag(args, names, fallback, min, max) {
 	return Math.max(min, Math.min(max, parsed));
 }
 
+const valueFlags = new Set([
+	"--target",
+	"--workers",
+	"-w",
+	"--max-concurrency",
+	"--provider",
+	"--model",
+	"--roles",
+	"--tools",
+	"--timeout-ms",
+	"--prompt",
+	"--expect",
+	"--cwd",
+]);
+
 function positionalTarget(args, offset = 0) {
-	return args.filter((arg) => !arg.startsWith("--"))[offset];
+	const positional = [];
+	for (let index = 0; index < args.length; index++) {
+		const arg = args[index];
+		if (arg === "--") {
+			positional.push(...args.slice(index + 1));
+			break;
+		}
+		if (arg.startsWith("--") || arg === "-w") {
+			const flagName = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+			if (!arg.includes("=") && valueFlags.has(flagName)) index++;
+			continue;
+		}
+		positional.push(arg);
+	}
+	return positional[offset];
 }
 
 function redact(value) {
@@ -143,7 +173,7 @@ function readJson(path) {
 }
 
 function copyIfExists(from, to) {
-	if (existsSync(from)) copyFileSync(from, to);
+	if (existsSync(from)) atomicWriteFile(to, readFileSync(from), 0o600);
 }
 
 function prepareWorkerAgentDir(tempRoot, workerId) {
@@ -227,8 +257,8 @@ function evidenceRootFor(runId) {
 function writePlan(plan) {
 	const dir = evidenceRootFor(plan.runId);
 	mkdirSync(dir, { recursive: true, mode: 0o700 });
-	writeFileSync(join(dir, "plan.json"), `${JSON.stringify(plan, null, 2)}\n`, "utf8");
-	writeFileSync(join(dir, "report.json"), `${JSON.stringify({ kind: "repi-swarm-plan-report", schemaVersion: 1, runId: plan.runId, generatedAt: plan.generatedAt, ok: true, planPath: join(dir, "plan.json"), evidenceRoot: dir, plan }, null, 2)}\n`, "utf8");
+	atomicWriteFile(join(dir, "plan.json"), `${JSON.stringify(plan, null, 2)}\n`, 0o600);
+	atomicWriteFile(join(dir, "report.json"), `${JSON.stringify({ kind: "repi-swarm-plan-report", schemaVersion: 1, runId: plan.runId, generatedAt: plan.generatedAt, ok: true, planPath: join(dir, "plan.json"), evidenceRoot: dir, plan }, null, 2)}\n`, 0o600);
 	return dir;
 }
 
@@ -257,8 +287,35 @@ function promptForWorker(plan, packet, promptTemplate, mode) {
 
 function runWorker({ plan, packet, promptTemplate, expectTemplate, tempRoot, mode }) {
 	return new Promise((resolveWorker) => {
-		const workerAgentDir = prepareWorkerAgentDir(tempRoot, packet.workerId);
-		const prompt = promptForWorker(plan, packet, promptTemplate, mode);
+		const startedAt = Date.now();
+		let workerAgentDir;
+		let prompt;
+		try {
+			prompt = promptForWorker(plan, packet, promptTemplate, mode);
+			workerAgentDir = prepareWorkerAgentDir(tempRoot, packet.workerId);
+		} catch (error) {
+			const message = redact(String(error?.message || error));
+			resolveWorker({
+				workerId: packet.workerId,
+				role: packet.role,
+				status: "fail",
+				exit: 1,
+				signal: null,
+				timedOut: false,
+				ms: Date.now() - startedAt,
+				provider: plan.provider,
+				model: plan.model,
+				workerAgentDir: workerAgentDir ?? "",
+				stdoutSha256: sha256(""),
+				stderrSha256: sha256(message),
+				stdoutPreview: "",
+				stderrPreview: message,
+				expect: expectTemplate ? substitute(expectTemplate, packet.workerId, plan.target, packet.role) : undefined,
+				expectOk: false,
+				promptSha256: sha256(redact(prompt ?? "")),
+			});
+			return;
+		}
 		const args = [
 			"--approve",
 			...(plan.provider !== "default" ? ["--provider", plan.provider] : []),
@@ -270,7 +327,6 @@ function runWorker({ plan, packet, promptTemplate, expectTemplate, tempRoot, mod
 			"-p",
 			prompt,
 		];
-		const startedAt = Date.now();
 		const child = spawn(join(root, "repi"), args, {
 			cwd: plan.runRoot,
 			env: {
@@ -305,6 +361,15 @@ function runWorker({ plan, packet, promptTemplate, expectTemplate, tempRoot, mod
 			stderr += chunk;
 			if (stderr.length > 1024 * 1024) stderr = stderr.slice(-1024 * 1024);
 		});
+		// opt #188: piped child stdio emits 'error' (EIO/EPIPE) independent of the
+		// child's own 'error'/'close' — e.g. proc.kill mid-output tears the pipe.
+		// A Readable with no 'error' listener → Unhandled 'error' event → crashes
+		// the whole orchestrator mid-pool (runPool finally cleanup never runs).
+		// Swallow so the 'close' handler still resolves the worker with whatever
+		// was captured. Same doctrine as opt #36 (mcp-manager) / #40
+		// (waitForChildProcess stdio).
+		child.stdout?.on("error", () => {});
+		child.stderr?.on("error", () => {});
 		child.on("close", (code, signal) => {
 			clearTimeout(timer);
 			const redactedStdout = clip(stdout, packet.limits.maxOutputChars);
@@ -383,8 +448,8 @@ async function runPool(plan, promptTemplate, expectTemplate, mode, keepProfiles)
 	}
 	rows.sort((left, right) => left.workerId - right.workerId);
 	for (const worker of rows) {
-		writeFileSync(join(evidenceRoot, `worker-${worker.workerId}.stdout.txt`), worker.stdoutPreview, "utf8");
-		writeFileSync(join(evidenceRoot, `worker-${worker.workerId}.stderr.txt`), worker.stderrPreview, "utf8");
+		atomicWriteFile(join(evidenceRoot, `worker-${worker.workerId}.stdout.txt`), worker.stdoutPreview, 0o600);
+		atomicWriteFile(join(evidenceRoot, `worker-${worker.workerId}.stderr.txt`), worker.stderrPreview, 0o600);
 	}
 	return { rows, tempRoot: keepProfiles ? tempRoot : undefined };
 }
@@ -493,7 +558,7 @@ function buildMergeReport(evidenceRoot) {
 		finalPromotionReady: promotedClaims.length > 0 && workersReport.every((worker) => worker.status === "pass"),
 		narrativeOnlyBlocked: claimRows.length === 0 && observations.length > 0,
 	};
-	writeFileSync(join(evidenceRoot, "merge-report.json"), `${JSON.stringify(mergeReport, null, 2)}\n`, "utf8");
+	atomicWriteFile(join(evidenceRoot, "merge-report.json"), `${JSON.stringify(mergeReport, null, 2)}\n`, 0o600);
 	return mergeReport;
 }
 
@@ -541,7 +606,7 @@ function buildRunReport({ plan, rows, tempRoot, mode }) {
 		mergeDigest: sha256(rows.map((worker) => `${worker.workerId}:${worker.role}:${worker.status}:${worker.stdoutSha256}`).join("\n")),
 		ok: rows.every((worker) => worker.status === "pass"),
 	};
-	writeFileSync(join(evidenceRoot, "report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
+	atomicWriteFile(join(evidenceRoot, "report.json"), `${JSON.stringify(report, null, 2)}\n`, 0o600);
 	return report;
 }
 
@@ -676,9 +741,10 @@ const runId = makeRunId(flagValue(argv, "--target") ?? positionalTarget(argv) ??
 const plan = mode === "llm-run" ? (() => {
 	const target = flagValue(argv, "--target") ?? positionalTarget(argv) ?? "local-selfcheck";
 	const workers = parseIntFlag(argv, ["--workers", "-w"], 3, 1, 16);
+	const maxConcurrency = parseIntFlag(argv, "--max-concurrency", workers, 1, workers);
 	const timeoutMs = parseIntFlag(argv, "--timeout-ms", Number(process.env.REPI_SWARM_LLM_TIMEOUT_MS ?? 210000), 5000, 30 * 60 * 1000);
 	return {
-		...buildSwarmPlan([target, "--workers", String(workers), "--max-concurrency", String(workers), ...(flagValue(argv, "--provider") ? ["--provider", flagValue(argv, "--provider")] : []), ...(flagValue(argv, "--model") ? ["--model", flagValue(argv, "--model")] : []), "--tools", flagValue(argv, "--tools", "") || ""], { runId }),
+		...buildSwarmPlan([target, "--workers", String(workers), "--max-concurrency", String(maxConcurrency), ...(flagValue(argv, "--provider") ? ["--provider", flagValue(argv, "--provider")] : []), ...(flagValue(argv, "--model") ? ["--model", flagValue(argv, "--model")] : []), "--tools", flagValue(argv, "--tools", "") || ""], { runId }),
 		timeoutMs,
 		workerPackets: Array.from({ length: workers }, (_, index) => ({
 			workerId: index + 1,
@@ -705,7 +771,7 @@ if (mode === "run" && !merge.finalPromotionReady) {
 	report.mergeFailureReason = merge.narrativeOnlyBlocked
 		? "narrative-only worker output lacked structured evidence-bearing claims"
 		: "no promoted evidence-bearing claims after structured merge";
-	writeFileSync(join(evidenceRoot, "report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
+	atomicWriteFile(join(evidenceRoot, "report.json"), `${JSON.stringify(report, null, 2)}\n`, 0o600);
 }
 if (json) console.log(JSON.stringify({ ...report, merge }, null, 2));
 else printRun(report, merge);

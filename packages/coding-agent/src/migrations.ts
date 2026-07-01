@@ -3,11 +3,13 @@
  */
 
 import chalk from "chalk";
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "fs";
 import { dirname, join } from "path";
 import { CONFIG_DIR_NAME, getAgentDir, getBinDir, IS_REPI_PRODUCT } from "./config.ts";
 import { migrateKeybindingsConfig } from "./core/keybindings.ts";
 import { isLegacyEnvVarNameConfigValue } from "./core/resolve-config-value.ts";
+import { readSessionHeader } from "./core/session-manager.ts";
+import { atomicWriteFileSync } from "./core/tools/atomic-write.ts";
 import { stripJsonComments } from "./utils/json.ts";
 
 const MIGRATION_GUIDE_URL =
@@ -59,7 +61,10 @@ export function migrateAuthToAuthJson(): string[] {
 					}
 				}
 				delete settings.apiKeys;
-				writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+				// opt #161: atomic temp+rename so a crash mid-write doesn't
+				// truncate the user's settings.json (writeFileSync truncate-
+				// then-write loses the whole file on SIGKILL/OOM mid-write).
+				atomicWriteFileSync(settingsPath, JSON.stringify(settings, null, 2), 0o644);
 			}
 		} catch {
 			// Skip on error
@@ -68,7 +73,10 @@ export function migrateAuthToAuthJson(): string[] {
 
 	if (Object.keys(migrated).length > 0) {
 		mkdirSync(dirname(authPath), { recursive: true });
-		writeFileSync(authPath, JSON.stringify(migrated, null, 2), { mode: 0o600 });
+		// opt #161: atomic temp+rename (0o600 on create; preserves existing
+		// mode if auth.json already exists) — crash mid-write no longer
+		// truncates the user's auth.json.
+		atomicWriteFileSync(authPath, JSON.stringify(migrated, null, 2), 0o600);
 	}
 
 	return providers;
@@ -132,7 +140,11 @@ function migrateAuthJsonConfigValues(agentDir: string): ConfigValueMigration[] {
 		}
 
 		if (migrations.length === 0) return [];
-		writeFileSync(authPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf-8");
+		// opt #161: atomic temp+rename — crash mid-write no longer truncates
+		// auth.json. The helper preserves the existing 0o600 mode; keep the
+		// chmodSync to enforce 0o600 even if a prior version left a wrong mode
+		// (this migration's job is to fix up old state).
+		atomicWriteFileSync(authPath, `${JSON.stringify(parsed, null, 2)}\n`, 0o600);
 		chmodSync(authPath, 0o600);
 		return migrations;
 	} catch {
@@ -140,51 +152,67 @@ function migrateAuthJsonConfigValues(agentDir: string): ConfigValueMigration[] {
 	}
 }
 
-function migrateModelsJsonConfigValues(agentDir: string): ConfigValueMigration[] {
+export function migrateModelsJsonConfigValues(agentDir: string): ConfigValueMigration[] {
 	const modelsPath = join(agentDir, "models.json");
 	if (!existsSync(modelsPath)) return [];
 
-	const parsed = JSON.parse(stripJsonComments(readFileSync(modelsPath, "utf-8"))) as unknown;
-	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return [];
-	const modelsData = parsed as Record<string, unknown>;
-	const providers = modelsData.providers;
-	if (typeof providers !== "object" || providers === null || Array.isArray(providers)) return [];
+	// opt #155: models.json is a user-supplied file. A syntactically-malformed
+	// file (trailing comma, unterminated string — anything the regex-based
+	// stripJsonComments leaves invalid) made JSON.parse throw here, and
+	// runMigrations calls this with no surrounding try/catch → the SyntaxError
+	// was uncaught → the agent crashed at startup before any session loaded. The
+	// sibling migrateAuthJsonConfigValues wraps its whole body in try/catch, and
+	// model-registry's loadCustomModels catches SyntaxError gracefully — this
+	// site was the lone inconsistency. Mirror the sibling: a malformed
+	// models.json skips migration (no values to migrate) instead of crashing.
+	try {
+		const parsed = JSON.parse(stripJsonComments(readFileSync(modelsPath, "utf-8"))) as unknown;
+		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return [];
+		const modelsData = parsed as Record<string, unknown>;
+		const providers = modelsData.providers;
+		if (typeof providers !== "object" || providers === null || Array.isArray(providers)) return [];
 
-	const migrations: ConfigValueMigration[] = [];
-	for (const [provider, providerConfig] of Object.entries(providers)) {
-		if (typeof providerConfig !== "object" || providerConfig === null || Array.isArray(providerConfig)) continue;
-		const providerRecord = providerConfig as Record<string, unknown>;
-		const providerLocation = `models.json.providers[${JSON.stringify(provider)}]`;
-		migrateStringProperty(providerRecord, "apiKey", `${providerLocation}.apiKey`, migrations);
-		migrateHeadersConfig(providerRecord.headers, `${providerLocation}.headers`, migrations);
+		const migrations: ConfigValueMigration[] = [];
+		for (const [provider, providerConfig] of Object.entries(providers)) {
+			if (typeof providerConfig !== "object" || providerConfig === null || Array.isArray(providerConfig)) continue;
+			const providerRecord = providerConfig as Record<string, unknown>;
+			const providerLocation = `models.json.providers[${JSON.stringify(provider)}]`;
+			migrateStringProperty(providerRecord, "apiKey", `${providerLocation}.apiKey`, migrations);
+			migrateHeadersConfig(providerRecord.headers, `${providerLocation}.headers`, migrations);
 
-		if (Array.isArray(providerRecord.models)) {
-			for (let index = 0; index < providerRecord.models.length; index++) {
-				const modelConfig = providerRecord.models[index];
-				if (typeof modelConfig !== "object" || modelConfig === null || Array.isArray(modelConfig)) continue;
-				const modelRecord = modelConfig as Record<string, unknown>;
-				const modelKey = typeof modelRecord.id === "string" ? JSON.stringify(modelRecord.id) : String(index);
-				migrateHeadersConfig(modelRecord.headers, `${providerLocation}.models[${modelKey}].headers`, migrations);
+			if (Array.isArray(providerRecord.models)) {
+				for (let index = 0; index < providerRecord.models.length; index++) {
+					const modelConfig = providerRecord.models[index];
+					if (typeof modelConfig !== "object" || modelConfig === null || Array.isArray(modelConfig)) continue;
+					const modelRecord = modelConfig as Record<string, unknown>;
+					const modelKey = typeof modelRecord.id === "string" ? JSON.stringify(modelRecord.id) : String(index);
+					migrateHeadersConfig(modelRecord.headers, `${providerLocation}.models[${modelKey}].headers`, migrations);
+				}
+			}
+
+			const modelOverrides = providerRecord.modelOverrides;
+			if (typeof modelOverrides === "object" && modelOverrides !== null && !Array.isArray(modelOverrides)) {
+				for (const [modelId, modelOverride] of Object.entries(modelOverrides)) {
+					if (typeof modelOverride !== "object" || modelOverride === null || Array.isArray(modelOverride))
+						continue;
+					const modelOverrideRecord = modelOverride as Record<string, unknown>;
+					migrateHeadersConfig(
+						modelOverrideRecord.headers,
+						`${providerLocation}.modelOverrides[${JSON.stringify(modelId)}].headers`,
+						migrations,
+					);
+				}
 			}
 		}
 
-		const modelOverrides = providerRecord.modelOverrides;
-		if (typeof modelOverrides === "object" && modelOverrides !== null && !Array.isArray(modelOverrides)) {
-			for (const [modelId, modelOverride] of Object.entries(modelOverrides)) {
-				if (typeof modelOverride !== "object" || modelOverride === null || Array.isArray(modelOverride)) continue;
-				const modelOverrideRecord = modelOverride as Record<string, unknown>;
-				migrateHeadersConfig(
-					modelOverrideRecord.headers,
-					`${providerLocation}.modelOverrides[${JSON.stringify(modelId)}].headers`,
-					migrations,
-				);
-			}
-		}
+		if (migrations.length === 0) return [];
+		// opt #161: atomic temp+rename — crash mid-write no longer truncates
+		// the user's models.json.
+		atomicWriteFileSync(modelsPath, `${JSON.stringify(parsed, null, 2)}\n`, 0o644);
+		return migrations;
+	} catch {
+		return [];
 	}
-
-	if (migrations.length === 0) return [];
-	writeFileSync(modelsPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf-8");
-	return migrations;
 }
 
 function migrateExplicitEnvVarConfigValues(): void {
@@ -212,8 +240,8 @@ function migrateExplicitEnvVarConfigValues(): void {
  *
  * See: https://github.com/multi-zhangyang/pi-recon-agent/issues/320
  */
-export function migrateSessionsFromAgentRoot(): void {
-	const agentDir = getAgentDir();
+export function migrateSessionsFromAgentRoot(dir: string = getAgentDir()): void {
+	const agentDir = dir;
 
 	// Find all .jsonl files directly in agentDir (not in subdirectories)
 	let files: string[];
@@ -229,13 +257,14 @@ export function migrateSessionsFromAgentRoot(): void {
 
 	for (const file of files) {
 		try {
-			// Read first line to get session header
-			const content = readFileSync(file, "utf8");
-			const firstLine = content.split("\n")[0];
-			if (!firstLine?.trim()) continue;
-
-			const header = JSON.parse(firstLine);
-			if (header.type !== "session" || !header.cwd) continue;
+			// opt #160: read ONLY the first line (the session header) via the
+			// bounded line-reader from session-manager (opt #157), not
+			// readFileSync-whole + split. Legacy session transcripts in
+			// ~/.repi/agent/*.jsonl can be hundreds of MB; readFileSync loaded
+			// the ENTIRE file into memory and split it into an array of all lines
+			// just to read line 0 → OOM at startup before any session loaded.
+			const header = readSessionHeader(file);
+			if (!header?.cwd) continue;
 
 			const cwd: string = header.cwd;
 
@@ -296,7 +325,9 @@ function migrateKeybindingsConfigFile(): void {
 		}
 		const { config, migrated } = migrateKeybindingsConfig(parsed as Record<string, unknown>);
 		if (!migrated) return;
-		writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+		// opt #161: atomic temp+rename — crash mid-write no longer truncates
+		// the user's keybindings.json.
+		atomicWriteFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 0o644);
 	} catch {
 		// Ignore malformed files during migration
 	}
@@ -432,11 +463,17 @@ export async function showDeprecationWarnings(warnings: string[]): Promise<void>
 	await new Promise<void>((resolve) => {
 		process.stdin.setRawMode?.(true);
 		process.stdin.resume();
-		process.stdin.once("data", () => {
+		const settle = (): void => {
 			process.stdin.setRawMode?.(false);
 			process.stdin.pause();
 			resolve();
-		});
+		};
+		process.stdin.once("data", settle);
+		// stdin 'error' listener: a closed/non-TTY stdin (or EIO mid-prompt) would
+		// emit 'error' with no listener → `Unhandled 'error' event` crash AND the
+		// promise would never settle → startup hangs at the migration prompt. Treat
+		// a stdin error as "prompt dismissed" and resolve so startup proceeds.
+		process.stdin.once("error", settle);
 	});
 	console.log();
 }

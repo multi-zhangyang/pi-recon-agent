@@ -125,6 +125,17 @@ class SessionSelectorHeader implements Component {
 		}, autoHideMs);
 	}
 
+	/**
+	 * Teardown the auto-hide status timer (opt #151). The header is a child of
+	 * SessionSelectorComponent (a Container); Container.dispose() propagates
+	 * child.dispose?.(), so without this method the propagation short-circuits
+	 * on `dispose?.() === undefined` and `statusTimeout` keeps firing
+	 * requestRender on a detached header 2-4s after the selector is dismissed.
+	 */
+	dispose(): void {
+		this.clearStatusTimeout();
+	}
+
 	invalidate(): void {}
 
 	render(width: number): string[] {
@@ -283,6 +294,16 @@ class SessionList implements Component, Focusable {
 	private confirmingDeletePath: string | null = null;
 	private currentSessionCanonicalPath?: string;
 	public onSelect?: (sessionPath: string) => void;
+	/**
+	 * Error sink for the select handler (opt #145). The confirm dispatch
+	 * invokes onSelect and drops any returned promise — an async onSelect (e.g.
+	 * the resume-session flow which awaits switchSession / missing-cwd prompts)
+	 * that rejects would otherwise become an unhandledRejection crashing the
+	 * host with the terminal left in raw mode. Routes BOTH sync throws and async
+	 * rejections here (or console.error fallback). Same class as the
+	 * CustomEditor/Editor action-handler error containment (opts #142/#145).
+	 */
+	public onSelectError?: (error: unknown) => void;
 	public onCancel?: () => void;
 	public onExit: () => void = () => {};
 	public onToggleScope?: () => void;
@@ -328,7 +349,7 @@ class SessionList implements Component, Focusable {
 			if (this.filteredSessions[this.selectedIndex]) {
 				const selected = this.filteredSessions[this.selectedIndex];
 				if (this.onSelect) {
-					this.onSelect(selected.session.path);
+					this.runSelect(() => this.onSelect!(selected.session.path));
 				}
 			}
 		};
@@ -606,7 +627,7 @@ class SessionList implements Component, Focusable {
 		else if (kb.matches(keyData, "tui.select.confirm")) {
 			const selected = this.filteredSessions[this.selectedIndex];
 			if (selected && this.onSelect) {
-				this.onSelect(selected.session.path);
+				this.runSelect(() => this.onSelect!(selected.session.path));
 			}
 		}
 		// Escape - cancel
@@ -619,6 +640,27 @@ class SessionList implements Component, Focusable {
 		else {
 			this.searchInput.handleInput(keyData);
 			this.filterSessions(this.searchInput.getValue());
+		}
+	}
+
+	/**
+	 * Invoke the select handler containing BOTH sync throws and async rejections
+	 * (opt #145). Routes to onSelectError (or console.error fallback) so a
+	 * rejecting async onSelect (resume-session flow) never escapes as an
+	 * unhandledRejection crashing the host with the terminal in raw mode.
+	 */
+	private runSelect(handler: () => void): void {
+		try {
+			const ret = handler() as unknown;
+			if (ret && typeof (ret as Promise<unknown>).then === "function") {
+				(ret as Promise<unknown>).catch((err: unknown) => {
+					if (this.onSelectError) this.onSelectError(err);
+					else console.error("SessionSelector async select handler error:", err);
+				});
+			}
+		} catch (err) {
+			if (this.onSelectError) this.onSelectError(err);
+			else console.error("SessionSelector select handler error:", err);
 		}
 	}
 }
@@ -744,6 +786,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 			renameSession?: (sessionPath: string, currentName: string | undefined) => Promise<void>;
 			showRenameHint?: boolean;
 			keybindings?: KeybindingsManager;
+			onSelectError?: (error: unknown) => void;
 		},
 		currentSessionFilePath?: string,
 	) {
@@ -781,6 +824,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 			clearStatusMessage();
 			onSelect(sessionPath);
 		};
+		this.sessionList.onSelectError = options?.onSelectError;
 		this.sessionList.onCancel = () => {
 			clearStatusMessage();
 			onCancel();
@@ -902,6 +946,15 @@ export class SessionSelectorComponent extends Container implements Focusable {
 		try {
 			await renameSession(target, next);
 			await this.refreshSessionsAfterMutation();
+		} catch (error) {
+			// A failed rename (EACCES/EROFS/ENOSPC on write, ENOENT if the session
+			// file was deleted after listing, or a corrupt/unparseable session
+			// file) must not crash the agent. The caller (`void
+			// this.confirmRename(value)`) drops the returned promise, so a rejection
+			// here would surface as an unhandled rejection → uncaughtException →
+			// process.exit. Surface the failure inline instead.
+			const detail = error instanceof Error ? error.message : String(error);
+			this.header.setStatusMessage({ type: "error", message: `Rename failed: ${detail}` }, 4000);
 		} finally {
 			this.exitRenameMode();
 		}

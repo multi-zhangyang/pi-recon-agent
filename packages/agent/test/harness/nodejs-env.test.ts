@@ -1,4 +1,4 @@
-import { access, chmod, realpath, symlink } from "node:fs/promises";
+import { access, chmod, realpath, rm, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
@@ -145,6 +145,46 @@ describe("NodeExecutionEnv", () => {
 		expect(tempFile.endsWith(".txt")).toBe(true);
 	});
 
+	it("createTempFile shares one temp dir across many files (regression: was one mkdtemp per file)", async () => {
+		// createTempFile used to mkdtemp a FRESH dir per file → a session with many truncated-output
+		// temp files created N dirs in the OS tmpdir. Now it reuses one lazily-created shared dir,
+		// so all files share the same parent (O(1) dirs, not O(files)).
+		const root = createTempDir();
+		const env = new NodeExecutionEnv({ cwd: root });
+		const files: string[] = [];
+		for (let i = 0; i < 5; i++) {
+			files.push(getOrThrow(await env.createTempFile({ prefix: "bash-", suffix: ".log" })));
+		}
+		const parents = new Set(files.map((f) => f.split("/").slice(0, -1).join("/")));
+		expect(parents.size).toBe(1);
+		for (const f of files) await expect(access(f)).resolves.toBeUndefined();
+		// cleanup removes the shared dir tree and resets so a later call makes a fresh one.
+		await env.cleanup();
+		const after = getOrThrow(await env.createTempFile({ prefix: "bash-", suffix: ".log" }));
+		expect(after).not.toBe(files[0]);
+		await expect(access(files[0]!)).rejects.toBeDefined();
+	});
+
+	it("caches the resolved shell config across exec calls (regression: was re-resolved per exec)", async () => {
+		// exec used to call getShellConfig on EVERY invocation — an access(2) syscall per exec on
+		// Linux (or a spawned which/where subprocess per exec where /bin/bash is absent). shellPath is
+		// immutable post-constructor so the result is invariant; caching it pays one resolution per
+		// env. Verify the cache is load-bearing: resolve a custom shell, delete it, and a second exec
+		// must NOT re-resolve (it reuses the cached config and fails at spawn), rather than silently
+		// falling back to /bin/bash the way the uncached path would.
+		const root = createTempDir();
+		const shellPath = join(root, "my-shell");
+		const env = new NodeExecutionEnv({ cwd: root, shellPath });
+		getOrThrow(await env.writeFile(shellPath, '#!/bin/sh\nexec /bin/sh "$@"'));
+		await chmod(shellPath, 0o755);
+		const first = getOrThrow(await env.exec("printf cached"));
+		expect(first.stdout).toBe("cached");
+		await rm(shellPath);
+		const second = await env.exec("printf retry");
+		expect(second.ok).toBe(false);
+		if (!second.ok) expect(second.error).toMatchObject({ code: "spawn_error" });
+	});
+
 	it("honors createDir recursive false and remove recursive/force options", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
@@ -198,7 +238,13 @@ describe("NodeExecutionEnv", () => {
 				env: { NODE_ENV_TEST: "ok" },
 			}),
 		);
-		expect(result).toEqual({ stdout: `${await realpath(root)}:ok`, stderr: "", exitCode: 0 });
+		expect(result).toEqual({
+			stdout: `${await realpath(root)}:ok`,
+			stderr: "",
+			exitCode: 0,
+			stdoutTruncated: false,
+			stderrTruncated: false,
+		});
 	});
 
 	it("streams stdout and stderr chunks", async () => {
@@ -216,7 +262,13 @@ describe("NodeExecutionEnv", () => {
 				},
 			}),
 		);
-		expect(result).toEqual({ stdout: "out", stderr: "err", exitCode: 0 });
+		expect(result).toEqual({
+			stdout: "out",
+			stderr: "err",
+			exitCode: 0,
+			stdoutTruncated: false,
+			stderrTruncated: false,
+		});
 		expect(stdout).toBe("out");
 		expect(stderr).toBe("err");
 	});
@@ -225,7 +277,7 @@ describe("NodeExecutionEnv", () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
 		const result = getOrThrow(await env.exec("exit 7"));
-		expect(result).toEqual({ stdout: "", stderr: "", exitCode: 7 });
+		expect(result).toEqual({ stdout: "", stderr: "", exitCode: 7, stdoutTruncated: false, stderrTruncated: false });
 	});
 
 	it("returns timeout errors for commands exceeding the timeout", async () => {
@@ -284,5 +336,39 @@ describe("NodeExecutionEnv", () => {
 		const fullOutput = getOrThrow(await env.readTextFile(result.fullOutputPath!));
 		expect(fullOutput.split("\n").length).toBeGreaterThan(10000);
 		expect(result.output.length).toBeLessThan(fullOutput.length);
+	});
+
+	it("caps captured stdout at maxBytes while still streaming every chunk to onStdout (regression: exec OOM guard)", async () => {
+		// exec accumulates stdout/stderr unbounded by default; a runaway command would OOM the
+		// agent. maxBytes bounds the RETURNED string (prefix kept, truncated flag set) while chunks
+		// keep flowing to onStdout/onStderr unchanged — the only in-package caller ignores the
+		// returned string and consumes via callbacks, so it must still see the full output.
+		const root = createTempDir();
+		const env = new NodeExecutionEnv({ cwd: root });
+		const streamedChunks: string[] = [];
+		const result = getOrThrow(
+			await env.exec("yes x | head -c 100000", {
+				maxBytes: 1024,
+				onStdout: (chunk) => {
+					streamedChunks.push(chunk);
+				},
+			}),
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.stdoutTruncated).toBe(true);
+		expect(result.stderrTruncated).toBe(false);
+		expect(result.stdout.length).toBeLessThanOrEqual(1024);
+		// Streaming callbacks received the FULL ~100KB output — the cap only bounds the returned string.
+		const streamedBytes = streamedChunks.join("").length;
+		expect(streamedBytes).toBeGreaterThan(50_000);
+		expect(streamedBytes).toBeGreaterThan(result.stdout.length);
+	});
+
+	it("maxBytes: 0 disables the cap (unbounded capture)", async () => {
+		const root = createTempDir();
+		const env = new NodeExecutionEnv({ cwd: root });
+		const result = getOrThrow(await env.exec("yes x | head -c 5000", { maxBytes: 0 }));
+		expect(result.stdoutTruncated).toBe(false);
+		expect(result.stdout.length).toBe(5000);
 	});
 });

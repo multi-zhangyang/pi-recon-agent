@@ -2,13 +2,18 @@ import { type CaseMemoryV1, latestCaseMemoryBySignature } from "./case-memory.ts
 import {
 	buildMemorySemanticIndex,
 	type MemoryContradictionLedgerEntryV1,
+	type MemorySedimentationReportV1,
 	type MemorySemanticIndexEntryV1,
 } from "./memory-distillation.ts";
 import type { MemoryArtifactHash, MemoryEventV1 } from "./memory-event.ts";
-import { buildMemoryFeedbackClosureReport, type MemoryFeedbackClosureRowV1 } from "./memory-feedback.ts";
+import {
+	buildMemoryFeedbackClosureReport,
+	type MemoryFeedbackClosureReportV1,
+	type MemoryFeedbackClosureRowV1,
+} from "./memory-feedback.ts";
 import { memoryTargetScope } from "./memory-scope.ts";
 import { readMemoryEvents } from "./memory-search.ts";
-import { verifyMemoryStore, writeFileAtomic } from "./memory-store.ts";
+import { type MemoryStoreVerificationV1, verifyMemoryStore, writeFileAtomic } from "./memory-store.ts";
 import { evaluateMemoryUsefulness } from "./memory-usefulness.ts";
 import {
 	ensureRepiStorage,
@@ -316,12 +321,24 @@ export function formatMemorySupervisor(report: MemorySupervisorReportV1): string
 	].join("\n");
 }
 
-export function superviseMemoryLifecycle(): MemorySupervisorReportV1 {
+export function superviseMemoryLifecycle(
+	options: {
+		// opt #99 PERF-1/PERF-2 — the orchestrator already holds the store verdict (verifyMemoryStore),
+		// the sedimentation report (buildMemorySemanticIndex), and the feedback-closure report
+		// (buildMemoryFeedbackClosureReport). Without these params superviseMemoryLifecycle re-runs
+		// all three (a 2nd full hash-chain walk + 2nd sedimentation build + 2nd feedback build) per
+		// orchestration. Thread them through so the supervisor reuses the in-hand reports (same
+		// pattern buildMemoryActiveKernelReport uses for sedimentation/feedback/quality/replay).
+		store?: MemoryStoreVerificationV1;
+		sedimentation?: MemorySedimentationReportV1;
+		feedback?: MemoryFeedbackClosureReportV1;
+	} = {},
+): MemorySupervisorReportV1 {
 	ensureRepiStorage();
-	const store = verifyMemoryStore();
+	const store = options.store ?? verifyMemoryStore();
 	const usefulness = evaluateMemoryUsefulness();
-	const sedimentation = buildMemorySemanticIndex();
-	const feedbackClosure = buildMemoryFeedbackClosureReport({ sedimentation });
+	const sedimentation = options.sedimentation ?? buildMemorySemanticIndex();
+	const feedbackClosure = options.feedback ?? buildMemoryFeedbackClosureReport({ sedimentation });
 	const events = readMemoryEvents();
 	const eventsById = new Map(events.map((event) => [event.id, event]));
 	const casesBySignature = latestCaseMemoryBySignature();

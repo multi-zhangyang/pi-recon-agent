@@ -116,6 +116,7 @@ export const REPI_TOOL_INDEX_CANDIDATES = [
 export const REPI_TOOL_NAMES = [
 	"re_route",
 	"re_kernel",
+	"re_techniques",
 	"re_decision_core",
 	"re_live_browser",
 	"re_web_authz_state",

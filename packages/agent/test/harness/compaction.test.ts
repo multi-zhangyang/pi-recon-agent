@@ -431,7 +431,13 @@ describe("harness compaction", () => {
 		]);
 		const result = serializeConversation(messages);
 		expect(result).toContain("[Tool result]:");
-		expect(result).toContain("[... 3000 more characters truncated]");
+		// Middle-ellipsis marker reports the elided character count.
+		expect(result).toContain("characters truncated");
+		// Head and tail are both preserved (head = tail = ~900 chars).
+		expect(result).toContain("x".repeat(900));
+		// The elided middle and the full content are NOT present.
+		expect(result).not.toContain("x".repeat(3000));
+		expect(result).not.toContain(longContent);
 	});
 
 	it("passes reasoning through generateSummary only for reasoning models with thinking enabled", async () => {

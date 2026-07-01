@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { registerOAuthProvider } from "@pi-recon/repi-ai/oauth";
 import lockfile from "proper-lockfile";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -611,6 +611,67 @@ describe("AuthStorage", () => {
 			const apiKey = await authStorage.getApiKey("anthropic");
 
 			expect(apiKey).toBe("stored-key");
+		});
+	});
+
+	describe("atomic persistence", () => {
+		// auth.json is rewritten on every login / key-add / key-update via set() →
+		// persistProviderChange → withLock → atomicWriteFileSync (temp+rename). A
+		// crash mid-write or a concurrent reload() reading the file mid-rewrite must
+		// never observe a truncated/partial JSON file: reload()'s JSON.parse would
+		// throw → loadError set → every getApiKey() returns undefined → the user is
+		// forced to re-login every provider. temp+rename (atomicWriteFileSync)
+		// guarantees reload sees either the complete prior credentials or the
+		// complete new ones. The distinguishing characteristic vs the old
+		// truncate-then-write (writeFileSync) is that the INODE changes across a
+		// rewrite (rename installs a new inode); truncate writes into the same
+		// inode. That inode-change assertion is the regression probe below.
+
+		test("set() replaces auth.json atomically: inode changes, mode 0o600, no .tmp leftover, credentials survive", async () => {
+			// create() → reload() → ensureFileExists creates {} atomically at 0o600.
+			// Seed through AuthStorage so the initial file is 0o600 (writeAuthJson
+			// uses default mode 0o644; atomicWriteFileSync preserves an existing
+			// target's mode, so the rewrite would inherit 0o644 instead of 0o600).
+			const authJson = AuthStorage.create(authJsonPath);
+			authJson.set("anthropic", { type: "api_key", key: "sk-first" });
+			const inodeBefore = statSync(authJsonPath).ino;
+			const modeBefore = statSync(authJsonPath).mode & 0o777;
+			expect(modeBefore).toBe(0o600);
+
+			// A second set() triggers persistProviderChange → withLock →
+			// atomicWriteFileSync (temp+rename). rename installs a NEW inode; the old
+			// truncate-then-write (writeFileSync) kept the SAME inode — this is the
+			// assertion that fails if the write regresses to truncate.
+			authJson.set("anthropic", { type: "api_key", key: "sk-survived" });
+			const inodeAfter = statSync(authJsonPath).ino;
+			expect(inodeAfter).not.toBe(inodeBefore);
+
+			// Mode 0o600 preserved across the atomic replace.
+			expect(statSync(authJsonPath).mode & 0o777).toBe(0o600);
+
+			// No stray temp file left behind in the auth dir.
+			const leftovers = readdirSync(dirname(authJsonPath)).filter((f) => f.endsWith(".tmp"));
+			expect(leftovers).toEqual([]);
+
+			// The file is complete + parseable, and a fresh AuthStorage reads it back.
+			const parsed = JSON.parse(readFileSync(authJsonPath, "utf8"));
+			expect(parsed.anthropic.key).toBe("sk-survived");
+			const reloaded = AuthStorage.create(authJsonPath);
+			expect(await reloaded.getApiKey("anthropic")).toBe("sk-survived");
+		});
+
+		test("ensureFileExists creates auth.json atomically at 0o600 when absent", () => {
+			// AuthStorage.create() calls reload() → withLock → ensureFileExists, which
+			// must create the missing file atomically (temp+rename) at mode 0o600
+			// rather than truncate-then-write. Creating via a fresh instance covers it.
+			expect(existsSync(authJsonPath)).toBe(false);
+			AuthStorage.create(authJsonPath);
+			expect(existsSync(authJsonPath)).toBe(true);
+			expect(statSync(authJsonPath).mode & 0o777).toBe(0o600);
+			const leftovers = readdirSync(dirname(authJsonPath)).filter((f) => f.endsWith(".tmp"));
+			expect(leftovers).toEqual([]);
+			// Newly created file is a valid empty-object JSON (reload must not throw).
+			expect(JSON.parse(readFileSync(authJsonPath, "utf8"))).toEqual({});
 		});
 	});
 });

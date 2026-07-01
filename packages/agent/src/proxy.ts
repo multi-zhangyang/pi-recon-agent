@@ -137,6 +137,7 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 		};
 
 		let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+		let terminated = false;
 
 		const abortHandler = () => {
 			if (reader) {
@@ -179,6 +180,40 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 			reader = response.body!.getReader();
 			const decoder = new TextDecoder();
 			let buffer = "";
+			// opt #254: extract per-line processing so the trailing buffer flush below
+			// can reuse it. Pre-fix the for-loop was inline and the trailing partial
+			// line (after the last "\n") was always dropped via lines.pop() — a
+			// terminal done/error event sent WITHOUT a trailing newline was lost,
+			// leaving `terminated` false and synthesizing a spurious "Proxy stream
+			// ended without a done event" error.
+			const processLine = (line: string): void => {
+				if (!line.startsWith("data: ")) return;
+				const data = line.slice(6).trim();
+				if (!data) return;
+				// opt #55 — guard the JSON.parse: a single malformed `data:` line
+				// (truncated JSON, a non-JSON heartbeat/keep-alive payload, an encoding
+				// glitch) used to throw SyntaxError here → propagated to the outer catch
+				// → synthesized an error event → stream.end() → the ENTIRE proxy
+				// response was lost, including all subsequent valid SSE lines and the
+				// partial text already buffered (never committed). Now skip just the
+				// unparseable line and continue, matching the SSE parser in
+				// mcp-manager.ts:parseSseJsonMessages. processProxyEvent's own throws
+				// (e.g. "Received text_delta for non-text content") are genuine
+				// structural errors that SHOULD terminate the stream — left uncaught.
+				let proxyEvent: ProxyAssistantMessageEvent;
+				try {
+					proxyEvent = JSON.parse(data) as ProxyAssistantMessageEvent;
+				} catch {
+					return;
+				}
+				const event = processProxyEvent(proxyEvent, partial);
+				if (event) {
+					if (event.type === "done" || event.type === "error") {
+						terminated = true;
+					}
+					stream.push(event);
+				}
+			};
 
 			while (true) {
 				const { done, value } = await reader.read();
@@ -193,16 +228,21 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 				buffer = lines.pop() || "";
 
 				for (const line of lines) {
-					if (line.startsWith("data: ")) {
-						const data = line.slice(6).trim();
-						if (data) {
-							const proxyEvent = JSON.parse(data) as ProxyAssistantMessageEvent;
-							const event = processProxyEvent(proxyEvent, partial);
-							if (event) {
-								stream.push(event);
-							}
-						}
-					}
+					processLine(line);
+				}
+			}
+
+			// opt #254: flush the trailing buffer. SSE servers may omit the final
+			// newline after the terminal event; pre-fix that line sat in `buffer`
+			// (lines.pop()) and was dropped → the done/error event was lost →
+			// `terminated` stayed false → a spurious "Proxy stream ended without a
+			// done event" error was synthesized, discarding the real terminal event
+			// and any partial text it carried. Flush the decoder's trailing bytes
+			// and process the remaining line(s).
+			buffer += decoder.decode();
+			if (buffer) {
+				for (const line of buffer.split("\n")) {
+					processLine(line);
 				}
 			}
 
@@ -210,6 +250,19 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 				throw new Error("Request aborted by user");
 			}
 
+			if (!terminated) {
+				// The SSE body ended cleanly but the server never sent a done/error
+				// terminal event. EventStream.end() with no result argument does NOT
+				// resolve finalResultPromise, so a consumer awaiting stream.result()
+				// (the agent-loop) would hang forever — partial text already streamed
+				// is also never committed (no message_end). Synthesize a terminal
+				// error event (matching the catch-block shape) so the stream resolves
+				// and the agent-loop's commit path runs.
+				const reason = options.signal?.aborted ? "aborted" : "error";
+				partial.stopReason = reason;
+				partial.errorMessage = "Proxy stream ended without a done event";
+				stream.push({ type: "error", reason, error: partial });
+			}
 			stream.end();
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : String(error);
@@ -223,6 +276,13 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 			});
 			stream.end();
 		} finally {
+			// Release the response body reader on every exit path. On a throw
+			// before the body was fully consumed (malformed SSE JSON.parse, or
+			// processProxyEvent throwing its "non-text content" errors), the
+			// ReadableStreamDefaultReader kept holding the response body → undici
+			// did not release the keep-alive socket until GC. cancel() is a no-op
+			// on an already-done/canceled reader, so this is safe unconditionally.
+			await reader?.cancel().catch(() => {});
 			if (options.signal) {
 				options.signal.removeEventListener("abort", abortHandler);
 			}
@@ -230,6 +290,45 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 	})();
 
 	return stream;
+}
+
+/**
+ * Normalize a server-supplied `usage` object into a well-shaped Usage.
+ *
+ * The proxy event types declare `usage: AssistantMessage["usage"]`, but at runtime this comes from
+ * `JSON.parse(data)` of an SSE line sent by an EXTERNAL proxy server — the type annotation is not
+ * enforced at the boundary. A server that omits `usage`, sends a partial object (e.g. only
+ * `{input, output}`), or sends wrong-typed fields would otherwise propagate undefined/NaN into the
+ * AssistantMessage and downstream into the compaction trigger (`calculateContextTokens(undefined)`
+ * → TypeError crash every turn at agent-session.ts:2140) and overflow detector (`input + undefined`
+ * → NaN → silent overflow → lost turn). Every direct provider (anthropic/openai-completions/google/
+ * bedrock) rebuilds Usage with `?? 0` / `|| 0` and recomputes totalTokens; the proxy was the lone
+ * outlier that assigned the raw object verbatim. This mirrors the direct-provider contract.
+ */
+function normalizeProxyUsage(raw: unknown): AssistantMessage["usage"] {
+	const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+	if (!raw || typeof raw !== "object") {
+		return { ...zero, totalTokens: 0, cost: { ...zero } };
+	}
+	const r = raw as Record<string, unknown>;
+	const input = Number(r.input) || 0;
+	const output = Number(r.output) || 0;
+	const cacheRead = Number(r.cacheRead) || 0;
+	const cacheWrite = Number(r.cacheWrite) || 0;
+	const rawTotal = Number(r.totalTokens);
+	const totalTokens = Number.isFinite(rawTotal) && rawTotal > 0 ? rawTotal : input + output + cacheRead + cacheWrite;
+	const rc = r.cost;
+	const cost =
+		rc && typeof rc === "object"
+			? {
+					input: Number((rc as Record<string, unknown>).input) || 0,
+					output: Number((rc as Record<string, unknown>).output) || 0,
+					cacheRead: Number((rc as Record<string, unknown>).cacheRead) || 0,
+					cacheWrite: Number((rc as Record<string, unknown>).cacheWrite) || 0,
+					total: Number((rc as Record<string, unknown>).total) || 0,
+				}
+			: { ...zero };
+	return { input, output, cacheRead, cacheWrite, totalTokens, cost };
 }
 
 /**
@@ -349,13 +448,13 @@ function processProxyEvent(
 
 		case "done":
 			partial.stopReason = proxyEvent.reason;
-			partial.usage = proxyEvent.usage;
+			partial.usage = normalizeProxyUsage(proxyEvent.usage);
 			return { type: "done", reason: proxyEvent.reason, message: partial };
 
 		case "error":
 			partial.stopReason = proxyEvent.reason;
 			partial.errorMessage = proxyEvent.errorMessage;
-			partial.usage = proxyEvent.usage;
+			partial.usage = normalizeProxyUsage(proxyEvent.usage);
 			return { type: "error", reason: proxyEvent.reason, error: partial };
 
 		default: {

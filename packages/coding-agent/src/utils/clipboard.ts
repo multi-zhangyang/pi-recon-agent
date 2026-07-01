@@ -92,6 +92,16 @@ export async function copyToClipboard(text: string): Promise<void> {
 							execSync("which wl-copy", { stdio: "ignore" });
 							// wl-copy with execSync hangs due to fork behavior; use spawn instead
 							const proc = spawn("wl-copy", [], { stdio: ["pipe", "ignore", "ignore"] });
+							// The `which wl-copy` check above is a TOCTOU guard at best — a spawn
+							// can still fail asynchronously (EMFILE, EACCES, a broken executable)
+							// and emit "error" on the child. Without a listener that is uncaught
+							// and crashes the agent. Attach a no-op so a late spawn failure is
+							// swallowed; the stdin error listener below already covers EPIPE.
+							proc.on("error", () => {
+								// Best-effort clipboard: a spawn failure just means the copy
+								// silently didn't happen (the OSC 52 fallback may already have
+								// run, or the caller degrades). Do not crash.
+							});
 							proc.stdin.on("error", () => {
 								// Ignore EPIPE errors if wl-copy exits early
 							});

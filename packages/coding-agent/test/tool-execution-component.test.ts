@@ -508,4 +508,51 @@ describe("ToolExecutionComponent parity", () => {
 			expect(collapsed.indexOf(":120-329")).toBeLessThan(collapsed.indexOf("to expand"));
 		});
 	}
+
+	test("bash partial render starts an elapsed-display interval that dispose() stops (no leak on discard)", async () => {
+		// The bash tool's renderResult starts a 1s setInterval (elapsed-display tick)
+		// while isPartial. It is cleared on the FINAL non-partial render — but a
+		// session switch / rewind mid-tool-execution detaches the component without
+		// a final render, so the interval would fire invalidate()+requestRender() on
+		// a dead component for the rest of the session. dispose() must clear it.
+		// Real timers (not fake): the interval is unref'd, and the test's own awaits
+		// keep the loop alive so ticks fire.
+		const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+		let renderRequests = 0;
+		const tui = {
+			requestRender: () => {
+				renderRequests++;
+			},
+		} as unknown as TUI;
+		const tool = createBashToolDefinition(process.cwd(), {
+			operations: { exec: async () => ({ exitCode: 0 }) },
+		});
+		const component = new ToolExecutionComponent(
+			"bash",
+			"tool-interval-leak",
+			{ command: "sleep 5" },
+			{},
+			tool,
+			tui,
+			process.cwd(),
+		);
+		component.markExecutionStarted();
+		component.updateResult({ content: [{ type: "text", text: "running" }], isError: false }, true);
+
+		const state = (component as unknown as { rendererState: { interval?: NodeJS.Timeout | undefined } })
+			.rendererState;
+		expect(state.interval).toBeDefined();
+
+		// A 1s elapsed tick fires → context.invalidate() → requestRender().
+		const baseline = renderRequests;
+		await sleep(1100);
+		expect(renderRequests).toBeGreaterThan(baseline);
+
+		// dispose() clears the interval. After dispose, NO further ticks.
+		component.dispose();
+		expect(state.interval).toBeUndefined();
+		const afterDispose = renderRequests;
+		await sleep(1100);
+		expect(renderRequests).toBe(afterDispose);
+	});
 });

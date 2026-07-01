@@ -1,0 +1,117 @@
+import { mkdirSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// opt #75 — current-mission.json read cache + atomic write. readCurrentMission was an
+// UNCACHED readTextFile + JSON.parse on every call, and it is called 3-4× per deposit
+// tool_result (buildPerTurnMemoryRecall + appendMemoryEventTransaction +
+// appendMemoryDepositionRuntimeEvent + currentMemoryScope) plus once per most re_* command
+// handlers — each a readFileSync + JSON.parse of a file that only changes on re_mission ops.
+// #75 routes it through readJsonObjectFileCached (the #65 mtime+size-keyed cache): one
+// stat(2)/call, 0 readFileSync + 0 JSON.parse on a cache hit. writeCurrentMission was a bare
+// writeFileSync truncate-then-write — a crash mid-write truncated current-mission.json →
+// readCurrentMission returned undefined → the agent silently lost its mission/route/lanes
+// (same class as opts #38/#41/#42/#43; this recon-profile.ts site was missed by the audit).
+// #75 routes it through writePrivateTextFile (atomic temp+rename, 0o600): a reader sees the
+// complete prior or complete new mission, and the rename bumps mtime+size → the read cache
+// invalidates cleanly (no stale-on-same-ms-tick risk a same-file truncate could have).
+//
+// These tests prove (1) repeat readCurrentMission calls do NOT re-read (0 readFileSync across
+// N calls once warm — the load-bearing #75 read-cache proof), (2) a writeCurrentMission
+// invalidates the cache (the next read sees the new mission, not stale), (3) writeCurrentMission
+// is atomic (inode CHANGES via temp+rename — the old truncate-then-write kept the same inode,
+// the regression probe), and (4) the mission round-trips (write → read returns the written
+// task). normalizeMission is non-mutating so the shared cached raw is safe to normalize per call.
+
+const ENV_AGENT_DIR = "REPI_CODING_AGENT_DIR";
+
+const { missionReadCount } = vi.hoisted(() => ({ missionReadCount: { current: 0 } }));
+
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs")>();
+	return {
+		...actual,
+		readFileSync: vi.fn((...args: Parameters<typeof actual.readFileSync>) => {
+			if (String(args[0]).includes("mission/current.json")) missionReadCount.current++;
+			return actual.readFileSync(...args);
+		}),
+	};
+});
+
+const { readCurrentMission, createMission } = await import("../../src/core/repi/mission.ts");
+const { writeCurrentMission } = await import("../../src/core/recon-profile.ts");
+const { currentMissionPath } = await import("../../src/core/repi/storage.ts");
+
+const RECON_ROUTE = { domain: "reverse", intent: "recon", toolchain: "generic", skillHint: "re", workflow: [] };
+
+describe("repi/mission read cache + atomic write (opt #75)", () => {
+	let tempDir: string;
+	let agentDir: string;
+	let previousAgentDir: string | undefined;
+
+	beforeEach(() => {
+		tempDir = join(tmpdir(), `repi-mission-cache-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		agentDir = join(tempDir, "agent");
+		mkdirSync(agentDir, { recursive: true });
+		previousAgentDir = process.env[ENV_AGENT_DIR];
+		process.env[ENV_AGENT_DIR] = agentDir;
+		missionReadCount.current = 0;
+	});
+
+	afterEach(() => {
+		if (previousAgentDir === undefined) delete process.env[ENV_AGENT_DIR];
+		else process.env[ENV_AGENT_DIR] = previousAgentDir;
+		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	it("repeat readCurrentMission calls do NOT re-read (0 readFileSync across N calls once warm)", () => {
+		writeCurrentMission(createMission("cache-test mission", RECON_ROUTE));
+		// Reset after the write. The first read cold-reads (1 readFileSync) and warms the
+		// mtime+size cache; subsequent reads hit (0 readFileSync). (Temp-neuter back to
+		// uncached readTextFile → 5 reads, one per call, failing the load-bearing assertion.)
+		missionReadCount.current = 0;
+		const first = readCurrentMission();
+		expect(first?.task).toBe("cache-test mission");
+		expect(missionReadCount.current).toBe(1); // cold read
+		readCurrentMission();
+		readCurrentMission();
+		readCurrentMission();
+		readCurrentMission();
+		expect(missionReadCount.current).toBe(1); // 4 more calls, still 1 read total
+	});
+
+	it("writeCurrentMission invalidates the read cache (next read sees the new mission, not stale)", () => {
+		writeCurrentMission(createMission("v1 mission", RECON_ROUTE));
+		expect(readCurrentMission()?.task).toBe("v1 mission");
+		// A second write (atomic temp+rename → mtime+size change) → the read cache must miss
+		// and the next read sees the new mission, not the stale v1 cache.
+		writeCurrentMission(createMission("v2 mission", RECON_ROUTE));
+		expect(readCurrentMission()?.task).toBe("v2 mission");
+	});
+
+	it("writeCurrentMission is atomic: inode CHANGES (temp+rename, not truncate-then-write)", () => {
+		const path = currentMissionPath();
+		// Two successive writeCurrentMission calls. Each goes through writePrivateTextFile
+		// (temp+rename) which installs a NEW inode per write. The old bare-writeFileSync
+		// truncate-then-write kept the SAME inode across rewrites → this assertion fails if
+		// the write regresses. (ensureReconStorage on the first call creates the parent dir.)
+		writeCurrentMission(createMission("atomic-test mission 1", RECON_ROUTE));
+		const inodeBefore = statSync(path).ino;
+		writeCurrentMission(createMission("atomic-test mission 2", RECON_ROUTE));
+		const inodeAfter = statSync(path).ino;
+		expect(inodeAfter).not.toBe(inodeBefore);
+		// Mode tightened to 0o600 (REPI state doctrine, opt #43).
+		expect(statSync(path).mode & 0o777).toBe(0o600);
+	});
+
+	it("mission round-trips: write → read returns the written task + normalized lanes", () => {
+		writeCurrentMission(createMission("roundtrip mission", RECON_ROUTE));
+		const read = readCurrentMission();
+		expect(read?.task).toBe("roundtrip mission");
+		expect(read?.route.domain).toBe("reverse");
+		expect(Array.isArray(read?.lanes)).toBe(true);
+		// normalizeMission marks the first lane in_progress (non-mutating on the cached raw).
+		expect(read?.lanes.some((lane) => lane.status === "in_progress")).toBe(true);
+	});
+});

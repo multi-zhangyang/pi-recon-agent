@@ -10,6 +10,15 @@ type GitPaths = {
 };
 
 /**
+ * Wall timeout for the footer's git symbolic-ref probe. The command is local
+ * and sub-second, but a hung filesystem / NFS stall / stuck git lock would
+ * otherwise leave the async execFile pending forever (stalling the footer's
+ * background refresh loop) or block the event loop on the sync path.
+ * (opt #126)
+ */
+const GIT_FOOTER_TIMEOUT_MS = 5_000;
+
+/**
  * Find git metadata paths by walking up from cwd.
  * Handles both regular git repos (.git is a directory) and worktrees (.git is a file).
  */
@@ -53,6 +62,8 @@ function resolveBranchWithGitSync(repoDir: string): string | null {
 		cwd: repoDir,
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "ignore"],
+		// (opt #126) bound a hung git probe so it can't block the event loop.
+		timeout: GIT_FOOTER_TIMEOUT_MS,
 	});
 	const branch = result.status === 0 ? result.stdout.trim() : "";
 	return branch || null;
@@ -67,6 +78,9 @@ function resolveBranchWithGitAsync(repoDir: string): Promise<string | null> {
 			{
 				cwd: repoDir,
 				encoding: "utf8",
+				// (opt #126) bound a hung git probe so the footer's background refresh
+				// loop can't stall forever on a hung filesystem / NFS stall.
+				timeout: GIT_FOOTER_TIMEOUT_MS,
 			},
 			(error: ExecFileException | null, stdout: string) => {
 				if (error) {
@@ -195,7 +209,18 @@ export class FooterDataProvider {
 	}
 
 	private notifyBranchChange(): void {
-		for (const cb of this.branchChangeCallbacks) cb();
+		// opt #53 — guard each callback: a throwing branch-change callback (a misbehaving
+		// TUI component, a downstream extension consumer) must not break sibling callbacks
+		// AND must not propagate into refreshGitBranchAsync's fire-and-forget caller (which
+		// would reject → unhandledRejection → process crash; no global unhandledRejection
+		// handler exists). Swallow per-callback and continue the loop.
+		for (const cb of this.branchChangeCallbacks) {
+			try {
+				cb();
+			} catch {
+				// Best-effort notification; one bad callback doesn't poison the rest.
+			}
+		}
 	}
 
 	private scheduleRefresh(): void {
@@ -227,6 +252,15 @@ export class FooterDataProvider {
 				return;
 			}
 			this.cachedBranch = nextBranch;
+		} catch {
+			// opt #53 — git branch refresh is best-effort BACKGROUND work called via a
+			// fire-and-forget `void this.refreshGitBranchAsync()` (scheduleRefresh's debounce
+			// timer). A throw here (a branch-change callback that threw despite the per-callback
+			// guard in notifyBranchChange, or any unexpected error) would reject this promise →
+			// the `void` caller drops the rejection → `unhandledRejection` → process crash.
+			// There is NO global unhandledRejection handler, so the rejection is fatal. Swallow;
+			// the finally still releases refreshInFlight and drains the pending queue so the
+			// footer recovers on the next watcher tick instead of crashing the agent.
 		} finally {
 			this.refreshInFlight = false;
 			if (this.refreshPending && !this.disposed) {

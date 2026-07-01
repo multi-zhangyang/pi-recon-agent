@@ -6,7 +6,7 @@
  */
 
 import type { AgentMessage, StreamFn } from "@pi-recon/repi-agent-core";
-import type { Model, SimpleStreamOptions } from "@pi-recon/repi-ai";
+import type { AssistantMessage, Model, SimpleStreamOptions } from "@pi-recon/repi-ai";
 import { completeSimple } from "@pi-recon/repi-ai";
 import {
 	convertToLlm,
@@ -336,9 +336,20 @@ export async function generateBranchSummary(
 	// without running through agent state/events.
 	const context = { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages };
 	const requestOptions: SimpleStreamOptions = { apiKey, headers, signal, maxTokens: 2048 };
-	const response = streamFn
-		? await (await streamFn(model, context, requestOptions)).result()
-		: await completeSimple(model, context, requestOptions);
+	// `stream.result()` resolves with an error AssistantMessage on a provider
+	// "error" event (handled by the `stopReason === "error"` check below) but
+	// REJECTS when the underlying EventStream ends without a terminal done/error
+	// event (a misbehaving custom extension stream). Convert that rejection into
+	// the existing `{ error }` return shape instead of letting it propagate as a
+	// possible unhandledRejection. (opt #132)
+	let response: AssistantMessage;
+	try {
+		response = streamFn
+			? await (await streamFn(model, context, requestOptions)).result()
+			: await completeSimple(model, context, requestOptions);
+	} catch (error) {
+		return { error: error instanceof Error ? error.message : String(error) };
+	}
 
 	// Check if aborted or errored
 	if (response.stopReason === "aborted") {

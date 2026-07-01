@@ -33,8 +33,18 @@ function buildLabelsById(entries: SessionTreeEntry[]): Map<string, string> {
 }
 
 function generateEntryId(byId: { has(id: string): boolean }): string {
+	// Use the full uuidv7. The previous slice(0, 8) kept only the timestamp's
+	// top 32 bits → constant within a ~65.5s window, so every entry after the
+	// first collided on the prefix, burned all 100 retries, and fell back to a
+	// full 36-char id — producing a mix of 8- and 36-char ids and O(100) wasted
+	// uuidv7 calls per append. No shorter prefix is safely unique: uuidv7's
+	// sequence bits are spread across bytes 6-10, and for low sequence values
+	// only byte 10 (in the final group) varies, so any truncation short of the
+	// random tail collides for some sequence range. The full id carries 80
+	// random bits (bytes 10-15) → collisions are astronomically unlikely and the
+	// retry loop stays a pure safety net.
 	for (let i = 0; i < 100; i++) {
-		const id = uuidv7().slice(0, 8);
+		const id = uuidv7();
 		if (!byId.has(id)) return id;
 	}
 	return uuidv7();
@@ -150,10 +160,35 @@ async function loadJsonlStorage(
 	const header = parseHeaderLine(lines[0]!, filePath);
 	const entries: SessionTreeEntry[] = [];
 	let leafId: string | null = null;
+	// Tolerate a torn TRAILING line: appendEntry/setLeafId write via appendFile
+	// (non-atomic — opt #38 only made the _rewriteFile path atomic), so a crash
+	// mid-flush leaves a partial final line with no trailing "\n". Without this
+	// tolerance ONE torn line makes the ENTIRE session unopenable. Only the LAST
+	// non-empty line is treated as torn (the crash-torn-write signature); an
+	// interior parse failure is genuine corruption and still throws.
+	let tornTrailingLine = false;
 	for (let i = 1; i < lines.length; i++) {
-		const entry = parseEntryLine(lines[i]!, filePath, i + 1);
-		entries.push(entry);
-		leafId = leafIdAfterEntry(entry);
+		try {
+			const entry = parseEntryLine(lines[i]!, filePath, i + 1);
+			entries.push(entry);
+			leafId = leafIdAfterEntry(entry);
+		} catch (error) {
+			if (i !== lines.length - 1) throw error;
+			tornTrailingLine = true;
+			break;
+		}
+	}
+	if (tornTrailingLine) {
+		// Re-truncate to the last good line boundary so the next appendEntry does
+		// not concatenate onto the partial line (which would fuse into one
+		// unhealable interior corrupt line). Best-effort: a write failure does not
+		// block open — the in-memory skip already made the session usable.
+		const cleanBody = `${JSON.stringify(header)}\n${entries.map((entry) => JSON.stringify(entry)).join("\n")}${entries.length ? "\n" : ""}`;
+		try {
+			getFileSystemResultOrThrow(await fs.writeFile(filePath, cleanBody), `Failed to heal session ${filePath}`);
+		} catch {
+			// best-effort heal
+		}
 	}
 	return { header, entries, leafId };
 }
@@ -274,16 +309,32 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 
 	async getPathToRoot(leafId: string | null): Promise<SessionTreeEntry[]> {
 		if (leafId === null) return [];
+		// Build leaf→root then reverse once (O(n)) instead of unshift-per-step
+		// (O(n²)): in this session model every appendEntry advances the leaf and
+		// compaction adds but never removes entries, so the chain depth ≈ total
+		// session entries and getPathToRoot runs per turn → unshift made the
+		// per-turn context build O(n²) (cumulative O(n³) over a long session).
 		const path: SessionTreeEntry[] = [];
 		let current = this.byId.get(leafId);
 		if (!current) throw new SessionError("not_found", `Entry ${leafId} not found`);
+		const visited = new Set<string>();
 		while (current) {
-			path.unshift(current);
+			// Cycle guard: entries are appended with parentId = currentLeafId so cycles
+			// can't form naturally, but a bit-rotted/hand-edited file with A.parentId =
+			// B, B.parentId = A would spin forever (getPathToRoot runs per turn via
+			// buildContext → getBranch → event-loop-blocking CPU spin). Convert a cycle
+			// into a typed invalid_session error instead of a hang.
+			if (visited.has(current.id)) {
+				throw new SessionError("invalid_session", `Cycle detected at entry ${current.id}`);
+			}
+			visited.add(current.id);
+			path.push(current);
 			if (!current.parentId) break;
 			const parent = this.byId.get(current.parentId);
 			if (!parent) throw new SessionError("invalid_session", `Entry ${current.parentId} not found`);
 			current = parent;
 		}
+		path.reverse();
 		return path;
 	}
 

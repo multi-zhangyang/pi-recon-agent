@@ -78,6 +78,11 @@ export class Loader extends Text {
 			this.currentFrame = (this.currentFrame + 1) % this.frames.length;
 			this.updateDisplay();
 		}, this.intervalMs);
+		// Defense-in-depth (opt #143): an unstopped Loader interval would keep
+		// the event loop alive + fire invalidate/requestRender on a detached
+		// component. unref() so a leaked interval never blocks process exit and
+		// is GC-eligible once the Loader is dropped.
+		this.intervalId.unref();
 	}
 
 	private updateDisplay(): void {
@@ -88,5 +93,9 @@ export class Loader extends Text {
 		if (this.ui) {
 			this.ui.requestRender();
 		}
+	}
+
+	dispose(): void {
+		this.stop();
 	}
 }

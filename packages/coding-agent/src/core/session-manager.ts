@@ -1,8 +1,9 @@
 import { type AgentMessage, uuidv7 } from "@pi-recon/repi-agent-core";
 import type { ImageContent, Message, TextContent } from "@pi-recon/repi-ai";
-import { randomUUID } from "crypto";
+import { randomBytes, randomUUID } from "crypto";
 import {
 	appendFileSync,
+	chmodSync,
 	closeSync,
 	createReadStream,
 	existsSync,
@@ -10,11 +11,13 @@ import {
 	openSync,
 	readdirSync,
 	readSync,
+	renameSync,
 	statSync,
+	unlinkSync,
 	writeFileSync,
 } from "fs";
 import { readdir, stat } from "fs/promises";
-import { join, resolve } from "path";
+import { basename, dirname, join, resolve } from "path";
 import { createInterface } from "readline";
 import { StringDecoder } from "string_decoder";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.ts";
@@ -26,6 +29,7 @@ import {
 	createCompactionSummaryMessage,
 	createCustomMessage,
 } from "./messages.ts";
+import { atomicWriteFileSync } from "./tools/atomic-write.ts";
 
 export const CURRENT_SESSION_VERSION = 3;
 
@@ -234,6 +238,12 @@ function migrateV1ToV2(entries: FileEntry[]): void {
 		}
 
 		entry.id = generateId(ids);
+		// opt #225: record the generated id in the collision set so subsequent
+		// generateId calls in this migration actually detect a collision. Pre-fix
+		// `ids` was never added to, so the 100-retry collision check was dead —
+		// two colliding 8-hex ids would silently share an id, shadowing one entry
+		// in byId and corrupting the parent chain (silent context loss).
+		ids.add(entry.id);
 		entry.parentId = prevId;
 		prevId = entry.id;
 
@@ -356,9 +366,28 @@ export function buildSessionContext(
 	// Walk from leaf to root, collecting path
 	const path: SessionEntry[] = [];
 	let current: SessionEntry | undefined = leaf;
+	const visited = new Set<string>();
 	while (current) {
+		if (visited.has(current.id)) {
+			throw new Error(`Session cycle detected at entry ${current.id} (corrupt parentId chain)`);
+		}
+		visited.add(current.id);
 		path.unshift(current);
 		current = current.parentId ? byId.get(current.parentId) : undefined;
+	}
+
+	// opt #223: detect a dangling parentId — the walk stopped because an entry's
+	// parentId was non-null but resolved to no entry (parent deleted/corrupt/not
+	// in the loaded set, e.g. a partial-load or a re-parented branch). The path
+	// is silently truncated at that point: every ancestor message before the
+	// break is lost from the model's context with no signal. Surface a warning
+	// so the loss is visible rather than silent. The truncation behavior itself
+	// is preserved (emit what we have) so session load still succeeds.
+	const pathRoot = path[0];
+	if (pathRoot?.parentId && !byId.has(pathRoot.parentId)) {
+		process.stderr.write(
+			`Warning: session branch truncated at entry "${pathRoot.id}" — parentId "${pathRoot.parentId}" not found in session; ancestor messages dropped from context.\n`,
+		);
 	}
 
 	// Extract settings and find compaction
@@ -406,13 +435,37 @@ export function buildSessionContext(
 
 		// Emit kept messages (before compaction, starting from firstKeptEntryId)
 		let foundFirstKept = false;
+		const firstKeptId = compaction.firstKeptEntryId;
 		for (let i = 0; i < compactionIdx; i++) {
 			const entry = path[i];
-			if (entry.id === compaction.firstKeptEntryId) {
+			if (firstKeptId && entry.id === firstKeptId) {
 				foundFirstKept = true;
 			}
 			if (foundFirstKept) {
 				appendMessage(entry);
+			}
+		}
+
+		// opt #222: if firstKeptEntryId was missing (e.g. a v1 compaction whose
+		// firstKeptEntryIndex pointed at the session header — migrateV1ToV2
+		// leaves firstKeptEntryId undefined) or pointed at an entry not on this
+		// path (orphaned by branching), the loop above emitted NOTHING — the
+		// model would see a compaction summary with zero retained messages
+		// (silent context loss). Fall back to emitting ALL pre-compaction messages
+		// so the conversation is preserved (redundant with the summary, but
+		// non-lossy). For the v1-header case this is exactly correct (kept window
+		// was the whole pre-compaction history); for the orphaned-branch case it
+		// is a safe over-inclusion. Surface a warning only when an id was present
+		// but unresolvable (real corruption), not when it was never set (migration).
+		if (!foundFirstKept) {
+			if (firstKeptId) {
+				process.stderr.write(
+					`Warning: session compaction firstKeptEntryId "${firstKeptId}" not found on branch path; ` +
+						`falling back to all pre-compaction messages to avoid context loss.\n`,
+				);
+			}
+			for (let i = 0; i < compactionIdx; i++) {
+				appendMessage(path[i]);
 			}
 		}
 
@@ -455,7 +508,34 @@ const SESSION_READ_BUFFER_SIZE = 1024 * 1024;
 function parseSessionEntryLine(line: string): FileEntry | null {
 	if (!line.trim()) return null;
 	try {
-		return JSON.parse(line) as FileEntry;
+		const entry = JSON.parse(line) as FileEntry;
+		// Foundational opt #270: validate the SHAPE of a parsed entry, not just
+		// JSON syntax. A `type:"message"` line that is valid JSON but has a
+		// missing/null `message` field (disk corruption, a partial write that
+		// landed as valid JSON, a buggy extension/custom writer, or a
+		// version-incompatible client) previously passed this check and entered
+		// `fileEntries`. Then _buildIndex (line ~1147) did
+		// `entry.message.role === "assistant"` and buildSessionContext (line ~403)
+		// did `entry.message.provider` — `TypeError: Cannot read properties of
+		// null/undefined (reading 'role')` — UNCAUGHT in setSessionFile (no
+		// try/catch around _buildIndex), propagating out of the SessionManager
+		// constructor and aborting every `--continue`/open/forkFrom on that
+		// session. The headerless/empty recovery (backupCorruptSessionFile) only
+		// fires when fileEntries.length===0, so a header-valid-but-entry-corrupt
+		// session was permanently unopenable with no .corrupt.*.bak. Skip a
+		// malformed message entry here (same as a malformed-JSON line) so the
+		// session stays loadable; the rest of the entries are unaffected.
+		if (entry.type === "message") {
+			const message = (entry as { message?: unknown }).message;
+			if (
+				message === null ||
+				typeof message !== "object" ||
+				typeof (message as { role?: unknown }).role !== "string"
+			) {
+				return null;
+			}
+		}
+		return entry;
 	} catch {
 		// Skip malformed lines
 		return null;
@@ -492,7 +572,21 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
 
 		pending += decoder.end();
 		const finalEntry = parseSessionEntryLine(pending);
-		if (finalEntry) entries.push(finalEntry);
+		if (finalEntry) {
+			entries.push(finalEntry);
+		} else if (pending.trim()) {
+			// Torn trailing line: a crash (SIGKILL/OOM/power loss) mid-appendFileSync
+			// left a partial final line with no trailing "\n". The in-memory skip above
+			// already made the session usable, but without re-truncating the file the
+			// NEXT append would concatenate directly onto the partial line, fusing into
+			// one unhealable interior corrupt line and silently losing BOTH the torn
+			// entry AND the next appended entry on the following reopen. Heal by
+			// atomically rewriting the parseable entries (mirrors the harness
+			// loadJsonlStorage heal in jsonl-storage.ts; atomic temp+rename per #38 so
+			// a crash during recovery cannot make things worse). Best-effort: a write
+			// failure does not block open — the in-memory skip already succeeded.
+			healTornTrailingLine(resolvedFilePath, entries);
+		}
 	} finally {
 		closeSync(fd);
 	}
@@ -507,13 +601,146 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
 	return entries;
 }
 
-function readSessionHeader(filePath: string): SessionHeader | null {
+/**
+ * Atomically re-truncate a session file to its parseable entries after a torn
+ * trailing line was skipped by {@link loadEntriesFromFile}. Without this heal the
+ * next `appendFileSync` fuses onto the partial line, losing both entries. Writes a
+ * uniquely-named temp file in the same directory then renames into place (POSIX
+ * atomic within the same filesystem), preserving the existing file's mode.
+ * Best-effort: any failure is swallowed — the in-memory skip already made the
+ * session usable, and a failed heal must not block open.
+ */
+function healTornTrailingLine(filePath: string, entries: FileEntry[]): void {
+	// opt #221: never heal to an EMPTY file. If entries is empty (the only line
+	// was a torn header / fully-corrupt blob), writing an empty temp and
+	// renaming it over the original DESTROYS the corrupt content — which may be
+	// partially recoverable by hand — before any caller-side backup runs. Leave
+	// the file intact and let the caller (setSessionFile) decide. When entries
+	// is empty the file has no valid header, so setSessionFile rewrites it with
+	// a fresh header anyway; skipping the heal here only avoids clobbering the
+	// original before that backup-aware path runs.
+	if (entries.length === 0) return;
+	const dir = dirname(filePath);
+	const tempPath = join(dir, `.${basename(filePath)}.${process.pid}.${randomBytes(4).toString("hex")}.torn.tmp`);
+	// Wrap the entire open→write→chmod→rename sequence in a single catch that
+	// unlinks the temp on ANY failure. Previously only the renameSync step was
+	// guarded: if writeFileSync threw mid-loop (disk full / EIO / EROFS), the
+	// inner finally closed the fd and the error propagated to the outer catch —
+	// which swallowed it but never unlinked tempPath, leaving a
+	// `.<basename>.<pid>.<hex>.torn.tmp` file in the session dir permanently
+	// (repeated heal attempts on a nearly-full disk accumulated them). This
+	// mirrors atomicWriteFileSync's whole-sequence unlink-on-failure contract.
+	// The heal itself stays best-effort: any failure is swallowed so a failed
+	// heal never blocks open (the in-memory skip already made the session
+	// usable).
 	try {
-		const fd = openSync(filePath, "r");
-		const buffer = Buffer.alloc(512);
-		const bytesRead = readSync(fd, buffer, 0, 512, 0);
-		closeSync(fd);
-		const firstLine = buffer.toString("utf8", 0, bytesRead).split("\n")[0];
+		const fd = openSync(tempPath, "wx");
+		try {
+			for (const entry of entries) {
+				writeFileSync(fd, `${JSON.stringify(entry)}\n`);
+			}
+		} finally {
+			closeSync(fd);
+		}
+		try {
+			const existing = statSync(filePath);
+			try {
+				chmodSync(tempPath, existing.mode & 0o777);
+			} catch {
+				/* best-effort: proceed with default mode */
+			}
+		} catch {
+			/* target doesn't exist yet — keep default mode */
+		}
+		try {
+			renameSync(tempPath, filePath);
+		} catch {
+			try {
+				unlinkSync(tempPath);
+			} catch {
+				/* best-effort cleanup */
+			}
+		}
+	} catch {
+		// best-effort heal; the in-memory skip already made the session usable.
+		// Clean up the temp on this write/open-failure path too (rename-failure
+		// cleanup is handled above).
+		try {
+			unlinkSync(tempPath);
+		} catch {
+			/* best-effort: temp may not exist (open threw) or already removed */
+		}
+	}
+}
+
+/**
+ * Best-effort backup of an unrecoverable session file before setSessionFile
+ * overwrites it with a fresh header. Renames the original to
+ * `<path>.corrupt.<ts>.bak` and surfaces a stderr warning so the user knows
+ * their conversation was retained as a backup. opt #221.
+ *
+ * No-op when the file does not exist or is genuinely empty (size 0). A rename
+ * failure is swallowed — setSessionFile proceeds to write a fresh session so
+ * open still succeeds; the original is left in place (the fresh write then
+ * overwrites it, but at least one backup attempt was made).
+ */
+function backupCorruptSessionFile(filePath: string): void {
+	try {
+		if (!existsSync(filePath)) return;
+		const st = statSync(filePath);
+		if (!st.isFile() || st.size === 0) return;
+		const backup = `${filePath}.corrupt.${Date.now()}.bak`;
+		try {
+			renameSync(filePath, backup);
+		} catch {
+			// Rename failed (cross-device / permissions). Fall back to leaving the
+			// original in place — the caller's fresh write will overwrite it, but we
+			// avoid destroying it via a failed partial move. Return without warning
+			// since no backup was created.
+			return;
+		}
+		process.stderr.write(
+			`Warning: session file "${filePath}" was corrupt or had no valid header and could not be recovered. ` +
+				`A backup was saved to "${backup}" and a fresh session was started.\n`,
+		);
+	} catch {
+		// best-effort: never block session open on a backup failure
+	}
+}
+
+/** Exported for testing (opt #157: long-first-line regression pin). */
+export function readSessionHeader(filePath: string): SessionHeader | null {
+	let fd: number | undefined;
+	try {
+		fd = openSync(filePath, "r");
+		// opt #157: read the first line in a loop until a newline, EOF, or a
+		// sane 16 KB cap, instead of a fixed 512-byte readSync. A long header
+		// line (deep cwd + full-path parentSession, which the writer stores at
+		// persist/fork/resume sites) exceeds 512 bytes → the old read truncated
+		// it mid-JSON → JSON.parse threw → the catch returned null → the session
+		// was silently dropped from findMostRecentSession's --continue auto-pick.
+		const CAP = 16 * 1024;
+		const buffer = Buffer.alloc(CAP);
+		let filled = 0;
+		let firstLine: string | null = null;
+		while (filled < CAP) {
+			const n = readSync(fd, buffer, filled, CAP - filled, filled);
+			if (n <= 0) {
+				// EOF before a newline — the whole buffer is the first line.
+				firstLine = buffer.toString("utf8", 0, filled);
+				break;
+			}
+			const nl = buffer.toString("utf8", filled, filled + n).indexOf("\n");
+			if (nl !== -1) {
+				firstLine = buffer.toString("utf8", 0, filled + nl);
+				break;
+			}
+			filled += n;
+		}
+		// firstLine === null → hit the 16 KB cap with no newline: a header this
+		// long is pathological; treat as unparseable rather than read unbounded.
+		if (!firstLine) return null;
+		firstLine = firstLine.trim();
 		if (!firstLine) return null;
 		const header = JSON.parse(firstLine) as Record<string, unknown>;
 		if (header.type !== "session" || typeof header.id !== "string") {
@@ -522,6 +749,16 @@ function readSessionHeader(filePath: string): SessionHeader | null {
 		return header as unknown as SessionHeader;
 	} catch {
 		return null;
+	} finally {
+		// Close in finally so a readSync/JSON.parse throw doesn't leak the fd.
+		// (loadEntriesFromFile already does this; this path didn't.)
+		if (fd !== undefined) {
+			try {
+				closeSync(fd);
+			} catch {
+				// Best-effort: fd may already be invalid.
+			}
+		}
 	}
 }
 
@@ -548,7 +785,19 @@ export function findMostRecentSession(sessionDir: string, cwd?: string): string 
 					file.header !== null &&
 					(!resolvedCwd || sessionCwdMatches(getSessionHeaderCwd(file.header), resolvedCwd)),
 			)
-			.map(({ path }) => ({ path, mtime: statSync(path).mtime }))
+			.flatMap(({ path }) => {
+				try {
+					return [{ path, mtime: statSync(path).mtime }];
+				} catch {
+					// opt #243: a single unreadable/deleted/broken-symlink .jsonl
+					// mid-list used to throw out of the .map, abort the whole
+					// .sort chain, and be caught by the outer try → return null
+					// for the ENTIRE directory. `pi --continue` (continueRecent)
+					// then silently started a fresh session instead of resuming
+					// the real most-recent readable one. Skip just the bad file.
+					return [];
+				}
+			})
 			.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
 
 		return files[0]?.path || null;
@@ -586,13 +835,46 @@ function getMessageActivityTime(entry: SessionMessageEntry): number | undefined 
 	return Number.isNaN(t) ? undefined : t;
 }
 
-async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
+/**
+ * Per-session cap on the accumulated transcript text held in memory for the
+ * session-picker fuzzy search (`allMessagesText`). `0` disables the cap (full
+ * transcript). Unset/garbage falls back to the default. Consistent with the
+ * opt #27/#41 `envNonNegativeInteger` style: an explicit `0` is honored.
+ */
+const DEFAULT_SESSION_SEARCH_MAX_CHARS = 256 * 1024;
+
+function getSessionSearchMaxChars(): number {
+	const raw = process.env.REPI_SESSION_SEARCH_MAX_CHARS;
+	if (raw === undefined || raw.trim() === "") return DEFAULT_SESSION_SEARCH_MAX_CHARS;
+	const value = Number(raw);
+	if (!Number.isFinite(value) || value < 0) return DEFAULT_SESSION_SEARCH_MAX_CHARS;
+	return Math.floor(value);
+}
+
+/** Exported for testing (opt #167: bounded allMessagesText pin). */
+export async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 	try {
 		const stats = await stat(filePath);
 		let header: SessionHeader | null = null;
 		let messageCount = 0;
 		let firstMessage = "";
-		const allMessages: string[] = [];
+		// opt #167: cap the per-session transcript held in memory for the
+		// session-picker fuzzy search. Previously every user/assistant
+		// textContent was pushed into allMessages with no cap, then joined —
+		// the full transcript of every session was accumulated in memory
+		// (array + joined string), and buildSessionInfosWithConcurrency
+		// (concurrency 10) ran this for ALL sessions at once on list/search →
+		// OOM on several long sessions. Now: keep the first message (head) +
+		// a bounded TAIL of recent messages (head+tail, faithful to "most
+		// recent context" for fuzzy search). A session whose total text stays
+		// under the cap — the normal case — is byte-identical to the uncapped
+		// join (no truncation, no drops). cap=0 disables → original behavior.
+		const cap = getSessionSearchMaxChars();
+		const allMessages: string[] = []; // uncapped path (cap === 0)
+		let head = ""; // first textContent, kept fully (capped to cap if one msg > cap)
+		let haveHead = false;
+		const tail: string[] = []; // recent messages after head, byte-bounded
+		let tailBytes = 0;
 		let name: string | undefined;
 		let lastActivityTime: number | undefined;
 
@@ -631,9 +913,33 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 			const textContent = extractTextContent(message);
 			if (!textContent) continue;
 
-			allMessages.push(textContent);
 			if (!firstMessage && message.role === "user") {
 				firstMessage = textContent;
+			}
+
+			if (cap === 0) {
+				// Uncapped path: preserve original behavior byte-for-byte.
+				allMessages.push(textContent);
+				continue;
+			}
+			// Capped head+tail path. Cap any single oversized message so one
+			// huge message can't itself blow the bound.
+			const piece = textContent.length > cap ? textContent.slice(0, cap) : textContent;
+			if (!haveHead) {
+				head = piece;
+				haveHead = true;
+				continue;
+			}
+			tail.push(piece);
+			tailBytes += piece.length;
+			// Drop oldest tail entries while over cap (keep head + recent tail).
+			// Batch-drop half when the tail is large to keep amortized O(1)
+			// even for pathological many-tiny-message sessions; each element is
+			// physically removed at most once.
+			while (tailBytes > cap && tail.length > 0) {
+				const dropCount = tail.length > 1024 ? Math.floor(tail.length / 2) : 1;
+				const removed = tail.splice(0, dropCount);
+				for (const r of removed) tailBytes -= r.length;
 			}
 		}
 
@@ -649,6 +955,12 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 					? new Date(headerTime)
 					: stats.mtime;
 
+		// cap===0 → uncapped join (byte-identical to original behavior).
+		// Otherwise head+tail join, then a final slice so the returned text is
+		// <= cap chars regardless of join separators. The tail-drop loop above
+		// bounds the in-memory working set; this slice bounds the output.
+		const allMessagesText = cap === 0 ? allMessages.join(" ") : [head, ...tail].join(" ").slice(0, cap);
+
 		return {
 			path: filePath,
 			id: header.id,
@@ -659,7 +971,7 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 			modified,
 			messageCount,
 			firstMessage: firstMessage || "(no messages)",
-			allMessagesText: allMessages.join(" "),
+			allMessagesText,
 		};
 	} catch {
 		return null;
@@ -761,6 +1073,13 @@ export class SessionManager {
 	private cwd: string;
 	private persist: boolean;
 	private flushed: boolean = false;
+	/** O(1) cache: true once an assistant message has been appended to fileEntries.
+	 * Replaces the O(n) some() scan in _persist that ran on every append. */
+	private _hasAssistant: boolean = false;
+	/** O(1) cache of the latest CompactionEntry on the current branch (leaf→root path).
+	 * Replaces the per-turn getLatestCompactionEntry(getBranch()) walk in the compaction hook.
+	 * Updated in appendCompaction; recomputed in _buildIndex/branch/resetLeaf/branchWithSummary. */
+	private _latestCompactionOnBranch: CompactionEntry | null = null;
 	private fileEntries: FileEntry[] = [];
 	private byId: Map<string, SessionEntry> = new Map();
 	private labelsById: Map<string, string> = new Map();
@@ -797,6 +1116,16 @@ export class SessionManager {
 			// If file was empty or corrupted (no valid header), truncate and start fresh
 			// to avoid appending messages without a session header (which breaks the session)
 			if (this.fileEntries.length === 0) {
+				// opt #221: before overwriting an unrecoverable session file with a
+				// fresh header, back the original up to `<path>.corrupt.<ts>.bak` so
+				// the user can attempt manual recovery. Pre-fix this branch silently
+				// replaced the file (newSession + _rewriteFile) with a blank session,
+				// permanently destroying the corrupt content — which may have been
+				// partially recoverable (a torn header from a crash during the first
+				// flush, or a single bad line). Best-effort: a rename failure is
+				// swallowed so open still succeeds with a fresh session. Skip only when
+				// the file is genuinely empty (size 0) — nothing to recover.
+				backupCorruptSessionFile(this.sessionFile);
 				const explicitPath = this.sessionFile;
 				this.newSession();
 				this.sessionFile = explicitPath;
@@ -840,6 +1169,8 @@ export class SessionManager {
 		this.labelsById.clear();
 		this.leafId = null;
 		this.flushed = false;
+		this._hasAssistant = false;
+		this._latestCompactionOnBranch = null;
 
 		if (this.persist) {
 			const fileTimestamp = timestamp.replace(/[:.]/g, "-");
@@ -853,10 +1184,14 @@ export class SessionManager {
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
 		this.leafId = null;
+		this._hasAssistant = false;
 		for (const entry of this.fileEntries) {
 			if (entry.type === "session") continue;
 			this.byId.set(entry.id, entry);
 			this.leafId = entry.id;
+			if (entry.type === "message" && entry.message.role === "assistant") {
+				this._hasAssistant = true;
+			}
 			if (entry.type === "label") {
 				if (entry.label) {
 					this.labelsById.set(entry.targetId, entry.label);
@@ -867,17 +1202,92 @@ export class SessionManager {
 				}
 			}
 		}
+		this._recomputeLatestCompactionOnBranch();
+	}
+
+	/** Recompute _latestCompactionOnBranch by walking leaf→root. O(depth). */
+	private _recomputeLatestCompactionOnBranch(): void {
+		this._latestCompactionOnBranch = null;
+		let current = this.leafId ? this.byId.get(this.leafId) : undefined;
+		const visited = new Set<string>();
+		while (current) {
+			if (visited.has(current.id)) {
+				throw new Error(`Session cycle detected at entry ${current.id} (corrupt parentId chain)`);
+			}
+			visited.add(current.id);
+			if (current.type === "compaction") {
+				this._latestCompactionOnBranch = current as CompactionEntry;
+				return;
+			}
+			current = current.parentId ? this.byId.get(current.parentId) : undefined;
+		}
 	}
 
 	private _rewriteFile(): void {
 		if (!this.persist || !this.sessionFile) return;
-		const fd = openSync(this.sessionFile, "w");
+		// Atomic rewrite: write to a uniquely-named temp file in the SAME directory
+		// as the session file, then rename it into place. A plain openSync("w")
+		// truncates the live session file first, so a crash (SIGKILL/OOM/SIGTERM)
+		// mid-write would leave a truncated/partial file and lose the whole
+		// conversation. temp+rename means readers see either the previous complete
+		// file or the new complete file, never a partial write. rename is atomic on
+		// POSIX only within the same filesystem, which same-directory placement
+		// guarantees. Mode is preserved from the existing file. fsync is omitted
+		// (crash-consistency of content, not power-loss durability — matches the
+		// async atomicWriteFile pattern in tools/atomic-write.ts).
+		const target = this.sessionFile;
+		const dir = dirname(target);
+		const tempPath = join(
+			dir,
+			`.${basename(target)}.${process.pid}.${Date.now()}.${randomBytes(4).toString("hex")}.tmp`,
+		);
+		const fd = openSync(tempPath, "wx");
 		try {
-			for (const entry of this.fileEntries) {
-				writeFileSync(fd, `${JSON.stringify(entry)}\n`);
+			try {
+				for (const entry of this.fileEntries) {
+					writeFileSync(fd, `${JSON.stringify(entry)}\n`);
+				}
+			} finally {
+				closeSync(fd);
 			}
-		} finally {
-			closeSync(fd);
+			// Preserve the existing session file's mode (e.g. a restrictive 0o600)
+			// across the replace; a temp+rename would otherwise reset it to the
+			// default. ENOENT (target doesn't exist yet) is non-fatal.
+			try {
+				const existing = statSync(target);
+				try {
+					chmodSync(tempPath, existing.mode & 0o777);
+				} catch {
+					/* best-effort: proceed with default mode */
+				}
+			} catch {
+				/* target doesn't exist yet — keep default mode */
+			}
+			try {
+				renameSync(tempPath, target);
+			} catch (error) {
+				try {
+					unlinkSync(tempPath);
+				} catch {
+					/* best-effort: temp may not exist or may have been renamed already */
+				}
+				throw error instanceof Error ? error : new Error(String(error));
+			}
+		} catch (error) {
+			// opt #235: pre-fix only the renameSync step unlinked the temp. If
+			// writeFileSync threw mid-loop (ENOSPC/EIO/EROFS), the finally closed
+			// the fd and the error propagated — control never reached the rename
+			// catch, so the partial `.<basename>.<pid>.<ts>.<hex>.tmp` file was
+			// left permanently in the session dir on EVERY failed rewrite (leak;
+			// same class opt #41 fixed for atomicWriteFileSync). Best-effort unlink
+			// before re-throwing. The original target is untouched (rename never
+			// reached), so no data loss — only the leaked temp is cleaned up.
+			try {
+				unlinkSync(tempPath);
+			} catch {
+				/* best-effort: temp may not exist (open threw) or already renamed */
+			}
+			throw error instanceof Error ? error : new Error(String(error));
 		}
 	}
 
@@ -908,7 +1318,7 @@ export class SessionManager {
 	_persist(entry: SessionEntry): void {
 		if (!this.persist || !this.sessionFile) return;
 
-		const hasAssistant = this.fileEntries.some((e) => e.type === "message" && e.message.role === "assistant");
+		const hasAssistant = this._hasAssistant;
 		if (!hasAssistant) {
 			if (this.flushed) {
 				appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
@@ -925,6 +1335,20 @@ export class SessionManager {
 				for (const e of this.fileEntries) {
 					writeFileSync(fd, `${JSON.stringify(e)}\n`);
 				}
+			} catch (error) {
+				// A write failure (e.g. ENOSPC) mid-loop leaves a partial file on
+				// disk while this.flushed stays false; the next _persist re-enters
+				// this branch and openSync("wx") throws EEXIST on every subsequent
+				// append, bricking persistence until process restart. Remove the
+				// partial file so the next attempt recreates it cleanly via "wx".
+				// Best-effort: never mask the original error. this.flushed remains
+				// false so the retry takes the first-flush path again.
+				try {
+					unlinkSync(this.sessionFile);
+				} catch {
+					/* best-effort: file may not exist or may have been removed already */
+				}
+				throw error;
 			} finally {
 				closeSync(fd);
 			}
@@ -935,10 +1359,52 @@ export class SessionManager {
 	}
 
 	private _appendEntry(entry: SessionEntry): void {
+		// opt #239: capture the pre-append in-memory state so a _persist failure
+		// can be rolled back. _persist's flushed-append branches use a bare
+		// `appendFileSync` with NO recovery (unlike the first-flush openSync("wx")
+		// path which unlinks the partial file). A throw there left `entry` in
+		// memory (fileEntries/byId/leafId/_hasAssistant) but NOT on disk. The NEXT
+		// successful append then wrote an entry whose parentId pointed at this
+		// failed (in-memory-only) id; on reload, buildSessionContext walks from
+		// the leaf, hits a parentId absent from the on-disk record set, and
+		// truncates the path — silently dropping all ancestor history from the
+		// LLM context (DATA-LOSS). Roll back so memory matches disk (the prior
+		// on-disk leaf is entry.parentId), then rethrow so the caller sees the
+		// failure.
+		//
+		// opt #274: the rollback is PATH-AWARE. It is only correct for the
+		// FLUSHED-APPEND path (priorFlushed=true): there a failed appendFileSync
+		// leaves the entry in memory but not on disk, and the next successful
+		// append would dangle a parentId at it. For the FIRST-FLUSH path
+		// (priorFlushed=false — reached when the first assistant triggers the
+		// initial openSync("wx") write of ALL buffered fileEntries), _persist's
+		// OWN catch already recovers: it unlinks the partial file and leaves
+		// flushed=false so the next assistant-triggered persist re-enters
+		// first-flush and rewrites the WHOLE fileEntries set. Rolling back there
+		// would POP the assistant and reset _hasAssistant=false → the next
+		// (non-assistant) append takes the !hasAssistant no-flush branch → the
+		// file is never created and the assistant message is silently LOST. Keep
+		// the entry buffered for the first-flush retry instead.
+		const priorLeafId = this.leafId;
+		const priorHadAssistant = this._hasAssistant;
+		const priorFlushed = this.flushed;
 		this.fileEntries.push(entry);
 		this.byId.set(entry.id, entry);
 		this.leafId = entry.id;
-		this._persist(entry);
+		if (entry.type === "message" && entry.message.role === "assistant") {
+			this._hasAssistant = true;
+		}
+		try {
+			this._persist(entry);
+		} catch (error) {
+			if (priorFlushed) {
+				this.fileEntries.pop();
+				this.byId.delete(entry.id);
+				this.leafId = priorLeafId;
+				this._hasAssistant = priorHadAssistant;
+			}
+			throw error;
+		}
 	}
 
 	/** Append a message as child of current leaf, then advance leaf. Returns entry id.
@@ -1006,6 +1472,9 @@ export class SessionManager {
 			fromHook,
 		};
 		this._appendEntry(entry);
+		// The new compaction entry is appended at the current leaf, so it is
+		// the latest compaction on the branch — update the O(1) cache directly.
+		this._latestCompactionOnBranch = entry as CompactionEntry;
 		return entry.id;
 	}
 
@@ -1151,11 +1620,27 @@ export class SessionManager {
 		const path: SessionEntry[] = [];
 		const startId = fromId ?? this.leafId;
 		let current = startId ? this.byId.get(startId) : undefined;
+		const visited = new Set<string>();
 		while (current) {
+			if (visited.has(current.id)) {
+				throw new Error(`Session cycle detected at entry ${current.id} (corrupt parentId chain)`);
+			}
+			visited.add(current.id);
 			path.unshift(current);
 			current = current.parentId ? this.byId.get(current.parentId) : undefined;
 		}
 		return path;
+	}
+
+	/**
+	 * O(1) accessor for the latest CompactionEntry on the current branch
+	 * (leaf→root path). Backed by _latestCompactionOnBranch, kept in sync on
+	 * appendCompaction / branch / resetLeaf / branchWithSummary / _buildIndex.
+	 * Equivalent to getLatestCompactionEntry(this.getBranch()) but avoids the
+	 * per-turn O(depth) walk + array allocation.
+	 */
+	getLatestCompactionOnBranch(): CompactionEntry | null {
+		return this._latestCompactionOnBranch;
 	}
 
 	/**
@@ -1243,6 +1728,9 @@ export class SessionManager {
 			throw new Error(`Entry ${branchFromId} not found`);
 		}
 		this.leafId = branchFromId;
+		// Leaf moved to a different sub-branch; the latest compaction on the
+		// path may differ — recompute the O(1) cache.
+		this._recomputeLatestCompactionOnBranch();
 	}
 
 	/**
@@ -1252,6 +1740,7 @@ export class SessionManager {
 	 */
 	resetLeaf(): void {
 		this.leafId = null;
+		this._latestCompactionOnBranch = null;
 	}
 
 	/**
@@ -1263,6 +1752,16 @@ export class SessionManager {
 		if (branchFromId !== null && !this.byId.has(branchFromId)) {
 			throw new Error(`Entry ${branchFromId} not found`);
 		}
+		// Foundational opt #266: capture the PRE-CALL leaf so a _persist failure
+		// restores it, NOT branchFromId. Below we set this.leafId = branchFromId
+		// BEFORE _appendEntry; _appendEntry's own rollback (opt #239) captures
+		// priorLeafId = this.leafId at that point = branchFromId, and restores
+		// THAT on failure → the leaf silently jumps to branchFromId (the
+		// navigation target) even though the branch_summary entry was never
+		// persisted → the next appendMessage creates a child of branchFromId,
+		// abandoning the original branch with no signal. Wrap _appendEntry so a
+		// failure restores the original caller leaf and rethrows.
+		const preCallLeafId = this.leafId;
 		this.leafId = branchFromId;
 		const entry: BranchSummaryEntry = {
 			type: "branch_summary",
@@ -1274,7 +1773,13 @@ export class SessionManager {
 			details,
 			fromHook,
 		};
-		this._appendEntry(entry);
+		try {
+			this._appendEntry(entry);
+		} catch (error) {
+			this.leafId = preCallLeafId;
+			throw error;
+		}
+		this._recomputeLatestCompactionOnBranch();
 		return entry.id;
 	}
 
@@ -1345,7 +1850,7 @@ export class SessionManager {
 			// first assistant response, matching the newSession() contract
 			// and avoiding the duplicate-header bug when _persist()'s
 			// no-assistant guard later resets flushed to false.
-			const hasAssistant = this.fileEntries.some((e) => e.type === "message" && e.message.role === "assistant");
+			const hasAssistant = this._hasAssistant;
 			if (hasAssistant) {
 				this._rewriteFile();
 				this.flushed = true;
@@ -1472,14 +1977,24 @@ export class SessionManager {
 			cwd: resolvedTargetCwd,
 			parentSession: resolvedSourcePath,
 		};
-		writeFileSync(newSessionFile, `${JSON.stringify(newHeader)}\n`, { flag: "wx" });
-
-		// Copy all non-header entries from source
+		// Atomic fork (opt #205): build the full file content (header + all
+		// non-header source entries) in memory, then write via temp+rename so a
+		// crash (SIGKILL/OOM) or an ENOSPC mid-write cannot leave a partial fork
+		// on disk. The previous writeFileSync(flag:"wx") + appendFileSync loop
+		// wrote the header first, then appended entries one at a time — a crash
+		// or append throw mid-loop left a fresh (wx-created) file with the header
+		// but only a SUBSET of source entries, silently losing conversation
+		// history (a reader would load a truncated session with no signal).
+		// Readers now see either no file or the complete fork. Mode 0o644 matches
+		// the prior writeFileSync(flag:"wx") default (umask); the temp+rename
+		// preserves it via atomicWriteFileSync's chmod-on-existing path.
+		const forkLines: string[] = [`${JSON.stringify(newHeader)}\n`];
 		for (const entry of sourceEntries) {
 			if (entry.type !== "session") {
-				appendFileSync(newSessionFile, `${JSON.stringify(entry)}\n`);
+				forkLines.push(`${JSON.stringify(entry)}\n`);
 			}
 		}
+		atomicWriteFileSync(newSessionFile, forkLines.join(""), 0o644);
 
 		return new SessionManager(resolvedTargetCwd, dir, newSessionFile, true);
 	}

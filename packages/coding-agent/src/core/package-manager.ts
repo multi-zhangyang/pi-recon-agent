@@ -35,6 +35,12 @@ import { isStdoutTakenOver } from "./output-guard.ts";
 import type { PackageSource, SettingsManager } from "./settings-manager.ts";
 
 const NETWORK_TIMEOUT_MS = 10000;
+/** Generous wall timeout for git clone/checkout/fetch (a slow clone is legit; a
+ * hang on a credential prompt is not — GIT_TERMINAL_PROMPT=0 makes prompts fail
+ * fast, this catches any remaining hang). */
+const GIT_OPERATION_TIMEOUT_MS = 180_000;
+/** Generous wall timeout for npm install of a cloned dep tree. */
+const NPM_INSTALL_TIMEOUT_MS = 300_000;
 const UPDATE_CHECK_CONCURRENCY = 4;
 const GIT_UPDATE_CONCURRENCY = 4;
 
@@ -1138,7 +1144,13 @@ export class DefaultPackageManager implements PackageManager {
 	private async installNpmBatch(specs: string[], scope: InstalledSourceScope): Promise<void> {
 		const installRoot = this.getNpmInstallRoot(scope, false);
 		this.ensureNpmProject(installRoot);
-		await this.runNpmCommand(this.getNpmInstallArgs(specs, installRoot));
+		// (opt #123) npm install inherits stdio in interactive mode → a private-registry
+		// credential prompt or a hung registry would block the agent's turn forever.
+		// The git-dependency install path already passes NPM_INSTALL_TIMEOUT_MS; this
+		// closes the gap on the managed-package install/uninstall callers.
+		await this.runNpmCommand(this.getNpmInstallArgs(specs, installRoot), {
+			timeoutMs: NPM_INSTALL_TIMEOUT_MS,
+		});
 	}
 
 	async checkForAvailableUpdates(): Promise<PackageUpdate[]> {
@@ -1534,7 +1546,11 @@ export class DefaultPackageManager implements PackageManager {
 				],
 			};
 		} catch {
-			await this.runCommand("git", ["remote", "set-head", "origin", "-a"], { cwd: installedPath }).catch(() => {});
+			await this.runCommand("git", ["remote", "set-head", "origin", "-a"], {
+				cwd: installedPath,
+				timeoutMs: NETWORK_TIMEOUT_MS,
+				env: { GIT_TERMINAL_PROMPT: "0" },
+			}).catch(() => {});
 			const head = await this.runCommandCapture("git", ["rev-parse", "origin/HEAD"], {
 				cwd: installedPath,
 				timeoutMs: NETWORK_TIMEOUT_MS,
@@ -1701,7 +1717,7 @@ export class DefaultPackageManager implements PackageManager {
 		return packageManagerCommand ? basename(packageManagerCommand).replace(/\.(cmd|exe)$/i, "") : "";
 	}
 
-	private async runNpmCommand(args: string[], options?: { cwd?: string }): Promise<void> {
+	private async runNpmCommand(args: string[], options?: { cwd?: string; timeoutMs?: number }): Promise<void> {
 		const npmCommand = this.getNpmCommand();
 		await this.runCommand(npmCommand.command, [...npmCommand.args, ...args], options);
 	}
@@ -1745,7 +1761,11 @@ export class DefaultPackageManager implements PackageManager {
 	private async installNpm(source: NpmSource, scope: SourceScope, temporary: boolean): Promise<void> {
 		const installRoot = this.getNpmInstallRoot(scope, temporary);
 		this.ensureNpmProject(installRoot);
-		await this.runNpmCommand(this.getNpmInstallArgs([source.spec], installRoot));
+		// (opt #123) bound the install so a hung registry / credential prompt can't
+		// freeze the package-install / extension-setup flow.
+		await this.runNpmCommand(this.getNpmInstallArgs([source.spec], installRoot), {
+			timeoutMs: NPM_INSTALL_TIMEOUT_MS,
+		});
 	}
 
 	private async uninstallNpm(source: NpmSource, scope: SourceScope): Promise<void> {
@@ -1754,10 +1774,16 @@ export class DefaultPackageManager implements PackageManager {
 			return;
 		}
 		if (this.getPackageManagerName() === "bun") {
-			await this.runNpmCommand(["uninstall", source.name, "--cwd", installRoot]);
+			// (opt #123) same hang bound as install.
+			await this.runNpmCommand(["uninstall", source.name, "--cwd", installRoot], {
+				timeoutMs: NPM_INSTALL_TIMEOUT_MS,
+			});
 			return;
 		}
-		await this.runNpmCommand(["uninstall", source.name, "--prefix", installRoot]);
+		// (opt #123) same hang bound as install.
+		await this.runNpmCommand(["uninstall", source.name, "--prefix", installRoot], {
+			timeoutMs: NPM_INSTALL_TIMEOUT_MS,
+		});
 	}
 
 	private async installGit(source: GitSource, scope: SourceScope): Promise<void> {
@@ -1777,13 +1803,23 @@ export class DefaultPackageManager implements PackageManager {
 		}
 		mkdirSync(dirname(targetDir), { recursive: true });
 
-		await this.runCommand("git", ["clone", source.repo, targetDir]);
+		await this.runCommand("git", ["clone", source.repo, targetDir], {
+			timeoutMs: GIT_OPERATION_TIMEOUT_MS,
+			env: { GIT_TERMINAL_PROMPT: "0" },
+		});
 		if (source.ref) {
-			await this.runCommand("git", ["checkout", source.ref], { cwd: targetDir });
+			await this.runCommand("git", ["checkout", source.ref], {
+				cwd: targetDir,
+				timeoutMs: GIT_OPERATION_TIMEOUT_MS,
+				env: { GIT_TERMINAL_PROMPT: "0" },
+			});
 		}
 		const packageJsonPath = join(targetDir, "package.json");
 		if (existsSync(packageJsonPath)) {
-			await this.runNpmCommand(this.getGitDependencyInstallArgs(), { cwd: targetDir });
+			await this.runNpmCommand(this.getGitDependencyInstallArgs(), {
+				cwd: targetDir,
+				timeoutMs: NPM_INSTALL_TIMEOUT_MS,
+			});
 		}
 	}
 
@@ -1805,7 +1841,11 @@ export class DefaultPackageManager implements PackageManager {
 
 	private async ensureGitRef(targetDir: string, fetchArgs: string[], ref: string): Promise<void> {
 		// Fetch only the ref we will reset to, avoiding unrelated branch/tag noise.
-		await this.runCommand("git", fetchArgs, { cwd: targetDir });
+		await this.runCommand("git", fetchArgs, {
+			cwd: targetDir,
+			timeoutMs: GIT_OPERATION_TIMEOUT_MS,
+			env: { GIT_TERMINAL_PROMPT: "0" },
+		});
 
 		const localHead = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
 			cwd: targetDir,
@@ -1820,14 +1860,25 @@ export class DefaultPackageManager implements PackageManager {
 			return;
 		}
 
-		await this.runCommand("git", ["reset", "--hard", commitRef], { cwd: targetDir });
+		await this.runCommand("git", ["reset", "--hard", commitRef], {
+			cwd: targetDir,
+			timeoutMs: GIT_OPERATION_TIMEOUT_MS,
+			env: { GIT_TERMINAL_PROMPT: "0" },
+		});
 
 		// Clean untracked files (extensions should be pristine)
-		await this.runCommand("git", ["clean", "-fdx"], { cwd: targetDir });
+		await this.runCommand("git", ["clean", "-fdx"], {
+			cwd: targetDir,
+			timeoutMs: GIT_OPERATION_TIMEOUT_MS,
+			env: { GIT_TERMINAL_PROMPT: "0" },
+		});
 
 		const packageJsonPath = join(targetDir, "package.json");
 		if (existsSync(packageJsonPath)) {
-			await this.runNpmCommand(this.getGitDependencyInstallArgs(), { cwd: targetDir });
+			await this.runNpmCommand(this.getGitDependencyInstallArgs(), {
+				cwd: targetDir,
+				timeoutMs: NPM_INSTALL_TIMEOUT_MS,
+			});
 		}
 	}
 
@@ -2475,8 +2526,13 @@ export class DefaultPackageManager implements PackageManager {
 		};
 	}
 
-	private spawnCommand(command: string, args: string[], options?: { cwd?: string }): ChildProcess {
-		const env = getEnv();
+	private spawnCommand(
+		command: string,
+		args: string[],
+		options?: { cwd?: string; env?: Record<string, string> },
+	): ChildProcess {
+		const baseEnv = getEnv();
+		const env = options?.env ? { ...baseEnv, ...options.env } : baseEnv;
 		return spawnProcess(command, args, {
 			cwd: options?.cwd,
 			stdio: isStdoutTakenOver() ? ["ignore", 2, 2] : "inherit",
@@ -2508,11 +2564,24 @@ export class DefaultPackageManager implements PackageManager {
 			let stdout = "";
 			let stderr = "";
 			let timedOut = false;
+			let killTimer: NodeJS.Timeout | undefined;
 			const timeout =
 				typeof options?.timeoutMs === "number"
 					? setTimeout(() => {
 							timedOut = true;
-							child.kill();
+							// SIGTERM first, then escalate to SIGKILL after 1s (mirrors
+							// StdioJsonRpcClient.close): a hung child that ignores
+							// SIGTERM would otherwise leak past the timeout. The killTimer
+							// is cleared in the close handler once the child actually exits.
+							try {
+								child.kill("SIGTERM");
+							} catch {}
+							killTimer = setTimeout(() => {
+								try {
+									child.kill("SIGKILL");
+								} catch {}
+							}, 1000);
+							killTimer.unref();
 						}, options.timeoutMs)
 					: undefined;
 
@@ -2520,14 +2589,28 @@ export class DefaultPackageManager implements PackageManager {
 				stdout += data.toString();
 			});
 			child.stderr?.on("data", (data) => {
+				// stderr is only surfaced in the failure error message below; tail-cap
+				// it so a verbose install (npm/pip progress, repeated warnings) cannot
+				// grow it unbounded and bloat the rejection message. stdout is the
+				// return value and stays unbounded (callers parse it).
 				stderr += data.toString();
+				if (stderr.length > 16384) stderr = stderr.slice(-16384);
 			});
+			// Piped stdio streams emit their own 'error' (EBADF/EIO on a closed
+			// handle) that the child "error"/"close" handlers do NOT cover →
+			// `Unhandled 'error' event` crashes the agent. Swallow best-effort;
+			// the child "close" handler still resolves/rejects with what was
+			// captured.
+			child.stdout?.on("error", () => {});
+			child.stderr?.on("error", () => {});
 			child.once("error", (error) => {
 				if (timeout) clearTimeout(timeout);
+				if (killTimer) clearTimeout(killTimer);
 				reject(error);
 			});
 			child.once("close", (code, signal) => {
 				if (timeout) clearTimeout(timeout);
+				if (killTimer) clearTimeout(killTimer);
 				if (timedOut) {
 					reject(new Error(`${command} ${args.join(" ")} timed out after ${options?.timeoutMs}ms`));
 					return;
@@ -2542,13 +2625,49 @@ export class DefaultPackageManager implements PackageManager {
 		});
 	}
 
-	private runCommand(command: string, args: string[], options?: { cwd?: string }): Promise<void> {
+	private runCommand(
+		command: string,
+		args: string[],
+		options?: { cwd?: string; timeoutMs?: number; env?: Record<string, string> },
+	): Promise<void> {
 		return new Promise((resolvePromise, reject) => {
 			const child = this.spawnCommand(command, args, options);
-			child.on("error", reject);
-			child.on("exit", (code) => {
+			let timedOut = false;
+			let killTimer: NodeJS.Timeout | undefined;
+			const timeout =
+				typeof options?.timeoutMs === "number"
+					? setTimeout(() => {
+							timedOut = true;
+							// SIGTERM then SIGKILL after 1s (mirrors runCommandCapture /
+							// StdioJsonRpcClient.close). A git clone / npm install hung on a
+							// stdin credential prompt would otherwise leak forever.
+							try {
+								child.kill("SIGTERM");
+							} catch {}
+							killTimer = setTimeout(() => {
+								try {
+									child.kill("SIGKILL");
+								} catch {}
+							}, 1000);
+							killTimer.unref();
+						}, options.timeoutMs)
+					: undefined;
+			child.on("error", (error) => {
+				if (timeout) clearTimeout(timeout);
+				if (killTimer) clearTimeout(killTimer);
+				reject(error);
+			});
+			child.on("exit", (code, signal) => {
+				if (timeout) clearTimeout(timeout);
+				if (killTimer) clearTimeout(killTimer);
+				if (timedOut) {
+					reject(new Error(`${command} ${args.join(" ")} timed out after ${options?.timeoutMs}ms`));
+					return;
+				}
 				if (code === 0) {
 					resolvePromise();
+				} else if (code === null) {
+					reject(new Error(`${command} ${args.join(" ")} terminated by signal ${signal ?? "unknown"}`));
 				} else {
 					reject(new Error(`${command} ${args.join(" ")} failed with code ${code}`));
 				}

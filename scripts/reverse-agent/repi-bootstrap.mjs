@@ -182,9 +182,12 @@ if (dryRun) {
 
 // --- confirm + execute ----------------------------------------------------
 if (!yes) {
-	process.stdout.write("\nProceed with installs? [y/N] ");
-	const r = spawnSync("head", ["-1"], { stdio: ["inherit", "pipe", "inherit"], encoding: "utf8" });
-	const answer = (r.stdout || "").trim().toLowerCase();
+	const { promptYesNo } = await import("./lib/confirm-prompt-helpers.mjs");
+	const { answer, timedOut } = promptYesNo("\nProceed with installs? [y/N] ", { timeoutMs: 30000 });
+	if (timedOut) {
+		process.stderr.write("confirmation prompt timed out after 30s (use --yes to skip)\n");
+		process.exit(1);
+	}
 	if (answer !== "y" && answer !== "yes") {
 		process.stdout.write("aborted.\n");
 		process.exit(0);

@@ -15,7 +15,6 @@
 import { lstatSync, readlinkSync, rmSync, existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
 
 const args = process.argv.slice(2);
 const rootArg = args[0] && !args[0].startsWith("--") ? args.shift() : undefined;
@@ -140,11 +139,14 @@ for (const p of removeList) {
 }
 
 if (!yes) {
+	const { promptYesNo } = await import("./lib/confirm-prompt-helpers.mjs");
 	process.stdout.write(`\nAbout to remove ${removeList.length} item(s):\n`);
 	for (const p of removeList) process.stdout.write(`  ${p}\n`);
-	process.stdout.write("Proceed? [y/N] ");
-	const r = spawnSync("head", ["-1"], { stdio: ["inherit", "pipe", "inherit"], encoding: "utf8" });
-	const answer = (r.stdout || "").trim().toLowerCase();
+	const { answer, timedOut } = promptYesNo("Proceed? [y/N] ", { timeoutMs: 30000 });
+	if (timedOut) {
+		process.stderr.write("confirmation prompt timed out after 30s (use --yes to skip)\n");
+		process.exit(1);
+	}
 	if (answer !== "y" && answer !== "yes") {
 		process.stdout.write("aborted.\n");
 		process.exit(0);

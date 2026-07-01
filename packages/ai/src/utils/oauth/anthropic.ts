@@ -95,7 +95,7 @@ function formatErrorDetails(error: unknown): string {
 	return String(error);
 }
 
-async function startCallbackServer(expectedState: string): Promise<CallbackServerInfo> {
+export async function startCallbackServer(expectedState: string): Promise<CallbackServerInfo> {
 	const { createServer } = await getNodeApis();
 
 	return new Promise((resolve, reject) => {
@@ -110,6 +110,14 @@ async function startCallbackServer(expectedState: string): Promise<CallbackServe
 		});
 
 		const server = createServer((req, res) => {
+			// Defense-in-depth (opt #146): a callback GET whose socket is reset by
+			// the browser/proxy before res.end() lands surfaces ECONNRESET/EPIPE on
+			// the connection socket (and a write-after-close 'error' on res) with no
+			// listener → `Unhandled 'error' event` crashes `pi auth login` mid-flow.
+			// Swallow stream errors here; the connection-level guard below covers
+			// socket errors that fire before/after the request handler runs.
+			req.on("error", () => {});
+			res.on("error", () => {});
 			try {
 				const url = new URL(req.url || "", "http://localhost");
 				if (url.pathname !== CALLBACK_PATH) {
@@ -151,6 +159,15 @@ async function startCallbackServer(expectedState: string): Promise<CallbackServe
 
 		server.on("error", (err) => {
 			reject(err);
+		});
+
+		// opt #146: defense-in-depth cover for connection-socket errors
+		// (ECONNRESET/EPIPE). Modern Node attaches an internal socket 'error'
+		// listener via the HTTP server, but this is the documented belt-and-
+		// suspenders guard for older Node / edge cases; the req/res listeners
+		// inside the handler are the primary guard for write-failure stream errors.
+		server.on("connection", (socket) => {
+			socket.on("error", () => {});
 		});
 
 		server.listen(CALLBACK_PORT, CALLBACK_HOST, () => {

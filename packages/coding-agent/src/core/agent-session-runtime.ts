@@ -1,4 +1,5 @@
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { resolvePath } from "../utils/paths.ts";
 import type { AgentSession } from "./agent-session.ts";
@@ -45,6 +46,37 @@ export class SessionImportFileNotFoundError extends Error {
 		this.name = "SessionImportFileNotFoundError";
 		this.filePath = filePath;
 	}
+}
+
+/**
+ * Compute the destination path for a `/import` of `resolvedPath` into
+ * `sessionDir`, avoiding silently overwriting an existing session.
+ *
+ * `isCopying` is true when the destination is not the same file as the source
+ * (i.e. the import actually copies rather than opens in place). When a copy
+ * WOULD land on an existing file at the same basename (re-import, a backup
+ * restored to the same dir, or a coincidental name collision), the basename is
+ * suffixed with a short random tag so the import lands at a unique path
+ * instead of truncating the existing session — the previous bare
+ * `copyFileSync(resolvedPath, destinationPath)` destroyed the prior
+ * conversation with no warning or backup. Exported for unit testing.
+ */
+export function resolveImportDestination(
+	sessionDir: string,
+	resolvedPath: string,
+): { destinationPath: string; isCopying: boolean } {
+	let destinationPath = join(sessionDir, basename(resolvedPath));
+	const isCopying = resolve(destinationPath) !== resolvedPath;
+	if (isCopying && existsSync(destinationPath)) {
+		const base = basename(resolvedPath);
+		const dot = base.lastIndexOf(".");
+		const stem = dot > 0 ? base.slice(0, dot) : base;
+		const ext = dot > 0 ? base.slice(dot) : "";
+		do {
+			destinationPath = join(sessionDir, `${stem}.${randomBytes(2).toString("hex")}${ext}`);
+		} while (existsSync(destinationPath));
+	}
+	return { destinationPath, isCopying };
 }
 
 function extractUserMessageText(content: string | Array<{ type: string; text?: string }>): string {
@@ -348,15 +380,35 @@ export class AgentSessionRuntime {
 			mkdirSync(sessionDir, { recursive: true });
 		}
 
-		const destinationPath = join(sessionDir, basename(resolvedPath));
+		const { destinationPath, isCopying } = resolveImportDestination(sessionDir, resolvedPath);
 		const beforeResult = await this.emitBeforeSwitch("resume", destinationPath);
 		if (beforeResult.cancelled) {
 			return beforeResult;
 		}
 
 		const previousSessionFile = this.session.sessionFile;
-		if (resolve(destinationPath) !== resolvedPath) {
-			copyFileSync(resolvedPath, destinationPath);
+		if (isCopying) {
+			// Atomic copy: copy to a same-dir temp then rename, so a mid-copy
+			// failure (ENOSPC/EIO) cannot leave a truncated/corrupt session at
+			// the destination (a partial JSONL would load as a silently
+			// truncated conversation via loadEntriesFromFile's torn-line skip).
+			// The temp is unlinked on any failure. Same-dir placement guarantees
+			// the rename is atomic (no EXDEV).
+			const tempPath = join(
+				sessionDir,
+				`.${basename(destinationPath)}.${randomBytes(4).toString("hex")}.import.tmp`,
+			);
+			try {
+				copyFileSync(resolvedPath, tempPath);
+				renameSync(tempPath, destinationPath);
+			} catch (error) {
+				try {
+					unlinkSync(tempPath);
+				} catch {
+					/* best-effort: temp may not exist (copy threw) or already renamed */
+				}
+				throw error;
+			}
 		}
 
 		const sessionManager = SessionManager.open(destinationPath, sessionDir, cwdOverride);

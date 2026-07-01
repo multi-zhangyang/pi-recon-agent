@@ -1,6 +1,6 @@
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { hasProjectTrustInputs, ProjectTrustStore } from "../src/core/trust-manager.ts";
 
@@ -81,5 +81,36 @@ describe("ProjectTrustStore", () => {
 
 		mkdirSync(join(cwd, ".agents", "skills"), { recursive: true });
 		expect(hasProjectTrustInputs(cwd)).toBe(true);
+	});
+
+	describe("atomic persistence", () => {
+		// trust.json is rewritten via writeTrustFile → atomicWriteFileSync
+		// (temp+rename) on every set(). A crash mid-write must never leave a
+		// truncated/partial file: readTrustFile self-heals (quarantine aside + {}),
+		// but that SILENTLY loses every prior trust decision → the user is
+		// re-prompted for dirs already approved. temp+rename replaces the inode;
+		// the old truncate-then-write kept it — the inode-change assertion is the
+		// regression probe.
+
+		it("set() replaces trust.json atomically: inode changes, mode 0o600, no .tmp leftover, decisions survive", () => {
+			const trustPath = join(agentDir, "trust.json");
+			const store = new ProjectTrustStore(agentDir);
+			store.set(cwd, true);
+			expect(existsSync(trustPath)).toBe(true);
+			expect(statSync(trustPath).mode & 0o777).toBe(0o600);
+			const inodeBefore = statSync(trustPath).ino;
+
+			// A second set() rewrites via temp+rename → new inode. Truncate keeps
+			// the inode; this assertion fails if the write regresses.
+			store.set(cwd, false);
+			const inodeAfter = statSync(trustPath).ino;
+			expect(inodeAfter).not.toBe(inodeBefore);
+
+			// Mode 0o600 preserved; no stray temp; decision survives reload.
+			expect(statSync(trustPath).mode & 0o777).toBe(0o600);
+			expect(readdirSync(dirname(trustPath)).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+			const reloaded = new ProjectTrustStore(agentDir);
+			expect(reloaded.get(cwd)).toBe(false);
+		});
 	});
 });

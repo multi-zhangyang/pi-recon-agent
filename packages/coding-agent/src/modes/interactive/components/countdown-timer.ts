@@ -28,6 +28,10 @@ export class CountdownTimer {
 				this.onExpire();
 			}
 		}, 1000);
+		// Defense-in-depth (opt #143): an undisposed countdown interval would
+		// keep the event loop alive + fire onTick/requestRender on a detached
+		// retry UI. unref() so a leaked interval never blocks process exit.
+		this.intervalId.unref();
 	}
 
 	dispose(): void {

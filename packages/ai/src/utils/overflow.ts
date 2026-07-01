@@ -139,7 +139,10 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
 
 	// Case 2: Silent overflow (z.ai style) - successful but usage exceeds context
 	if (contextWindow && message.stopReason === "stop") {
-		const inputTokens = message.usage.input + message.usage.cacheRead;
+		// Guard against missing/partial usage (proxy transport can hand a partial Usage at runtime
+		// despite the type) — `undefined + undefined` = NaN, and `NaN > contextWindow` is false,
+		// which would silently DISABLE overflow detection. Coerce missing fields to 0. opt #58.
+		const inputTokens = (Number(message.usage.input) || 0) + (Number(message.usage.cacheRead) || 0);
 		if (inputTokens > contextWindow) {
 			return true;
 		}
@@ -149,7 +152,7 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
 	// to fit the context window, leaving no room for output. Returns stopReason "length"
 	// with output=0 and input+cacheRead filling the context window.
 	if (contextWindow && message.stopReason === "length" && message.usage.output === 0) {
-		const inputTokens = message.usage.input + message.usage.cacheRead;
+		const inputTokens = (Number(message.usage.input) || 0) + (Number(message.usage.cacheRead) || 0);
 		if (inputTokens >= contextWindow * 0.99) {
 			return true;
 		}

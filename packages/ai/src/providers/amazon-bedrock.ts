@@ -43,6 +43,7 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.ts";
+import { safeStringifyError, terminalErrorMessage } from "../utils/error-stringify.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
 import { createHttpProxyAgentsForTarget } from "../utils/node-http-proxy.ts";
@@ -252,7 +253,10 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 			}
 
 			if (output.stopReason === "error" || output.stopReason === "aborted") {
-				throw new Error("An unknown error occurred");
+				// opt #275: surface the captured errorMessage / abort label
+				// instead of a generic "An unknown error occurred". Inline
+				// guard kept so TS narrows stopReason for the `done` push.
+				throw new Error(terminalErrorMessage(output.stopReason, output.errorMessage) as string);
 			}
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
@@ -295,7 +299,7 @@ const BEDROCK_ERROR_PREFIXES: Record<string, string> = {
  * detection) can distinguish error categories via simple string matching.
  */
 function formatBedrockError(error: unknown): string {
-	const message = error instanceof Error ? error.message : JSON.stringify(error);
+	const message = error instanceof Error ? error.message : safeStringifyError(error);
 	if (error instanceof BedrockRuntimeServiceException) {
 		const prefix = BEDROCK_ERROR_PREFIXES[error.name] ?? error.name;
 		return `${prefix}: ${message}`;
@@ -677,7 +681,7 @@ function convertToolResultContent(content: (TextContent | ImageContent)[]): Tool
 	return result;
 }
 
-function convertMessages(
+export function convertMessages(
 	context: Context,
 	model: Model<"bedrock-converse-stream">,
 	cacheRetention: CacheRetention,
@@ -738,9 +742,31 @@ function convertMessages(
 							});
 							break;
 						case "thinking": {
-							// Skip empty thinking blocks
 							const thinking = sanitizeSurrogates(c.thinking);
-							if (thinking.trim().length === 0) continue;
+							// opt #212: thinkingDisplay:"omitted" streams an EMPTY thinking
+							// string BUT a real signature. The old guard dropped the whole
+							// block, discarding the signature → silent multi-turn reasoning
+							// degradation (same bug as anthropic.ts pre-fix). Preserve the
+							// signature-bearing block; only drop when there's nothing to
+							// replay. Non-Anthropic models can't carry a signature, so an
+							// empty block is still dropped for them.
+							if (thinking.trim().length === 0) {
+								if (
+									supportsThinkingSignature(model) &&
+									c.thinkingSignature &&
+									c.thinkingSignature.trim().length > 0
+								) {
+									contentBlocks.push({
+										reasoningContent: {
+											reasoningText: {
+												text: "",
+												signature: c.thinkingSignature,
+											},
+										},
+									});
+								}
+								continue;
+							}
 							// Only Anthropic models support the signature field in reasoningText.
 							// For other models, we omit the signature to avoid errors like:
 							// "This model doesn't support the reasoningContent.reasoningText.signature field"
@@ -872,7 +898,7 @@ function convertToolConfig(
 	return { tools: bedrockTools, toolChoice: bedrockToolChoice };
 }
 
-function mapStopReason(reason: string | undefined): StopReason {
+export function mapStopReason(reason: string | undefined): StopReason {
 	switch (reason) {
 		case BedrockStopReason.END_TURN:
 		case BedrockStopReason.STOP_SEQUENCE:
@@ -882,8 +908,26 @@ function mapStopReason(reason: string | undefined): StopReason {
 			return "length";
 		case BedrockStopReason.TOOL_USE:
 			return "toolUse";
-		default:
+		// Known error sentinels — content was blocked/malformed. Map to "error"
+		// explicitly so the default below can be graceful. (#207)
+		case BedrockStopReason.CONTENT_FILTERED:
+		case BedrockStopReason.GUARDRAIL_INTERVENED:
+		case BedrockStopReason.MALFORMED_MODEL_OUTPUT:
+		case BedrockStopReason.MALFORMED_TOOL_USE:
 			return "error";
+		default:
+			// opt #207: graceful default for unknown/future stop reasons, mirroring
+			// openai-completions #187 / openai-responses #180 / anthropic #179.
+			// AWS may add a new benign StopReason (or the SDK enum may lag the
+			// server runtime). The old default reclassified the successfully-
+			// streamed content as stopReason:"error" → stripTrailingErrorAssistants
+			// stripped the valid assistant turn → conversation history loss; and a
+			// false error event surfaced. The four known error sentinels above are
+			// now handled explicitly so only TRULY unknown (presumed benign) reasons
+			// fall through to "stop" (content preserved). Google deliberately keeps
+			// "error" for unknown (Gemini's unknowns are usually safety blocks);
+			// Bedrock's enum is stable so "stop" is the safer default here.
+			return "stop";
 	}
 }
 

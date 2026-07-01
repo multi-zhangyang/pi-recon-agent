@@ -240,6 +240,9 @@ export interface FileInfo {
 	mtimeMs: number;
 }
 
+/** Default byte cap for {@link Shell.exec} captured stdout/stderr when `maxBytes` is unset and `REPI_EXEC_MAX_BYTES` is absent. */
+export const DEFAULT_EXEC_MAX_BYTES = 1024 * 1024; // 1MB — bounds runaway output OOM while staying well above any normal command capture.
+
 /** Options for {@link Shell.exec}. */
 export interface ExecutionEnvExecOptions {
 	/** Working directory for the command. Relative paths are resolved against {@link ExecutionEnv.cwd}. Defaults to {@link ExecutionEnv.cwd}. */
@@ -254,6 +257,15 @@ export interface ExecutionEnvExecOptions {
 	onStdout?: (chunk: string) => void;
 	/** Called with stderr chunks as they are produced. */
 	onStderr?: (chunk: string) => void;
+	/**
+	 * Maximum number of bytes to retain in the returned `stdout`/`stderr` strings. Once the cap is
+	 * reached the corresponding stream stops accumulating (the prefix up to the cap is kept) and the
+	 * `stdoutTruncated`/`stderrTruncated` flag is set; chunks keep flowing to `onStdout`/`onStderr`
+	 * unchanged, so streaming consumers are unaffected. Defaults to the `REPI_EXEC_MAX_BYTES` env
+	 * value (default {@link DEFAULT_EXEC_MAX_BYTES}). Pass `0` to disable the cap (unbounded, for
+	 * callers that genuinely need the full captured string).
+	 */
+	maxBytes?: number;
 }
 
 /**
@@ -323,7 +335,12 @@ export interface Shell {
 	exec(
 		command: string,
 		options?: ExecutionEnvExecOptions,
-	): Promise<Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>>;
+	): Promise<
+		Result<
+			{ stdout: string; stderr: string; exitCode: number; stdoutTruncated: boolean; stderrTruncated: boolean },
+			ExecutionError
+		>
+	>;
 	/** Release shell resources. Must be best-effort and must not throw or reject. */
 	cleanup(): Promise<void>;
 }

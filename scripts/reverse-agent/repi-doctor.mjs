@@ -14,6 +14,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { defaultReportWriteError } from "./lib/report-write-helpers.mjs";
 
 const args = process.argv.slice(2);
 const rootArg = args[0] && !args[0].startsWith("--") ? args.shift() : undefined;
@@ -47,6 +48,23 @@ function check(id, pass, evidence, fix) {
 	return { id, status: pass ? "pass" : "fail", evidence, fix };
 }
 
+function redactText(value) {
+	return String(value ?? "")
+		.replace(/\bsk-[A-Za-z0-9._-]{8,}\b/g, "<redacted:api-key>")
+		.replace(/\bghp_[A-Za-z0-9_]{16,}\b/g, "<redacted:github-token>")
+		.replace(/\bgithub_pat_[A-Za-z0-9_]{16,}\b/g, "<redacted:github-token>")
+		.replace(/\bglpat-[A-Za-z0-9_-]{16,}\b/g, "<redacted:gitlab-token>")
+		.replace(/\b(?:A3T|AKIA|ASIA)[A-Z0-9]{16}\b/g, "<redacted:aws-access-key>")
+		.replace(/\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g, "<redacted:slack-token>")
+		.replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, "<redacted:jwt>")
+		.replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "<redacted:private-key>")
+		.replace(/(?:AUTH_TOKEN|API_KEY|PASSWORD|SECRET|TOKEN|ACCESS_KEY|SECRET_KEY|PRIVATE_KEY|CLIENT_SECRET)=\S+/gi, (match) => `${match.split("=")[0]}=<redacted>`)
+		.replace(/(authorization|x-api-key|api-key)\s*[:=]\s*bearer\s+[A-Za-z0-9._-]+/gi, "$1: Bearer <redacted>")
+		.replace(/(authorization|x-api-key|api-key)\s*[:=]\s*[A-Za-z0-9._-]{12,}/gi, "$1: <redacted>")
+		.replace(/(baseUrl|baseURL|endpoint|url)\s*[:=]\s*https?:\/\/[^\s"',}]+/gi, "$1=<redacted:url>")
+		.replace(/\bhttps?:\/\/api\.[^\s"',}<)]+/gi, "<redacted:url>");
+}
+
 function run(cmd, args, options = {}) {
 	const result = spawnSync(cmd, args, {
 		cwd: root,
@@ -61,11 +79,13 @@ function run(cmd, args, options = {}) {
 		timeout: options.timeout ?? 20_000,
 		maxBuffer: 2 * 1024 * 1024,
 	});
+	const stdout = redactText(result.stdout ?? "");
+	const stderr = redactText(result.stderr ?? "");
 	return {
 		code: result.status ?? 1,
-		stdout: result.stdout ?? "",
-		stderr: result.stderr ?? "",
-		error: result.error ? String(result.error.message || result.error) : undefined,
+		stdout,
+		stderr,
+		error: result.error ? redactText(String(result.error.message || result.error)) : undefined,
 	};
 }
 
@@ -165,7 +185,18 @@ function uniquePath(path) {
 }
 
 function ensurePrivateDir(path) {
-	mkdirSync(path, { recursive: true, mode: 0o700 });
+	// opt #177: guard the mkdir so an ENOSPC/EACCES in the --fix repair path
+	// (archive/extension dirs) becomes an observable stderr diagnostic +
+	// non-zero exit instead of an uncaught throw that aborts the doctor.
+	// The doctor report itself is emitted to stdout; this guards its only
+	// on-disk write path (the --fix repair layout).
+	try {
+		mkdirSync(path, { recursive: true, mode: 0o700 });
+	} catch (err) {
+		defaultReportWriteError(
+			`Error creating report directory ${path}: ${err instanceof Error ? err.message : String(err)}`,
+		);
+	}
 	try {
 		chmodSync(path, 0o700);
 	} catch {

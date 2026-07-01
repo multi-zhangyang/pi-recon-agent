@@ -250,22 +250,21 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			return "";
 		},
 
-		async editor(title: string, prefill?: string): Promise<string | undefined> {
-			const id = crypto.randomUUID();
-			return new Promise((resolve, reject) => {
-				pendingExtensionRequests.set(id, {
-					resolve: (response: RpcExtensionUIResponse) => {
-						if ("cancelled" in response && response.cancelled) {
-							resolve(undefined);
-						} else if ("value" in response) {
-							resolve(response.value);
-						} else {
-							resolve(undefined);
-						}
-					},
-					reject,
-				});
-				output({ type: "extension_ui_request", id, method: "editor", title, prefill } as RpcExtensionUIRequest);
+		async editor(
+			title: string,
+			prefill?: string,
+			opts?: { signal?: AbortSignal; timeout?: number },
+		): Promise<string | undefined> {
+			// Routed through createDialogPromise so editor() gets the same bounded
+			// timeout / AbortSignal / session-replacement escape as select/confirm/
+			// input. Existing callers passing no opts keep their current behavior
+			// (no timeout), but now their promise rejects (rather than hanging
+			// forever) when the session is replaced — F5(a) clears pendingExtensionRequests
+			// on rebind. The wire-format request is unchanged (no timeout field emitted).
+			return createDialogPromise(opts, undefined, { method: "editor", title, prefill }, (r) => {
+				if ("cancelled" in r && r.cancelled) return undefined;
+				if ("value" in r) return r.value;
+				return undefined;
 			});
 		},
 
@@ -315,52 +314,85 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 	const rebindSession = async (): Promise<void> => {
 		session = runtimeHost.session;
-		await session.bindExtensions({
-			uiContext: createExtensionUIContext(),
-			mode: "rpc",
-			commandContextActions: {
-				waitForIdle: () => session.agent.waitForIdle(),
-				newSession: async (options) => runtimeHost.newSession(options),
-				fork: async (entryId, forkOptions) => {
-					const result = await runtimeHost.fork(entryId, forkOptions);
-					return { cancelled: result.cancelled };
-				},
-				navigateTree: async (targetId, options) => {
-					const result = await session.navigateTree(targetId, {
-						summarize: options?.summarize,
-						customInstructions: options?.customInstructions,
-						replaceInstructions: options?.replaceInstructions,
-						label: options?.label,
-					});
-					return { cancelled: result.cancelled };
-				},
-				switchSession: async (sessionPath, options) => {
-					return runtimeHost.switchSession(sessionPath, options);
-				},
-				reload: async () => {
-					await session.reload();
-				},
-			},
-			shutdownHandler: () => {
-				shutdownRequested = true;
-			},
-			onError: (err) => {
-				output({ type: "extension_error", extensionPath: err.extensionPath, event: err.event, error: err.error });
-			},
-		});
-
+		// Unsubscribe from the OLD session's event/backpressure forwarding FIRST.
+		// Previously the new subscription was established AFTER bindExtensions, so
+		// if bindExtensions threw (e.g. an extension session_start handler error)
+		// the new session had no forwarding — `unsubscribe` still referenced the
+		// old disposed session's no-op unsubscribers. Reorder: unsubscribe old
+		// first, then establish the new subscription in a finally block so it is
+		// set up even when bindExtensions throws. On the success path the order
+		// relative to bindExtensions is unchanged, so session_start emitted inside
+		// bindExtensions still goes only to extension handlers.
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
-		unsubscribe = session.subscribe((event) => {
-			output(event);
-		});
-		unsubscribeBackpressure = session.agent.subscribe(async () => {
-			await waitForRawStdoutBackpressure();
-		});
+		// Reject any pending extension UI dialogs (editor/select/confirm/input)
+		// registered against the previous session. An unanswered dialog promise
+		// would otherwise hang forever (editor() historically had no timeout/signal
+		// escape) and accumulate across session switches. Extensions handle the
+		// rejection via the existing onError channel.
+		for (const [, entry] of pendingExtensionRequests) {
+			try {
+				entry.reject(new Error("session replaced"));
+			} catch {
+				// A reject that throws is not actionable; never block rebind.
+			}
+		}
+		pendingExtensionRequests.clear();
+		try {
+			await session.bindExtensions({
+				uiContext: createExtensionUIContext(),
+				mode: "rpc",
+				commandContextActions: {
+					waitForIdle: () => session.agent.waitForIdle(),
+					newSession: async (options) => runtimeHost.newSession(options),
+					fork: async (entryId, forkOptions) => {
+						const result = await runtimeHost.fork(entryId, forkOptions);
+						return { cancelled: result.cancelled };
+					},
+					navigateTree: async (targetId, options) => {
+						const result = await session.navigateTree(targetId, {
+							summarize: options?.summarize,
+							customInstructions: options?.customInstructions,
+							replaceInstructions: options?.replaceInstructions,
+							label: options?.label,
+						});
+						return { cancelled: result.cancelled };
+					},
+					switchSession: async (sessionPath, options) => {
+						return runtimeHost.switchSession(sessionPath, options);
+					},
+					reload: async () => {
+						await session.reload();
+					},
+				},
+				shutdownHandler: () => {
+					shutdownRequested = true;
+				},
+				onError: (err) => {
+					output({
+						type: "extension_error",
+						extensionPath: err.extensionPath,
+						event: err.event,
+						error: err.error,
+					});
+				},
+			});
+		} finally {
+			unsubscribe = session.subscribe((event) => {
+				output(event);
+			});
+			unsubscribeBackpressure = session.agent.subscribe(async () => {
+				await waitForRawStdoutBackpressure();
+			});
+		}
 	};
 
 	const registerSignalHandlers = (): void => {
-		const signals: NodeJS.Signals[] = ["SIGTERM"];
+		// SIGINT (Ctrl+C) handled explicitly (opt #62): previously only
+		// SIGTERM/SIGHUP were, so Ctrl+C took the default-exit path WITHOUT running
+		// shutdown() → no graceful rpc-mode teardown / pending-response rejection /
+		// raw-stdout flush. Same gap as print-mode (opt #62 A1). Exits 130.
+		const signals: NodeJS.Signals[] = ["SIGTERM", "SIGINT"];
 		if (process.platform !== "win32") {
 			signals.push("SIGHUP");
 		}
@@ -368,7 +400,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		for (const signal of signals) {
 			const handler = () => {
 				killTrackedDetachedChildren();
-				void shutdown(signal === "SIGHUP" ? 129 : 143, signal);
+				const exitCode = signal === "SIGHUP" ? 129 : signal === "SIGINT" ? 130 : 143;
+				void shutdown(exitCode, signal);
 			};
 			process.on(signal, handler);
 			signalCleanupHandlers.push(() => process.off(signal, handler));
@@ -678,7 +711,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	 */
 	let detachInput = () => {};
 
-	async function shutdown(exitCode = 0, signal?: NodeJS.Signals): Promise<never> {
+	async function shutdown(exitCode = 0, _signal?: NodeJS.Signals): Promise<never> {
 		if (shuttingDown) {
 			process.exit(exitCode);
 		}
@@ -688,12 +721,25 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		}
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
+		// Defense in depth: reject any still-pending extension UI dialogs so their
+		// promises do not hang forever after the process exits. F5(a) clears these
+		// on rebind; this covers shutdown-time leftovers.
+		for (const [, entry] of pendingExtensionRequests) {
+			try {
+				entry.reject(new Error("RPC shutdown"));
+			} catch {
+				// ignore
+			}
+		}
+		pendingExtensionRequests.clear();
 		await runtimeHost.dispose();
 		detachInput();
 		process.stdin.pause();
-		if (signal !== "SIGTERM") {
-			await flushRawStdout();
-		}
+		// Flush unconditionally. Previously SIGTERM (the common graceful
+		// termination) skipped the flush, dropping queued final responses/events
+		// in rawStdoutWriteTail. Safe on a dead pipe (writeRawStdout's tail .catch
+		// handles EPIPE).
+		await flushRawStdout();
 		process.exit(exitCode);
 	}
 
@@ -701,6 +747,55 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		if (!shutdownRequested) return;
 		await shutdown();
 	}
+
+	// Session-replacement commands that mutate the runtime's shared _session/
+	// _services non-atomically (teardown → apply → rebind). These are serialized
+	// through cmdChain so two concurrent lines (e.g. two new_session in one stdin
+	// write) cannot interleave their teardown/apply steps — without serialization,
+	// A tears down session 1, B tears down session 2, A applies session 2, B
+	// applies session 3, leaving session 2 torn down but now live.
+	//
+	// DEFERRED (per audit's conservative option): `abort`, `compact`,
+	// `set_model`, `set_thinking_level`, `set_steering_mode`, `set_follow_up_mode`,
+	// `set_auto_compaction`, `set_auto_retry`, `set_session_name`, `bash`, and
+	// `prompt` are NOT serialized. They mutate only the current session's own
+	// state (not the runtime _session/_services swap) and operate on whatever
+	// session is live when their turn starts — serializing them risks ordering
+	// regressions (e.g. blocking fire-and-forget prompt streaming) for narrow
+	// gain. `prompt` stays fire-and-forget: its response is emitted via
+	// preflightResult before the stream completes, so serializing its dispatch
+	// is unnecessary (prompt does not swap the session).
+	const MUTATING_SESSION_COMMANDS = new Set<RpcCommand["type"]>(["new_session", "switch_session", "fork", "clone"]);
+
+	// Promise chain that serializes mutating session-replacement commands. Each
+	// chained runCommand never rejects (it has an internal try/catch), so a
+	// failure in one command does not break the chain for subsequent ones.
+	let cmdChain: Promise<void> = Promise.resolve();
+
+	// Run a single command end-to-end: dispatch via handleCommand, emit the
+	// response, drain backpressure, and check shutdown. Never rejects — errors
+	// are surfaced as error responses. Extracted so mutating commands can be
+	// serialized through cmdChain while non-mutating commands keep their
+	// immediate fire-and-forget handling.
+	const runCommand = async (command: RpcCommand): Promise<void> => {
+		try {
+			const response = await handleCommand(command);
+			if (response) {
+				output(response);
+				await waitForRawStdoutBackpressure();
+			}
+			await checkShutdownRequested();
+		} catch (commandError: unknown) {
+			output(
+				error(
+					command.id,
+					command.type,
+					commandError instanceof Error ? commandError.message : String(commandError),
+				),
+			);
+			await waitForRawStdoutBackpressure();
+		}
+	};
 
 	const handleInputLine = async (line: string) => {
 		let parsed: unknown;
@@ -734,24 +829,29 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			return;
 		}
 
-		const command = parsed as RpcCommand;
-		try {
-			const response = await handleCommand(command);
-			if (response) {
-				output(response);
-				await waitForRawStdoutBackpressure();
-			}
-			await checkShutdownRequested();
-		} catch (commandError: unknown) {
-			output(
-				error(
-					command.id,
-					command.type,
-					commandError instanceof Error ? commandError.message : String(commandError),
-				),
-			);
+		// Reject non-object inputs (null, primitives, arrays) before the fall-through
+		// dereferences command.type. JSON.parse("null") yields null and null.type
+		// throws TypeError → since handleInputLine is async the throw becomes a
+		// rejected promise, and the reader does `void handleInputLine(line)` (dropped)
+		// → unhandledRejection → process crash. A single `null\n` on stdin kills the
+		// headless agent. Primitives like 123/"x" don't crash (.type is undefined),
+		// only null — but guard all non-objects for symmetry with the parse branch.
+		if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+			output(error(undefined, "parse", "Invalid command: expected a JSON object"));
 			await waitForRawStdoutBackpressure();
+			return;
 		}
+
+		const command = parsed as RpcCommand;
+		if (MUTATING_SESSION_COMMANDS.has(command.type)) {
+			// Serialize session-replacement commands so concurrent lines cannot
+			// interleave the runtime's non-atomic teardown/apply/rebind. The chain
+			// stays fulfilled because runCommand never rejects. Non-mutating
+			// commands (including fire-and-forget prompt) bypass the chain.
+			cmdChain = cmdChain.then(() => runCommand(command));
+			return;
+		}
+		await runCommand(command);
 	};
 
 	const onInputEnd = () => {

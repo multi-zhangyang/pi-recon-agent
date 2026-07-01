@@ -65,6 +65,16 @@ class TreeList implements Component {
 	private foldedNodes: Set<string> = new Set();
 
 	public onSelect?: (entryId: string) => void;
+	/**
+	 * Error sink for the select handler. The confirm dispatch invokes onSelect
+	 * and drops any returned promise — an async onSelect (e.g. the navigateTree
+	 * flow which awaits showExtensionSelector/showExtensionEditor/session
+	 * navigation) that rejects would otherwise become an unhandledRejection
+	 * crashing the host with the terminal left in raw mode. Routes BOTH sync
+	 * throws and async rejections here (or console.error fallback). Same class
+	 * as the CustomEditor/Editor action-handler error containment (opts #142/#145).
+	 */
+	public onSelectError?: (error: unknown) => void;
 	public onCancel?: () => void;
 	public onLabelEdit?: (entryId: string, currentLabel: string | undefined) => void;
 
@@ -927,7 +937,7 @@ class TreeList implements Component {
 		} else if (kb.matches(keyData, "tui.select.confirm")) {
 			const selected = this.filteredNodes[this.selectedIndex];
 			if (selected && this.onSelect) {
-				this.onSelect(selected.node.entry.id);
+				this.runSelect(() => this.onSelect!(selected.node.entry.id));
 			}
 		} else if (kb.matches(keyData, "tui.select.cancel")) {
 			if (this.searchQuery) {
@@ -1052,6 +1062,27 @@ class TreeList implements Component {
 			currentId = parentId;
 		}
 	}
+
+	/**
+	 * Invoke the select handler containing BOTH sync throws and async rejections
+	 * (opt #145). Routes to onSelectError (or console.error fallback) so a
+	 * rejecting async onSelect (navigateTree flow) never escapes as an
+	 * unhandledRejection crashing the host with the terminal in raw mode.
+	 */
+	private runSelect(handler: () => void): void {
+		try {
+			const ret = handler() as unknown;
+			if (ret && typeof (ret as Promise<unknown>).then === "function") {
+				(ret as Promise<unknown>).catch((err: unknown) => {
+					if (this.onSelectError) this.onSelectError(err);
+					else console.error("TreeSelector async select handler error:", err);
+				});
+			}
+		} catch (err) {
+			if (this.onSelectError) this.onSelectError(err);
+			else console.error("TreeSelector select handler error:", err);
+		}
+	}
 }
 
 /** Component that displays the current search query */
@@ -1139,6 +1170,9 @@ export class TreeSelectorComponent extends Container implements Focusable {
 	private labelInputContainer: Container;
 	private treeContainer: Container;
 	private onLabelChangeCallback?: (entryId: string, label: string | undefined) => void;
+	// opt #152: track the auto-cancel timer so dispose() can cancel it instead
+	// of firing onCancel on a detached component after the picker is dismissed.
+	private emptyListTimer: ReturnType<typeof setTimeout> | null = null;
 
 	// Focusable implementation - propagate to labelInput when active for IME cursor positioning
 	private _focused = false;
@@ -1162,6 +1196,7 @@ export class TreeSelectorComponent extends Container implements Focusable {
 		onLabelChange?: (entryId: string, label: string | undefined) => void,
 		initialSelectedId?: string,
 		initialFilterMode?: FilterMode,
+		onSelectError?: (error: unknown) => void,
 	) {
 		super();
 
@@ -1170,6 +1205,7 @@ export class TreeSelectorComponent extends Container implements Focusable {
 
 		this.treeList = new TreeList(tree, currentLeafId, maxVisibleLines, initialSelectedId, initialFilterMode);
 		this.treeList.onSelect = onSelect;
+		this.treeList.onSelectError = onSelectError;
 		this.treeList.onCancel = onCancel;
 		this.treeList.onLabelEdit = (entryId, currentLabel) => this.showLabelInput(entryId, currentLabel);
 
@@ -1209,8 +1245,20 @@ export class TreeSelectorComponent extends Container implements Focusable {
 		this.addChild(new DynamicBorder());
 
 		if (tree.length === 0) {
-			setTimeout(() => onCancel(), 100);
+			this.emptyListTimer = setTimeout(() => onCancel(), 100);
+			this.emptyListTimer.unref();
 		}
+	}
+
+	dispose(): void {
+		// opt #152: cancel any pending auto-cancel timer so it can't fire onCancel
+		// on a detached component after the picker is dismissed via showSelector's
+		// done(). super.dispose() propagates to children (Container.dispose).
+		if (this.emptyListTimer) {
+			clearTimeout(this.emptyListTimer);
+			this.emptyListTimer = null;
+		}
+		super.dispose();
 	}
 
 	private showLabelInput(entryId: string, currentLabel: string | undefined): void {

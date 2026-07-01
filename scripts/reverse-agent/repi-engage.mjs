@@ -7,12 +7,12 @@ import {
 	readFileSync,
 	readdirSync,
 	statSync,
-	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { atomicWriteFile } from "./lib/memory-purge-helpers.mjs";
 
 const argv = process.argv.slice(2);
 const rootArg = argv[0] && !argv[0].startsWith("-") ? argv.shift() : undefined;
@@ -47,20 +47,31 @@ if (argv.includes("--help") || argv.includes("-h")) {
 	process.exit(0);
 }
 
+const valueFlags = new Set(["--timeout-ms", "--provider", "--model", "--workers", "--prompt"]);
+
 function argValue(flag) {
-	const index = argv.indexOf(flag);
-	if (index === -1) return undefined;
-	const next = argv[index + 1];
-	return next && !next.startsWith("--") ? next : "";
+	for (let index = 0; index < argv.length; index++) {
+		const arg = argv[index];
+		if (arg === flag) {
+			const next = argv[index + 1];
+			return next && !next.startsWith("--") ? next : "";
+		}
+		if (arg.startsWith(`${flag}=`)) return arg.slice(flag.length + 1);
+	}
+	return undefined;
 }
 
 function positionalTarget() {
 	const parts = [];
 	for (let index = 0; index < argv.length; index++) {
 		const arg = argv[index];
+		if (arg === "--") {
+			parts.push(...argv.slice(index + 1));
+			break;
+		}
 		if (arg.startsWith("--")) {
-			const next = argv[index + 1];
-			if (next && !next.startsWith("--")) index++;
+			const flagName = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+			if (!arg.includes("=") && valueFlags.has(flagName)) index++;
 			continue;
 		}
 		parts.push(arg);
@@ -90,7 +101,7 @@ function ensureDir(path) {
 
 function writePrivate(path, content, mode = 0o600) {
 	ensureDir(dirname(path));
-	writeFileSync(path, content, { encoding: "utf8", mode });
+	atomicWriteFile(path, content, mode);
 	try {
 		chmodSync(path, mode);
 	} catch {
@@ -344,21 +355,27 @@ function engageUrl(targetInfo, artifactDir) {
 		rows.push({ id: "curl-missing", command: "curl", args: [], cwd: root, exit: 127, signal: null, durationMs: 0, stdout: "", stderr: "curl not found", error: "curl not found" });
 		return rows;
 	}
-	const headersPath = join(artifactDir, "http-headers.txt");
-	const bodyPath = join(artifactDir, "http-body-sample.txt");
 	rows.push(run("curl", ["-k", "-L", "-I", "--max-time", String(Math.ceil(timeoutMs / 1000)), target], { id: "http-head", timeout: timeoutMs + 3000 }));
-	rows.push(run("curl", ["-k", "-L", "--max-time", String(Math.ceil(timeoutMs / 1000)), "-D", headersPath, "-o", bodyPath, target], { id: "http-get-sample", timeout: timeoutMs + 5000 }));
 	let body = "";
-	try {
-		body = readFileSync(bodyPath, "utf8").slice(0, 400_000);
-	} catch {
-		body = "";
+	if (noWrite) {
+		const sample = run("curl", ["-k", "-L", "--max-time", String(Math.ceil(timeoutMs / 1000)), "-D", "-", "-o", "-", target], { id: "http-get-sample", timeout: timeoutMs + 5000 });
+		rows.push(sample);
+		body = sample.stdout.slice(0, 400_000);
+	} else {
+		const headersPath = join(artifactDir, "http-headers.txt");
+		const bodyPath = join(artifactDir, "http-body-sample.txt");
+		rows.push(run("curl", ["-k", "-L", "--max-time", String(Math.ceil(timeoutMs / 1000)), "-D", headersPath, "-o", bodyPath, target], { id: "http-get-sample", timeout: timeoutMs + 5000 }));
+		try {
+			body = readFileSync(bodyPath, "utf8").slice(0, 400_000);
+		} catch {
+			body = "";
+		}
 	}
 	const assets = Array.from(body.matchAll(/(?:src|href)=["']([^"']+)["']/gi))
 		.map((match) => match[1])
 		.filter(Boolean)
 		.slice(0, 120);
-	writePrivate(join(artifactDir, "web-assets.json"), `${JSON.stringify({ target, assets }, null, 2)}\n`);
+	if (!noWrite) writePrivate(join(artifactDir, "web-assets.json"), `${JSON.stringify({ target, assets }, null, 2)}\n`);
 	if (assets.some((asset) => /\.js(?:\?|$)/i.test(asset))) {
 		const firstJs = assets.find((asset) => /\.js(?:\?|$)/i.test(asset));
 		rows.push({ id: "web-js-asset-hint", command: "internal", args: [firstJs], cwd: root, exit: 0, signal: null, durationMs: 0, stdout: `first_js_asset=${firstJs}\n`, stderr: "", error: undefined });

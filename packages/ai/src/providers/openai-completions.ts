@@ -29,9 +29,11 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.ts";
+import { safeStringifyError } from "../utils/error-stringify.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
+import { callOnResponseWithDrain } from "../utils/response-drain.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
@@ -156,7 +158,9 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			const { data: openaiStream, response } = await client.chat.completions
 				.create(params, requestOptions)
 				.withResponse();
-			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+			await callOnResponseWithDrain(response.body, () =>
+				options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model),
+			);
 			stream.push({ type: "start", partial: output });
 
 			interface StreamingToolCallBlock extends ToolCall {
@@ -171,6 +175,22 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			let hasFinishReason = false;
 			const toolCallBlocksByIndex = new Map<number, StreamingToolCallBlock>();
 			const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
+			// opt #211: reasoning.encrypted details carry the id of the tool call
+			// they accompany, but they typically arrive in an EARLIER SSE chunk
+			// than the corresponding tool_calls delta (reasoning is generated
+			// before the tool call). An eager match at detail-arrival time
+			// returns undefined when the tool-call block doesn't exist yet →
+			// thoughtSignature is never set → on the next turn convertMessages
+			// cannot replay the encrypted reasoning chain → degraded/rejected
+			// multi-turn reasoning (silent data loss). Buffer every encrypted
+			// detail and reconcile after the stream loop, when all tool-call
+			// blocks exist.
+			const pendingEncryptedDetails: Array<{ id: string; detail: unknown }> = [];
+			// Some OpenRouter / vLLM-compatible servers send NUMERIC tool-call ids
+			// (e.g. 0, 1, 2). Normalize to a string so id `0` is preserved as "0"
+			// instead of being dropped by a falsy collapse, and so tool_use id and
+			// tool_result toolCallId pair consistently. null/undefined -> "".
+			const normalizeToolCallId = (id: unknown): string => (id === null || id === undefined ? "" : String(id));
 			const blocks = output.content as StreamingBlock[];
 			const getContentIndex = (block: StreamingBlock) => blocks.indexOf(block);
 			const finishBlock = (block: StreamingBlock) => {
@@ -228,14 +248,15 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			};
 			const ensureToolCallBlock = (toolCall: StreamingToolCallDelta) => {
 				const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
+				const id = normalizeToolCallId(toolCall.id);
 				let block = streamIndex !== undefined ? toolCallBlocksByIndex.get(streamIndex) : undefined;
-				if (!block && toolCall.id) {
-					block = toolCallBlocksById.get(toolCall.id);
+				if (!block && id) {
+					block = toolCallBlocksById.get(id);
 				}
 				if (!block) {
 					block = {
 						type: "toolCall",
-						id: toolCall.id || "",
+						id,
 						name: toolCall.function?.name || "",
 						arguments: {},
 						partialArgs: "",
@@ -244,8 +265,8 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 					if (streamIndex !== undefined) {
 						toolCallBlocksByIndex.set(streamIndex, block);
 					}
-					if (toolCall.id) {
-						toolCallBlocksById.set(toolCall.id, block);
+					if (id) {
+						toolCallBlocksById.set(id, block);
 					}
 					blocks.push(block);
 					stream.push({
@@ -258,8 +279,8 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 					block.streamIndex = streamIndex;
 					toolCallBlocksByIndex.set(streamIndex, block);
 				}
-				if (toolCall.id) {
-					toolCallBlocksById.set(toolCall.id, block);
+				if (id) {
+					toolCallBlocksById.set(id, block);
 				}
 				return block;
 			};
@@ -347,9 +368,10 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 					if (choice?.delta?.tool_calls) {
 						for (const toolCall of choice.delta.tool_calls) {
 							const block = ensureToolCallBlock(toolCall);
-							if (!block.id && toolCall.id) {
-								block.id = toolCall.id;
-								toolCallBlocksById.set(toolCall.id, block);
+							const id = normalizeToolCallId(toolCall.id);
+							if (!block.id && id) {
+								block.id = id;
+								toolCallBlocksById.set(id, block);
 							}
 							if (!block.name && toolCall.function?.name) {
 								block.name = toolCall.function.name;
@@ -374,15 +396,24 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 					if (reasoningDetails && Array.isArray(reasoningDetails)) {
 						for (const detail of reasoningDetails) {
 							if (detail.type === "reasoning.encrypted" && detail.id && detail.data) {
-								const matchingToolCall = output.content.find(
-									(b) => b.type === "toolCall" && b.id === detail.id,
-								) as ToolCall | undefined;
-								if (matchingToolCall) {
-									matchingToolCall.thoughtSignature = JSON.stringify(detail);
-								}
+								// opt #211: buffer the detail; reconcile after the loop when
+								// the matching tool-call block exists (it may not yet — the
+								// detail can precede its tool_calls delta).
+								pendingEncryptedDetails.push({ id: detail.id, detail });
 							}
 						}
 					}
+				}
+			}
+
+			// opt #211: reconcile buffered encrypted reasoning details now that
+			// all tool-call blocks exist. Each detail carries the id of the tool
+			// call it accompanies; attach it as that tool call's thoughtSignature
+			// so convertMessages can replay the encrypted reasoning chain next turn.
+			for (const { id, detail } of pendingEncryptedDetails) {
+				const matchingToolCall = blocks.find((b) => b.type === "toolCall" && b.id === id) as ToolCall | undefined;
+				if (matchingToolCall) {
+					matchingToolCall.thoughtSignature = JSON.stringify(detail);
 				}
 			}
 
@@ -400,7 +431,13 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 				throw new Error(output.errorMessage || "Provider returned an error stop reason");
 			}
 			if (!hasFinishReason) {
-				throw new Error("Stream ended without finish_reason");
+				// opt #187: a clean stream end without finish_reason is not
+				// necessarily an error — the SDK guarantees finish_reason on
+				// normal completion, but a missing one shouldn't discard
+				// streamed content. output.stopReason defaults to "stop"
+				// (init at :135), so fall through to the done event instead of
+				// throwing. Mirrors openai-responses-shared.ts graceful default.
+				output.stopReason = "stop";
 			}
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
@@ -413,7 +450,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 				delete (block as { streamIndex?: number }).streamIndex;
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			output.errorMessage = error instanceof Error ? error.message : safeStringifyError(error);
 			// Some providers via OpenRouter give additional information in this field.
 			const rawMetadata = (error as any)?.error?.metadata?.raw;
 			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
@@ -820,6 +857,10 @@ export function convertMessages(
 				role: "assistant",
 				content: compat.requiresAssistantAfterToolResult ? "" : null,
 			};
+			// opt #213: track whether a reasoning field (reasoning_content / a
+			// provider-specific signature key) was populated on this assistant
+			// message, so the skip guard preserves reasoning-only turns.
+			let hasReasoningField = false;
 
 			const assistantTextParts = msg.content
 				.filter(isTextContentBlock)
@@ -859,7 +900,17 @@ export function convertMessages(
 						signature = "reasoning_content";
 					}
 					if (signature && signature.length > 0) {
+						// opt #213: record that a reasoning field was populated so the
+						// skip guard below does not drop this assistant turn. A turn can
+						// carry ONLY reasoning (no text, no tool_calls) — e.g. max_tokens
+						// hit during reasoning, or a reasoning model that stops after
+						// thinking. Pre-fix the skip guard saw content===null + no
+						// tool_calls and dropped the whole message, silently losing the
+						// reasoning_content replay → degraded multi-turn reasoning for
+						// providers that rely on it (gpt-oss / DeepSeek / OpenRouter
+						// reasoning models).
 						(assistantMsg as any)[signature] = nonEmptyThinkingBlocks.map((block) => block.thinking).join("\n");
+						hasReasoningField = true;
 					}
 				}
 			} else if (assistantText.length > 0) {
@@ -911,7 +962,7 @@ export function convertMessages(
 				content !== null &&
 				content !== undefined &&
 				(typeof content === "string" ? content.length > 0 : content.length > 0);
-			if (!hasContent && !assistantMsg.tool_calls) {
+			if (!hasContent && !assistantMsg.tool_calls && !hasReasoningField) {
 				continue;
 			}
 			params.push(assistantMsg);
@@ -931,10 +982,20 @@ export function convertMessages(
 
 				// Always send tool result with text (or placeholder if only images)
 				const hasText = textResult.length > 0;
+				let toolContent = hasText ? textResult : "(see attached image)";
+				// The OpenAI chat-completions tool message has no is_error field (unlike
+				// Anthropic's is_error / Bedrock's ToolResultStatus / Google's {error}).
+				// A failed tool (edit not-found, bash exit!=0, read-binary, …) would
+				// otherwise be indistinguishable from a successful result to the model.
+				// Surface the failure with a prefix marker so the model can self-correct —
+				// same convention the mistral provider uses.
+				if (toolMsg.isError) {
+					toolContent = `[tool error] ${toolContent}`;
+				}
 				// Some providers require the 'name' field in tool results
 				const toolResultMsg: ChatCompletionToolMessageParam = {
 					role: "tool",
-					content: sanitizeSurrogates(hasText ? textResult : "(see attached image)"),
+					content: sanitizeSurrogates(toolContent),
 					tool_call_id: toolMsg.toolCallId,
 				};
 				if (compat.requiresToolResultName && toolMsg.toolName) {
@@ -1041,7 +1102,7 @@ function parseChunkUsage(
 	return usage;
 }
 
-function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | string): {
+export function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | string): {
 	stopReason: StopReason;
 	errorMessage?: string;
 } {
@@ -1060,10 +1121,19 @@ function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | str
 		case "network_error":
 			return { stopReason: "error", errorMessage: "Provider finish_reason: network_error" };
 		default:
-			return {
-				stopReason: "error",
-				errorMessage: `Provider finish_reason: ${reason}`,
-			};
+			// opt #187: graceful default for unknown/future finish_reasons. An
+			// OpenAI-compatible provider (OpenRouter/vLLM/local gateways — REPI's
+			// default kimchi/kimi runs this path via the GLM proxy) may emit a
+			// finish_reason outside the known set (e.g. "insufficient_information",
+			// "sensitive", "model_length"). The old default reclassified the
+			// successfully-streamed content as stopReason:"error" → false failure
+			// (error event instead of done); if no content, the retry layer
+			// re-sent up to maxRetries wasting tokens then false-errored. This
+			// diverged from the round-8 graceful fixes (anthropic #179, mistral
+			// #178, openai-responses #180). Now default to "stop" so content is
+			// preserved; only KNOWN error sentinels (content_filter/network_error)
+			// map to "error". Mirrors openai-responses-shared.ts:552-572.
+			return { stopReason: "stop" };
 	}
 }
 

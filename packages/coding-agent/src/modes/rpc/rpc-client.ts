@@ -51,16 +51,44 @@ export type RpcEventListener = (event: AgentEvent) => void;
 // RPC Client
 // ============================================================================
 
+// Tail-cap for the accumulated agent-process stderr. The RPC agent process is
+// long-lived (a whole session) and emits stderr continuously (deprecation
+// warnings, debug logs, repeated warnings); without a cap `this.stderr` grows
+// unbounded for the session lifetime AND is embedded verbatim in every error
+// message (exit/timeout/stdin-error). Keep the most-recent tail — that is what
+// diagnoses a just-occurred exit/error — and bound both memory and error
+// message size. Same doctrine as mcp-manager stderr (12KB) and agent-thread
+// stderr (512KB): a stream you keep, capped.
+const RPC_STDERR_TAIL_CHARS = 64 * 1024;
+
 export class RpcClient {
 	private process: ChildProcess | null = null;
 	private stopReadingStdout: (() => void) | null = null;
 	private eventListeners: RpcEventListener[] = [];
 	private pendingRequests: Map<string, { resolve: (response: RpcResponse) => void; reject: (error: Error) => void }> =
 		new Map();
+	/** Active onEvent-based waiters (waitForIdle / collectEvents). Unlike
+	 * `pendingRequests` (the send() map), these are NOT rejected by
+	 * rejectPendingRequests — without exit-aware rejection they hang for the
+	 * full 60s timeout when the agent process dies, since no agent_end ever
+	 * arrives. Rejected en masse from the exit/error/stdin-error handlers. */
+	private pendingWaiters: Set<{
+		reject: (error: Error) => void;
+		unsubscribe: () => void;
+		timer: NodeJS.Timeout;
+	}> = new Set();
 	private requestId = 0;
 	private stderr = "";
 	private exitError: Error | null = null;
 	private options: RpcClientOptions;
+	/**
+	 * Synchronous `process.on("exit")` reap hook (opt #61). The spawned RPC agent
+	 * child is a full agent process; on parent exit (crash, SIGKILL, consumer
+	 * forgets stop()) it is reparented to init and keeps making LLM API calls
+	 * (cost/quota leak) — the same class opt #46 fixed for AgentThreadManager.
+	 * `stop()` only runs when the consumer calls it. Idempotent install/remove.
+	 */
+	private exitHook: (() => void) | undefined;
 
 	constructor(options: RpcClientOptions = {}) {
 		this.options = options;
@@ -95,24 +123,37 @@ export class RpcClient {
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 		this.process = childProcess;
+		this.installExitHook();
 
-		// Collect stderr for debugging
+		// Collect stderr for debugging. Tail-capped so a long-lived RPC agent
+		// session emitting continuous stderr cannot grow `this.stderr` unbounded
+		// (it is embedded in every error message below). Keeps the most-recent
+		// tail, which is what diagnoses a just-occurred exit/error.
 		childProcess.stderr?.on("data", (data) => {
 			this.stderr += data.toString();
+			if (this.stderr.length > RPC_STDERR_TAIL_CHARS) this.stderr = this.stderr.slice(-RPC_STDERR_TAIL_CHARS);
 			process.stderr.write(data);
 		});
+		// A stream-level 'error' on the stderr pipe (EBADF/EIO on a closed/detached
+		// handle) has no listener by default → `Unhandled 'error' event` crashes the
+		// parent during RPC teardown. The child "error" handler covers spawn errors,
+		// not the readable stream's own error. Swallow best-effort; stderr is
+		// debug-only and already accumulated up to the error.
+		childProcess.stderr?.on("error", () => {});
 
 		childProcess.once("exit", (code, signal) => {
 			if (this.process !== childProcess) return;
 			const error = this.createProcessExitError(code, signal);
 			this.exitError = error;
 			this.rejectPendingRequests(error);
+			this.rejectPendingWaiters(error);
 		});
 		childProcess.once("error", (error) => {
 			if (this.process !== childProcess) return;
 			const processError = new Error(`Agent process error: ${error.message}. Stderr: ${this.stderr}`);
 			this.exitError = processError;
 			this.rejectPendingRequests(processError);
+			this.rejectPendingWaiters(processError);
 		});
 		childProcess.stdin?.on("error", (error) => {
 			if (this.process !== childProcess) return;
@@ -120,6 +161,7 @@ export class RpcClient {
 				this.exitError ?? new Error(`Agent process stdin error: ${error.message}. Stderr: ${this.stderr}`);
 			this.exitError = stdinError;
 			this.rejectPendingRequests(stdinError);
+			this.rejectPendingWaiters(stdinError);
 		});
 
 		// Set up strict JSONL reader for stdout.
@@ -161,7 +203,63 @@ export class RpcClient {
 		});
 
 		this.process = null;
-		this.pendingRequests.clear();
+
+		// Reject any still-pending send() requests and onEvent waiters with a
+		// "stopped" error. In the normal path the child's exit handler already
+		// rejected+cleared both (so these loops are no-ops). But if the child
+		// ignored SIGTERM and we SIGKILLed it, stop() nulled `this.process`
+		// BEFORE the late exit fired, so the exit handler's
+		// `if (this.process !== childProcess) return` guard skipped rejection
+		// entirely — without this, an in-flight send() waited its full 30s timer
+		// for a "Timeout waiting for response" and waitForIdle/collectEvents
+		// waited their full 60s, all with a misleading timeout error instead of
+		// an immediate "stopped". Rejecting here is safe in both paths: when the
+		// exit handler already ran, both collections are empty. (opt #120)
+		const stoppedError = new Error("Agent process stopped.");
+		this.rejectPendingRequests(stoppedError);
+		this.rejectPendingWaiters(stoppedError);
+		this.removeExitHook();
+	}
+
+	/**
+	 * Install the synchronous `process.on("exit")` reap hook (opt #61). Idempotent.
+	 * Bounds the live exit-listener count: a fresh RpcClient per RPC session
+	 * installs one and removes it on stop(), so no accumulation across sessions.
+	 */
+	private installExitHook(): void {
+		if (this.exitHook) return;
+		const hook = () => this.killChild("parent_exit");
+		this.exitHook = hook;
+		process.on("exit", hook);
+	}
+
+	private removeExitHook(): void {
+		if (!this.exitHook) return;
+		try {
+			process.off("exit", this.exitHook);
+		} catch {
+			/* listener already gone */
+		}
+		this.exitHook = undefined;
+	}
+
+	/**
+	 * SIGKILL the in-flight RPC agent child if it is still running. Called from
+	 * the exit hook on parent exit (synchronous, best-effort) so the child is not
+	 * reparented to init. No-op once the child has exited (`exitCode`/`signalCode`
+	 * set). Mirrors AgentThreadManager.disposeChildren (opt #46).
+	 */
+	private killChild(reason: string): void {
+		const child = this.process;
+		if (!child) return;
+		if (child.exitCode !== null || child.signalCode !== null) return;
+		void reason;
+		try {
+			child.kill("SIGKILL");
+		} catch {
+			/* already dead — nothing to reap */
+		}
+		void reason;
 	}
 
 	/**
@@ -429,18 +527,26 @@ export class RpcClient {
 	 */
 	waitForIdle(timeout = 60000): Promise<void> {
 		return new Promise((resolve, reject) => {
+			// Forward-declared so the timeout/event callbacks can deregister the
+			// waiter. The callbacks only fire after this synchronous body finishes,
+			// by which point `waiter` is assigned — no TDZ at call time.
+			let waiter!: { reject: (error: Error) => void; unsubscribe: () => void; timer: NodeJS.Timeout };
 			const timer = setTimeout(() => {
-				unsubscribe();
+				waiter.unsubscribe();
+				this.pendingWaiters.delete(waiter);
 				reject(new Error(`Timeout waiting for agent to become idle. Stderr: ${this.stderr}`));
 			}, timeout);
 
 			const unsubscribe = this.onEvent((event) => {
 				if (event.type === "agent_end") {
 					clearTimeout(timer);
-					unsubscribe();
+					waiter.unsubscribe();
+					this.pendingWaiters.delete(waiter);
 					resolve();
 				}
 			});
+			waiter = { reject, unsubscribe, timer };
+			this.pendingWaiters.add(waiter);
 		});
 	}
 
@@ -450,8 +556,10 @@ export class RpcClient {
 	collectEvents(timeout = 60000): Promise<AgentEvent[]> {
 		return new Promise((resolve, reject) => {
 			const events: AgentEvent[] = [];
+			let waiter!: { reject: (error: Error) => void; unsubscribe: () => void; timer: NodeJS.Timeout };
 			const timer = setTimeout(() => {
-				unsubscribe();
+				waiter.unsubscribe();
+				this.pendingWaiters.delete(waiter);
 				reject(new Error(`Timeout collecting events. Stderr: ${this.stderr}`));
 			}, timeout);
 
@@ -459,10 +567,13 @@ export class RpcClient {
 				events.push(event);
 				if (event.type === "agent_end") {
 					clearTimeout(timer);
-					unsubscribe();
+					waiter.unsubscribe();
+					this.pendingWaiters.delete(waiter);
 					resolve(events);
 				}
 			});
+			waiter = { reject, unsubscribe, timer };
+			this.pendingWaiters.add(waiter);
 		});
 	}
 
@@ -483,17 +594,32 @@ export class RpcClient {
 		try {
 			const data = JSON.parse(line);
 
-			// Check if it's a response to a pending request
-			if (data.type === "response" && data.id && this.pendingRequests.has(data.id)) {
-				const pending = this.pendingRequests.get(data.id)!;
-				this.pendingRequests.delete(data.id);
-				pending.resolve(data as RpcResponse);
+			// A response is never an event. Matched → resolve its pending request;
+			// unmatched (a late reply whose send() already timed out and deleted the
+			// pending entry) → drop it. Pre-fix an unmatched response fell through to
+			// the event-listener broadcast and was dispatched to every listener as a
+			// phantom AgentEvent (polluting collectEvents / waitForIdle consumers).
+			if (data.type === "response") {
+				const id = data.id;
+				if (id && this.pendingRequests.has(id)) {
+					const pending = this.pendingRequests.get(id)!;
+					this.pendingRequests.delete(id);
+					pending.resolve(data as RpcResponse);
+				}
 				return;
 			}
 
 			// Otherwise it's an event
 			for (const listener of this.eventListeners) {
-				listener(data as AgentEvent);
+				// opt #148: wrap each listener so a throw doesn't abort the loop and
+				// starve every subsequent listener for this event (and get swallowed
+				// under the misleading outer "non-JSON lines" catch). A misbehaving
+				// listener must not silence its siblings or drop the line dispatch.
+				try {
+					listener(data as AgentEvent);
+				} catch (err) {
+					console.error("rpc-client event listener threw:", err);
+				}
 			}
 		} catch {
 			// Ignore non-JSON lines
@@ -509,6 +635,19 @@ export class RpcClient {
 			pending.reject(error);
 		}
 		this.pendingRequests.clear();
+	}
+
+	/** Reject all active onEvent-based waiters (waitForIdle / collectEvents) with
+	 * the process exit/error. Mirrors rejectPendingRequests for send() waiters.
+	 * Clears the per-waiter 60s timeout and unsubscribes the listener so neither
+	 * a leaked timer nor a stale listener survives the process death. */
+	private rejectPendingWaiters(error: Error): void {
+		for (const waiter of this.pendingWaiters) {
+			clearTimeout(waiter.timer);
+			waiter.unsubscribe();
+			waiter.reject(error);
+		}
+		this.pendingWaiters.clear();
 	}
 
 	private async send(command: RpcCommandBody): Promise<RpcResponse> {

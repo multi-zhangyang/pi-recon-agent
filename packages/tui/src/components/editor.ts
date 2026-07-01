@@ -290,6 +290,17 @@ export class Editor implements Component, Focusable {
 	public onSubmit?: (text: string) => void;
 	public onChange?: (text: string) => void;
 	public disableSubmit: boolean = false;
+	/**
+	 * Error sink for the submit handler. submitValue() invokes onSubmit and
+	 * drops any returned promise — an async onSubmit that rejects (e.g. a prompt
+	 * submission path that re-throws on expired auth / a command handler throw)
+	 * would otherwise become an unhandledRejection that crashes the host process
+	 * WITHOUT the consumer's terminal being restored (raw mode stuck, cursor
+	 * hidden). submitValue routes BOTH sync throws and async rejections here (or
+	 * console.error fallback) so the editor/TUI keep running. Mirrors the
+	 * CustomEditor action-handler error containment pattern.
+	 */
+	public onSubmitError?: (error: unknown) => void;
 
 	constructor(tui: TUI, theme: EditorTheme, options: EditorOptions = {}) {
 		this.tui = tui;
@@ -1204,7 +1215,26 @@ export class Editor implements Component, Focusable {
 		this.lastAction = null;
 
 		if (this.onChange) this.onChange("");
-		if (this.onSubmit) this.onSubmit(result);
+		if (this.onSubmit) {
+			// Guard the submit dispatch (same class as the CustomEditor action-
+			// handler containment): onSubmit may be an async fn whose returned
+			// promise is dropped here, or may throw synchronously. Without this,
+			// an async rejection → unhandledRejection (host crash, terminal left
+			// in raw mode) or a sync throw → uncaughtException. Route to
+			// onSubmitError (or console.error fallback) so neither escapes.
+			try {
+				const ret = this.onSubmit(result) as unknown;
+				if (ret && typeof (ret as Promise<unknown>).then === "function") {
+					(ret as Promise<unknown>).catch((err: unknown) => {
+						if (this.onSubmitError) this.onSubmitError(err);
+						else console.error("Editor async submit handler error:", err);
+					});
+				}
+			} catch (err) {
+				if (this.onSubmitError) this.onSubmitError(err);
+				else console.error("Editor submit handler error:", err);
+			}
+		}
 	}
 
 	private handleBackspace(): void {
@@ -2091,7 +2121,12 @@ export class Editor implements Component, Focusable {
 	): Promise<void> {
 		const previousTask = this.autocompleteRequestTask;
 		this.autocompleteRequestTask = (async () => {
-			await previousTask;
+			// Swallow any prior-task rejection so a previous failure cannot cascade
+			// into this request. The shared task chain must never carry a rejection
+			// forward, or every subsequent autocomplete would await a rejected task,
+			// throw again, and the `void` at the call site would drop the rejection
+			// as unhandled — crashing the agent AND permanently breaking autocomplete.
+			await previousTask.catch(() => {});
 			if (startToken !== this.autocompleteStartToken || !this.autocompleteProvider) {
 				return;
 			}
@@ -2103,7 +2138,19 @@ export class Editor implements Component, Focusable {
 			const snapshotLine = this.state.cursorLine;
 			const snapshotCol = this.state.cursorCol;
 
-			await this.runAutocompleteRequest(requestId, controller, snapshotText, snapshotLine, snapshotCol, options);
+			try {
+				await this.runAutocompleteRequest(requestId, controller, snapshotText, snapshotLine, snapshotCol, options);
+			} catch {
+				// runAutocompleteRequest calls extension-controlled completion code
+				// (getArgumentCompletions / applyCompletion) that can throw on
+				// arbitrary internal failures. A rejection here would poison the
+				// shared autocompleteRequestTask chain. Degrade gracefully: clear any
+				// partial popup, release the abort controller, and keep the chain
+				// resolved so the next request is not poisoned.
+				this.autocompleteAbort = undefined;
+				this.cancelAutocomplete();
+				this.tui.requestRender();
+			}
 		})();
 		await this.autocompleteRequestTask;
 	}
@@ -2218,6 +2265,10 @@ export class Editor implements Component, Focusable {
 	private cancelAutocomplete(): void {
 		this.cancelAutocompleteRequest();
 		this.clearAutocompleteUi();
+	}
+
+	dispose(): void {
+		this.cancelAutocomplete();
 	}
 
 	public isShowingAutocomplete(): boolean {

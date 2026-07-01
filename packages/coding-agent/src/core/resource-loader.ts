@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import chalk from "chalk";
 import { CONFIG_DIR_NAME } from "../config.ts";
@@ -13,7 +13,7 @@ import { createExtensionRuntime, loadExtensionFromFactory, loadExtensions } from
 import type { Extension, ExtensionFactory, ExtensionRuntime, LoadExtensionsResult } from "./extensions/types.ts";
 import { DefaultPackageManager, type PathMetadata } from "./package-manager.ts";
 import type { PromptTemplate } from "./prompt-templates.ts";
-import { loadPromptTemplates } from "./prompt-templates.ts";
+import { loadPromptTemplates, readBoundedTextFile } from "./prompt-templates.ts";
 import { SettingsManager } from "./settings-manager.ts";
 import type { Skill } from "./skills.ts";
 import { loadSkills } from "./skills.ts";
@@ -37,14 +37,15 @@ export interface ResourceLoader {
 	reload(): Promise<void>;
 }
 
-function resolvePromptInput(input: string | undefined, description: string): string | undefined {
+// Exported for testing (opt #169).
+export function resolvePromptInput(input: string | undefined, description: string): string | undefined {
 	if (!input) {
 		return undefined;
 	}
 
 	if (existsSync(input)) {
 		try {
-			return readFileSync(input, "utf-8");
+			return readBoundedTextFile(input);
 		} catch (error) {
 			console.error(chalk.yellow(`Warning: Could not read ${description} file ${input}: ${error}`));
 			return input;
@@ -54,7 +55,8 @@ function resolvePromptInput(input: string | undefined, description: string): str
 	return input;
 }
 
-function loadContextFileFromDir(dir: string): { path: string; content: string } | null {
+// Exported for testing (opt #169).
+export function loadContextFileFromDir(dir: string): { path: string; content: string } | null {
 	const candidates = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
 	for (const filename of candidates) {
 		const filePath = join(dir, filename);
@@ -62,7 +64,7 @@ function loadContextFileFromDir(dir: string): { path: string; content: string } 
 			try {
 				return {
 					path: filePath,
-					content: readFileSync(filePath, "utf-8"),
+					content: readBoundedTextFile(filePath),
 				};
 			} catch (error) {
 				console.error(chalk.yellow(`Warning: Could not read ${filePath}: ${error}`));
@@ -157,6 +159,14 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private agentDir: string;
 	private settingsManager: SettingsManager;
 	private eventBus: EventBus;
+	// opt #238: unsubscribe functions for every `eventBus.on()` registered by
+	// extension factories. reload() re-runs every factory against the SAME
+	// persistent `eventBus`, so without clearing, each reload added another set
+	// of listeners to the underlying EventEmitter — after N reloads every event
+	// fired N times (duplicate side-effects, e.g. an auto-resume extension
+	// queuing N steer messages on one event) AND the old handlers/closures were
+	// never collected. We drain these before re-loading extensions.
+	private eventUnsubs: Set<() => void> = new Set();
 	private packageManager: DefaultPackageManager;
 	private additionalExtensionPaths: string[];
 	private additionalSkillPaths: string[];
@@ -210,7 +220,23 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.cwd = resolvePath(options.cwd);
 		this.agentDir = resolvePath(options.agentDir);
 		this.settingsManager = options.settingsManager ?? SettingsManager.create(this.cwd, this.agentDir);
-		this.eventBus = options.eventBus ?? createEventBus();
+		// opt #238: wrap the event bus so every `on()` registration is tracked for
+		// cleanup on reload (see eventUnsubs). The wrapper passes emit/on through to
+		// the underlying bus unchanged; it only intercepts `on` to record the
+		// returned unsubscribe so reload() can drain stale listeners before the
+		// factories re-register. Works for any EventBus (injected or default).
+		const underlyingEventBus = options.eventBus ?? createEventBus();
+		this.eventBus = {
+			emit: (channel, data) => underlyingEventBus.emit(channel, data),
+			on: (channel, handler) => {
+				const unsub = underlyingEventBus.on(channel, handler);
+				this.eventUnsubs.add(unsub);
+				return () => {
+					unsub();
+					this.eventUnsubs.delete(unsub);
+				};
+			},
+		};
 		this.packageManager = new DefaultPackageManager({
 			cwd: this.cwd,
 			agentDir: this.agentDir,
@@ -397,6 +423,19 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const extensionPaths = this.noExtensions
 			? cliEnabledExtensions
 			: this.mergePaths(cliEnabledExtensions, enabledExtensions);
+
+		// opt #238: drain every eventBus listener registered by the PREVIOUS load
+		// before re-running the factories. Without this, reload() accumulated a
+		// new set of listeners on the same persistent EventEmitter each call
+		// (duplicate event firing + unbounded closure retention).
+		for (const unsub of this.eventUnsubs) {
+			try {
+				unsub();
+			} catch {
+				// best-effort — a throwing unsub must not abort the reload
+			}
+		}
+		this.eventUnsubs.clear();
 
 		const extensionsResult = await loadExtensions(extensionPaths, this.cwd, this.eventBus);
 		const inlineExtensions = await this.loadExtensionFactories(extensionsResult.runtime);

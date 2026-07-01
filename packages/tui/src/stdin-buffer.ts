@@ -383,6 +383,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 					this.emitDataSequence(sequence);
 				}
 			}, this.timeoutMs);
+			this.timeout.unref();
 		}
 	}
 

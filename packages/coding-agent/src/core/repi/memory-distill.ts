@@ -1,13 +1,14 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import type { MemoryArtifactHash } from "./memory-event.ts";
-import { buildMemoryExperienceReport } from "./memory-experience.ts";
-import { buildMemorySkillCapsuleReport } from "./memory-skill.ts";
+import { buildMemoryExperienceReport, type MemoryExperienceReportV8 } from "./memory-experience.ts";
+import { buildMemorySkillCapsuleReport, type MemorySkillCapsuleReportV9 } from "./memory-skill.ts";
 import { writeFileAtomic } from "./memory-store.ts";
 import {
 	ensureRepiStorage,
 	memoryDistillPromotionBookPath,
 	memoryDistillPromotionCandidateLedgerPath,
 	memoryDistillPromotionReportPath,
+	readTextFile,
 } from "./storage.ts";
 import { clamp01, sha256Text, truncateMiddle, uniqueNonEmpty } from "./text.ts";
 
@@ -170,10 +171,20 @@ export function memoryDistillSnippetFromArtifacts(refs: MemoryArtifactHash[], li
 	const snippets: string[] = [];
 	for (const ref of refs.slice(0, 3)) {
 		if (!ref.path || !existsSync(ref.path)) continue;
-		try {
-			const body = readFileSync(ref.path, "utf-8");
-			snippets.push(`${ref.path}\n${truncateMiddle(body, limit)}`);
-		} catch {}
+		// Foundational opt #267: read the artifact body via the stat-guarded
+		// readTextFile (16MB cap, REPI_READ_TEXT_FILE_MAX_BYTES; returns "" for
+		// oversized/unreadable) instead of bare readFileSync. ref.path is a recon
+		// artifact (memory dump, pcap, firmware, coredump, large replay/compiler
+		// artifact) — bare readFileSync loaded the WHOLE file into the V8 heap
+		// before truncateMiddle → OOM-spike crash on a multi-hundred-MB artifact,
+		// OR threw ERR_FS_FILE_TOO_LARGE (>~512MB) swallowed by catch {} → the
+		// snippet was silently dropped, degrading distillation routing with no
+		// error surfaced. Same class as opt #34/#158/#163 (read-tool, sha256,
+		// evidence/storage body reads). Skip the snippet when the guarded read
+		// yields no usable body (oversized/binary/unreadable).
+		const body = readTextFile(ref.path);
+		if (!body) continue;
+		snippets.push(`${ref.path}\n${truncateMiddle(body, limit)}`);
 	}
 	return snippets.join("\n---\n");
 }
@@ -195,21 +206,31 @@ export function memoryDistillDecision(input: {
 }
 
 export function buildMemoryDistillPromotionReport(
-	options: { route?: string; target?: string; write?: boolean } = {},
+	options: {
+		route?: string;
+		target?: string;
+		write?: boolean;
+		skill?: MemorySkillCapsuleReportV9;
+		experience?: MemoryExperienceReportV8;
+	} = {},
 ): MemoryDistillPromotionReportV10 {
 	ensureRepiStorage();
 	const generatedAt = new Date().toISOString();
 	const provider = memoryDistillProviderConfigV10();
-	const skillReport = buildMemorySkillCapsuleReport({
-		route: options.route,
-		target: options.target,
-		write: options.write,
-	});
-	const experience = buildMemoryExperienceReport({
-		route: options.route,
-		target: options.target,
-		write: options.write,
-	});
+	const skillReport =
+		options.skill ??
+		buildMemorySkillCapsuleReport({
+			route: options.route,
+			target: options.target,
+			write: options.write,
+		});
+	const experience =
+		options.experience ??
+		buildMemoryExperienceReport({
+			route: options.route,
+			target: options.target,
+			write: options.write,
+		});
 	const candidates: MemoryDistillCandidateV10[] = [];
 	for (const capsule of skillReport.recentCapsules) {
 		const artifactSnippet = memoryDistillSnippetFromArtifacts(capsule.evidenceRefs, 500);

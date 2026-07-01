@@ -1,10 +1,11 @@
 import type { Transport } from "@pi-recon/repi-ai";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
+import { atomicWriteFileSync } from "./tools/atomic-write.ts";
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
@@ -148,14 +149,19 @@ function deepMergeSettings(base: Settings, overrides: Settings): Settings {
 	return result;
 }
 
-function parseTimeoutSetting(value: unknown, settingName: string): number | undefined {
+function parseTimeoutSetting(value: unknown): number | undefined {
 	const timeoutMs = parseHttpIdleTimeoutMs(value);
 	if (timeoutMs !== undefined) {
 		return timeoutMs;
 	}
-	if (value !== undefined) {
-		throw new Error(`Invalid ${settingName} setting: ${String(value)}`);
-	}
+	// opt #242: pre-fix this threw when `value` was present but malformed
+	// (negative, non-numeric, NaN). The getters are written as
+	// `parseTimeoutSetting(...) ?? DEFAULT`, but the throw fired BEFORE `??`
+	// evaluated — so a hand-edited settings.json with e.g.
+	// "httpIdleTimeoutMs": -1 crashed startup at
+	// configureHttpDispatcher(settingsManager.getHttpIdleTimeoutMs()). The
+	// read path must not throw (setters still validate on write). Return
+	// undefined so the `??` fallback applies.
 	return undefined;
 }
 
@@ -233,7 +239,16 @@ export class FileSettingsStorage implements SettingsStorage {
 				if (!release) {
 					release = this.acquireLockSyncWithRetry(path);
 				}
-				writeFileSync(path, next, "utf-8");
+				// Atomic temp+rename (mode 0o644 for a new file, existing mode
+				// preserved): a plain writeFileSync truncates then writes, so a crash
+				// (SIGKILL/OOM/SIGTERM) mid-write leaves a truncated/partial
+				// settings.json → next load's JSON.parse throws → settings lost or
+				// startup degrades. The file lock serializes concurrent writers but
+				// does NOT protect against a crash-torn write. temp+rename means a
+				// reader sees either the complete prior settings or the complete new
+				// ones. 0o644 matches the old writeFileSync default (world-readable
+				// config, no secrets).
+				atomicWriteFileSync(path, next, 0o644);
 			}
 		} finally {
 			if (release) {
@@ -819,7 +834,7 @@ export class SettingsManager {
 	}
 
 	getHttpIdleTimeoutMs(): number {
-		return parseTimeoutSetting(this.settings.httpIdleTimeoutMs, "httpIdleTimeoutMs") ?? DEFAULT_HTTP_IDLE_TIMEOUT_MS;
+		return parseTimeoutSetting(this.settings.httpIdleTimeoutMs) ?? DEFAULT_HTTP_IDLE_TIMEOUT_MS;
 	}
 
 	setHttpIdleTimeoutMs(timeoutMs: number): void {
@@ -840,7 +855,7 @@ export class SettingsManager {
 	}
 
 	getWebSocketConnectTimeoutMs(): number | undefined {
-		return parseTimeoutSetting(this.settings.websocketConnectTimeoutMs, "websocketConnectTimeoutMs");
+		return parseTimeoutSetting(this.settings.websocketConnectTimeoutMs);
 	}
 
 	getHideThinkingBlock(): boolean {

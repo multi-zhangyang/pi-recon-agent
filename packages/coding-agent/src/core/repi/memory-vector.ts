@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { statSync } from "node:fs";
 import { type MemoryArtifactHash, type MemoryEventV1, memoryEventHashChainOk } from "./memory-event.ts";
 import { memoryRouteMatches, memoryTargetScope } from "./memory-scope.ts";
 import {
@@ -428,6 +429,56 @@ export function buildMemoryVectorIndex(events = readMemoryEvents()): MemoryVecto
 	return index;
 }
 
+// opt #76 — vector index cache. searchMemoryVectors runs on every tool_result (via
+// searchMemoryEvents → buildPerTurnMemoryRecall) and called buildMemoryVectorIndex every
+// time, which (1) recomputes embeddings for ALL events (O(events) CPU — local hash is
+// deterministic; remote openai-compatible would be a network call per event) AND (2)
+// atomic-rewrote the index file via writeFileAtomic every tool_result (O(index) disk write
+// of unchanged state). The index is a PURE function of (events, embeddingProvider); events
+// only change on deposit. So a mtime+size-keyed cache on events.jsonl (+ providerKey) makes
+// a cache hit 0-recompute + 0-write: the index file already matches the cached index from
+// the last miss's writeFileAtomic (the file is a write-only persisted snapshot — no reader
+// reads its content; reports reference only its PATH — so skipping the rewrite on a hit
+// leaves it current). Deposit ordering: a deposit writes events.jsonl BEFORE the recall read
+// (handler order trace→auto-deposit→recall) → mtime bump → cache miss → rebuild + rewrite +
+// re-cache → recall sees the post-deposit index. The providerKey (model|dimensions) guards
+// against an in-session REPI_MEMORY_EMBEDDING_* env change (rare). Path-keyed so a changed
+// REPI_CODING_AGENT_DIR gets its own entry (test/multi-agent isolation). Missing events file
+// → stat throws → miss → buildMemoryVectorIndex(readMemoryEvents()=[]) → don't cache (no
+// stat) → the next call re-stats and rebuilds once events appear.
+const memoryVectorIndexCache = new Map<
+	string,
+	{ mtimeMs: number; size: number; providerKey: string; index: MemoryVectorIndexV1 }
+>();
+
+function resolveMemoryVectorIndex(events: MemoryEventV1[]): MemoryVectorIndexV1 {
+	const eventsPath = memoryEventsPath();
+	let stat: { mtimeMs: number; size: number } | undefined;
+	try {
+		const s = statSync(eventsPath);
+		stat = { mtimeMs: s.mtimeMs, size: s.size };
+	} catch {
+		stat = undefined;
+	}
+	const provider = memoryEmbeddingProviderConfig();
+	const providerKey = `${provider.model}|${provider.dimensions}`;
+	const cached = stat ? memoryVectorIndexCache.get(eventsPath) : undefined;
+	if (
+		cached &&
+		stat &&
+		cached.mtimeMs === stat.mtimeMs &&
+		cached.size === stat.size &&
+		cached.providerKey === providerKey
+	) {
+		return cached.index; // cache hit: 0 embedding recompute, 0 index-file write
+	}
+	const built = buildMemoryVectorIndex(events);
+	if (stat)
+		memoryVectorIndexCache.set(eventsPath, { mtimeMs: stat.mtimeMs, size: stat.size, providerKey, index: built });
+	else memoryVectorIndexCache.delete(eventsPath);
+	return built;
+}
+
 export function searchMemoryVectors(
 	query?: string,
 	options?: { route?: string; target?: string; limit?: number },
@@ -435,7 +486,7 @@ export function searchMemoryVectors(
 	ensureRepiStorage();
 	const events = readMemoryEvents();
 	const eventsById = new Map(events.map((event) => [event.id, event]));
-	const index = buildMemoryVectorIndex(events);
+	const index = resolveMemoryVectorIndex(events);
 	const queryText = query ?? "";
 	const queryTokens = memoryVectorTokens(queryText);
 	const queryEmbedding = memoryEmbeddingVectorsForTexts([queryText], index.embeddingProvider);

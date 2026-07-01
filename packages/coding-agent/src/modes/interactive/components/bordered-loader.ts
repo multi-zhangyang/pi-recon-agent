@@ -59,6 +59,11 @@ export class BorderedLoader extends Container {
 	}
 
 	dispose(): void {
+		// opt #152: abort the non-cancellable loader's signal so any consumer
+		// awaiting `signal` resolves instead of hanging after the loader is torn
+		// down. (The cancellable branch owns its own AbortController via
+		// CancellableLoader, disposed below.)
+		this.signalController?.abort();
 		if ("dispose" in this.loader && typeof this.loader.dispose === "function") {
 			this.loader.dispose();
 		} else if ("stop" in this.loader && typeof this.loader.stop === "function") {

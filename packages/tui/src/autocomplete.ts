@@ -2,6 +2,7 @@ import { spawn } from "child_process";
 import { readdirSync, statSync } from "fs";
 import { homedir } from "os";
 import { basename, dirname, join } from "path";
+import { appendBounded, resolveAutocompleteMaxBytes } from "./autocomplete-buffer.ts";
 import { fuzzyFilter } from "./fuzzy.ts";
 
 const PATH_DELIMITERS = new Set([" ", "\t", '"', "'", "="]);
@@ -120,13 +121,44 @@ function buildCompletionValue(
 	return `${openQuote}${path}${closeQuote}`;
 }
 
+/** Minimal structural type for a child stdio stream we attach an error listener to. */
+export interface ChildStdioStream {
+	on(event: "error", listener: (err: unknown) => void): unknown;
+}
+
+/**
+ * Attach swallow 'error' listeners to a spawned child's piped stdout/stderr so
+ * that a stream 'error' (EIO/EPIPE/EBADF) independent of the child's own
+ * 'error'/'close' events doesn't crash the process with an Unhandled 'error'
+ * event. The supplied `onError` should route to the existing double-resolve
+ * guard so behavior is unchanged on the happy path. Mirrors opt #40's pattern.
+ */
+export function attachChildStdioErrorListeners(
+	stdout: ChildStdioStream,
+	stderr: ChildStdioStream,
+	onError: () => void,
+): void {
+	stdout.on("error", () => {
+		onError();
+	});
+	stderr.on("error", () => {
+		onError();
+	});
+}
+
 // Use fd to walk directory tree (fast, respects .gitignore)
-async function walkDirectoryWithFd(
+// `--max-results` bounds the result count at the source (fd stops after N
+// matches); `maxStdoutBytes` is a defense-in-depth buffer cap so a misbehaving
+// fd or a future caller that drops `--max-results` cannot OOM the long-lived
+// TUI process. A truncated completion list is fine — the user is typing
+// interactively. See autocomplete-buffer.ts (#174).
+export async function walkDirectoryWithFd(
 	baseDir: string,
 	fdPath: string,
 	query: string,
 	maxResults: number,
 	signal: AbortSignal,
+	maxStdoutBytes: number | undefined = resolveAutocompleteMaxBytes(),
 ): Promise<Array<{ path: string; isDirectory: boolean }>> {
 	const args = [
 		"--base-directory",
@@ -165,6 +197,7 @@ async function walkDirectoryWithFd(
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		let stdout = "";
+		let stdoutCapped = false;
 		let resolved = false;
 
 		const finish = (results: Array<{ path: string; isDirectory: boolean }>) => {
@@ -183,18 +216,43 @@ async function walkDirectoryWithFd(
 		signal.addEventListener("abort", onAbort, { once: true });
 		child.stdout.setEncoding("utf-8");
 		child.stdout.on("data", (chunk: string) => {
-			stdout += chunk;
+			// Bound the accumulated stdout so a huge monorepo (or a dropped
+			// --max-results) cannot OOM the long-lived TUI process. Once capped,
+			// stop appending — a truncated completion list is fine (#174).
+			if (maxStdoutBytes === undefined) {
+				stdout += chunk;
+				return;
+			}
+			if (stdoutCapped) return;
+			const next = appendBounded(stdout, chunk, maxStdoutBytes);
+			if (next.length >= maxStdoutBytes) stdoutCapped = true;
+			stdout = next;
 		});
+		// Swallow stream 'error' events (EIO/EPIPE/EBADF) on the piped stdio
+		// independent of the child's own 'error'/'close' events. The existing
+		// double-resolve guard in finish() keeps behavior unchanged on the happy
+		// path. Mirrors opt #40's pattern.
+		attachChildStdioErrorListeners(child.stdout!, child.stderr!, () => finish([]));
 		child.on("error", () => {
 			finish([]);
 		});
 		child.on("close", (code) => {
-			if (signal.aborted || code !== 0 || !stdout) {
+			const trimmed = stdout.trim();
+			if (signal.aborted || code !== 0 || !trimmed) {
 				finish([]);
 				return;
 			}
 
-			const lines = stdout.trim().split("\n").filter(Boolean);
+			// If the buffer was capped mid-stream, the final line may be a
+			// partial path — drop it so we never surface a garbage completion
+			// entry. The remaining (complete) lines form a valid truncated list.
+			let body = trimmed;
+			if (stdoutCapped && !stdout.endsWith("\n")) {
+				const lastNewline = trimmed.lastIndexOf("\n");
+				body = lastNewline === -1 ? "" : trimmed.slice(0, lastNewline);
+			}
+
+			const lines = body.split("\n").filter(Boolean);
 			const results: Array<{ path: string; isDirectory: boolean }> = [];
 
 			for (const line of lines) {

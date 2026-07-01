@@ -26,7 +26,11 @@ class MockSpawnedProcess extends EventEmitter {
 }
 
 interface PackageManagerInternals {
-	runCommand(command: string, args: string[], options?: { cwd?: string }): Promise<void>;
+	runCommand(
+		command: string,
+		args: string[],
+		options?: { cwd?: string; timeoutMs?: number; env?: Record<string, string> },
+	): Promise<void>;
 	runCommandCapture(
 		command: string,
 		args: string[],
@@ -718,7 +722,9 @@ Content`,
 					join(agentDir, "npm"),
 					"--legacy-peer-deps",
 				],
-				undefined,
+				// (opt #123) managed npm install now carries a wall timeout so a hung
+				// registry / credential prompt can't freeze the install flow.
+				{ timeoutMs: 300000 },
 			);
 		});
 
@@ -739,7 +745,46 @@ Content`,
 			expect(runCommandSpy).toHaveBeenCalledWith(
 				"mise",
 				["exec", "bun@1", "--", "bun", "install", "@scope/pkg", "--cwd", join(agentDir, "npm"), "--omit=peer"],
-				undefined,
+				// (opt #123) same hang bound as the npm-cli path.
+				{ timeoutMs: 300000 },
+			);
+		});
+
+		it("should bound npm uninstall with a wall timeout (opt #123)", async () => {
+			// uninstallNpm early-returns when the install root does not exist, so
+			// materialize it to reach the runNpmCommand call site.
+			mkdirSync(join(agentDir, "npm"), { recursive: true });
+
+			const runCommandSpy = vi.spyOn(packageManager as any, "runCommand").mockResolvedValue(undefined);
+
+			await packageManager.remove("npm:@scope/pkg");
+
+			expect(runCommandSpy).toHaveBeenCalledWith(
+				"npm",
+				["uninstall", "@scope/pkg", "--prefix", join(agentDir, "npm")],
+				{ timeoutMs: 300000 },
+			);
+		});
+
+		it("should bound bun uninstall with a wall timeout (opt #123)", async () => {
+			settingsManager = SettingsManager.inMemory({
+				npmCommand: ["mise", "exec", "bun@1", "--", "bun"],
+			});
+			packageManager = new DefaultPackageManager({
+				cwd: tempDir,
+				agentDir,
+				settingsManager,
+			});
+			mkdirSync(join(agentDir, "npm"), { recursive: true });
+
+			const runCommandSpy = vi.spyOn(packageManager as any, "runCommand").mockResolvedValue(undefined);
+
+			await packageManager.remove("npm:@scope/pkg");
+
+			expect(runCommandSpy).toHaveBeenCalledWith(
+				"mise",
+				["exec", "bun@1", "--", "bun", "uninstall", "@scope/pkg", "--cwd", join(agentDir, "npm")],
+				{ timeoutMs: 300000 },
 			);
 		});
 
@@ -758,7 +803,10 @@ Content`,
 
 			await packageManager.install(source);
 
-			expect(runCommandSpy).toHaveBeenCalledWith("npm", ["install", "--omit=dev"], { cwd: targetDir });
+			expect(runCommandSpy).toHaveBeenCalledWith("npm", ["install", "--omit=dev"], {
+				cwd: targetDir,
+				timeoutMs: 300000,
+			});
 		});
 
 		it("should reconcile an existing git checkout to a pinned ref during install", async () => {
@@ -781,12 +829,25 @@ Content`,
 
 			await packageManager.install(source);
 
-			expect(runCommandSpy).toHaveBeenCalledWith("git", ["fetch", "origin", "v2"], { cwd: targetDir });
-			expect(runCommandSpy).toHaveBeenCalledWith("git", ["reset", "--hard", "FETCH_HEAD^{commit}"], {
+			expect(runCommandSpy).toHaveBeenCalledWith(
+				"git",
+				["fetch", "origin", "v2"],
+				expect.objectContaining({ cwd: targetDir, env: { GIT_TERMINAL_PROMPT: "0" } }),
+			);
+			expect(runCommandSpy).toHaveBeenCalledWith(
+				"git",
+				["reset", "--hard", "FETCH_HEAD^{commit}"],
+				expect.objectContaining({ cwd: targetDir, env: { GIT_TERMINAL_PROMPT: "0" } }),
+			);
+			expect(runCommandSpy).toHaveBeenCalledWith(
+				"git",
+				["clean", "-fdx"],
+				expect.objectContaining({ cwd: targetDir, env: { GIT_TERMINAL_PROMPT: "0" } }),
+			);
+			expect(runCommandSpy).toHaveBeenCalledWith("npm", ["install", "--omit=dev"], {
 				cwd: targetDir,
+				timeoutMs: 300000,
 			});
-			expect(runCommandSpy).toHaveBeenCalledWith("git", ["clean", "-fdx"], { cwd: targetDir });
-			expect(runCommandSpy).toHaveBeenCalledWith("npm", ["install", "--omit=dev"], { cwd: targetDir });
 		});
 
 		it("should reconcile an existing git checkout to its update target when installing without a ref", async () => {
@@ -814,11 +875,21 @@ Content`,
 
 			await packageManager.install(source);
 
-			expect(runCommandSpy).toHaveBeenCalledWith("git", fetchArgs, { cwd: targetDir });
-			expect(runCommandSpy).toHaveBeenCalledWith("git", ["reset", "--hard", "origin/HEAD^{commit}"], {
-				cwd: targetDir,
-			});
-			expect(runCommandSpy).toHaveBeenCalledWith("git", ["clean", "-fdx"], { cwd: targetDir });
+			expect(runCommandSpy).toHaveBeenCalledWith(
+				"git",
+				fetchArgs,
+				expect.objectContaining({ cwd: targetDir, env: { GIT_TERMINAL_PROMPT: "0" } }),
+			);
+			expect(runCommandSpy).toHaveBeenCalledWith(
+				"git",
+				["reset", "--hard", "origin/HEAD^{commit}"],
+				expect.objectContaining({ cwd: targetDir, env: { GIT_TERMINAL_PROMPT: "0" } }),
+			);
+			expect(runCommandSpy).toHaveBeenCalledWith(
+				"git",
+				["clean", "-fdx"],
+				expect.objectContaining({ cwd: targetDir, env: { GIT_TERMINAL_PROMPT: "0" } }),
+			);
 		});
 
 		it("should use plain install for git package dependencies when npmCommand is configured", async () => {
@@ -845,7 +916,7 @@ Content`,
 
 			await packageManager.install(source);
 
-			expect(runCommandSpy).toHaveBeenCalledWith("pnpm", ["install"], { cwd: targetDir });
+			expect(runCommandSpy).toHaveBeenCalledWith("pnpm", ["install"], { cwd: targetDir, timeoutMs: 300000 });
 		});
 
 		it("should update git package dependencies with --omit=dev", async () => {
@@ -872,7 +943,10 @@ Content`,
 
 			await packageManager.update(source);
 
-			expect(runCommandSpy).toHaveBeenCalledWith("npm", ["install", "--omit=dev"], { cwd: targetDir });
+			expect(runCommandSpy).toHaveBeenCalledWith("npm", ["install", "--omit=dev"], {
+				cwd: targetDir,
+				timeoutMs: 300000,
+			});
 		});
 
 		it("should use plain install through npmCommand argv when updating git package dependencies", async () => {
@@ -910,6 +984,7 @@ Content`,
 
 			expect(runCommandSpy).toHaveBeenCalledWith("mise", ["exec", "node@20", "--", "pnpm", "install"], {
 				cwd: targetDir,
+				timeoutMs: 300000,
 			});
 		});
 
@@ -2071,7 +2146,9 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 			expect(runCommandSpy).toHaveBeenCalledWith(
 				"npm",
 				["install", "example@latest", "--prefix", join(tempDir, ".repi", "npm"), "--legacy-peer-deps"],
-				undefined,
+				// (opt #123) single-package update routes through installNpmBatch →
+				// now carries the wall timeout.
+				{ timeoutMs: 300000 },
 			);
 		});
 
@@ -2233,7 +2310,8 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 					join(agentDir, "npm"),
 					"--legacy-peer-deps",
 				],
-				undefined,
+				// (opt #123) batched npm install carries the wall timeout.
+				{ timeoutMs: 300000 },
 			);
 			expect(runCommandSpy).toHaveBeenNthCalledWith(
 				2,
@@ -2246,7 +2324,8 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 					join(tempDir, ".repi", "npm"),
 					"--legacy-peer-deps",
 				],
-				undefined,
+				// (opt #123) batched npm install carries the wall timeout.
+				{ timeoutMs: 300000 },
 			);
 			expect(updateGitSpy).toHaveBeenCalledTimes(4);
 			expect(maxConcurrentNpmUpdates).toBeGreaterThan(1);

@@ -3,14 +3,13 @@ import { createHash } from "node:crypto";
 import {
 	chmodSync,
 	existsSync,
-	mkdirSync,
 	readFileSync,
 	readdirSync,
 	statSync,
-	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { safeWriteReport } from "./lib/report-write-helpers.mjs";
 
 const argv = process.argv.slice(2);
 const rootArg = argv[0] && !argv[0].startsWith("-") ? argv.shift() : undefined;
@@ -150,18 +149,17 @@ function positionalText() {
 	return parts.join(" ").trim();
 }
 
-function ensureDir(path) {
-	mkdirSync(path, { recursive: true, mode: 0o700 });
-	try {
-		chmodSync(path, 0o700);
-	} catch {
-		// Best effort.
-	}
-}
-
 function writePrivate(path, text) {
-	ensureDir(dirname(path));
-	writeFileSync(path, text, { encoding: "utf8", mode: 0o600 });
+	// opt #177: route the mission artifact/state write through safeWriteReport
+	// so an ENOSPC/EACCES mid-write is observable instead of a bare uncaught
+	// throw that discards the artifact with no partial output. onWriteError
+	// rethrows a descriptive Error so the script-level catch emits the
+	// structured error report (JSON in --json mode, stderr + exit 2 otherwise).
+	safeWriteReport(path, text, {
+		onWriteError: (msg) => {
+			throw new Error(msg);
+		},
+	});
 	try {
 		chmodSync(path, 0o600);
 	} catch {

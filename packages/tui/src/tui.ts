@@ -7,6 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isKeyRelease, matchesKey } from "./keys.ts";
+import { safeWriteLogFile } from "./safe-log-write.ts";
 import type { Terminal } from "./terminal.ts";
 import { deleteKittyImage, getCapabilities, isImageLine, setCellDimensions } from "./terminal-image.ts";
 import { extractSegments, normalizeTerminalOutput, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.ts";
@@ -66,6 +67,17 @@ export interface Component {
 	 * Called when theme changes or when component needs to re-render from scratch.
 	 */
 	invalidate(): void;
+
+	/**
+	 * Optional teardown: release resources (timers, abort controllers, listeners)
+	 * when the component is permanently discarded. Called by the parent Container's
+	 * own dispose() for each child, and by explicit discard sites. NOT called on
+	 * Container.clear()/removeChild() (those are used for re-arranging live
+	 * children, e.g. editorContainer.clear() then re-adding the editor). A
+	 * Container's dispose() propagates to its children, so overriding
+	 * implementations should call super.dispose() to reach nested components.
+	 */
+	dispose?(): void;
 }
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
@@ -244,6 +256,23 @@ export class Container implements Component {
 	}
 
 	clear(): void {
+		this.children = [];
+	}
+
+	/**
+	 * Propagate dispose to every child, then drop them. The container itself is
+	 * stateless beyond its children and may be reused after dispose() (re-populate
+	 * via addChild). Use this at true-discard sites (session reset, teardown) —
+	 * NOT clear()/removeChild(), which are for re-arranging live children.
+	 */
+	dispose(): void {
+		for (const child of this.children) {
+			try {
+				child.dispose?.();
+			} catch {
+				// A failing child teardown must not skip the remaining children.
+			}
+		}
 		this.children = [];
 	}
 
@@ -1370,8 +1399,7 @@ export class TUI extends Container {
 					...newLines.map((l, idx) => `[${idx}] (w=${visibleWidth(l)}) ${l}`),
 					"",
 				].join("\n");
-				fs.mkdirSync(path.dirname(crashLogPath), { recursive: true });
-				fs.writeFileSync(crashLogPath, crashData);
+				safeWriteLogFile(crashLogPath, crashData);
 
 				// Clean up terminal state before throwing
 				this.stop();
@@ -1412,7 +1440,6 @@ export class TUI extends Container {
 
 		if (process.env.PI_TUI_DEBUG === "1") {
 			const debugDir = "/tmp/tui";
-			fs.mkdirSync(debugDir, { recursive: true });
 			const debugPath = path.join(debugDir, `render-${Date.now()}-${Math.random().toString(36).slice(2)}.log`);
 			const debugData = [
 				`firstChanged: ${firstChanged}`,
@@ -1436,7 +1463,7 @@ export class TUI extends Container {
 				"=== buffer ===",
 				JSON.stringify(buffer),
 			].join("\n");
-			fs.writeFileSync(debugPath, debugData);
+			safeWriteLogFile(debugPath, debugData);
 		}
 
 		// Write entire buffer at once

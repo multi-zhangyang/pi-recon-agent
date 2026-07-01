@@ -38,13 +38,15 @@ import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { KeybindingsManager } from "./core/keybindings.ts";
 import type { ModelRegistry } from "./core/model-registry.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
-import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
+import { installStdioErrorGuard, restoreStdout, takeOverStdout } from "./core/output-guard.ts";
 import {
 	createReconExtensionFactory,
 	createReconResourceLoaderOptions,
 	RECON_APPEND_SYSTEM_PROMPT,
 	RECON_SYSTEM_PROMPT,
 } from "./core/recon-profile.ts";
+import { noteIndexForInjection } from "./core/repi/memory-notes.ts";
+import { setMemoryScopeCwd } from "./core/repi/storage.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
 import {
 	formatMissingSessionCwdPrompt,
@@ -647,6 +649,13 @@ export async function main(args: string[], options?: MainOptions) {
 		appMode !== "interactive" && !parsed.version && parsed.listModels === undefined && !parsed.export;
 	if (shouldTakeOverStdout) {
 		takeOverStdout();
+		// Headless modes write the agent protocol to a piped stdout. If the read
+		// end closes (consumer exited, or parent agent died and orphaned this
+		// child) the stream emits 'error' (EPIPE/EIO/ENOTCONN); without a listener
+		// that is an `Unhandled 'error' event` crash. writeRawStdout handles write
+		// callbacks, but a stream 'error' between writes bypasses it. This guard is
+		// the headless counterpart of interactive-mode's terminalErrorHandler.
+		installStdioErrorGuard();
 	}
 
 	if (parsed.version) {
@@ -718,6 +727,11 @@ export async function main(args: string[], options?: MainOptions) {
 		sessionManager.appendSessionInfo(name);
 	}
 	time("createSessionManager");
+	// opt #273: scope the memory subsystem to the session's authoritative cwd
+	// so memory is project-local (per-cwd) instead of global — prevents
+	// cross-project memory pollution. Set before appendSystemPrompt so the
+	// re_note index injection reads the right project's notes.
+	setMemoryScopeCwd(sessionManager.getCwd());
 
 	const trustStore = new ProjectTrustStore(agentDir);
 	const trustPromptMode: AppMode = parsed.help || parsed.listModels !== undefined ? "print" : appMode;
@@ -737,8 +751,16 @@ export async function main(args: string[], options?: MainOptions) {
 	const extensionFactories = parsed.recon
 		? [createReconExtensionFactory(), ...(options?.extensionFactories ?? [])]
 		: options?.extensionFactories;
+	// opt #273 follow-on: inject the Claude-Code-style project note index into
+	// the system prompt so durable per-project facts are visible at session
+	// start (mirrors Claude Code's MEMORY.md auto-load). Empty when no notes.
+	const noteIndexSegment = parsed.recon ? noteIndexForInjection() : "";
 	const appendSystemPrompt = parsed.recon
-		? [...(parsed.appendSystemPrompt ?? []), RECON_APPEND_SYSTEM_PROMPT]
+		? [
+				...(parsed.appendSystemPrompt ?? []),
+				RECON_APPEND_SYSTEM_PROMPT,
+				...(noteIndexSegment ? [noteIndexSegment] : []),
+			]
 		: parsed.appendSystemPrompt;
 	const systemPrompt = parsed.systemPrompt ?? (parsed.recon ? RECON_SYSTEM_PROMPT : undefined);
 	const authStorage = AuthStorage.create();

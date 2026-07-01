@@ -187,6 +187,10 @@ export class ArminComponent implements Component {
 				this.stopAnimation();
 			}
 		}, 1000 / fps);
+		// opt #152: defense-in-depth — dispose() clears the interval, but unref
+		// ensures a missed dispose (or a detach without dispose) can't keep the
+		// Node event loop alive for the animation's lifetime.
+		this.interval.unref();
 	}
 
 	private stopAnimation(): void {

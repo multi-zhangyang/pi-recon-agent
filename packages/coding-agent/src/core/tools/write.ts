@@ -1,13 +1,15 @@
 import type { AgentTool } from "@pi-recon/repi-agent-core";
 import { Container, Text } from "@pi-recon/repi-tui";
-import { mkdir as fsMkdir, writeFile as fsWriteFile } from "fs/promises";
+import { mkdir as fsMkdir, stat as fsStat } from "fs/promises";
 import { dirname } from "path";
 import { type Static, Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import { getLanguageFromPath, highlightCode, type Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
+import { atomicWriteFile } from "./atomic-write.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
+import type { ReadFileStat } from "./read.ts";
 import { normalizeDisplayText, renderToolPath, replaceTabs, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
@@ -27,11 +29,22 @@ export interface WriteOperations {
 	writeFile: (absolutePath: string, content: string) => Promise<void>;
 	/** Create directory recursively */
 	mkdir: (dir: string) => Promise<void>;
+	/**
+	 * Stat the path. Used to reject non-regular files (devices, FIFOs, sockets)
+	 * BEFORE writing — `atomicWriteFile` writes a temp regular file then renames
+	 * it over the target, and `rename(temp, fifo)` REPLACES the FIFO entry with
+	 * a regular file, silently destroying the user's named pipe. `access` only
+	 * checks mode bits so a FIFO passes. Optional: remote/custom ops may omit
+	 * it, in which case the guard is skipped (preserves their behavior). Same
+	 * doctrine as the read/edit tools' special-file guards (opt #30).
+	 */
+	stat?: (absolutePath: string) => Promise<ReadFileStat>;
 }
 
 const defaultWriteOperations: WriteOperations = {
-	writeFile: (path, content) => fsWriteFile(path, content, "utf-8"),
+	writeFile: (path, content) => atomicWriteFile(path, content),
 	mkdir: (dir) => fsMkdir(dir, { recursive: true }).then(() => {}),
+	stat: (path) => fsStat(path),
 };
 
 export interface WriteToolOptions {
@@ -210,6 +223,33 @@ export function createWriteToolDefinition(
 				};
 
 				throwIfAborted();
+				// Reject non-regular files BEFORE writing. atomicWriteFile writes a
+				// temp regular file then renames it over the target; `rename(temp,
+				// fifo)` REPLACES the FIFO entry with a regular file — silently
+				// destroying a named pipe (or socket/device). `access` only checks
+				// mode bits so a FIFO passes; stat first. Same guard as the
+				// read/edit tools (opt #30). Skipped for remote/custom ops that omit
+				// `stat` (preserves their behavior). A directory is caught here too
+				// so the error is clear instead of a raw EISDIR from mkdir/rename.
+				if (ops.stat) {
+					let targetStat: ReadFileStat | undefined;
+					try {
+						targetStat = await ops.stat(absolutePath);
+					} catch {
+						/* ENOENT (new file) or stat denied — proceed; write surfaces a real errno */
+					}
+					throwIfAborted();
+					if (targetStat) {
+						if (targetStat.isDirectory()) {
+							throw new Error(`Could not write file: ${path}. ${path} is a directory, not a file.`);
+						}
+						if (!targetStat.isFile()) {
+							throw new Error(
+								`Could not write file: ${path}. ${path} is not a regular file (it is a device, FIFO, or socket). The write tool cannot write a special file — use bash instead.`,
+							);
+						}
+					}
+				}
 				// Create parent directories if needed.
 				await ops.mkdir(dir);
 				throwIfAborted();
@@ -218,8 +258,12 @@ export function createWriteToolDefinition(
 				await ops.writeFile(absolutePath, content);
 				throwIfAborted();
 
+				// Report the real UTF-8 byte count, not content.length (which is a
+				// UTF-16 code-unit count and would under-report multi-byte text, e.g.
+				// a 100-char CJK string is ~300 bytes but length reports 100).
+				const byteLength = Buffer.byteLength(content, "utf-8");
 				return {
-					content: [{ type: "text", text: `Successfully wrote ${content.length} bytes to ${path}` }],
+					content: [{ type: "text", text: `Successfully wrote ${byteLength} bytes to ${path}` }],
 					details: undefined,
 				};
 			});

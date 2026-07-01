@@ -457,7 +457,26 @@ try {
 	pkg = JSON.parse(readFileSync(getPackageJsonPath(), "utf-8")) as PackageJson;
 } catch (e: unknown) {
 	const err = e as NodeJS.ErrnoException;
-	if (err.code !== "ENOENT") throw e;
+	// Foundational opt #271: a SyntaxError (a corrupt or hand-edited shipped
+	// package.json) has `code === undefined`, so the ENOENT-only check rethrew
+	// it — crashing startup BEFORE VERSION/APP_NAME/CONFIG_DIR_NAME initialize
+	// (line ~466-471), with no session loaded. All downstream consumers already
+	// tolerate missing fields via `??` / `||` defaults against `pkg = {}`, so
+	// swallow the parse failure and degrade to defaults (best-effort stderr
+	// warning) instead of aborting. Same JSON.parse-on-state-file-with-partial-
+	// catch class the audit flagged for settings/session — keep ENOENT silent
+	// (file genuinely absent is normal) but surface a parse failure so a broken
+	// shipped metadata file isn't silently masked.
+	if (err.code !== "ENOENT") {
+		if (e instanceof SyntaxError) {
+			console.error("repi: warning: package.json parse failed; using default metadata.");
+		}
+		// Non-ENOENT, non-SyntaxError errors (e.g. EACCES/EISDIR) still surface —
+		// those indicate a real environment problem worth failing on.
+		else {
+			throw e;
+		}
+	}
 }
 
 const runtimeAppNameOverride = process.env.REPI_CODING_AGENT_APP_NAME?.trim();

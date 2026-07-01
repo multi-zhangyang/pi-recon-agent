@@ -1,11 +1,12 @@
 import type { AgentTool } from "@pi-recon/repi-agent-core";
 import { Box, Container, Spacer, Text } from "@pi-recon/repi-tui";
 import { constants } from "fs";
-import { access as fsAccess, readFile as fsReadFile, stat as fsStat, writeFile as fsWriteFile } from "fs/promises";
+import { access as fsAccess, readFile as fsReadFile, stat as fsStat } from "fs/promises";
 import { type Static, Type } from "typebox";
 import { renderDiff } from "../../modes/interactive/components/diff.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
+import { atomicWriteFile } from "./atomic-write.ts";
 import {
 	applyEditsToNormalizedContent,
 	computeEditsDiff,
@@ -21,6 +22,7 @@ import {
 } from "./edit-diff.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
+import type { ReadFileStat } from "./read.ts";
 import { renderToolPath, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
@@ -78,11 +80,21 @@ export interface EditOperations {
 	writeFile: (absolutePath: string, content: string) => Promise<void>;
 	/** Check if file is readable and writable (throw if not) */
 	access: (absolutePath: string) => Promise<void>;
+	/**
+	 * Stat the path. Used to reject non-regular files (devices, FIFOs, sockets)
+	 * BEFORE readFile — `access` only checks mode bits, so a FIFO/named pipe
+	 * passes access, then ops.readFile calls fs.readFile on a FIFO which on
+	 * Linux blocks forever waiting for a writer → the tool call hangs. Optional:
+	 * remote/custom ops may omit it, in which case the guard is skipped (the
+	 * pre-existing access/readFile errors still surface). Same doctrine as the
+	 * read tool's opt #30 special-file guard.
+	 */
+	stat?: (absolutePath: string) => Promise<ReadFileStat>;
 }
 
 const defaultEditOperations: EditOperations = {
 	readFile: (path) => fsReadFile(path),
-	writeFile: (path, content) => fsWriteFile(path, content, "utf-8"),
+	writeFile: (path, content) => atomicWriteFile(path, content),
 	access: async (path) => {
 		await fsAccess(path, constants.R_OK | constants.W_OK);
 		const mode = (await fsStat(path)).mode;
@@ -92,6 +104,7 @@ const defaultEditOperations: EditOperations = {
 			throw error;
 		}
 	},
+	stat: (path) => fsStat(path),
 };
 
 export interface EditToolOptions {
@@ -333,11 +346,38 @@ export function createEditToolDefinition(
 					await ops.access(absolutePath);
 				} catch (error: unknown) {
 					throwIfAborted();
+					// ENOENT: the file doesn't exist. The edit tool can only modify
+					// existing files; point the model at the write tool so it creates
+					// the file instead of retrying edit against a missing path.
+					if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+						throw new Error(
+							`Could not edit file: ${path}. Error code: ENOENT. ${path} does not exist. Use the write tool to create it, e.g. write ${path} with the full content.`,
+						);
+					}
 					const errorMessage =
 						error instanceof Error && "code" in error ? `Error code: ${error.code}` : String(error);
 					throw new Error(`Could not edit file: ${path}. ${errorMessage}.`);
 				}
 				throwIfAborted();
+
+				// Reject non-regular files BEFORE readFile. `access` only checks mode
+				// bits, so a FIFO/named pipe (or a device/socket) passes access — but
+				// ops.readFile then calls fs.readFile on a FIFO, which on Linux blocks
+				// forever waiting for a writer → the tool call hangs and blocks the
+				// agent loop. Same guard as the read tool's opt #30. Skipped for
+				// remote/custom ops that omit `stat` (preserves their behavior).
+				if (ops.stat) {
+					const fileStat = await ops.stat(absolutePath);
+					throwIfAborted();
+					if (!fileStat.isFile()) {
+						if (fileStat.isDirectory()) {
+							throw new Error(`Could not edit file: ${path}. ${path} is a directory, not a file.`);
+						}
+						throw new Error(
+							`Could not edit file: ${path}. ${path} is not a regular file (it is a device, FIFO, or socket). The edit tool cannot edit a special file — use bash instead.`,
+						);
+					}
+				}
 
 				// Read the file.
 				const buffer = await ops.readFile(absolutePath);
@@ -357,11 +397,15 @@ export function createEditToolDefinition(
 
 				const diffResult = generateDiffString(baseContent, newContent);
 				const patch = generateUnifiedPatch(path, baseContent, newContent);
+				const locationNote =
+					diffResult.firstChangedLine !== undefined
+						? ` (first change at line ${diffResult.firstChangedLine})`
+						: "";
 				return {
 					content: [
 						{
 							type: "text",
-							text: `Successfully replaced ${edits.length} block(s) in ${path}.`,
+							text: `Successfully replaced ${edits.length} block(s) in ${path}.${locationNote}`,
 						},
 					],
 					details: { diff: diffResult.diff, patch, firstChangedLine: diffResult.firstChangedLine },

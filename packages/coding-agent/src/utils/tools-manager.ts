@@ -6,6 +6,7 @@ import { join } from "path";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 import { APP_NAME, getBinDir } from "../config.ts";
+import { drainResponseBody } from "./http-drain.ts";
 
 const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
@@ -111,6 +112,7 @@ async function getLatestVersion(repo: string): Promise<string> {
 	});
 
 	if (!response.ok) {
+		await drainResponseBody(response);
 		throw new Error(`GitHub API error: ${response.status}`);
 	}
 
@@ -125,6 +127,7 @@ async function downloadFile(url: string, dest: string): Promise<void> {
 	});
 
 	if (!response.ok) {
+		await drainResponseBody(response);
 		throw new Error(`Failed to download: ${response.status}`);
 	}
 

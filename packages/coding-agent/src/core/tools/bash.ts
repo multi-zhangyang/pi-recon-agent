@@ -293,12 +293,16 @@ export function createBashToolDefinition(
 			{ command, timeout }: { command: string; timeout?: number },
 			signal?: AbortSignal,
 			onUpdate?,
-			_ctx?,
+			ctx?,
 		) {
 			const effectiveTimeout = timeout ?? envPositiveTimeoutSeconds("REPI_BASH_DEFAULT_TIMEOUT_SECONDS");
 			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
 			const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
-			const output = new OutputAccumulator({ tempFilePrefix: "pi-bash" });
+			// opt #153: bind the overflow temp file to the current session so it is
+			// unlinked on session disposal (cleanupSessionResources) instead of
+			// leaking in /tmp across sessions in a long-running rpc daemon.
+			const sessionId = ctx?.sessionManager?.getSessionId?.();
+			const output = new OutputAccumulator({ tempFilePrefix: "pi-bash", sessionId });
 			let updateTimer: NodeJS.Timeout | undefined;
 			let updateDirty = false;
 			let lastUpdateAt = 0;
@@ -353,7 +357,14 @@ export function createBashToolDefinition(
 				clearUpdateTimer();
 				emitOutputUpdate();
 				const snapshot = output.snapshot({ persistIfTruncated: true });
-				await output.closeTempFile();
+				const flushed = await output.closeTempFile();
+				// opt #64: if the temp-file flush did not complete (stream error or wall
+				// timeout on a stalled FS), withhold the "Full output" path so the model
+				// is not pointed at a partial/missing file. The in-memory truncation
+				// content is the authoritative output either way.
+				if (!flushed) {
+					snapshot.fullOutputPath = undefined;
+				}
 				return snapshot;
 			};
 
@@ -399,12 +410,31 @@ export function createBashToolDefinition(
 						const timeoutSecs = err.message.split(":")[1];
 						throw new Error(appendStatus(text, `Command timed out after ${timeoutSecs} seconds`));
 					}
-					throw err;
+					// Any other spawn/exec failure (ENOENT = shell binary not found, EACCES =
+					// permission denied, etc). Without this the raw Node error bubbles up with
+					// no accumulated-output context, which is misleading: the model sees a bare
+					// "spawn ENOENT" with no hint that the shell itself is missing/misconfigured.
+					const reason = err instanceof Error ? err.message : String(err);
+					throw new Error(appendStatus(text, `Failed to spawn shell: ${reason}`));
 				}
 
 				const snapshot = await finishOutput();
 				const { text: outputText, details } = formatOutput(snapshot);
-				if (exitCode !== 0 && exitCode !== null) {
+				if (exitCode === null) {
+					// null exit code = the process was terminated by a signal (Node's
+					// `exit` event fires with code=null when a signal killed it). Our
+					// own abort/timeout are already handled above as thrown errors, so a
+					// null reaching here means an external signal (e.g. OOM SIGKILL,
+					// external SIGTERM/SIGKILL). Without this status the model would see
+					// the partial output as a successful result and misjudge the command.
+					throw new Error(
+						appendStatus(
+							outputText,
+							"Command was terminated by a signal (no exit code). It may have been killed (e.g. by the OOM killer) or received SIGTERM/SIGKILL. The output above may be incomplete — re-run or check system resource limits.",
+						),
+					);
+				}
+				if (exitCode !== 0) {
 					throw new Error(appendStatus(outputText, `Command exited with code ${exitCode}`));
 				}
 				return { content: [{ type: "text", text: outputText }], details };
@@ -425,7 +455,15 @@ export function createBashToolDefinition(
 		renderResult(result, options, _theme, context) {
 			const state = context.state;
 			if (state.startedAt !== undefined && options.isPartial && !state.interval) {
-				state.interval = setInterval(() => context.invalidate(), 1000);
+				const interval = setInterval(() => context.invalidate(), 1000);
+				// unref: the elapsed-display tick is purely cosmetic. If a discard
+				// path misses the explicit clearInterval (cleared on the final
+				// non-partial render), an unref'd interval cannot keep the Node
+				// event loop alive on its own — bounding the leak to session
+				// lifetime instead of a permanent process-keep-alive timer. The
+				// tool's own subprocess pipes keep the loop alive while it runs.
+				interval.unref();
+				state.interval = interval;
 			}
 			if (!options.isPartial || context.isError) {
 				state.endedAt ??= Date.now();

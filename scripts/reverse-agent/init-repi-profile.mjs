@@ -1,7 +1,19 @@
 #!/usr/bin/env node
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import {
+	chmodSync,
+	closeSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	renameSync,
+	statSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
+import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
+import { basename, dirname, join } from "node:path";
 
 const repoRoot = process.argv[2] || process.cwd();
 const agentDir =
@@ -28,22 +40,48 @@ const readJson = (path) => {
 		return undefined;
 	}
 };
-const writeJson = (path, value, mode) => {
+const atomicWriteFile = (path, content, mode = 0o600) => {
 	mkdir(dirname(path));
-	writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+	const tempPath = join(
+		dirname(path),
+		`.${basename(path)}.${process.pid}.${Date.now()}.${randomBytes(4).toString("hex")}.tmp`,
+	);
+	try {
+		const fd = openSync(tempPath, "wx", mode);
+		try {
+			writeFileSync(fd, content);
+		} finally {
+			closeSync(fd);
+		}
+		try {
+			chmodSync(tempPath, statSync(path).mode & 0o777);
+		} catch {
+			chmodSync(tempPath, mode);
+		}
+		renameSync(tempPath, path);
+	} catch (error) {
+		try {
+			unlinkSync(tempPath);
+		} catch {
+			// Best-effort: temp may not exist (open failed) or may already be renamed.
+		}
+		throw error;
+	}
+};
+const writeJson = (path, value, mode) => {
+	atomicWriteFile(path, `${JSON.stringify(value, null, 2)}\n`, mode ?? 0o600);
 	if (mode !== undefined) chmodSync(path, mode);
 };
 const copyIfMissing = (from, to, mode) => {
 	if (!existsSync(from) || existsSync(to)) return false;
-	mkdir(dirname(to));
-	copyFileSync(from, to);
+	atomicWriteFile(to, readFileSync(from), mode ?? 0o600);
 	if (mode !== undefined) chmodSync(to, mode);
 	return true;
 };
 
 mkdir(agentDir);
 mkdir(join(agentDir, "sessions"));
-mkdir(join(agentDir, "recon", "memory", "playbooks"));
+mkdir(join(agentDir, "recon", "memory"));
 mkdir(join(agentDir, "recon", "mission"));
 mkdir(join(agentDir, "recon", "tools"));
 for (const sub of [
@@ -165,18 +203,11 @@ for (const key of ["extensions", "skills", "prompts", "enabledModels"]) {
 writeJson(settingsPath, settings, 0o600);
 
 for (const [rel, body] of [
-	["recon/memory/field-journal.md", "# REPI Field Journal\n\n"],
-	["recon/memory/case-index.md", "# REPI Case Index\n\n"],
-	["recon/memory/evolution-log.md", "# REPI Evolution Log\n\n"],
-	["recon/memory/core-memory.md", "# REPI Core Memory\n\n固定偏好、项目不变量、长期稳定事实写在这里；保持短小。\n\n"],
-	["recon/memory/project-memory.md", "# REPI Project Memory\n\n当前 workspace 的构建、运行、测试、入口、常用命令写在这里。\n\n"],
-	["recon/memory/procedural-memory.md", "# REPI Procedural Memory\n\n可复用 workflow / checklist / verified command template 写在这里。\n\n"],
-	["recon/memory/events.jsonl", ""],
 	["recon/evidence/ledger.md", "# REPI Evidence Ledger\n\n"],
 	["recon/tools/tool-index.md", "# REPI Tool Index\n\n"],
 ]) {
 	const path = join(agentDir, rel);
-	if (!existsSync(path)) writeFileSync(path, body, "utf8");
+	if (!existsSync(path)) atomicWriteFile(path, body, 0o600);
 	try {
 		chmodSync(path, 0o600);
 	} catch {

@@ -44,6 +44,7 @@ export class SelectList implements Component {
 	private maxVisible: number = 5;
 	private theme: SelectListTheme;
 	private layout: SelectListLayoutOptions;
+	private primaryColumnWidth: number = DEFAULT_PRIMARY_COLUMN_WIDTH;
 
 	public onSelect?: (item: SelectItem) => void;
 	public onCancel?: () => void;
@@ -55,12 +56,14 @@ export class SelectList implements Component {
 		this.maxVisible = maxVisible;
 		this.theme = theme;
 		this.layout = layout;
+		this.primaryColumnWidth = this.computePrimaryColumnWidth();
 	}
 
 	setFilter(filter: string): void {
 		this.filteredItems = this.items.filter((item) => item.value.toLowerCase().startsWith(filter.toLowerCase()));
 		// Reset selection when filter changes
 		this.selectedIndex = 0;
+		this.primaryColumnWidth = this.computePrimaryColumnWidth();
 	}
 
 	setSelectedIndex(index: number): void {
@@ -80,7 +83,7 @@ export class SelectList implements Component {
 			return lines;
 		}
 
-		const primaryColumnWidth = this.getPrimaryColumnWidth();
+		const primaryColumnWidth = this.primaryColumnWidth;
 
 		// Calculate visible range with scrolling
 		const startIndex = Math.max(
@@ -175,7 +178,7 @@ export class SelectList implements Component {
 		return prefix + truncatedValue;
 	}
 
-	private getPrimaryColumnWidth(): number {
+	private computePrimaryColumnWidth(): number {
 		const { min, max } = this.getPrimaryColumnBounds();
 		const widestPrimary = this.filteredItems.reduce((widest, item) => {
 			return Math.max(widest, visibleWidth(this.getDisplayValue(item)) + PRIMARY_COLUMN_GAP);

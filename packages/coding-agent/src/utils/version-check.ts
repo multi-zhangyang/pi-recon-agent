@@ -1,3 +1,4 @@
+import { drainResponseBody } from "./http-drain.ts";
 import { getPiUserAgent } from "./pi-user-agent.ts";
 
 const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
@@ -73,7 +74,10 @@ export async function getLatestPiRelease(
 		},
 		signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_VERSION_CHECK_TIMEOUT_MS),
 	});
-	if (!response.ok) return undefined;
+	if (!response.ok) {
+		await drainResponseBody(response);
+		return undefined;
+	}
 
 	const data = (await response.json()) as {
 		packageName?: unknown;

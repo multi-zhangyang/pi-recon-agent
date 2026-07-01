@@ -242,7 +242,11 @@ export async function refreshGitHubCopilotToken(
  * Enable a model for the user's GitHub Copilot account.
  * This is required for some models (like Claude, Grok) before they can be used.
  */
-async function enableGitHubCopilotModel(token: string, modelId: string, enterpriseDomain?: string): Promise<boolean> {
+export async function enableGitHubCopilotModel(
+	token: string,
+	modelId: string,
+	enterpriseDomain?: string,
+): Promise<boolean> {
 	const baseUrl = getGitHubCopilotBaseUrl(token, enterpriseDomain);
 	const url = `${baseUrl}/models/${modelId}/policy`;
 
@@ -258,7 +262,14 @@ async function enableGitHubCopilotModel(token: string, modelId: string, enterpri
 			},
 			body: JSON.stringify({ state: "enabled" }),
 		});
-		return response.ok;
+		const ok = response.ok;
+		// Drain the body so undici releases the keep-alive socket (opt #57 / opt #49 class:
+		// reading only response.ok strands an unread body against the per-host connection cap).
+		// enableAllGitHubCopilotModels calls this in a loop for N models right after login, so
+		// without draining N sockets are held until GC. The sibling fetchJson at line 94 drains
+		// via response.text(); cancel() is the cheaper drain for a body we never read.
+		await response.body?.cancel().catch(() => {});
+		return ok;
 	} catch {
 		return false;
 	}

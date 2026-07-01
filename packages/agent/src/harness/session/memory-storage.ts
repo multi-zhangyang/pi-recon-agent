@@ -26,8 +26,15 @@ function buildLabelsById(entries: SessionTreeEntry[]): Map<string, string> {
 }
 
 function generateEntryId(byId: { has(id: string): boolean }): string {
+	// See jsonl-storage.ts: use the full uuidv7. The old slice(0, 8) prefix was
+	// constant within a ~65.5s timestamp window → every entry after the first
+	// collided, burned the 100-retry loop, and fell back to a 36-char id (mixed
+	// id lengths + O(100) wasted calls per append). No shorter prefix is safely
+	// unique — uuidv7 sequence bits span bytes 6-10 and only byte 10 (final
+	// group) varies for low sequence values — so the full 80-random-bit id is
+	// the correct fix; the retry loop is a pure safety net.
 	for (let i = 0; i < 100; i++) {
-		const id = uuidv7().slice(0, 8);
+		const id = uuidv7();
 		if (!byId.has(id)) return id;
 	}
 	return uuidv7();
@@ -112,16 +119,28 @@ export class InMemorySessionStorage<TMetadata extends SessionMetadata = SessionM
 
 	async getPathToRoot(leafId: string | null): Promise<SessionTreeEntry[]> {
 		if (leafId === null) return [];
+		// Build leaf→root then reverse once (O(n)) instead of unshift-per-step
+		// (O(n²)): chain depth ≈ total session entries and this runs per turn.
 		const path: SessionTreeEntry[] = [];
 		let current = this.byId.get(leafId);
 		if (!current) throw new SessionError("not_found", `Entry ${leafId} not found`);
+		const visited = new Set<string>();
 		while (current) {
-			path.unshift(current);
+			// Cycle guard: a bit-rotted/hand-edited entry set with A.parentId =
+			// B, B.parentId = A would spin forever (runs per turn via buildContext →
+			// getBranch → event-loop-blocking CPU spin). Convert a cycle into a
+			// typed invalid_session error instead of a hang.
+			if (visited.has(current.id)) {
+				throw new SessionError("invalid_session", `Cycle detected at entry ${current.id}`);
+			}
+			visited.add(current.id);
+			path.push(current);
 			if (!current.parentId) break;
 			const parent = this.byId.get(current.parentId);
 			if (!parent) throw new SessionError("invalid_session", `Entry ${current.parentId} not found`);
 			current = parent;
 		}
+		path.reverse();
 		return path;
 	}
 

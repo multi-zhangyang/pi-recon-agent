@@ -441,7 +441,19 @@ export class ModelRegistry {
 		this.loadModels();
 
 		for (const [providerName, config] of this.registeredProviders.entries()) {
-			this.applyProviderConfig(providerName, config);
+			// opt #244: refresh() already resetApiProviders()/resetOAuthProviders()
+			// + cleared the config maps BEFORE this loop. Pre-fix one throwing
+			// applyProviderConfig aborted the loop: the global registries stayed
+			// wiped, this.models was only partially rebuilt, and every remaining
+			// registered provider was never reapplied — one bad extension
+			// provider poisoned ALL dynamic providers. Continue so the rest apply.
+			try {
+				this.applyProviderConfig(providerName, config);
+			} catch (error) {
+				this.loadError = `Provider "${providerName}" failed to apply config: ${
+					error instanceof Error ? error.message : String(error)
+				}`;
+			}
 		}
 	}
 
@@ -473,7 +485,18 @@ export class ModelRegistry {
 		for (const oauthProvider of this.authStorage.getOAuthProviders()) {
 			const cred = this.authStorage.get(oauthProvider.id);
 			if (cred?.type === "oauth" && oauthProvider.modifyModels) {
-				combined = oauthProvider.modifyModels(combined, cred);
+				// opt #244: a throwing OAuth provider (built-in or extension) used
+				// to propagate out of loadModels → the ModelRegistry constructor /
+				// refresh() → startup crash. Every other external-input path here
+				// is wrapped (loadCustomModels, getApiKeyAndHeaders); mirror it.
+				// Keep `combined` unchanged and surface the failure via loadError.
+				try {
+					combined = oauthProvider.modifyModels(combined, cred);
+				} catch (error) {
+					this.loadError = `OAuth provider "${oauthProvider.id}" failed to modify models: ${
+						error instanceof Error ? error.message : String(error)
+					}`;
+				}
 			}
 		}
 
@@ -844,13 +867,23 @@ export class ModelRegistry {
 	 * Get API key for a provider.
 	 */
 	async getApiKeyForProvider(provider: string): Promise<string | undefined> {
-		const apiKey = await this.authStorage.getApiKey(provider, { includeFallback: false });
-		if (apiKey !== undefined) {
-			return apiKey;
-		}
+		// opt #245: the sibling getApiKeyAndHeaders wraps its body in try/catch
+		// and converts any throw into {ok:false,error}. This method did the same
+		// authStorage.getApiKey + config-value resolution with NO try/catch, so
+		// an OAuth provider.getApiKey rejection (auth-storage non-refresh branch)
+		// propagated to the caller as an unhandled rejection. Mirror the
+		// "resolution failed → undefined" contract the rest of the file uses.
+		try {
+			const apiKey = await this.authStorage.getApiKey(provider, { includeFallback: false });
+			if (apiKey !== undefined) {
+				return apiKey;
+			}
 
-		const providerApiKey = this.providerRequestConfigs.get(provider)?.apiKey;
-		return providerApiKey ? resolveConfigValueUncached(providerApiKey) : undefined;
+			const providerApiKey = this.providerRequestConfigs.get(provider)?.apiKey;
+			return providerApiKey ? resolveConfigValueUncached(providerApiKey) : undefined;
+		} catch {
+			return undefined;
+		}
 	}
 
 	/**
@@ -929,6 +962,26 @@ export class ModelRegistry {
 			const api = modelDef.api || config.api;
 			if (!api) {
 				throw new Error(`Provider ${providerName}, model ${modelDef.id}: no "api" specified.`);
+			}
+			// Foundational opt #269: validate that modelDef.id is a non-empty
+			// string. The schema-validated models.json path (ModelDefinitionSchema)
+			// already requires `id: Type.String({ minLength: 1 })`, but the
+			// extension registerProvider path flows through THIS validator only —
+			// it previously checked only `api`. A model with `id: undefined` (an
+			// extension that forgot the field) or `id: 123` (typed wrong) entered
+			// `this.models` verbatim (applyProviderConfig stores `id: modelDef.id`)
+			// and then crashed model resolution with `TypeError: Cannot read
+			// properties of undefined (reading 'toLowerCase')` at
+			// model-resolver.ts findExactModelReferenceMatch/tryMatchModel
+			// (`model.id.toLowerCase()` / `b.id.localeCompare(a.id)`) — uncaught,
+			// aborting --list-models / startup / any resolve. Same class as opt #44
+			// (undefined.localeCompare on a missing manifest field). Mirror the
+			// schema constraint at the extension entry gate so the bad model is
+			// rejected before it can poison the model table.
+			if (typeof modelDef.id !== "string" || modelDef.id.trim().length === 0) {
+				throw new Error(
+					`Provider ${providerName}, model ${JSON.stringify(modelDef.id)}: "id" must be a non-empty string.`,
+				);
 			}
 		}
 	}

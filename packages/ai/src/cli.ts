@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
+import { randomBytes } from "node:crypto";
 import { createInterface } from "node:readline";
-import { existsSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { getOAuthProvider, getOAuthProviders } from "./utils/oauth/index.ts";
 import type { OAuthCredentials, OAuthProviderId } from "./utils/oauth/types.ts";
 
@@ -21,8 +22,33 @@ function loadAuth(): Record<string, { type: "oauth" } & OAuthCredentials> {
 	}
 }
 
-function saveAuth(auth: Record<string, { type: "oauth" } & OAuthCredentials>): void {
-	writeFileSync(AUTH_FILE, JSON.stringify(auth, null, 2), "utf-8");
+/**
+ * Atomic write (temp + rename in the same dir) so a crash/SIGINT mid-write
+ * doesn't truncate the auth file and silently lose every provider credential
+ * (opt #149). `loadAuth` swallows a parse failure → `{}`, so a torn truncate
+ * would force a full re-login with no diagnostic. The temp file lives in the
+ * same directory as the target (same filesystem) so rename is atomic.
+ */
+function atomicWriteAuthFileSync(filePath: string, content: string): void {
+	const tmp = `${filePath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+	try {
+		writeFileSync(tmp, content, "utf-8");
+		renameSync(tmp, filePath);
+	} catch (error) {
+		try {
+			rmSync(tmp, { force: true });
+		} catch {
+			// best-effort cleanup of the orphaned temp file
+		}
+		throw error;
+	}
+}
+
+export function saveAuth(
+	auth: Record<string, { type: "oauth" } & OAuthCredentials>,
+	filePath: string = AUTH_FILE,
+): void {
+	atomicWriteAuthFileSync(filePath, JSON.stringify(auth, null, 2));
 }
 
 async function login(providerId: OAuthProviderId): Promise<void> {

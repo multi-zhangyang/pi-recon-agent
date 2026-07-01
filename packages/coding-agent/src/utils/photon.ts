@@ -123,15 +123,21 @@ export async function loadPhoton(): Promise<typeof import("@silvia-odwyer/photon
 	}
 
 	loadPromise = (async () => {
-		const restoreReadFileSync = patchPhotonWasmRead();
+		// opt #54 — patchPhotonWasmRead() is inside the try: if the fs patch itself throws
+		// (Object.defineProperty on a frozen fs, a weird process.execPath) the IIFE used to
+		// reject → loadPromise rejected → callers like convertToPng (fire-and-forget) dropped
+		// it → unhandledRejection → crash. Now any setup/import failure resolves to null
+		// (the "photon unavailable" contract); the finally still restores fs only if patched.
+		let restoreReadFileSync: (() => void) | undefined;
 		try {
+			restoreReadFileSync = patchPhotonWasmRead();
 			photonModule = await import("@silvia-odwyer/photon-node");
 			return photonModule;
 		} catch {
 			photonModule = null;
 			return photonModule;
 		} finally {
-			restoreReadFileSync();
+			restoreReadFileSync?.();
 		}
 	})();
 

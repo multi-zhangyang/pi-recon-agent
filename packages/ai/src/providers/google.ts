@@ -19,6 +19,7 @@ import type {
 	ThinkingLevel,
 	ToolCall,
 } from "../types.ts";
+import { safeStringifyError, terminalErrorMessage } from "../utils/error-stringify.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import type { GoogleThinkingLevel } from "./google-shared.ts";
@@ -213,8 +214,16 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
 
 				if (chunk.usageMetadata) {
 					output.usage = {
-						input:
+						// opt #260: floor at 0 — a proxy/misreporting endpoint can emit
+						// cachedContentTokenCount > promptTokenCount (double-counted
+						// cache), which would produce a NEGATIVE input token count,
+						// negative input cost, and a totalTokens that no longer matches
+						// the component sum. Sibling openai-completions.ts:1090 guards
+						// this subtraction with Math.max(0, ...).
+						input: Math.max(
+							0,
 							(chunk.usageMetadata.promptTokenCount || 0) - (chunk.usageMetadata.cachedContentTokenCount || 0),
+						),
 						output:
 							(chunk.usageMetadata.candidatesTokenCount || 0) + (chunk.usageMetadata.thoughtsTokenCount || 0),
 						cacheRead: chunk.usageMetadata.cachedContentTokenCount || 0,
@@ -255,7 +264,10 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
 			}
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error("An unknown error occurred");
+				// opt #275: surface the captured errorMessage / abort label
+				// instead of a generic "An unknown error occurred". Inline
+				// guard kept so TS narrows stopReason for the `done` push.
+				throw new Error(terminalErrorMessage(output.stopReason, output.errorMessage) as string);
 			}
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
@@ -268,7 +280,7 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
 				}
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			output.errorMessage = error instanceof Error ? error.message : safeStringifyError(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

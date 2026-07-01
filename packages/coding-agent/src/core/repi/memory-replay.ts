@@ -3,7 +3,7 @@ import type { MemoryEventV1 } from "./memory-event.ts";
 import { buildMemoryQualityLedgerReport, type MemoryQualityLedgerReportV11 } from "./memory-quality.ts";
 import { searchMemoryEvents } from "./memory-recall.ts";
 import { memoryRouteMatches, memoryTargetScope } from "./memory-scope.ts";
-import { readMemoryEvents } from "./memory-search.ts";
+import { type MemoryRetrievalHit, readMemoryEvents } from "./memory-search.ts";
 import { writeFileAtomic } from "./memory-store.ts";
 import { type MemoryUsefulnessEvalReportV1, memoryUsefulnessQueryForEvent } from "./memory-usefulness.ts";
 import {
@@ -208,6 +208,66 @@ export function readMemoryReplayEvaluatorRows(): MemoryReplayEvaluatorRowV12[] {
 	return jsonlRecords(memoryReplayEvaluatorLedgerPath(), isMemoryReplayEvaluatorRow);
 }
 
+// opt F5 — replay evaluator ledger rotation (sibling of #88 deposition bus rotation + #48
+// tool-trace ledger rotation + F4 quality ledger rotation). The replay ledger
+// (replay-evaluator-ledger.jsonl) is append-only with a contiguous prevHash chain, but it has
+// NO genesis-strict verifier (isMemoryReplayEvaluatorRow is structural only; no
+// memoryReplayHashChainOk exists) and the seq+prevHash for the next append are derived from
+// readMemoryReplayEvaluatorRows() each call (no #73-style chain cache).
+// buildMemoryReplayEvaluatorReport({write:true}) appends a fresh row per scenario (up to 24)
+// on every orchestration call → the file grows unbounded and never rotates;
+// readMemoryReplayEvaluatorRows reads the whole file on every cold read. Readers
+// (previousRows.at(-1) for chain continuity only) → HEAD IS DISPOSABLE → rotation-safe (same
+// contract as #88). Cap at REPI_REPLAY_LEDGER_MAX_ROWS (default 500, 0=disable); when the
+// just-appended batch's last seq exceeds maxRows + REPI_REPLAY_LEDGER_ROTATE_BATCH (default
+// 50), rotateReplayLedgerIfNeeded drops the head rows, keeps the last maxRows, RENUMBERS seq
+// to 1..kept (seq IS part of entryHash via memoryReplayEvaluatorRowHash, which hashes every
+// field except entryHash), recomputes prevHash from "0".repeat(64) and entryHash via the
+// row-hash function over the kept tail, and atomically rewrites the ledger (writeFileAtomic
+// temp+rename 0o600, matching the existing write path). The batch trigger fires once per
+// orchestration call (not per row) so the hot-path write stays a single read-modify-write;
+// the O(maxRows) rotation read+rewrite+rehash amortizes to O(maxRows/batch) per call. There
+// is no cache for this ledger (readMemoryReplayEvaluatorRows reads directly, and no
+// cachedJsonlDerived derived cache wraps it) → no re-warm is needed. Returns the rotated rows
+// when it rewrote the file, else null.
+function replayLedgerMaxRows(): number {
+	const raw = Number(process.env.REPI_REPLAY_LEDGER_MAX_ROWS);
+	if (Number.isFinite(raw) && raw >= 0) return Math.floor(raw);
+	return 500;
+}
+
+function replayLedgerRotateBatch(): number {
+	const raw = Number(process.env.REPI_REPLAY_LEDGER_ROTATE_BATCH);
+	if (Number.isFinite(raw) && raw >= 0) return Math.floor(raw);
+	return 50;
+}
+
+function rotateReplayLedgerIfNeeded(): MemoryReplayEvaluatorRowV12[] | null {
+	const maxRows = replayLedgerMaxRows();
+	if (maxRows <= 0) return null;
+	const rows = readMemoryReplayEvaluatorRows();
+	if (rows.length <= maxRows) return null;
+	const kept = rows.slice(-maxRows);
+	if (kept.length === 0) return null;
+	let prevHash = "0".repeat(64);
+	const rotated: MemoryReplayEvaluatorRowV12[] = [];
+	for (let i = 0; i < kept.length; i++) {
+		// Renumber seq to 1..kept.length — the next buildMemoryReplayEvaluatorReport call
+		// derives seq from readMemoryReplayEvaluatorRows().length, so leaving the original
+		// (large) seq values would make the next appended row's seq go backwards. seq is part
+		// of the entryHash (memoryReplayEvaluatorRowHash hashes every field except entryHash),
+		// so the renumber is correctly reflected in the recomputed hash + genesis-reset chain.
+		const { entryHash: _omitHash, ...withoutHash } = kept[i];
+		const rebuilt = { ...withoutHash, prevHash, seq: i + 1 };
+		const newEntryHash = memoryReplayEvaluatorRowHash({ ...rebuilt, entryHash: "" });
+		rotated.push({ ...rebuilt, entryHash: newEntryHash });
+		prevHash = newEntryHash;
+	}
+	const body = `${rotated.map((row) => JSON.stringify(row)).join("\n")}\n`;
+	writeFileAtomic(memoryReplayEvaluatorLedgerPath(), body);
+	return rotated;
+}
+
 export function memoryReplayScenarios(
 	events: MemoryEventV1[],
 	usefulness?: MemoryUsefulnessEvalReportV1,
@@ -335,13 +395,35 @@ export function buildMemoryReplayEvaluatorReport(
 		...(quality.expiredEventIds ?? []),
 	]);
 	const scenarios = memoryReplayScenarios(events, usefulness, options);
+	// opt #99 PERF-9 — memoize searchMemoryEvents by (query, route, target, limit) within a single
+	// replay build. The replay evaluator generates up to 24 scenarios; several share the same
+	// (query, route, target, limit) tuple. Without the memo each duplicate re-runs the full
+	// lexical+vector scoring AND re-calls searchMemoryVectors (a 2nd embedding API call) for the
+	// same inputs. The memo result is identical (pure function of inputs) and the retrieval-report
+	// file side-effect is idempotent (same query/options → same hits; generatedAt is already
+	// non-deterministic). The memo is local to this single build → no cross-build stale risk.
+	const retrievalMemo = new Map<string, MemoryRetrievalHit[]>();
+	const memoizedRetrieval = (
+		query: string,
+		route: string | undefined,
+		target: string | undefined,
+		limit: number,
+	): MemoryRetrievalHit[] => {
+		const key = `${query}\0${route ?? ""}\0${target ?? ""}\0${limit}`;
+		const cached = retrievalMemo.get(key);
+		if (cached) return cached;
+		const hits = searchMemoryEvents(query, { route, target, limit });
+		retrievalMemo.set(key, hits);
+		return hits;
+	};
 	const rows: MemoryReplayEvaluatorRowV12[] = scenarios.map((scenario) => {
 		const topK = Math.max(1, Math.min(10, Math.floor(scenario.topK || 3)));
-		const treatmentHits = searchMemoryEvents(scenario.query, {
-			route: scenario.route ?? options.route,
-			target: scenario.target ?? options.target,
-			limit: Math.max(topK, scenario.forbiddenEventIds.length ? 8 : topK),
-		});
+		const treatmentHits = memoizedRetrieval(
+			scenario.query,
+			scenario.route ?? options.route,
+			scenario.target ?? options.target,
+			Math.max(topK, scenario.forbiddenEventIds.length ? 8 : topK),
+		);
 		const treatmentHitIds = treatmentHits.slice(0, Math.max(topK, 8)).map((hit) => hit.event.id);
 		const topTreatmentIds = treatmentHitIds.slice(0, topK);
 		const expectedHits = topTreatmentIds.filter((eventId) => scenario.expectedEventIds.includes(eventId));
@@ -594,6 +676,18 @@ export function buildMemoryReplayEvaluatorReport(
 				"",
 			].join("\n"),
 		);
+		// opt F5 — rotate the replay ledger when it exceeds the row cap. Batched via
+		// replayLedgerRotateBatch() so this only fires every `batch` rows past the cap (the
+		// last appended row's seq is the new total row count; after a rotation rewrites the
+		// ledger to maxRows rows with seq 1..maxRows, the next call's seq starts at maxRows+1,
+		// so the trigger re-arms and fires once per batch). The kept tail is re-hashed from
+		// genesis → the prevHash chain stays contiguous; previousRows.at(-1) for chain
+		// continuity only → the dropped head is disposable.
+		const _replayMaxRows = replayLedgerMaxRows();
+		const _replayLastSeq = rows.at(-1)?.seq ?? 0;
+		if (_replayMaxRows > 0 && _replayLastSeq > _replayMaxRows + replayLedgerRotateBatch()) {
+			rotateReplayLedgerIfNeeded();
+		}
 	}
 	return report;
 }

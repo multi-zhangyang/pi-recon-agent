@@ -2,6 +2,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFile
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getAgentDir, getPackageDir } from "../config.ts";
+import { atomicWriteFileSync } from "./tools/atomic-write.ts";
 
 export interface RepiProfileInitResult {
 	agentDir: string;
@@ -30,8 +31,14 @@ function readJson(path: string): Record<string, unknown> | undefined {
 
 function writeJson(path: string, value: unknown, mode?: number): void {
 	mkdir(dirname(path));
-	writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-	if (mode !== undefined) chmodSync(path, mode);
+	// Foundational opt #265: write atomically (temp+rename, mode-preserved) so a
+	// crash mid-write (SIGKILL/OOM/power loss) doesn't truncate settings.json /
+	// profile.json — readJson swallows the JSON.parse failure → settings rebuilt
+	// from defaults only → user customizations permanently lost. Same class as
+	// opt #43 (SettingsManager runtime path); this startup init path bypassed the
+	// SettingsManager entirely. The helper preserves an existing target's mode
+	// across the replace and unlinks the temp on any failure.
+	atomicWriteFileSync(path, `${JSON.stringify(value, null, 2)}\n`, mode ?? 0o600);
 }
 
 function copyIfMissing(from: string, to: string, mode?: number): boolean {
@@ -54,7 +61,12 @@ export function initializeRepiProfile(options: { repoRoot?: string; verbose?: bo
 
 	mkdir(agentDir);
 	mkdir(join(agentDir, "sessions"));
-	mkdir(join(agentDir, "recon", "memory", "playbooks"));
+	// opt #273: do NOT create the global recon/memory/playbooks dir here.
+	// initializeRepiProfile runs before the session cwd is known, so a global
+	// playbooks dir would orphan (scoped agent uses projects/<cwd>/playbooks via
+	// memoryPlaybooksDir()). The scoped playbooks dir is created on demand by
+	// ensureRepiStorage when the recon extension inits with the cwd scope set.
+	mkdir(join(agentDir, "recon", "memory"));
 	mkdir(join(agentDir, "recon", "mission"));
 	mkdir(join(agentDir, "recon", "tools"));
 	for (const sub of [
@@ -196,22 +208,14 @@ export function initializeRepiProfile(options: { repoRoot?: string; verbose?: bo
 	writeJson(settingsPath, settings, 0o600);
 
 	for (const [rel, body] of [
-		["recon/memory/field-journal.md", "# REPI Field Journal\n\n"],
-		["recon/memory/case-index.md", "# REPI Case Index\n\n"],
-		["recon/memory/evolution-log.md", "# REPI Evolution Log\n\n"],
-		[
-			"recon/memory/core-memory.md",
-			"# REPI Core Memory\n\n固定偏好、项目不变量、长期稳定事实写在这里；保持短小。\n\n",
-		],
-		[
-			"recon/memory/project-memory.md",
-			"# REPI Project Memory\n\n当前 workspace 的构建、运行、测试、入口、常用命令写在这里。\n\n",
-		],
-		[
-			"recon/memory/procedural-memory.md",
-			"# REPI Procedural Memory\n\n可复用 workflow / checklist / verified command template 写在这里。\n\n",
-		],
-		["recon/memory/events.jsonl", ""],
+		// opt #273: the recon/memory/* default .md files are NOT seeded here.
+		// initializeRepiProfile runs at cli.ts bootstrap BEFORE the session cwd is
+		// known, so it cannot scope them — writing them here seeded the GLOBAL
+		// recon/memory root on every startup, orphaning defaults the scoped agent
+		// never reads (cross-project pollution). ensureRepiStorage() now seeds the
+		// same defaults per-cwd via memoryPath() (scoped) when the recon extension
+		// inits. Only non-memory recon infrastructure (evidence ledger, tool index)
+		// is seeded here — those are global runtime infra, not project memory.
 		["recon/evidence/ledger.md", "# REPI Evidence Ledger\n\n"],
 		["recon/tools/tool-index.md", "# REPI Tool Index\n\n"],
 	] as const) {

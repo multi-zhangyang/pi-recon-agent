@@ -78,6 +78,20 @@ export class SettingsList implements Component {
 		this.submenuComponent?.invalidate?.();
 	}
 
+	/**
+	 * Tear down the active submenu component and search input. The submenu is
+	 * app-supplied (item.submenu(...)) and may own resources (an Editor with an
+	 * autocomplete AbortController + debounce timer, a CancellableLoader, etc.);
+	 * without this, a Container.dispose() reaching a SettingsList short-circuits
+	 * on `child.dispose?.() === undefined` and the submenu's timers/AbortControllers
+	 * leak, with in-flight async resolving into a dead component (use-after-dispose).
+	 */
+	dispose(): void {
+		this.submenuComponent?.dispose?.();
+		this.submenuComponent = null;
+		this.submenuItemIndex = null;
+	}
+
 	render(width: number): string[] {
 		// If submenu is active, render it instead
 		if (this.submenuComponent) {

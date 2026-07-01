@@ -1,5 +1,6 @@
 import type { Message } from "@pi-recon/repi-ai";
 import type { AgentMessage } from "../../types.ts";
+import { safeHeadEnd, safeTailStart } from "../utils/truncate.ts";
 
 /** File paths touched by a session branch or compaction range. */
 export interface FileOperations {
@@ -81,10 +82,18 @@ function safeJsonStringify(value: unknown): string {
 	}
 }
 
-function truncateForSummary(text: string, maxChars: number): string {
+export function truncateForSummary(text: string, maxChars: number): string {
 	if (text.length <= maxChars) return text;
-	const truncatedChars = text.length - maxChars;
-	return `${text.slice(0, maxChars)}\n\n[... ${truncatedChars} more characters truncated]`;
+	// Keep BOTH head and tail with a middle-ellipsis marker reporting the elided
+	// character count. The tail is usually the most decision-relevant part of a
+	// tool result (final error, exit code, last output line); head-only would
+	// lose it. Mirrors the coding-agent compaction serializer.
+	const head = Math.floor(maxChars * 0.45);
+	const tail = Math.floor(maxChars * 0.45);
+	const elidedChars = text.length - head - tail;
+	const headEnd = safeHeadEnd(text, head);
+	const tailStart = safeTailStart(text, text.length - tail);
+	return `${text.slice(0, headEnd)}\n\n[... ${elidedChars} more characters truncated ...]\n\n${text.slice(tailStart)}`;
 }
 
 /** Serialize LLM messages to plain text for summarization prompts. */

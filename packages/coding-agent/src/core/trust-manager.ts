@@ -1,8 +1,9 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME } from "../config.ts";
 import { canonicalizePath, resolvePath } from "../utils/paths.ts";
+import { atomicWriteFileSync } from "./tools/atomic-write.ts";
 
 export type ProjectTrustDecision = boolean | null;
 
@@ -121,7 +122,16 @@ function writeTrustFile(path: string, data: TrustFile): void {
 	}
 	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 	chmodPrivate(dirname(path), 0o700);
-	writeFileSync(path, `${JSON.stringify(sorted, null, 2)}\n`, { encoding: "utf-8", mode: 0o600 });
+	// Atomic temp+rename (mode 0o600): a plain writeFileSync truncates then
+	// writes, so a crash mid-write leaves a truncated/partial trust.json. The
+	// reader self-heals (readTrustFile → quarantineTrustFile renames a bad file
+	// aside and returns {}), but that SILENTLY loses every prior trust decision
+	// → the user is re-prompted to trust dirs they already approved. temp+rename
+	// means a reader sees either the complete prior trust store or the complete
+	// new one, so a crash can't destroy decisions. chmodPrivate after the rename
+	// still enforces 0o600 (atomicWriteFileSync preserves an existing target's
+	// mode, which could be wrong if the file predates 0o600 enforcement).
+	atomicWriteFileSync(path, `${JSON.stringify(sorted, null, 2)}\n`, 0o600);
 	chmodPrivate(path, 0o600);
 }
 

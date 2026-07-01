@@ -137,9 +137,25 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 /**
  * Calculate total context tokens from usage.
  * Uses the native totalTokens field when available, falls back to computing from components.
+ *
+ * Defensive against undefined/partial/NaN usage: the proxy transport (and any misbehaving direct
+ * provider) can in principle hand an AssistantMessage a missing or partial Usage at runtime despite
+ * the `Usage` type requiring all fields. The post-turn compaction check (agent-session.ts:2140)
+ * calls this with `assistantMessage.usage` when no valid prior usage is found — a bare
+ * `usage.totalTokens` on undefined would TypeError-crash every turn, and `input + undefined` would
+ * yield NaN (which silently disables compaction via the `Number.isFinite` guard in shouldCompact →
+ * lost turn). Normalize to 0 instead. opt #58.
  */
-export function calculateContextTokens(usage: Usage): number {
-	return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+export function calculateContextTokens(usage: Usage | undefined | null): number {
+	if (!usage) return 0;
+	const total = Number(usage.totalTokens);
+	if (Number.isFinite(total) && total > 0) return total;
+	const sum =
+		(Number(usage.input) || 0) +
+		(Number(usage.output) || 0) +
+		(Number(usage.cacheRead) || 0) +
+		(Number(usage.cacheWrite) || 0);
+	return Number.isFinite(sum) ? sum : 0;
 }
 
 /**
@@ -416,6 +432,29 @@ export interface CutPointResult {
 }
 
 /**
+ * Clamp the keep-recent budget so the verbatim-recent window can never exceed a
+ * safe fraction of the model's context window. opt #218.
+ *
+ * Pre-fix, `settings.keepRecentTokens` (default 36000) was passed verbatim to
+ * findCutPoint regardless of contextWindow. On a small-context model (e.g.
+ * 16K window), 36000 > contextWindow meant the backwards walk accumulated the
+ * WHOLE conversation without ever reaching the budget → cutIndex stayed at
+ * cutPoints[0] (keep from the first message) → messagesToSummarize was empty
+ * → compaction was a NO-OP, so overflow recovery never brought the context
+ * under the window and the next request overflowed again. Clamping to ~50% of
+ * the window leaves room for the summary + the next turn and guarantees the
+ * cut actually trims on small-context models. No-op when contextWindow is
+ * unknown (0/NaN) — preserves existing behavior for unscoped callers/tests.
+ */
+const KEEP_RECENT_FRACTION = 0.5;
+function clampKeepRecentTokens(keepRecentTokens: number, contextWindow: number | undefined): number {
+	const window = contextWindow ?? 0;
+	if (!Number.isFinite(window) || window <= 0) return keepRecentTokens;
+	const capped = Math.floor(window * KEEP_RECENT_FRACTION);
+	return Math.min(keepRecentTokens, Math.max(capped, 1));
+}
+
+/**
  * Find the cut point in session entries that keeps approximately `keepRecentTokens`.
  *
  * Algorithm: Walk backwards from newest, accumulating estimated message sizes.
@@ -436,12 +475,18 @@ export function findCutPoint(
 	startIndex: number,
 	endIndex: number,
 	keepRecentTokens: number,
+	contextWindow?: number,
 ): CutPointResult {
 	const cutPoints = findValidCutPoints(entries, startIndex, endIndex);
 
 	if (cutPoints.length === 0) {
 		return { firstKeptEntryIndex: startIndex, turnStartIndex: -1, isSplitTurn: false };
 	}
+
+	// opt #218: cap the keep-recent budget to a safe fraction of the context
+	// window so compaction actually trims on small-context models (see
+	// clampKeepRecentTokens). No-op when contextWindow is unknown.
+	const effectiveKeepRecent = clampKeepRecentTokens(keepRecentTokens, contextWindow);
 
 	// Walk backwards from newest, accumulating estimated message sizes
 	let accumulatedTokens = 0;
@@ -456,7 +501,7 @@ export function findCutPoint(
 		accumulatedTokens += messageTokens;
 
 		// Check if we've exceeded the budget
-		if (accumulatedTokens >= keepRecentTokens) {
+		if (accumulatedTokens >= effectiveKeepRecent) {
 			// Find the closest valid cut point at or after this entry
 			for (let c = 0; c < cutPoints.length; c++) {
 				if (cutPoints[c] >= i) {
@@ -596,7 +641,37 @@ async function completeSummarization(
 		return completeSimple(model, context, options);
 	}
 	const stream = await streamFn(model, context, options);
-	return stream.result();
+	// `stream.result()` resolves with an error AssistantMessage when the provider
+	// pushes a terminal "error" event (the normal failure path, handled by the
+	// `stopReason === "error"` check below). But it REJECTS when the underlying
+	// EventStream ends without ever pushing a terminal done/error event — e.g. a
+	// misbehaving custom extension stream that completes without finalizing. A
+	// rejection here would propagate up through `generateSummary` to the
+	// compaction callers and, if uncaught, surface as an unhandledRejection mid
+	// compaction. Convert the rejection into the same error-AssistantMessage
+	// shape so the existing error check handles it uniformly. (opt #132)
+	try {
+		return await stream.result();
+	} catch (error) {
+		return {
+			role: "assistant",
+			content: [],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "error",
+			errorMessage: error instanceof Error ? error.message : String(error),
+			timestamp: Date.now(),
+		};
+	}
 }
 
 /**
@@ -692,6 +767,7 @@ export interface CompactionPreparation {
 export function prepareCompaction(
 	pathEntries: SessionEntry[],
 	settings: CompactionSettings,
+	contextWindow?: number,
 ): CompactionPreparation | undefined {
 	if (pathEntries.length > 0 && pathEntries[pathEntries.length - 1].type === "compaction") {
 		return undefined;
@@ -717,7 +793,7 @@ export function prepareCompaction(
 
 	const tokensBefore = estimateContextTokens(buildSessionContext(pathEntries).messages).tokens;
 
-	const cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, settings.keepRecentTokens);
+	const cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, settings.keepRecentTokens, contextWindow);
 
 	// Get UUID of first kept entry
 	const firstKeptEntry = pathEntries[cutPoint.firstKeptEntryIndex];
@@ -832,7 +908,17 @@ export async function compact(
 						thinkingLevel,
 						streamFn,
 					)
-				: Promise.resolve("No prior history."),
+				: // opt #236: carry previousSummary forward when there is nothing new
+					// to summarize. Pre-fix this was `Promise.resolve("No prior history.")`,
+					// which DISCARDED previousSummary. In the orphaned-branch fallback
+					// (prepareCompaction sets boundaryStart = prevCompactionIndex + 1
+					// when the prev compaction's firstKeptEntryId is off the current
+					// path), the cut can land so messagesToSummarize is empty while
+					// previousSummary is the ONLY record of the pre-compaction history.
+					// buildSessionContext emits only the latest compaction's summary, so
+					// dropping previousSummary here permanently and silently lost the
+					// prior history from the context (DATA-LOSS).
+					Promise.resolve(previousSummary ?? "No prior history."),
 			generateTurnPrefixSummary(
 				turnPrefixMessages,
 				model,
@@ -847,19 +933,31 @@ export async function compact(
 		// Merge into single summary
 		summary = `${historyResult}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult}`;
 	} else {
-		// Just generate history summary
-		summary = await generateSummary(
-			messagesToSummarize,
-			model,
-			settings.reserveTokens,
-			apiKey,
-			headers,
-			signal,
-			customInstructions,
-			previousSummary,
-			thinkingLevel,
-			streamFn,
-		);
+		// opt #240: mirror the opt #236 split-branch empty guard. Pre-fix the
+		// non-split branch unconditionally called generateSummary, so when
+		// messagesToSummarize was empty (orphaned-branch fallback where the cut
+		// lands exactly on a user message at boundaryStart) it serialized an
+		// empty `<conversation></conversation>` and issued a pointless LLM call;
+		// if the model didn't echo previousSummary verbatim the prior history
+		// was silently degraded/lost from context (buildSessionContext emits only
+		// the latest compaction's summary) — DATA-LOSS. Carry previousSummary.
+		if (messagesToSummarize.length === 0) {
+			summary = previousSummary ?? "No prior history.";
+		} else {
+			// Just generate history summary
+			summary = await generateSummary(
+				messagesToSummarize,
+				model,
+				settings.reserveTokens,
+				apiKey,
+				headers,
+				signal,
+				customInstructions,
+				previousSummary,
+				thinkingLevel,
+				streamFn,
+			);
+		}
 	}
 
 	// Compute file lists and append to summary
