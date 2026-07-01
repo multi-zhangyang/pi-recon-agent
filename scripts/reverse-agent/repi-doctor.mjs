@@ -342,6 +342,14 @@ const guardrailMarkers = [
 const missingHelpGuardrails = guardrailMarkers.filter((marker) => !helpText.includes(marker));
 const missingBootstrapGuardrails = guardrailMarkers.filter((marker) => !bootstrapSource.includes(marker));
 const legacyExtensions = legacyExtensionLayout();
+const scopedMemoryDefaultsOk =
+	memory.schemaVersion === 2 &&
+	memory.mode === "scoped" &&
+	memory.autoRecall === true &&
+	memory.autoDeposit === "high-value" &&
+	memory.startupDigest === "scoped" &&
+	memory.rawAutoInject === false;
+const globalMemoryLazyOk = scopedMemoryDefaultsOk;
 
 const checks = [
 	check("repo:root", existsSync(join(root, "package.json")) && existsSync(repiBin), `root=${root}`),
@@ -358,14 +366,34 @@ const checks = [
 	check("runtime:settings", Boolean(settings), `settings=${join(agentDir, "settings.json")}`, "run npm run install:repi"),
 	check(
 		"memory:scoped-defaults",
-		memory.schemaVersion === 2 && memory.mode === "scoped" && memory.autoRecall === true && memory.autoDeposit === "high-value" && memory.startupDigest === "scoped" && memory.rawAutoInject === false,
+		scopedMemoryDefaultsOk,
 		`memory=${JSON.stringify({ schemaVersion: memory.schemaVersion, mode: memory.mode, autoRecall: memory.autoRecall, autoDeposit: memory.autoDeposit, startupDigest: memory.startupDigest, rawAutoInject: memory.rawAutoInject })}`,
 		"run npm run install:repi or edit ~/.repi/agent/settings.json",
 	),
-	check("memory:core-file", existsSync(join(runtimeMemory, "core-memory.md")), `path=${join(runtimeMemory, "core-memory.md")}`, "run npm run install:repi"),
-	check("memory:project-file", existsSync(join(runtimeMemory, "project-memory.md")), `path=${join(runtimeMemory, "project-memory.md")}`, "run npm run install:repi"),
-	check("memory:procedural-file", existsSync(join(runtimeMemory, "procedural-memory.md")), `path=${join(runtimeMemory, "procedural-memory.md")}`, "run npm run install:repi"),
-	check("memory:event-store", existsSync(join(runtimeMemory, "events.jsonl")), `events=${lineCount(join(runtimeMemory, "events.jsonl"))}`, "run repi doctor --fix"),
+	check(
+		"memory:core-file",
+		existsSync(join(runtimeMemory, "core-memory.md")) || globalMemoryLazyOk,
+		`path=${join(runtimeMemory, "core-memory.md")} lazyScoped=${globalMemoryLazyOk}`,
+		"run npm run install:repi",
+	),
+	check(
+		"memory:project-file",
+		existsSync(join(runtimeMemory, "project-memory.md")) || globalMemoryLazyOk,
+		`path=${join(runtimeMemory, "project-memory.md")} lazyScoped=${globalMemoryLazyOk}`,
+		"run npm run install:repi",
+	),
+	check(
+		"memory:procedural-file",
+		existsSync(join(runtimeMemory, "procedural-memory.md")) || globalMemoryLazyOk,
+		`path=${join(runtimeMemory, "procedural-memory.md")} lazyScoped=${globalMemoryLazyOk}`,
+		"run npm run install:repi",
+	),
+	check(
+		"memory:event-store",
+		existsSync(join(runtimeMemory, "events.jsonl")) || globalMemoryLazyOk,
+		`events=${lineCount(join(runtimeMemory, "events.jsonl"))} lazyScoped=${globalMemoryLazyOk}`,
+		"run repi doctor --fix",
+	),
 	check(
 		"runtime:legacy-extension-layout",
 		legacyExtensions.clean,

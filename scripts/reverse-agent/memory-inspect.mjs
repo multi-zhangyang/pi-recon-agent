@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -181,6 +181,20 @@ function rechainMemoryEvents(events) {
 		prevHash = row.entryHash;
 		return row;
 	});
+}
+
+function appendGovernanceDecision(decision) {
+	mkdirSync(memoryDir, { recursive: true, mode: 0o700 });
+	withFileLock(governancePath, () => {
+		const previous = existsSync(governancePath) ? readFileSync(governancePath, "utf8") : "";
+		const separator = previous && !previous.endsWith("\n") ? "\n" : "";
+		atomicWriteFile(governancePath, `${previous}${separator}${JSON.stringify(decision)}\n`, 0o600);
+	});
+	try {
+		chmodSync(governancePath, 0o600);
+	} catch {
+		// Best-effort on non-POSIX filesystems.
+	}
 }
 
 function redactSensitiveRaw(value) {
@@ -499,7 +513,7 @@ function applyGovernance(action) {
 		reason: clip(reason, 360),
 		nextCommands: ["repi memory status", `repi memory why ${source?.id ?? JSON.stringify(identifier)}`, "repi memory diff"],
 	};
-	appendFileSync(governancePath, `${JSON.stringify(decision)}\n`, "utf8");
+	appendGovernanceDecision(decision);
 	return {
 		kind: "repi-memory-governance-report",
 		schemaVersion: 1,
@@ -672,11 +686,10 @@ function buildExportReport() {
 		const outputPath = resolve(output);
 		try {
 			mkdirSync(dirname(outputPath), { recursive: true, mode: 0o700 });
-			writeFileSync(outputPath, `${JSON.stringify(bundle, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+			atomicWriteFile(outputPath, `${JSON.stringify(bundle, null, 2)}\n`, 0o600);
 		} catch (error) {
-			// opt #176: bare writeFileSync here threw uncaught on ENOSPC/EACCES
-			// and aborted the script mid-export. Now surface a stderr diagnostic
-			// and a non-zero exit via ok:false (the caller exits 1 on !ok).
+			// opt #176/#278: export writes are temp+rename and still surfaced
+			// as a structured ok:false report on ENOSPC/EACCES.
 			const message = error instanceof Error ? error.message : String(error);
 			console.error(`repi memory export: failed to write output ${outputPath}: ${message}`);
 			return {
@@ -802,9 +815,7 @@ function buildPurgeReport() {
 			}
 			atomicWriteFile(eventsPath, `${nextLines.join("\n")}${nextLines.length ? "\n" : ""}`, 0o600);
 		});
-		appendFileSync(
-			governancePath,
-			`${JSON.stringify({
+		appendGovernanceDecision({
 				kind: "repi-memory-ux-governance-decision",
 				schemaVersion: 1,
 				id: `memory-cli:purge:${sha256(`${ts}:${[...selected.keys()].join(",")}`).slice(0, 16)}`,
@@ -815,9 +826,7 @@ function buildPurgeReport() {
 				removedEventIds: [...selected.keys()].slice(0, 500),
 				reason: clip(flagValue(rawArgs, "--reason", "manual purge through repi memory purge"), 360),
 				backupPath,
-			})}\n`,
-			"utf8",
-		);
+			});
 	}
 	return {
 		kind: "repi-memory-purge-report",
@@ -889,13 +898,11 @@ function buildSanitizeReport() {
 		});
 		if (apply && confirmed) {
 			if (backup) copyFileSync(path, `${path}.bak-${ts}`);
-			// opt #176: bare writeFileSync threw uncaught on ENOSPC/EACCES mid-
-			// sanitize and aborted the whole script mid-collection. Now wrap the
-			// per-file write so one failure is recorded + surfaced rather than
-			// crashing; the final report carries ok:false + the error so the
-			// process exits non-zero.
+			// opt #176/#278: temp+rename prevents a crash mid-sanitize from
+			// truncating the target file; failures are still recorded so the
+			// final report exits non-zero instead of throwing.
 			try {
-				writeFileSync(path, after, { encoding: "utf8", mode: 0o600 });
+				atomicWriteFile(path, after, 0o600);
 				try {
 					chmodSync(path, 0o600);
 				} catch {
@@ -1049,8 +1056,8 @@ function buildRepairReport() {
 				eventChainRepair.rehashedRows = rechained.length;
 				nextLines = rechained.map((row) => JSON.stringify(row));
 			}
-			writeFileSync(file.path, `${nextLines.join("\n")}${nextLines.length ? "\n" : ""}`, { encoding: "utf8", mode: 0o600 });
-			if (file.invalidRows.length) writeFileSync(file.quarantinePath, `${file.invalidRows.map((row) => JSON.stringify(row)).join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
+			atomicWriteFile(file.path, `${nextLines.join("\n")}${nextLines.length ? "\n" : ""}`, 0o600);
+			if (file.invalidRows.length) atomicWriteFile(file.quarantinePath, `${file.invalidRows.map((row) => JSON.stringify(row)).join("\n")}\n`, 0o600);
 			try {
 				chmodSync(file.path, 0o600);
 				if (file.invalidRows.length) chmodSync(file.quarantinePath, 0o600);

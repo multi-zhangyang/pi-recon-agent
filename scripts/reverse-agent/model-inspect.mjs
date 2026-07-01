@@ -34,7 +34,7 @@ function usage() {
   repi model test --provider <id> --model <id> [--timeout-ms N]
   repi model cost --provider <id> --model <id> --input-tokens N --output-tokens N [--cache-read-tokens N] [--cache-write-tokens N]
   repi model export [--output <path>] [--json]
-  repi model import --input <path|-> [--merge|--replace] [--json]
+  repi model import --input <path|-> [--merge|--replace] [--json] [--stdin-timeout-ms N] [--stdin-max-bytes N]
 
 model doctor is offline: it parses ~/.repi/agent/models.json, checks provider/model metadata, local auth, default model, context window and cost fields; --fix repairs safe local config issues.
 model list hides provider base URLs by default to avoid leaking private gateway endpoints into screenshots/logs; add --show-urls for local troubleshooting.
@@ -84,6 +84,55 @@ function flagValue(args, names, fallback = "") {
 		}
 	}
 	return fallback;
+}
+
+function boundedIntFlag(args, names, fallback, min, max) {
+	const value = flagValue(args, names, "");
+	const parsed = value ? Number.parseInt(value, 10) : fallback;
+	if (!Number.isFinite(parsed)) return fallback;
+	return Math.max(min, Math.min(max, parsed));
+}
+
+function modelStdinTimeoutMs() {
+	return boundedIntFlag(
+		rawArgs,
+		["--stdin-timeout-ms", "--stdin-timeout"],
+		Number.parseInt(process.env.REPI_MODEL_STDIN_TIMEOUT_MS || process.env.REPI_STDIN_READ_TIMEOUT_MS || "30000", 10),
+		50,
+		10 * 60 * 1000,
+	);
+}
+
+function modelStdinMaxBytes(fallback) {
+	return boundedIntFlag(
+		rawArgs,
+		["--stdin-max-bytes", "--stdin-bytes"],
+		Number.parseInt(process.env.REPI_MODEL_STDIN_MAX_BYTES || String(fallback), 10),
+		1,
+		64 * 1024 * 1024,
+	);
+}
+
+function readStdinBounded(label, { maxBytes = 1024 * 1024 } = {}) {
+	const timeoutMs = modelStdinTimeoutMs();
+	const limit = modelStdinMaxBytes(maxBytes);
+	const result = spawnSync("head", ["-c", String(limit + 1)], {
+		stdio: ["inherit", "pipe", "pipe"],
+		timeout: timeoutMs,
+		maxBuffer: limit + 1024,
+	});
+	const timedOut = result.error?.code === "ETIMEDOUT" || result.signal === "SIGTERM" || (result.status === null && !result.stdout);
+	if (timedOut) {
+		throw new Error(`${label} stdin read timed out after ${timeoutMs}ms; close stdin, pipe the value, or pass a file`);
+	}
+	if (result.error) throw new Error(`${label} stdin reader failed: ${result.error.message || String(result.error)}`);
+	if (result.status !== 0) {
+		const stderr = String(result.stderr ?? "").trim();
+		throw new Error(`${label} stdin reader exited ${result.status}${stderr ? `: ${stderr}` : ""}`);
+	}
+	const body = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(String(result.stdout ?? ""), "utf8");
+	if (body.length > limit) throw new Error(`${label} stdin exceeds max bytes (${limit})`);
+	return body.toString("utf8");
 }
 
 function insecureApiKeyArgAllowed() {
@@ -167,6 +216,10 @@ const valueFlags = new Set([
 	"--context",
 	"--max-tokens",
 	"--max-output",
+	"--stdin-timeout-ms",
+	"--stdin-timeout",
+	"--stdin-max-bytes",
+	"--stdin-bytes",
 ]);
 
 function positional(args, offset = 0) {
@@ -667,7 +720,17 @@ function buildAddReport() {
 		};
 	}
 	if (!apiKey && rawArgs.includes("--api-key-stdin")) {
-		apiKey = readFileSync(0, "utf8").trim();
+		try {
+			apiKey = readStdinBounded("model add api key", { maxBytes: 64 * 1024 }).trim();
+		} catch (error) {
+			return {
+				kind: "repi-model-add-report",
+				schemaVersion: 1,
+				generatedAt: new Date().toISOString(),
+				ok: false,
+				error: error instanceof Error ? error.message : String(error),
+			};
+		}
 	}
 	if (!/^[A-Z_][A-Z0-9_]*$/.test(apiKeyEnv)) {
 		return {
@@ -971,7 +1034,7 @@ function buildImportReport() {
 	}
 	let imported;
 	try {
-		imported = JSON.parse(input === "-" ? readFileSync(0, "utf8") : readFileSync(resolve(input), "utf8"));
+		imported = JSON.parse(input === "-" ? readStdinBounded("model import", { maxBytes: 4 * 1024 * 1024 }) : readFileSync(resolve(input), "utf8"));
 	} catch (error) {
 		return {
 			kind: "repi-model-import-report",
@@ -1034,7 +1097,17 @@ function buildLoginReport() {
 		};
 	}
 	if (!apiKey && rawArgs.includes("--api-key-stdin")) {
-		apiKey = readFileSync(0, "utf8").trim();
+		try {
+			apiKey = readStdinBounded("model login api key", { maxBytes: 64 * 1024 }).trim();
+		} catch (error) {
+			return {
+				kind: "repi-model-login-report",
+				schemaVersion: 1,
+				generatedAt: new Date().toISOString(),
+				ok: false,
+				error: error instanceof Error ? error.message : String(error),
+			};
+		}
 	}
 	if (!apiKey) {
 		return {
