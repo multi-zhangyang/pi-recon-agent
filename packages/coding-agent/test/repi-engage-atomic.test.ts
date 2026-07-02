@@ -950,6 +950,51 @@ describe("repi-engage artifact writes", () => {
 		expect(jsReport.commands.map((row) => row.id)).toContain("js-pattern-search");
 		expect(jsReport.summary.anchors).toContain("JS signing/runtime anchors");
 
+		const jsWriteResult = spawnSync(
+			process.execPath,
+			[ENGAGE, workspace, jsTarget, "--no-mission", "--json", "--timeout-ms=5000"],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 15_000,
+			},
+		);
+		expect(jsWriteResult.status, `${jsWriteResult.stderr}\n${jsWriteResult.stdout}`).toBe(0);
+		const jsWriteReport = JSON.parse(jsWriteResult.stdout) as {
+			artifactDir: string;
+			commands: Array<{ id: string; stdout: string }>;
+			nextQueue: string[];
+			summary: { anchors: string[] };
+		};
+		expect(jsWriteReport.commands.map((row) => row.id)).toContain("js-reverse-workbench");
+		expect(jsWriteReport.commands.map((row) => row.id)).toContain("proof-harness-self-test");
+		expect(jsWriteReport.summary.anchors).toContain("JS reverse workbench anchors");
+		expect(jsWriteReport.summary.anchors).toContain("proof harness/self-test anchors");
+		expect(jsWriteReport.commands.find((row) => row.id === "js-reverse-workbench")?.stdout).toContain(
+			"js-signature-rebuild-candidate",
+		);
+		const jsWorkbenchPath = join(jsWriteReport.artifactDir, "js-reverse-workbench.json");
+		const jsProofMatrixPath = join(jsWriteReport.artifactDir, "proof-matrix.json");
+		expect(existsSync(jsWorkbenchPath)).toBe(true);
+		expect(existsSync(jsProofMatrixPath)).toBe(true);
+		const jsWorkbench = JSON.parse(readFileSync(jsWorkbenchPath, "utf8")) as {
+			risks: string[];
+			files: Array<{ endpoints: string[]; functionCandidates: Array<{ name: string }> }>;
+		};
+		expect(jsWorkbench.risks).toContain("js-signature-rebuild-candidate");
+		expect(jsWorkbench.files[0].endpoints).toContain("/api");
+		expect(jsWorkbench.files[0].functionCandidates.map((candidate) => candidate.name)).toContain("sign");
+		const jsProofMatrix = JSON.parse(readFileSync(jsProofMatrixPath, "utf8")) as {
+			artifacts: Array<{ relPath: string }>;
+			liveChecks: Array<{ id: string }>;
+		};
+		expect(jsProofMatrix.artifacts.map((row) => row.relPath)).toContain("js-reverse-workbench.json");
+		expect(jsProofMatrix.liveChecks.map((row) => row.id)).toContain("js-reverse-workbench-self-test");
+		expect(jsWriteReport.nextQueue.some((command) => command.includes("js-reverse-workbench.mjs"))).toBe(true);
+
 		const memoryTarget = join(workspace, "capture.vmem");
 		writeFileSync(memoryTarget, "WinProcess cmdline token lsass http artifact\n");
 		const memoryResult = spawnSync(
@@ -3557,35 +3602,65 @@ echo "ready"
 		expect(report.commands.map((row) => row.id)).toContain("native-replay-verifier-artifact");
 		expect(report.commands.map((row) => row.id)).toContain("native-gdb-trace-artifact");
 		expect(report.commands.map((row) => row.id)).toContain("native-exploit-hypotheses");
+		expect(report.commands.map((row) => row.id)).toContain("proof-harness-plan");
+		expect(report.commands.map((row) => row.id)).toContain("proof-harness-self-test");
 		expect(report.commands.find((row) => row.id === "native-run-empty")?.stdout).toContain("mode=empty exit=0");
 		expect(report.commands.find((row) => row.id === "native-run-cyclic")?.stdout).toContain("crash_signal=SIGSEGV");
 		expect(report.summary.anchors).toContain("dynamic execution/crash anchors");
 		expect(report.summary.anchors).toContain("native exploit hypothesis anchors");
+		expect(report.summary.anchors).toContain("proof harness/self-test anchors");
 		const verifierPath = join(report.artifactDir, "native-replay-verifier.py");
 		const gdbPath = join(report.artifactDir, "native-gdb-trace.gdb");
 		const cyclicPayloadPath = join(report.artifactDir, "native-cyclic-payload.bin");
 		const cyclicOffsetPath = join(report.artifactDir, "native-cyclic-offset.py");
 		const hypothesesPath = join(report.artifactDir, "native-exploit-hypotheses.json");
+		const proofMatrixPath = join(report.artifactDir, "proof-matrix.json");
+		const proofHarnessPath = join(report.artifactDir, "proof-harness.mjs");
 		expect(existsSync(verifierPath)).toBe(true);
 		expect(existsSync(gdbPath)).toBe(true);
 		expect(existsSync(cyclicPayloadPath)).toBe(true);
 		expect(existsSync(cyclicOffsetPath)).toBe(true);
 		expect(existsSync(hypothesesPath)).toBe(true);
+		expect(existsSync(proofMatrixPath)).toBe(true);
+		expect(existsSync(proofHarnessPath)).toBe(true);
 		expect(statSync(verifierPath).mode & 0o777).toBe(0o700);
 		expect(statSync(gdbPath).mode & 0o777).toBe(0o600);
 		expect(statSync(cyclicPayloadPath).mode & 0o777).toBe(0o600);
 		expect(statSync(cyclicOffsetPath).mode & 0o777).toBe(0o700);
+		expect(statSync(proofMatrixPath).mode & 0o777).toBe(0o600);
+		expect(statSync(proofHarnessPath).mode & 0o777).toBe(0o700);
 		const gdbScript = readFileSync(gdbPath, "utf8");
 		expect(gdbScript).toContain("info registers");
 		expect(gdbScript).toContain("bt");
 		expect(gdbScript).toContain("native-cyclic-payload.bin");
+		const proofMatrix = JSON.parse(readFileSync(proofMatrixPath, "utf8")) as {
+			artifacts: Array<{ relPath: string }>;
+			liveChecks: Array<{ id: string; selfTest: boolean }>;
+		};
+		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("native-replay-verifier.py");
+		expect(proofMatrix.liveChecks).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ id: "native-cyclic-offset-self-test", selfTest: true }),
+				expect.objectContaining({ id: "native-replay-verifier-live", selfTest: false }),
+			]),
+		);
 		expect(report.nextQueue.some((command) => command.includes("native-replay-verifier.py"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("native-cyclic-offset.py"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("native-exploit-hypotheses.json"))).toBe(true);
+		expect(
+			report.nextQueue.some((command) => command.includes("proof-harness.mjs") && command.includes("--self-test")),
+		).toBe(true);
 		expect(report.summary.anchors).toContain("gdb/cyclic offset artifacts");
 		if (spawnSync("bash", ["-lc", "command -v gdb >/dev/null 2>&1"]).status === 0) {
 			expect(report.nextQueue.some((command) => command.includes("native-gdb-trace.gdb"))).toBe(true);
 		}
+		const proofHarness = spawnSync(process.execPath, [proofHarnessPath, "--self-test"], {
+			encoding: "utf8",
+			timeout: 15_000,
+		});
+		expect(proofHarness.status, `${proofHarness.stderr}\n${proofHarness.stdout}`).toBe(0);
+		expect(proofHarness.stdout).toContain('"proofReady": true');
+		expect(proofHarness.stdout).toContain("native-cyclic-offset-self-test");
 		const cyclicNeedle = readFileSync(cyclicPayloadPath).subarray(30, 34).toString("hex");
 		const offset = spawnSync("python3", [cyclicOffsetPath, `hex:${cyclicNeedle}`], {
 			encoding: "utf8",
@@ -3924,6 +3999,7 @@ server.listen(0,"127.0.0.1",()=>console.log(server.address().port));`,
 
 		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
 		const report = JSON.parse(result.stdout) as {
+			nextQueue: string[];
 			swarm: {
 				exit: number;
 				provider: string;
@@ -3964,6 +4040,7 @@ server.listen(0,"127.0.0.1",()=>console.log(server.address().port));`,
 			missing: ["proof-ready promoted claim"],
 		});
 		expect(report.swarm.summary.nextCommands[0]).toContain("--route 'js-reverse'");
+		expect(report.nextQueue.some((command) => command.includes("--route 'js-reverse'"))).toBe(true);
 	});
 
 	it("probes GraphQL and OpenAPI schemas into bounded evidence artifacts", async () => {

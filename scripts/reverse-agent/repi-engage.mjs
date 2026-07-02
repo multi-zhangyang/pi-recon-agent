@@ -495,6 +495,366 @@ function writeCommandLedger(artifactDir, rows) {
 	}
 }
 
+function proofArtifactPath(artifactDir, relPath) {
+	return join(artifactDir, relPath);
+}
+
+function proofArtifactExists(artifactDir, relPath) {
+	return existsSync(proofArtifactPath(artifactDir, relPath));
+}
+
+function proofArtifactRow(artifactDir, relPath, role, expectedMode) {
+	const path = proofArtifactPath(artifactDir, relPath);
+	return {
+		id: slug(relPath),
+		role,
+		path,
+		relPath,
+		expectedMode,
+		minBytes: 1,
+	};
+}
+
+function buildProofArtifactRows(targetInfo, artifactDir) {
+	const candidates = [];
+	const add = (relPath, role, expectedMode = 0o600) => {
+		if (proofArtifactExists(artifactDir, relPath)) candidates.push(proofArtifactRow(artifactDir, relPath, role, expectedMode));
+	};
+	if (targetInfo.kind === "url") {
+		for (const relPath of [
+			"web-security-posture.json",
+			"web-discovery-matrix.json",
+			"web-api-schema-probes.json",
+			"web-replay-matrix.json",
+			"web-identity-jwt.json",
+			"web-ssrf-matrix.json",
+			"web-redirect-matrix.json",
+			"web-cors-matrix.json",
+			"web-object-matrix.json",
+			"web-runtime-capture-plan.json",
+			"web-runtime-replay-plan.json",
+			"web-signer-rebuild-workbench-plan.json",
+			"web-js-signature-control-plan.json",
+			"web-js-sourcemap-summary.json",
+		]) add(relPath, "web/API runtime evidence");
+		add("web-runtime-capture-harness.mjs", "browser runtime capture harness", 0o700);
+		add("web-runtime-replay-verifier.mjs", "browser replay negative-control verifier", 0o700);
+		add("web-signer-rebuild-workbench.mjs", "JS signer byte-for-byte workbench", 0o700);
+		add("web-js-signature-control-harness.mjs", "JS signature negative-control harness", 0o700);
+	}
+	if (targetInfo.lane === "native-pwn") {
+		add("native-elf-hardening.json", "ELF mitigation/import/relocation parser output");
+		add("native-pe-quicklook.json", "PE mitigation/import parser output");
+		add("native-macho-quicklook.json", "Mach-O load-command/symbol parser output");
+		add("native-static-triage.json", "native static sink/gadget triage");
+		add("native-exploit-hypotheses.json", "native exploit hypothesis matrix");
+		add("native-replay-verifier.py", "native crash replay verifier", 0o700);
+		add("native-gdb-trace.gdb", "native debugger trace script");
+		add("native-cyclic-payload.bin", "native cyclic proof payload");
+		add("native-cyclic-offset.py", "native cyclic offset helper", 0o700);
+	}
+	if (targetInfo.lane === "js-reverse") {
+		add("js-reverse-workbench.json", "local JS/WASM reverse workbench output");
+		add("js-reverse-workbench.mjs", "local JS/WASM signer/API reverse harness", 0o700);
+	}
+	if (targetInfo.lane === "mobile" || targetInfo.lane === "mobile-ios") {
+		add("mobile-archive-summary.json", "mobile archive manifest/plist/dex quicklook");
+		add("mobile-frida-hooks.js", "mobile runtime hook harness", 0o700);
+	}
+	if (targetInfo.lane === "pcap-dfir") {
+		add("pcap-flow-summary.json", "packet/flow/TCP/HTTP/DNS/TLS quicklook");
+		add("pcap-http-objects.json", "PCAP HTTP object carve manifest");
+		add("pcap-http-object-verifier.py", "PCAP object verifier", 0o700);
+	}
+	if (targetInfo.lane === "memory-forensics") {
+		add("memory-quicklook.json", "memory forensic quicklook/correlation output");
+		add("memory-triage-plan.sh", "memory forensic triage harness", 0o700);
+	}
+	if (targetInfo.lane === "windows-ad") {
+		add("windows-ad-quicklook.json", "Windows/AD identity quicklook output");
+		add("windows-ad-triage-plan.sh", "Windows/AD triage harness", 0o700);
+	}
+	if (targetInfo.lane === "malware") {
+		add("malware-quicklook.json", "malware IOC/capability quicklook output");
+		add("malware-triage-plan.sh", "malware triage harness", 0o700);
+	}
+	if (targetInfo.lane === "firmware-iot") {
+		add("firmware-quicklook.json", "firmware structure/string/signature quicklook output");
+		add("firmware-extract-plan.sh", "firmware extraction harness", 0o700);
+	}
+	if (targetInfo.lane === "crypto-stego") {
+		add("crypto-stego-media-quicklook.json", "crypto/stego media structure quicklook output");
+		add("crypto-stego-solver.py", "crypto/stego transform-chain solver harness", 0o700);
+	}
+	if (targetInfo.lane === "agent-boundary") {
+		add("agent-boundary-map.json", "agent prompt/tool boundary evidence map");
+		add("agent-boundary-payloads.py", "agent boundary replay payload harness", 0o700);
+	}
+	if (targetInfo.lane === "cloud-identity") {
+		add("cloud-identity-map.json", "cloud/container identity trust-chain map");
+		add("cloud-identity-verify.sh", "cloud identity verification harness", 0o700);
+	}
+	return candidates;
+}
+
+function buildProofCoverageGaps(targetInfo, artifactRows) {
+	const present = new Set(artifactRows.map((row) => row.relPath));
+	const gaps = [];
+	const requireAny = (id, relPaths, reason) => {
+		if (!relPaths.some((relPath) => present.has(relPath))) gaps.push({ id, reason, expectedAnyOf: relPaths });
+	};
+	if (targetInfo.kind === "url") {
+		requireAny("web-runtime-replay", ["web-runtime-replay-verifier.mjs", "web-replay-matrix.json"], "web targets need replayable HTTP/browser evidence");
+		requireAny("web-route-matrix", ["web-api-schema-probes.json", "web-discovery-matrix.json", "web-object-matrix.json"], "web targets need route/schema/object matrix evidence");
+	}
+	if (targetInfo.lane === "native-pwn") requireAny("native-replay", ["native-replay-verifier.py", "native-exploit-hypotheses.json", "native-static-triage.json"], "native targets need replay/triage/hypothesis artifacts");
+	if (targetInfo.lane === "js-reverse") requireAny("js-reverse-workbench", ["js-reverse-workbench.json", "js-reverse-workbench.mjs"], "JS reverse targets need local signer/API workbench artifacts");
+	if (targetInfo.lane === "pcap-dfir") requireAny("pcap-flow-summary", ["pcap-flow-summary.json"], "PCAP targets need parsed flow/stream evidence");
+	if (targetInfo.lane === "crypto-stego") requireAny("crypto-transform-solver", ["crypto-stego-solver.py", "crypto-stego-media-quicklook.json"], "crypto/stego targets need a transform-chain verifier or media structure proof");
+	if (targetInfo.lane === "mobile" || targetInfo.lane === "mobile-ios") requireAny("mobile-runtime-hook", ["mobile-frida-hooks.js", "mobile-archive-summary.json"], "mobile targets need archive/runtime hook anchors");
+	if (targetInfo.lane === "firmware-iot") requireAny("firmware-extract-plan", ["firmware-extract-plan.sh", "firmware-quicklook.json"], "firmware targets need structure/extraction anchors");
+	if (targetInfo.lane === "memory-forensics") requireAny("memory-triage-plan", ["memory-triage-plan.sh", "memory-quicklook.json"], "memory targets need triage/correlation anchors");
+	if (targetInfo.lane === "windows-ad") requireAny("windows-ad-triage-plan", ["windows-ad-triage-plan.sh", "windows-ad-quicklook.json"], "identity targets need AD graph/credential triage anchors");
+	if (targetInfo.lane === "malware") requireAny("malware-triage-plan", ["malware-triage-plan.sh", "malware-quicklook.json"], "malware targets need IOC/capability triage anchors");
+	if (targetInfo.lane === "agent-boundary") requireAny("agent-boundary-replay", ["agent-boundary-payloads.py", "agent-boundary-map.json"], "agent-boundary targets need replay payloads and flow map");
+	if (targetInfo.lane === "cloud-identity") requireAny("cloud-identity-verify", ["cloud-identity-verify.sh", "cloud-identity-map.json"], "cloud targets need trust-chain verification anchors");
+	return gaps;
+}
+
+function buildProofLiveChecks(targetInfo, artifactDir, toolState) {
+	const available = new Set(toolState.filter((row) => row.available).map((row) => row.tool));
+	const checks = [];
+	const add = (row) => checks.push({ timeoutMs: 20_000, destructive: false, selfTest: true, ...row });
+	const python = available.has("python3") ? "python3" : available.has("python") ? "python" : undefined;
+	if (targetInfo.kind === "url") {
+		const replayVerifier = proofArtifactPath(artifactDir, "web-runtime-replay-verifier.mjs");
+		if (existsSync(replayVerifier)) add({ id: "web-runtime-replay-verifier-self-test", command: process.execPath, args: [replayVerifier, "--self-test"], reason: "execute browser replay verifier self-test with negative controls" });
+		const signerWorkbench = proofArtifactPath(artifactDir, "web-signer-rebuild-workbench.mjs");
+		if (existsSync(signerWorkbench)) add({ id: "web-signer-rebuild-workbench-self-test", command: process.execPath, args: [signerWorkbench, "--self-test"], reason: "execute signer rebuild regression self-test" });
+		const signatureHarness = proofArtifactPath(artifactDir, "web-js-signature-control-harness.mjs");
+		if (existsSync(signatureHarness)) add({ id: "web-js-signature-control-harness-smoke", command: process.execPath, args: [signatureHarness], reason: "execute JS signature-control harness plan smoke" });
+	}
+	if (targetInfo.lane === "js-reverse") {
+		const jsWorkbench = proofArtifactPath(artifactDir, "js-reverse-workbench.mjs");
+		if (existsSync(jsWorkbench)) add({ id: "js-reverse-workbench-self-test", command: process.execPath, args: [jsWorkbench, "--self-test"], reason: "execute local JS reverse workbench self-test" });
+	}
+	if (targetInfo.lane === "native-pwn" && python) {
+		const offsetHelper = proofArtifactPath(artifactDir, "native-cyclic-offset.py");
+		const payloadPath = proofArtifactPath(artifactDir, "native-cyclic-payload.bin");
+		if (existsSync(offsetHelper) && existsSync(payloadPath)) {
+			let needleHex = "";
+			try {
+				needleHex = readFileSync(payloadPath).subarray(30, 34).toString("hex");
+			} catch {
+				needleHex = "";
+			}
+			if (needleHex) add({ id: "native-cyclic-offset-self-test", command: python, args: [offsetHelper, `hex:${needleHex}`], reason: "execute cyclic offset helper against generated cyclic payload" });
+		}
+		const verifier = proofArtifactPath(artifactDir, "native-replay-verifier.py");
+		if (existsSync(verifier)) {
+			checks.push({
+				id: "native-replay-verifier-live",
+				command: python,
+				args: [verifier, targetInfo.representativePath || targetInfo.path || targetInfo.target],
+				timeoutMs: 20_000,
+				destructive: false,
+				selfTest: false,
+				reason: "live native replay; intentionally operator-triggered with --execute",
+			});
+		}
+	}
+	if (python) {
+		for (const [id, relPath, reason] of [
+			["pcap-http-object-verifier-pycompile", "pcap-http-object-verifier.py", "syntax-check PCAP object verifier"],
+			["crypto-stego-solver-pycompile", "crypto-stego-solver.py", "syntax-check crypto/stego solver harness"],
+			["agent-boundary-payloads-pycompile", "agent-boundary-payloads.py", "syntax-check agent boundary payload harness"],
+		]) {
+			const path = proofArtifactPath(artifactDir, relPath);
+			if (existsSync(path)) add({ id, command: python, args: ["-m", "py_compile", path], reason });
+		}
+	}
+	if (available.has("bash")) {
+		for (const [id, relPath, reason] of [
+			["memory-triage-plan-shellcheck", "memory-triage-plan.sh", "syntax-check memory triage harness"],
+			["windows-ad-triage-plan-shellcheck", "windows-ad-triage-plan.sh", "syntax-check Windows/AD triage harness"],
+			["malware-triage-plan-shellcheck", "malware-triage-plan.sh", "syntax-check malware triage harness"],
+			["firmware-extract-plan-shellcheck", "firmware-extract-plan.sh", "syntax-check firmware extraction harness"],
+			["cloud-identity-verify-shellcheck", "cloud-identity-verify.sh", "syntax-check cloud identity verifier"],
+		]) {
+			const path = proofArtifactPath(artifactDir, relPath);
+			if (existsSync(path)) add({ id, command: "bash", args: ["-n", path], reason });
+		}
+	}
+	const mobileHook = proofArtifactPath(artifactDir, "mobile-frida-hooks.js");
+	if (existsSync(mobileHook)) add({ id: "mobile-frida-hook-syntax", command: process.execPath, args: ["--check", mobileHook], reason: "syntax-check mobile Frida hook harness" });
+	return checks;
+}
+
+function proofHarnessSource(plan) {
+	const planJson = JSON.stringify(plan, null, 2);
+	return `#!/usr/bin/env node
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+
+const plan = ${planJson};
+const execute = process.argv.includes("--execute");
+const selfTest = process.argv.includes("--self-test") || !execute;
+
+function sha256(value) {
+	return createHash("sha256").update(value).digest("hex");
+}
+
+function redact(value) {
+	return String(value ?? "")
+		.replace(/\\bsk-[A-Za-z0-9._-]{8,}\\b/g, "<redacted:api-key>")
+		.replace(/\\bBearer\\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer <redacted>")
+		.replace(/([?&](?:api[_-]?key|token|access_token|refresh_token|client_secret|secret|password)=)[^&\\s"'<>]{4,}/gi, "$1<redacted>")
+		.replace(/((?:authorization|x-api-key|api-key|cookie|set-cookie)\\s*[:=]\\s*["']?)([^"'\\n;]{4,})/gi, "$1<redacted>");
+}
+
+function checkArtifact(row) {
+	if (!existsSync(row.path)) return { ...row, ok: false, error: "missing" };
+	const stat = statSync(row.path);
+	const data = readFileSync(row.path);
+	const mode = stat.mode & 0o777;
+	const modeOk = typeof row.expectedMode !== "number" || mode === row.expectedMode;
+	const sizeOk = stat.size >= (row.minBytes ?? 1);
+	return {
+		id: row.id,
+		role: row.role,
+		relPath: row.relPath,
+		ok: modeOk && sizeOk,
+		size: stat.size,
+		mode: "0o" + mode.toString(8),
+		expectedMode: typeof row.expectedMode === "number" ? "0o" + row.expectedMode.toString(8) : null,
+		sha256: sha256(data),
+		error: modeOk ? (sizeOk ? undefined : "empty-or-too-small") : "mode-mismatch",
+	};
+}
+
+function runLiveCheck(row) {
+	const started = Date.now();
+	const result = spawnSync(row.command, row.args || [], {
+		cwd: row.cwd || plan.cwd,
+		encoding: "utf8",
+		timeout: row.timeoutMs || 20000,
+		maxBuffer: 4 * 1024 * 1024,
+		env: {
+			...process.env,
+			REPI_SKIP_VERSION_CHECK: "1",
+			REPI_SKIP_PACKAGE_UPDATE_CHECK: "1",
+			REPI_TELEMETRY: "0",
+		},
+	});
+	const stdout = redact(result.stdout || "");
+	const stderr = redact(result.stderr || "");
+	return {
+		id: row.id,
+		reason: row.reason,
+		selfTest: row.selfTest !== false,
+		destructive: Boolean(row.destructive),
+		command: redact([row.command, ...(row.args || [])].join(" ")),
+		exit: result.status ?? (result.signal ? 128 : 1),
+		signal: result.signal,
+		durationMs: Date.now() - started,
+		ok: (result.status ?? (result.signal ? 128 : 1)) === 0,
+		stdoutSha256: sha256(stdout),
+		stderrSha256: sha256(stderr),
+		stdoutSample: stdout.slice(0, 1200),
+		stderrSample: stderr.slice(0, 1200),
+		error: result.error ? redact(result.error.message || String(result.error)) : undefined,
+	};
+}
+
+function main() {
+	const artifactRows = (plan.artifacts || []).map(checkArtifact);
+	const selectedChecks = (plan.liveChecks || []).filter((row) => execute || row.selfTest !== false);
+	const liveRows = selectedChecks.map(runLiveCheck);
+	const failedArtifacts = artifactRows.filter((row) => !row.ok);
+	const failedLive = liveRows.filter((row) => !row.ok);
+	const proofReady = failedArtifacts.length === 0 && failedLive.length === 0 && (artifactRows.length > 0 || liveRows.length > 0);
+	const report = {
+		kind: "repi-proof-harness-self-test",
+		schemaVersion: 1,
+		target: plan.target,
+		lane: plan.lane,
+		mode: execute ? "execute" : selfTest ? "self-test" : "plan",
+		proofReady,
+		artifactCheckCount: artifactRows.length,
+		liveCheckCount: liveRows.length,
+		coverageGaps: plan.coverageGaps || [],
+		artifactRows,
+		liveRows,
+		next: execute
+			? "Use failed rows as repair targets; successful rows are claim-ready proof anchors."
+			: "Run this harness with --execute only after reviewing the live checks; --self-test stays local/non-destructive.",
+	};
+	console.log(JSON.stringify(report, null, 2));
+	process.exit(proofReady ? 0 : 1);
+}
+
+main();
+`;
+}
+
+function proofHarnessRows(targetInfo, artifactDir, commands, toolState) {
+	if (noWrite || !artifactDir) return [];
+	const artifacts = buildProofArtifactRows(targetInfo, artifactDir);
+	const liveChecks = buildProofLiveChecks(targetInfo, artifactDir, toolState);
+	if (!artifacts.length && !liveChecks.length) return [];
+	const planPath = join(artifactDir, "proof-matrix.json");
+	const harnessPath = join(artifactDir, "proof-harness.mjs");
+	const plan = {
+		kind: "repi-proof-harness-plan",
+		schemaVersion: 1,
+		target: redact(targetInfo.target),
+		lane: targetInfo.lane,
+		domain: targetInfo.domain,
+		cwd: root,
+		artifactDir,
+		generatedAt: new Date().toISOString(),
+		commandIds: commands.map((row) => row.id),
+		artifacts: artifacts.map((row) => ({ ...row, path: row.path })),
+		coverageGaps: buildProofCoverageGaps(targetInfo, artifacts),
+		liveChecks: liveChecks.map((row) => ({ ...row, cwd: row.cwd ?? root })),
+		proofExitRules: [
+			"Every promoted claim must bind to an artifact sha256 or live check row from this matrix.",
+			"Self-test rows validate harness syntax/local invariants; --execute rows are operator-triggered live proof replays.",
+			"Negative controls and replay/hash differentials outrank static signatures; policy gaps are not exploit proof.",
+		],
+	};
+	const harness = proofHarnessSource(plan);
+	writePrivate(planPath, `${JSON.stringify(plan, null, 2)}\n`, 0o600);
+	writePrivate(harnessPath, harness, 0o700);
+	const rows = [
+		{
+			id: "proof-harness-plan",
+			command: "internal",
+			args: [redact(planPath), redact(harnessPath)],
+			cwd: root,
+			exit: 0,
+			signal: null,
+			durationMs: 0,
+			stdout: `${JSON.stringify(
+				{
+					...plan,
+					artifacts: plan.artifacts.map((row) => ({ ...row, path: redact(row.path) })),
+					liveChecks: plan.liveChecks.map((row) => ({ ...row, command: redact(row.command), args: row.args.map((arg) => redact(arg)) })),
+					planPath: redact(planPath),
+					harnessPath: redact(harnessPath),
+				},
+				null,
+				2,
+			)}\n`,
+			stderr: "",
+			error: undefined,
+		},
+		run(process.execPath, [harnessPath, "--self-test"], { id: "proof-harness-self-test", timeout: 30_000 }),
+	];
+	return rows;
+}
+
 function toolSnapshot() {
 	const tools = [
 		"file",
@@ -505,6 +865,8 @@ function toolSnapshot() {
 		"checksec",
 		"r2",
 		"gdb",
+		"bash",
+		"node",
 		"python3",
 		"find",
 		"curl",
@@ -6646,6 +7008,190 @@ function dataLooksLikeMachO(target) {
 	}
 }
 
+function jsReverseWorkbenchSource(target) {
+	return `#!/usr/bin/env node
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const input = process.argv.includes("--self-test") ? "<self-test>" : (process.argv[2] || ${JSON.stringify(target)});
+const output = process.argv[3] || "js-reverse-workbench.json";
+const selfTest = process.argv.includes("--self-test");
+const maxFiles = Number(process.env.REPI_JS_REVERSE_MAX_FILES || 80);
+const maxBytesPerFile = Number(process.env.REPI_JS_REVERSE_MAX_BYTES || 300000);
+
+function sha256(value) {
+	return createHash("sha256").update(value).digest("hex");
+}
+
+function redact(value) {
+	return String(value ?? "")
+		.replace(/\\bBearer\\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer <redacted>")
+		.replace(/([?&](?:api[_-]?key|token|access_token|refresh_token|client_secret|secret|password)=)[^&\\s"'<>]{4,}/gi, "$1<redacted>")
+		.replace(/((?:authorization|x-api-key|api-key|cookie|set-cookie)\\s*[:=]\\s*["']?)([^"'\\n;]{4,})/gi, "$1<redacted>")
+		.replace(/(["']?(?:api[_-]?key|token|secret|password|client_secret|access_token|refresh_token)["']?\\s*[:=]\\s*["'])([^"']{4,})(["'])/gi, "$1<redacted>$3");
+}
+
+function walkFiles(root) {
+	if (!existsSync(root)) return [];
+	const stat = statSync(root);
+	if (stat.isFile()) return [root];
+	const out = [];
+	const skip = new Set([".git", "node_modules", "dist", "build", ".next", "coverage"]);
+	function walk(dir, depth) {
+		if (out.length >= maxFiles || depth > 4) return;
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			if (out.length >= maxFiles) return;
+			const path = join(dir, entry.name);
+			if (entry.isDirectory()) {
+				if (!skip.has(entry.name)) walk(path, depth + 1);
+			} else if (/\\.(?:js|mjs|cjs|ts|tsx|jsx|wasm)$/i.test(entry.name)) {
+				out.push(path);
+			}
+		}
+	}
+	walk(root, 0);
+	return out;
+}
+
+function endpointHints(text) {
+	const hints = new Set();
+	const patterns = [
+		/\\b(?:fetch|open)\\(\\s*["'\`]([^"'\`]+)["'\`]/gi,
+		/\\b(?:axios|request)\\.(?:get|post|put|patch|delete)\\(\\s*["'\`]([^"'\`]+)["'\`]/gi,
+		/["'\`](https?:\\/\\/[^"'\`\\s<>]+|\\/(?:api|graphql|oauth|auth|login|admin|v\\d+)\\/[^"'\`\\s<>]*)["'\`]/gi,
+	];
+	for (const pattern of patterns) {
+		for (const match of text.matchAll(pattern)) {
+			if (match[1]) hints.add(redact(match[1]).slice(0, 240));
+			if (hints.size >= 80) return Array.from(hints);
+		}
+	}
+	return Array.from(hints);
+}
+
+function signalLines(text, label) {
+	const out = [];
+	const lines = String(text ?? "").split(/\\r?\\n/);
+	for (const [index, line] of lines.entries()) {
+		if (/(fetch|XMLHttpRequest|websocket|sign|signature|encrypt|decrypt|crypto\\.subtle|hmac|md5|sha-?1|sha-?256|nonce|timestamp|token|authorization|canonical|permutation|salt|secret|WebAssembly)/i.test(line)) {
+			out.push({ file: label, line: index + 1, text: redact(line.trim().slice(0, 260)) });
+			if (out.length >= 80) break;
+		}
+	}
+	return out;
+}
+
+function functionCandidates(text, label) {
+	const rows = [];
+	const pattern = /(?:async\\s+)?function\\s+([A-Za-z_$][\\w$]{0,80})\\s*\\(|(?:const|let|var)\\s+([A-Za-z_$][\\w$]{0,80})\\s*=\\s*(?:async\\s*)?\\([^)]*\\)\\s*=>|([A-Za-z_$][\\w$]{0,80})\\s*[:=]\\s*(?:async\\s*)?function\\s*\\(/g;
+	for (const match of text.matchAll(pattern)) {
+		const name = match[1] || match[2] || match[3] || "";
+		if (!/(sign|sig|auth|token|encrypt|decrypt|hash|hmac|nonce|timestamp|canonical|wbi|mixin|key|crypto)/i.test(name)) continue;
+		const start = Math.max(0, match.index - 240);
+		const end = Math.min(text.length, match.index + 800);
+		const window = text.slice(start, end);
+		rows.push({
+			file: label,
+			name: redact(name),
+			offset: match.index,
+			windowSha256: sha256(window),
+			signals: Array.from(new Set((window.match(/crypto\\.subtle|md5|sha-?1|sha-?256|hmac|nonce|timestamp|signature|canonical|sort\\(|encodeURIComponent|URLSearchParams|permutation/gi) || []).map((item) => item.toLowerCase()))).slice(0, 20),
+			sample: redact(window.replace(/\\s+/g, " ").slice(0, 500)),
+		});
+		if (rows.length >= 60) break;
+	}
+	return rows;
+}
+
+function signatureParams(text) {
+	return Array.from(
+		new Set(
+			Array.from(text.matchAll(/(?:[?&]|["'])((?:signature|sign|sig|_signature|x-signature|x-sign|timestamp|ts|nonce|w_rid|wts))\\b/gi)).map((match) =>
+				redact(match[1]),
+			),
+		),
+	).slice(0, 40);
+}
+
+function analyzeFile(path) {
+	const data = readFileSync(path);
+	const text = data.subarray(0, maxBytesPerFile).toString("utf8");
+	const label = path;
+	return {
+		path: redact(path),
+		size: data.length,
+		sha256: sha256(data),
+		truncated: data.length > maxBytesPerFile,
+		endpoints: endpointHints(text),
+		signalLines: signalLines(text, label),
+		functionCandidates: functionCandidates(text, label),
+		signatureParams: signatureParams(text),
+	};
+}
+
+function buildReport(files) {
+	const analyses = files.map(analyzeFile);
+	const risks = [];
+	if (analyses.some((row) => row.signatureParams.length || row.functionCandidates.length)) risks.push("js-signature-rebuild-candidate");
+	if (analyses.some((row) => row.signalLines.some((line) => /crypto\\.subtle|hmac|md5|sha/i.test(line.text)))) risks.push("js-crypto-transform-candidate");
+	if (analyses.some((row) => row.endpoints.some((endpoint) => /\\/api|graphql|auth|login|admin/i.test(endpoint)))) risks.push("js-api-route-candidate");
+	return {
+		kind: "repi-js-reverse-workbench",
+		schemaVersion: 1,
+		input: redact(input),
+		fileCount: analyses.length,
+		risks,
+		files: analyses,
+		rebuildChecklist: [
+			"freeze captured timestamp/nonce inputs before rebuilding signer",
+			"extract exact canonical query order and URL encoding from runtime/source evidence",
+			"run missing-signature and tampered-signature negative controls before calling a signer proof-ready",
+		],
+	};
+}
+
+function selfTestReport() {
+	const sample = "function signRequest(params){ const base = Object.keys(params).sort().map(k=>k+'='+encodeURIComponent(params[k])).join('&'); return md5(base + client_salt); }\\nfetch('/api/proof?timestamp=1&signature=abc&nonce=n')\\ncrypto.subtle.digest('SHA-256', new TextEncoder().encode('x'))";
+	return {
+		kind: "repi-js-reverse-workbench-self-test",
+		signalLines: signalLines(sample, "self-test"),
+		endpoints: endpointHints(sample),
+		functionCandidates: functionCandidates(sample, "self-test"),
+		signatureParams: signatureParams(sample),
+	};
+}
+
+function main() {
+	if (selfTest) {
+		const report = selfTestReport();
+		console.log(JSON.stringify(report, null, 2));
+		process.exit(report.functionCandidates?.length && report.endpoints?.length ? 0 : 1);
+	}
+	const files = walkFiles(input).slice(0, maxFiles);
+	const report = buildReport(files);
+	if (output && output !== "-") {
+		writeFileSync(output, JSON.stringify(report, null, 2) + "\\n", { mode: 0o600 });
+	}
+	console.log(JSON.stringify({ kind: report.kind, output, fileCount: report.fileCount, risks: report.risks, functionCandidates: report.files.reduce((count, row) => count + row.functionCandidates.length, 0), endpoints: report.files.reduce((count, row) => count + row.endpoints.length, 0) }, null, 2));
+}
+
+try {
+	main();
+} catch (error) {
+	console.error(error?.stack || error?.message || String(error));
+	process.exit(1);
+}
+`;
+}
+
+function writeJsReverseWorkbench(artifactDir, target) {
+	if (noWrite || !artifactDir) return undefined;
+	const path = join(artifactDir, "js-reverse-workbench.mjs");
+	writePrivate(path, jsReverseWorkbenchSource(target), 0o700);
+	return path;
+}
+
 function engageFile(targetInfo, artifactDir) {
 	const target = targetInfo.path;
 	const rows = [];
@@ -6711,6 +7257,11 @@ function engageFile(targetInfo, artifactDir) {
 		if (commandExists("rg")) rows.push(run("rg", ["-n", "--no-heading", pattern, target], { id: "js-pattern-search", timeout: timeoutMs }));
 		else rows.push(run("bash", ["-lc", `grep -nE ${shellQuote(pattern)} ${shellQuote(target)} 2>/dev/null | head -160`], { id: "js-pattern-search", timeout: timeoutMs }));
 		if (extname(target).toLowerCase() === ".wasm") rows.push(run("bash", ["-lc", `xxd -l 256 ${shellQuote(target)} 2>/dev/null || true`], { id: "wasm-header-hex", timeout: timeoutMs }));
+		const workbenchPath = writeJsReverseWorkbench(artifactDir, target);
+		if (workbenchPath) {
+			const outputPath = join(artifactDir, "js-reverse-workbench.json");
+			rows.push(run(process.execPath, [workbenchPath, target, outputPath], { id: "js-reverse-workbench", timeout: timeoutMs + 3000 }));
+		}
 	}
 	if (targetInfo.lane === "mobile" || targetInfo.lane === "mobile-ios") {
 		if (dataLooksLikeZip(target)) rows.push(...mobileArchiveQuicklookRows(target, artifactDir, targetInfo.lane));
@@ -10048,6 +10599,10 @@ function nextQueue(targetInfo, artifactDir, toolState) {
 	const quotedTarget = shellQuote(primaryTarget);
 	q.push(`repi mission status`);
 	q.push(`repi -p ${shellQuote(`Use engagement artifact ${artifactDir}. Continue ${targetInfo.domain}: parse decisive anchors, choose one minimal proof path, execute it, then output Outcome → Key Evidence → Verification → Next Step.`)}`);
+	if (!noWrite && existsSync(join(artifactDir, "proof-harness.mjs"))) {
+		q.push(`node ${shellQuote(join(artifactDir, "proof-harness.mjs"))} --self-test`);
+		q.push(`node ${shellQuote(join(artifactDir, "proof-harness.mjs"))} --execute`);
+	}
 	if (targetInfo.kind === "url") {
 		q.push(`repi -p ${shellQuote(`For ${target}, use ${artifactDir}/web-security-posture.json, web-discovery-matrix.json, web-api-schema-probes.json, web-ssrf-matrix.json, web-redirect-matrix.json, web-cors-matrix.json, web-object-matrix.json, web-replay-matrix.json, web-identity-jwt.json, web-js-sourcemap-summary.json, web-runtime-capture-plan.json/web-runtime-capture-harness.mjs, web-runtime-replay-plan.json/web-runtime-replay-verifier.mjs, web-signer-rebuild-workbench-plan.json/web-signer-rebuild-workbench.mjs, and web-js-signature-control-plan.json/web-js-signature-control-harness.mjs when present plus JS endpoint scans to build auth/session/JWT/CORS/header/redirect/SSRF/signature-control matrix; run browser/XHR/WS capture if needed; produce replay commands and IDOR/BOLA/object ownership/signature proof.`)}`);
 		q.push(`repi swarm plan ${quotedTarget} --workers ${argValue("--workers") || "5"}${swarmRouteFlagsText(targetInfo)}`);
@@ -10068,6 +10623,8 @@ function nextQueue(targetInfo, artifactDir, toolState) {
 		q.push(`repi -p ${shellQuote(`Continue native/pwn from ${artifactDir}: use native-exploit-hypotheses.json plus native-elf-hardening.json dynamic.imports/relocations, native-pe-quicklook.json/native-macho-quicklook.json and native-static-triage.json gadgetQuicklook to prioritize mitigations/imports/PLT-GOT/load-commands/symbols/sinks/ROP primitives, locate compare/decode/crash primitive, generate debugger/r2 trace, and produce a local verifier.`)}`);
 	}
 	if (targetInfo.lane === "js-reverse") {
+		if (!noWrite && existsSync(join(artifactDir, "js-reverse-workbench.json"))) q.push(`cat ${shellQuote(join(artifactDir, "js-reverse-workbench.json"))}`);
+		if (!noWrite && existsSync(join(artifactDir, "js-reverse-workbench.mjs"))) q.push(`node ${shellQuote(join(artifactDir, "js-reverse-workbench.mjs"))} ${quotedTarget} ${shellQuote(join(artifactDir, "js-reverse-workbench.json"))}`);
 		q.push(`repi -p ${shellQuote(`Continue JS/WASM reverse from ${artifactDir}: trace signing/crypto/fetch initiators, rebuild the minimal function in Node, and verify with a replay diff.`)}`);
 	}
 	if (targetInfo.lane === "mobile" || targetInfo.lane === "mobile-ios") {
@@ -10138,6 +10695,7 @@ function summarizeEvidence(rows, targetInfo, toolState) {
 	for (const row of rows) {
 		const text = `${row.stdout}\n${row.stderr}`.slice(0, row.id === "pcap-quicklook" ? 50_000 : 6000);
 		if (/ELF|PE32|Mach-O|executable|shared object/i.test(text)) anchors.push("native binary fingerprint");
+		if (/repi-proof-harness|proof-harness|proofReady|artifactRows|liveRows|coverageGaps/i.test(text)) anchors.push("proof harness/self-test anchors");
 		if (/GNU_STACK|RELRO|NX|Canary|PIE/i.test(text)) anchors.push("mitigation anchors");
 		if (/repi-native-elf-hardening|stackExecutable|native-elf-hardening|no-gnu-relro|executable-stack/i.test(text)) anchors.push("native hardening anchors");
 		if (/elf-(?:unsafe-import|command-exec-import|dynamic-loader|plt-relocation|lazy-binding)|R_X86_64_JUMP_SLOT|dynamic.*imports|symtab|JUMP_SLOT/i.test(text)) anchors.push("native ELF import/relocation anchors");
@@ -10155,6 +10713,7 @@ function summarizeEvidence(rows, targetInfo, toolState) {
 		if (/repi-web-security-posture|web-security-posture|session-cookie-missing|content-security-policy|clickjacking-header|missing-x-content-type/i.test(text) && targetInfo.kind === "url") anchors.push("web security header/cookie anchors");
 		if (/repi-web-identity-jwt|web-identity-jwt|openid-configuration|jwks|jwt-alg|jwt-kid|jwt-remote-key|jwt-embedded-jwk|jwt-x5c|oidc/i.test(text) && targetInfo.kind === "url") anchors.push("JWT/OIDC identity anchors");
 		if (/fetch|XMLHttpRequest|WebSocket|WebAssembly|signature|crypto\.subtle/i.test(text) && (targetInfo.lane === "js-reverse" || targetInfo.kind === "url")) anchors.push("JS signing/runtime anchors");
+		if (/repi-js-reverse-workbench|js-reverse-workbench|js-signature-rebuild-candidate|js-crypto-transform-candidate|rebuildChecklist/i.test(text) && targetInfo.lane === "js-reverse") anchors.push("JS reverse workbench anchors");
 		if (/repi-web-js-sourcemap-summary|web-js-asset-\d+-sourcemap-scan|sourcesWithContent|sourceMapUrl/i.test(text) && targetInfo.kind === "url") anchors.push("JS sourcemap reverse anchors");
 		if (/repi-web-runtime-capture|web-runtime-capture|fetch-call|xhr-open|websocket-open|crypto-subtle-|browser-request/i.test(text) && targetInfo.kind === "url") anchors.push("browser runtime capture anchors");
 		if (/repi-web-runtime-replay|web-runtime-replay|captured-signed|missing-signature|tampered-signature|stale-timestamp|signer_proven_negative_controls/i.test(text) && targetInfo.kind === "url") anchors.push("browser runtime replay verifier anchors");
@@ -10389,9 +10948,13 @@ if (targetInfo.kind === "url") commands = engageUrl(targetInfo, artifactDir);
 else if (targetInfo.kind === "directory") commands = engageDirectory(targetInfo, artifactDir);
 else if (targetInfo.kind === "file") commands = engageFile(targetInfo, artifactDir);
 else commands = [run("bash", ["-lc", `printf '%s\n' ${shellQuote(targetInfo.target)}`], { id: "task-text", timeout: 3000 })];
+commands.push(...proofHarnessRows(targetInfo, artifactDir, commands, toolState));
 const swarmReport = maybeRunSwarm(targetInfo);
 const summary = summarizeEvidence(commands, targetInfo, toolState);
-const nextQueueRows = nextQueue(targetInfo, artifactDir, toolState).map((command) => redact(command));
+const nextQueueRows = Array.from(new Set([
+	...nextQueue(targetInfo, artifactDir, toolState).map((command) => redact(command)),
+	...(Array.isArray(swarmReport?.summary?.nextCommands) ? swarmReport.summary.nextCommands : []),
+])).slice(0, 80);
 
 const report = {
 	kind: "repi-active-engagement-report",
