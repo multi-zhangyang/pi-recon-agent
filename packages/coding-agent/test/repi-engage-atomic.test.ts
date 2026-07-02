@@ -2112,22 +2112,33 @@ jobs:
 		expect(JSON.stringify(report)).not.toContain(secret);
 		expect(report.target.lane).toBe("malware");
 		expect(report.commands.map((row) => row.id)).toContain("malware-quicklook");
+		expect(report.commands.map((row) => row.id)).toContain("malware-config-verification");
 		expect(report.commands.map((row) => row.id)).toContain("malware-behavior-claims");
+		expect(report.commands.map((row) => row.id)).toContain("malware-config-verifier-artifact");
 		expect(report.commands.map((row) => row.id)).toContain("malware-triage-plan-artifact");
 		expect(report.summary.anchors).toContain("malware IOC/capability anchors");
+		expect(report.summary.anchors).toContain("malware verifier proof anchors");
 		expect(report.summary.missingCritical).not.toContain("strings");
 		expect(report.nextQueue.some((command) => command.includes("malware-quicklook.json"))).toBe(true);
+		expect(report.nextQueue.some((command) => command.includes("malware-config-verification.json"))).toBe(true);
+		expect(report.nextQueue.some((command) => command.includes("malware-config-verifier.py"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("malware-behavior-claims.json"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("claimLedger"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("malware-triage-plan.sh"))).toBe(true);
 		const summaryPath = join(report.artifactDir, "malware-quicklook.json");
+		const configVerificationPath = join(report.artifactDir, "malware-config-verification.json");
 		const behaviorClaimsPath = join(report.artifactDir, "malware-behavior-claims.json");
+		const verifierPath = join(report.artifactDir, "malware-config-verifier.py");
 		const planPath = join(report.artifactDir, "malware-triage-plan.sh");
 		expect(existsSync(summaryPath)).toBe(true);
+		expect(existsSync(configVerificationPath)).toBe(true);
 		expect(existsSync(behaviorClaimsPath)).toBe(true);
+		expect(existsSync(verifierPath)).toBe(true);
 		expect(existsSync(planPath)).toBe(true);
 		expect(statSync(summaryPath).mode & 0o777).toBe(0o600);
+		expect(statSync(configVerificationPath).mode & 0o777).toBe(0o600);
 		expect(statSync(behaviorClaimsPath).mode & 0o777).toBe(0o600);
+		expect(statSync(verifierPath).mode & 0o777).toBe(0o700);
 		expect(statSync(planPath).mode & 0o777).toBe(0o700);
 		const summary = JSON.parse(readFileSync(summaryPath, "utf8")) as {
 			files: Array<{
@@ -2153,9 +2164,58 @@ jobs:
 			risks: string[];
 		};
 		expect(JSON.stringify(summary)).not.toContain(secret);
+		const configVerification = JSON.parse(readFileSync(configVerificationPath, "utf8")) as {
+			proofReady: boolean;
+			stats: {
+				filesVerified: number;
+				overlaysVerified: number;
+				signalsVerified: number;
+				configsVerified: number;
+				importsVerified: number;
+				negativeControlsPassed: number;
+			};
+			signalChecks: Array<{ kind: string; verified: boolean; valueSha256: string; sourceOffset: number }>;
+			overlayCarves: Array<{ verified: boolean; expected: { offset: number; sha256: string } }>;
+			negativeControls: Array<{ id: string; passed: boolean }>;
+			claimLedger: Array<{ claimType: string; verdict: string }>;
+			composedPaths: Array<{ claimType: string; verdict: string }>;
+			repairQueue: Array<{ blocker: string }>;
+		};
+		expect(JSON.stringify(configVerification)).not.toContain(secret);
+		expect(configVerification.proofReady).toBe(true);
+		expect(configVerification.stats.filesVerified).toBeGreaterThanOrEqual(1);
+		expect(configVerification.stats.signalsVerified).toBeGreaterThanOrEqual(4);
+		expect(configVerification.stats.configsVerified).toBeGreaterThanOrEqual(1);
+		expect(configVerification.stats.overlaysVerified).toBeGreaterThanOrEqual(1);
+		expect(configVerification.stats.importsVerified).toBeGreaterThanOrEqual(1);
+		expect(configVerification.stats.negativeControlsPassed).toBeGreaterThanOrEqual(1);
+		expect(configVerification.signalChecks.some((row) => row.kind === "urls" && row.verified)).toBe(true);
+		expect(configVerification.overlayCarves.some((row) => row.verified && row.expected.offset === 0x800)).toBe(true);
+		expect(configVerification.negativeControls.some((row) => row.passed)).toBe(true);
+		expect(
+			configVerification.claimLedger.some(
+				(claim) => claim.claimType === "malware-ioc-offset-verification-proof" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			configVerification.claimLedger.some(
+				(claim) => claim.claimType === "malware-overlay-carve-verifier-proof" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			configVerification.composedPaths.some(
+				(path) => path.claimType === "malware-ioc-config-proof-path" && path.verdict === "promoted",
+			),
+		).toBe(true);
+		const verifierSelfTest = spawnSync("python3", [verifierPath, "--self-test"], {
+			encoding: "utf8",
+			timeout: 15_000,
+		});
+		expect(verifierSelfTest.status, `${verifierSelfTest.stderr}\n${verifierSelfTest.stdout}`).toBe(0);
 		const behaviorClaims = JSON.parse(readFileSync(behaviorClaimsPath, "utf8")) as {
 			proofReady: boolean;
 			configFields: Array<{ field: string; value: string }>;
+			verificationStats: { filesVerified: number; signalsVerified: number; negativeControlsPassed: number };
 			claimLedger: Array<{ claimType: string; verdict: string; evidenceBinding: Record<string, unknown> }>;
 			composedPaths: Array<{ claimType: string; verdict: string }>;
 			promotionReport: { promotedClaims: Array<{ claimType: string }> };
@@ -2163,6 +2223,7 @@ jobs:
 		};
 		expect(JSON.stringify(behaviorClaims)).not.toContain(secret);
 		expect(behaviorClaims.proofReady).toBe(true);
+		expect(behaviorClaims.verificationStats.negativeControlsPassed).toBeGreaterThanOrEqual(1);
 		expect(behaviorClaims.configFields.some((field) => field.field === "mutex")).toBe(true);
 		expect(
 			behaviorClaims.claimLedger.some(
@@ -2187,6 +2248,16 @@ jobs:
 		expect(
 			behaviorClaims.claimLedger.some(
 				(claim) => claim.claimType === "malware-behavior-chain" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			behaviorClaims.claimLedger.some(
+				(claim) => claim.claimType === "malware-verifier-negative-control-proof" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			behaviorClaims.composedPaths.some(
+				(path) => path.claimType === "malware-ioc-config-proof-path" && path.verdict === "promoted",
 			),
 		).toBe(true);
 		expect(

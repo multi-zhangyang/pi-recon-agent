@@ -592,7 +592,9 @@ function buildProofArtifactRows(targetInfo, artifactDir) {
 	}
 	if (targetInfo.lane === "malware") {
 		add("malware-quicklook.json", "malware IOC/capability quicklook output");
+		add("malware-config-verification.json", "malware static IOC/config/overlay verifier output");
 		add("malware-behavior-claims.json", "malware IOC/config/capability claim ledger");
+		add("malware-config-verifier.py", "malware IOC/config/overlay verification harness", 0o700);
 		add("malware-triage-plan.sh", "malware triage harness", 0o700);
 	}
 	if (targetInfo.lane === "firmware-iot") {
@@ -641,7 +643,7 @@ function buildProofCoverageGaps(targetInfo, artifactRows) {
 	if (targetInfo.lane === "firmware-iot") requireAny("firmware-extract-plan", ["firmware-attack-surface.json", "firmware-extract-plan.sh", "firmware-quicklook.json"], "firmware targets need structure/extraction anchors");
 	if (targetInfo.lane === "memory-forensics") requireAny("memory-triage-plan", ["memory-evidence-claims.json", "memory-triage-plan.sh", "memory-quicklook.json"], "memory targets need triage/correlation anchors");
 	if (targetInfo.lane === "windows-ad") requireAny("windows-ad-triage-plan", ["windows-ad-triage-plan.sh", "windows-ad-quicklook.json"], "identity targets need AD graph/credential triage anchors");
-	if (targetInfo.lane === "malware") requireAny("malware-triage-plan", ["malware-behavior-claims.json", "malware-triage-plan.sh", "malware-quicklook.json"], "malware targets need IOC/capability triage anchors");
+	if (targetInfo.lane === "malware") requireAny("malware-triage-plan", ["malware-behavior-claims.json", "malware-config-verification.json", "malware-config-verifier.py", "malware-triage-plan.sh", "malware-quicklook.json"], "malware targets need IOC/capability triage and verifier anchors");
 	if (targetInfo.lane === "agent-boundary") requireAny("agent-boundary-replay", ["agent-boundary-payloads.py", "agent-boundary-map.json"], "agent-boundary targets need replay payloads and flow map");
 	if (targetInfo.lane === "cloud-identity") requireAny("cloud-identity-verify", ["cloud-identity-trust-claims.json", "cloud-identity-verify.sh", "cloud-identity-map.json"], "cloud targets need trust-chain verification anchors");
 	return gaps;
@@ -702,12 +704,15 @@ function buildProofLiveChecks(targetInfo, artifactDir, toolState) {
 			["pcap-http-object-verifier-pycompile", "pcap-http-object-verifier.py", "syntax-check PCAP object verifier"],
 			["crypto-stego-solver-pycompile", "crypto-stego-solver.py", "syntax-check crypto/stego solver harness"],
 			["agent-boundary-payloads-pycompile", "agent-boundary-payloads.py", "syntax-check agent boundary payload harness"],
+			["malware-config-verifier-pycompile", "malware-config-verifier.py", "syntax-check malware config verifier"],
 		]) {
 			const path = proofArtifactPath(artifactDir, relPath);
 			if (existsSync(path)) add({ id, command: python, args: ["-m", "py_compile", path], reason });
 		}
 		const agentBoundaryPayloads = proofArtifactPath(artifactDir, "agent-boundary-payloads.py");
 		if (existsSync(agentBoundaryPayloads)) add({ id: "agent-boundary-payloads-self-test", command: python, args: [agentBoundaryPayloads, "--self-test"], reason: "execute agent boundary replay harness self-test with unsafe/control payloads" });
+		const malwareVerifier = proofArtifactPath(artifactDir, "malware-config-verifier.py");
+		if (existsSync(malwareVerifier)) add({ id: "malware-config-verifier-self-test", command: python, args: [malwareVerifier, "--self-test"], reason: "execute malware config verifier self-test with offset/hash negative controls" });
 	}
 	if (available.has("bash")) {
 		for (const [id, relPath, reason] of [
@@ -902,6 +907,7 @@ const unifiedProofGraphArtifactCandidates = [
 	"pcap-flow-claims.json",
 	"memory-evidence-claims.json",
 	"windows-ad-attack-paths.json",
+	"malware-config-verification.json",
 	"malware-behavior-claims.json",
 	"firmware-attack-surface.json",
 	"agent-boundary-claim-promotion.json",
@@ -952,6 +958,7 @@ function proofGraphRepairRows(parsed) {
 function proofGraphRepairPriority(blocker) {
 	if (/missing-base-url|no-live-response|no-status|service|unreachable|endpoint/i.test(blocker)) return "high";
 	if (/missing-session|credential|authorization|cookie|token|principal/i.test(blocker)) return "high";
+	if (/missing-(?:ioc-offset|config-extraction|overlay-carve|sample-hash|import-parser|network-ioc-negative-control)/i.test(blocker)) return "high";
 	if (/no-differential|object-mutation|baseline|negative-control|oracle/i.test(blocker)) return "medium";
 	if (/missing-source|missing-.*map|missing-.*plan|missing-.*harness/i.test(blocker)) return "medium";
 	return "normal";
@@ -967,6 +974,10 @@ function proofGraphRepairAction(blocker) {
 		"object-mutation-inconclusive": "Bind route parameters to owned and tampered objects before replay.",
 		"baseline-not-accepted": "Make the benign baseline succeed before interpreting blocked malicious controls.",
 		"no-boundary-differential": "Bind the payload to a stronger leak, tool side-effect, audit log, or blocked/refused oracle.",
+		"missing-ioc-offset-verification": "Rerun malware-config-verifier.py after binding each IOC to sourceOffset, valueSha256, and valueLength.",
+		"missing-config-extraction-oracle": "Bind decoded malware config fields to a source offset/hash oracle before promotion.",
+		"missing-overlay-carve-verifier": "Carve overlay bytes by offset/size and match SHA-256 before treating it as payload/config proof.",
+		"missing-network-ioc-negative-control": "Add mismatch or mutated-offset controls so IOC matches also prove rejection behavior.",
 	};
 	return actions[blocker] ?? "Drain this blocker by collecting source-bound runtime evidence and rerun the relevant harness.";
 }
@@ -10151,21 +10162,32 @@ function malwareSignals(strings) {
 	const packerEvasion = [];
 	const configHints = [];
 	const ruleHits = [];
-	const addUnique = (list, value, offset) => {
-		const text = redact(String(value).slice(0, 360));
-		if (!text || list.some((row) => row.text === text)) return;
-		list.push({ offset, text });
+	const addUnique = (list, value, row, matchIndex) => {
+		const raw = String(value ?? "");
+		const sourceOffset = Number.isFinite(row?.offset) && Number.isFinite(matchIndex) ? row.offset + matchIndex : null;
+		const text = redact(raw.slice(0, 360));
+		const file = row?.file ? redact(row.file) : null;
+		const displayText = file ? `${file}: ${text}` : text;
+		if (!text || list.some((existing) => existing.text === displayText && existing.file === file)) return;
+		list.push({
+			offset: sourceOffset,
+			sourceOffset,
+			file,
+			text: displayText,
+			valueSha256: bufferSha256(Buffer.from(raw)),
+			valueLength: Buffer.byteLength(raw),
+		});
 	};
 	for (const row of strings) {
-		const text = row.text;
-		for (const match of text.matchAll(/https?:\/\/[^\s"'<>\\]{4,240}/gi)) addUnique(urls, match[0], row.offset + match.index);
-		for (const match of text.matchAll(/\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|ru|cn|top|xyz|biz|info|local|onion)\b/gi)) addUnique(domains, match[0], row.offset + match.index);
-		for (const match of text.matchAll(/\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g)) addUnique(ipv4, match[0], row.offset + match.index);
-		for (const match of text.matchAll(/\b(?:HKEY_(?:CURRENT_USER|LOCAL_MACHINE)|HKCU|HKLM|CurrentVersion\\Run(?:Once)?|Startup|schtasks(?:\.exe)?|CreateService|StartService|Service Control|LaunchAgents|systemd|crontab)\b[^\0\r\n]{0,180}/gi)) addUnique(registryPersistence, match[0], row.offset + match.index);
-		for (const match of text.matchAll(/\b(?:CreateRemoteThread|VirtualAlloc(?:Ex)?|WriteProcessMemory|ReadProcessMemory|OpenProcess|SetWindowsHookEx|QueueUserAPC|WinExec|ShellExecute|PowerShell|cmd\.exe|GetProcAddress|LoadLibraryA?|InternetOpen|InternetConnect|WinHttpOpen|URLDownloadToFile|Crypt(?:AcquireContext|Decrypt|Encrypt)|ptrace|execve|fork)\b[^\0\r\n]{0,180}/gi)) addUnique(capabilities, match[0], row.offset + match.index);
-		for (const match of text.matchAll(/\b(?:UPX|packed|packer|Themida|VMProtect|Enigma|IsDebuggerPresent|CheckRemoteDebuggerPresent|NtQueryInformationProcess|OutputDebugString|anti[- ]?(?:debug|vm|sandbox)|VirtualBox|VMware|QEMU|sandbox)\b[^\0\r\n]{0,180}/gi)) addUnique(packerEvasion, match[0], row.offset + match.index);
-		for (const match of text.matchAll(/\b(?:mutex|User-Agent|bot_id|campaign|gate\.php|panel|beacon|sleep|interval|ransom|wallet|public_key|config|C2|command-and-control)\b[^\0\r\n]{0,220}/gi)) addUnique(configHints, match[0], row.offset + match.index);
-		for (const match of text.matchAll(/\b(?:YARA|capa|FLOSS|ATT&CK|T10\d{2}(?:\.\d{3})?|MBC|MAEC|decoded-string|rule\s+[\w-]+)\b[^\0\r\n]{0,220}/gi)) addUnique(ruleHits, match[0], row.offset + match.index);
+		const text = row.rawText ?? row.text;
+		for (const match of text.matchAll(/https?:\/\/[^\s"'<>\\]{4,240}/gi)) addUnique(urls, match[0], row, match.index);
+		for (const match of text.matchAll(/\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|ru|cn|top|xyz|biz|info|local|onion)\b/gi)) addUnique(domains, match[0], row, match.index);
+		for (const match of text.matchAll(/\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g)) addUnique(ipv4, match[0], row, match.index);
+		for (const match of text.matchAll(/\b(?:HKEY_(?:CURRENT_USER|LOCAL_MACHINE)|HKCU|HKLM|CurrentVersion\\Run(?:Once)?|Startup|schtasks(?:\.exe)?|CreateService|StartService|Service Control|LaunchAgents|systemd|crontab)\b[^\0\r\n]{0,180}/gi)) addUnique(registryPersistence, match[0], row, match.index);
+		for (const match of text.matchAll(/\b(?:CreateRemoteThread|VirtualAlloc(?:Ex)?|WriteProcessMemory|ReadProcessMemory|OpenProcess|SetWindowsHookEx|QueueUserAPC|WinExec|ShellExecute|PowerShell|cmd\.exe|GetProcAddress|LoadLibraryA?|InternetOpen|InternetConnect|WinHttpOpen|URLDownloadToFile|Crypt(?:AcquireContext|Decrypt|Encrypt)|ptrace|execve|fork)\b[^\0\r\n]{0,180}/gi)) addUnique(capabilities, match[0], row, match.index);
+		for (const match of text.matchAll(/\b(?:UPX|packed|packer|Themida|VMProtect|Enigma|IsDebuggerPresent|CheckRemoteDebuggerPresent|NtQueryInformationProcess|OutputDebugString|anti[- ]?(?:debug|vm|sandbox)|VirtualBox|VMware|QEMU|sandbox)\b[^\0\r\n]{0,180}/gi)) addUnique(packerEvasion, match[0], row, match.index);
+		for (const match of text.matchAll(/\b(?:mutex|User-Agent|bot_id|campaign|gate\.php|panel|beacon|sleep|interval|ransom|wallet|public_key|config|C2|command-and-control)\b[^\0\r\n]{0,220}/gi)) addUnique(configHints, match[0], row, match.index);
+		for (const match of text.matchAll(/\b(?:YARA|capa|FLOSS|ATT&CK|T10\d{2}(?:\.\d{3})?|MBC|MAEC|decoded-string|rule\s+[\w-]+)\b[^\0\r\n]{0,220}/gi)) addUnique(ruleHits, match[0], row, match.index);
 		if (urls.length + domains.length + ipv4.length + registryPersistence.length + capabilities.length + packerEvasion.length + configHints.length + ruleHits.length >= 420) break;
 	}
 	return {
@@ -10192,7 +10214,7 @@ function malwareQuicklookSummary(target) {
 			continue;
 		}
 		const strings = firmwareStrings(data, 5, 1800).map((row) => ({ ...row, file: file.name }));
-		allStrings = allStrings.concat(strings.map((row) => ({ offset: row.offset, text: `${file.name}: ${row.text}` })));
+		allStrings = allStrings.concat(strings.map((row) => ({ file: file.name, offset: row.offset, rawText: row.text, text: `${file.name}: ${row.text}` })));
 		const format = malwareFormatHint(data, file.name);
 		const staticStructure = malwareStaticStructure(file.path, data, format);
 		fileRows.push({
@@ -10235,9 +10257,12 @@ function malwareSignalBinding(row) {
 	const text = String(row?.text ?? "");
 	const match = text.match(/^([^:\n]{1,260}):\s*([\s\S]*)$/);
 	return {
-		file: match ? match[1] : null,
-		offset: row?.offset ?? null,
+		file: row?.file ?? (match ? match[1] : null),
+		offset: row?.sourceOffset ?? row?.offset ?? null,
+		sourceOffset: row?.sourceOffset ?? row?.offset ?? null,
 		text: match ? match[2] : text,
+		valueSha256: row?.valueSha256 ?? null,
+		valueLength: row?.valueLength ?? null,
 	};
 }
 
@@ -10270,7 +10295,476 @@ function malwareConfigFields(rows) {
 	return fields.slice(0, 80);
 }
 
-function malwareBehaviorClaims(summary) {
+function malwareResolveCandidatePath(target, name) {
+	try {
+		const stat = statSync(target);
+		if (stat.isFile()) return target;
+	} catch {
+		return undefined;
+	}
+	const direct = join(target, name || "");
+	try {
+		if (statSync(direct).isFile()) return direct;
+	} catch {
+		// Fall through to basename scan.
+	}
+	const base = basename(name || "");
+	if (!base) return undefined;
+	for (const entry of collectDirectoryFiles(target, 4, 500)) {
+		if (entry.name === name || basename(entry.name) === base) return entry.path;
+	}
+	return undefined;
+}
+
+function malwareVerifyFileIdentity(target, summary) {
+	const rows = [];
+	for (const file of summary.files ?? []) {
+		const path = malwareResolveCandidatePath(target, file.name);
+		let verified = false;
+		let reason = "missing-file";
+		let actual = {};
+		let negativeControl = null;
+		if (path) {
+			try {
+				const data = readFileSync(path);
+				actual = {
+					size: data.length,
+					sha256: bufferSha256(data),
+					headerHex: data.subarray(0, 16).toString("hex"),
+				};
+				if (data.length) {
+					const mutated = Buffer.from(data);
+					mutated[0] ^= 0xff;
+					const mutatedSha256 = bufferSha256(mutated);
+					negativeControl = {
+						controlType: "sample-byte-mutation-rejection",
+						mutatedSha256,
+						passed: mutatedSha256 !== file.sha256,
+					};
+				}
+				verified = actual.size === file.size && actual.sha256 === file.sha256 && actual.headerHex === file.headerHex;
+				reason = verified ? "identity-hash-size-header-match" : "identity-mismatch";
+			} catch (error) {
+				reason = error instanceof Error ? redact(error.message) : redact(String(error));
+			}
+		}
+		rows.push({
+			file: file.name,
+			format: file.format,
+			expected: { size: file.size, sha256: file.sha256, headerHex: file.headerHex },
+			actual,
+			verified,
+			reason,
+			negativeControl,
+		});
+	}
+	return rows;
+}
+
+function malwareVerifyOverlayCarves(target, summary) {
+	const rows = [];
+	for (const file of summary.files ?? []) {
+		const overlay = file.staticStructure?.overlay;
+		if (!overlay) continue;
+		const path = malwareResolveCandidatePath(target, file.name);
+		let verified = false;
+		let reason = "missing-file";
+		let actual = {};
+		let negativeControl = null;
+		if (path) {
+			try {
+				const data = readFileSync(path);
+				const offset = Number(overlay.offset);
+				const size = Number(overlay.size);
+				if (!Number.isFinite(offset) || !Number.isFinite(size) || offset < 0 || size < 0 || offset + size > data.length) {
+					reason = "overlay-out-of-range";
+				} else {
+					const carved = data.subarray(offset, offset + size);
+					actual = {
+						offset,
+						size: carved.length,
+						sha256: bufferSha256(carved),
+						headerHex: carved.subarray(0, 16).toString("hex"),
+						entropy: byteEntropy(carved),
+					};
+					const mutatedOffset = offset + 1 + size <= data.length ? offset + 1 : offset > 0 ? offset - 1 : null;
+					if (mutatedOffset != null) {
+						const mutated = data.subarray(mutatedOffset, mutatedOffset + size);
+						const mutatedSha256 = bufferSha256(mutated);
+						negativeControl = {
+							controlType: "overlay-mutated-offset-rejection",
+							mutatedOffset,
+							mutatedSha256,
+							passed: mutatedSha256 !== overlay.sha256,
+						};
+					}
+					verified = actual.sha256 === overlay.sha256 && actual.size === overlay.size && actual.headerHex === overlay.headerHex;
+					reason = verified ? "overlay-carve-hash-match" : "overlay-carve-mismatch";
+				}
+			} catch (error) {
+				reason = error instanceof Error ? redact(error.message) : redact(String(error));
+			}
+		}
+		rows.push({
+			file: file.name,
+			expected: overlay,
+			actual,
+			verified,
+			reason,
+			negativeControl,
+		});
+	}
+	return rows;
+}
+
+function malwareVerifySignalRows(target, summary) {
+	const signals = summary.signals ?? {};
+	const rows = [];
+	for (const [kind, values] of Object.entries(signals)) {
+		if (!Array.isArray(values)) continue;
+		for (const row of values.slice(0, 80)) {
+			const binding = malwareSignalBinding(row);
+			const path = binding.file ? malwareResolveCandidatePath(target, binding.file) : undefined;
+			let verified = false;
+			let reason = "missing-file-binding";
+			const valueLength = Number(binding.valueLength ?? row.valueLength);
+			const valueSha256 = binding.valueSha256 ?? row.valueSha256 ?? null;
+			const sourceOffset = Number(binding.sourceOffset ?? binding.offset);
+			let actual = {};
+			let negativeControl = null;
+			if (path && Number.isFinite(sourceOffset) && Number.isFinite(valueLength) && valueLength > 0 && valueSha256) {
+				try {
+					const data = readFileSync(path);
+					if (sourceOffset < 0 || sourceOffset + valueLength > data.length) {
+						reason = "signal-offset-out-of-range";
+					} else {
+						const chunk = data.subarray(sourceOffset, sourceOffset + valueLength);
+						actual = { sha256: bufferSha256(chunk), length: chunk.length };
+						if (chunk.length) {
+							const mutated = Buffer.from(chunk);
+							mutated[0] ^= 0xff;
+							const mutatedSha256 = bufferSha256(mutated);
+							negativeControl = {
+								controlType: "signal-byte-mutation-rejection",
+								mutatedSha256,
+								passed: mutatedSha256 !== valueSha256,
+							};
+						}
+						verified = actual.sha256 === valueSha256 && actual.length === valueLength;
+						reason = verified ? "signal-offset-hash-match" : "signal-offset-hash-mismatch";
+					}
+				} catch (error) {
+					reason = error instanceof Error ? redact(error.message) : redact(String(error));
+				}
+			}
+			rows.push({
+				kind,
+				file: binding.file,
+				sourceOffset: Number.isFinite(sourceOffset) ? sourceOffset : null,
+				redactedText: binding.text,
+				valueSha256,
+				valueLength: Number.isFinite(valueLength) ? valueLength : null,
+				actual,
+				verified,
+				reason,
+				negativeControl,
+			});
+		}
+	}
+	return rows;
+}
+
+function malwareVerifyConfigFields(target, summary) {
+	return malwareConfigFields(summary.signals?.configHints ?? []).map((field) => {
+		const source = field.source ?? {};
+		const path = source.file ? malwareResolveCandidatePath(target, source.file) : undefined;
+		const sourceOffset = Number(source.sourceOffset ?? source.offset);
+		const valueLength = Number(source.valueLength);
+		const valueSha256 = source.valueSha256 ?? null;
+		let verified = false;
+		let reason = "missing-config-source-binding";
+		let actual = {};
+		if (path && Number.isFinite(sourceOffset) && Number.isFinite(valueLength) && valueLength > 0 && valueSha256) {
+			try {
+				const data = readFileSync(path);
+				if (sourceOffset < 0 || sourceOffset + valueLength > data.length) {
+					reason = "config-source-offset-out-of-range";
+				} else {
+					const chunk = data.subarray(sourceOffset, sourceOffset + valueLength);
+					actual = { sha256: bufferSha256(chunk), length: chunk.length };
+					verified = actual.sha256 === valueSha256 && actual.length === valueLength;
+					reason = verified ? "config-source-hash-match" : "config-source-hash-mismatch";
+				}
+			} catch (error) {
+				reason = error instanceof Error ? redact(error.message) : redact(String(error));
+			}
+		}
+		return {
+			field: field.field,
+			value: field.value,
+			file: source.file ?? null,
+			sourceOffset: Number.isFinite(sourceOffset) ? sourceOffset : null,
+			valueSha256,
+			valueLength: Number.isFinite(valueLength) ? valueLength : null,
+			actual,
+			verified,
+			reason,
+		};
+	});
+}
+
+function malwareVerifyImports(target, summary) {
+	const rows = [];
+	for (const file of summary.files ?? []) {
+		const expectedImports = file.staticStructure?.suspiciousImports ?? [];
+		if (!expectedImports.length) continue;
+		const path = malwareResolveCandidatePath(target, file.name);
+		let parsedImports = [];
+		let reason = "missing-file";
+		if (path) {
+			try {
+				if (file.format === "PE") parsedImports = parsePeQuicklook(path).suspiciousImports ?? [];
+				reason = parsedImports.length ? "import-parser-rerun" : "no-imports-parsed";
+			} catch (error) {
+				reason = error instanceof Error ? redact(error.message) : redact(String(error));
+			}
+		}
+		for (const expected of expectedImports.slice(0, 80)) {
+			const verified = parsedImports.some((row) => row.dll === expected.dll && row.name === expected.name);
+			rows.push({
+				file: file.name,
+				dll: expected.dll,
+				name: expected.name,
+				capability: malwareImportCapability(`${expected.dll}!${expected.name}`),
+				verified,
+				reason: verified ? "fresh-import-parser-match" : reason,
+			});
+		}
+	}
+	return rows;
+}
+
+function malwareVerifierNegativeControls(signalChecks, overlayCarves, fileIdentity) {
+	const controls = [];
+	const verifiedSignal = signalChecks.find((row) => row.verified && row.valueSha256 && row.valueLength);
+	if (verifiedSignal) {
+		controls.push({
+			id: "malware-ioc-hash-mismatch-negative-control",
+			controlType: verifiedSignal.negativeControl?.controlType ?? "hash-mismatch-rejection",
+			sourceBinding: { file: verifiedSignal.file, sourceOffset: verifiedSignal.sourceOffset, kind: verifiedSignal.kind },
+			expected: "mutated-source-bytes-must-not-equal-source-value-sha256",
+			observed: verifiedSignal.negativeControl?.passed ? "mutation-rejected" : "unexpected-match",
+			mutatedSha256: verifiedSignal.negativeControl?.mutatedSha256 ?? null,
+			passed: Boolean(verifiedSignal.negativeControl?.passed),
+		});
+	}
+	const verifiedOverlay = overlayCarves.find((row) => row.verified);
+	if (verifiedOverlay) {
+		controls.push({
+			id: "malware-overlay-offset-negative-control",
+			controlType: verifiedOverlay.negativeControl?.controlType ?? "offset-boundary-rejection",
+			sourceBinding: { file: verifiedOverlay.file, offset: verifiedOverlay.expected?.offset, size: verifiedOverlay.expected?.size },
+			expected: "carve-at-mutated-offset-must-not-share-overlay-sha256",
+			observed: verifiedOverlay.negativeControl?.passed ? "mutated-offset-rejected" : "unexpected-match",
+			mutatedOffset: verifiedOverlay.negativeControl?.mutatedOffset ?? null,
+			mutatedSha256: verifiedOverlay.negativeControl?.mutatedSha256 ?? null,
+			passed: Boolean(verifiedOverlay.negativeControl?.passed),
+		});
+	}
+	const verifiedIdentity = fileIdentity.find((row) => row.verified);
+	if (verifiedIdentity) {
+		controls.push({
+			id: "malware-sample-hash-negative-control",
+			controlType: verifiedIdentity.negativeControl?.controlType ?? "sample-hash-mismatch-rejection",
+			sourceBinding: { file: verifiedIdentity.file },
+			expected: "mutated-sample-digest-must-not-equal-source-sha256",
+			observed: verifiedIdentity.negativeControl?.passed ? "mutation-rejected" : "unexpected-match",
+			mutatedSha256: verifiedIdentity.negativeControl?.mutatedSha256 ?? null,
+			passed: Boolean(verifiedIdentity.negativeControl?.passed),
+		});
+	}
+	return controls;
+}
+
+function malwareConfigVerificationClaims(summary, verificationRows) {
+	const claimLedger = [];
+	const composedPaths = [];
+	const addClaim = (claim) => claimLedger.push({ verdict: "promoted", confidence: 0.76, blockers: [], ...claim });
+	const verifiedIdentity = verificationRows.fileIdentity.filter((row) => row.verified);
+	const verifiedIocs = verificationRows.signalChecks.filter((row) => row.verified && ["urls", "domains", "ipv4"].includes(row.kind));
+	const verifiedConfigs = verificationRows.configChecks.filter((row) => row.verified);
+	const verifiedOverlays = verificationRows.overlayCarves.filter((row) => row.verified);
+	const verifiedImports = verificationRows.importChecks.filter((row) => row.verified);
+	const passedControls = verificationRows.negativeControls.filter((row) => row.passed);
+	if (verifiedIdentity.length) {
+		addClaim({
+			id: "malware-sample-hash-verification-" + shortHash(verifiedIdentity.map((row) => `${row.file}:${row.expected?.sha256}`).join("|")),
+			claimType: "malware-sample-hash-verification-proof",
+			sourceBinding: { artifact: "malware-config-verification.json", files: verifiedIdentity.map((row) => row.file) },
+			evidenceBinding: { verifiedFiles: verifiedIdentity.map((row) => ({ file: row.file, sha256: row.expected?.sha256, size: row.expected?.size, format: row.format })) },
+			statement: "Verifier re-read malware samples and matched SHA-256, size, and header evidence against quicklook identities.",
+			confidence: 0.9,
+			rerunCommand: "python3 malware-config-verifier.py <target> malware-quicklook.json malware-config-verification.json",
+		});
+	}
+	if (verifiedIocs.length) {
+		addClaim({
+			id: "malware-ioc-offset-verification-" + shortHash(verifiedIocs.map((row) => `${row.kind}:${row.file}:${row.sourceOffset}:${row.valueSha256}`).join("|")),
+			claimType: "malware-ioc-offset-verification-proof",
+			sourceBinding: { artifact: "malware-config-verification.json", offsets: verifiedIocs.slice(0, 32).map((row) => ({ kind: row.kind, file: row.file, sourceOffset: row.sourceOffset })) },
+			evidenceBinding: { verifiedCount: verifiedIocs.length, valueHashes: verifiedIocs.slice(0, 32).map((row) => ({ kind: row.kind, valueSha256: row.valueSha256, valueLength: row.valueLength })) },
+			statement: "Verifier matched network IOC rows back to exact file offsets and raw-value hashes without exposing the raw IOC secret material.",
+			confidence: 0.88,
+			rerunCommand: "python3 malware-config-verifier.py <target> malware-quicklook.json malware-config-verification.json",
+		});
+	}
+	if (verifiedConfigs.length) {
+		addClaim({
+			id: "malware-config-field-verification-" + shortHash(verifiedConfigs.map((row) => `${row.field}:${row.file}:${row.sourceOffset}:${row.valueSha256}`).join("|")),
+			claimType: "malware-config-verification-proof",
+			sourceBinding: { artifact: "malware-config-verification.json", fields: verifiedConfigs.slice(0, 32).map((row) => ({ field: row.field, file: row.file, sourceOffset: row.sourceOffset })) },
+			evidenceBinding: { verifiedFields: verifiedConfigs.slice(0, 32).map((row) => ({ field: row.field, value: row.value, valueSha256: row.valueSha256, valueLength: row.valueLength })) },
+			statement: "Verifier bound normalized malware config fields to exact source offsets and source-string hashes.",
+			confidence: 0.84,
+			rerunCommand: "python3 malware-config-verifier.py <target> malware-quicklook.json malware-config-verification.json",
+		});
+	}
+	if (verifiedOverlays.length) {
+		addClaim({
+			id: "malware-overlay-carve-verifier-" + shortHash(verifiedOverlays.map((row) => `${row.file}:${row.expected?.offset}:${row.expected?.sha256}`).join("|")),
+			claimType: "malware-overlay-carve-verifier-proof",
+			sourceBinding: { artifact: "malware-config-verification.json", carves: verifiedOverlays.map((row) => ({ file: row.file, offset: row.expected?.offset, size: row.expected?.size })) },
+			evidenceBinding: { verifiedCarves: verifiedOverlays.map((row) => ({ file: row.file, offset: row.expected?.offset, size: row.expected?.size, sha256: row.expected?.sha256, entropy: row.expected?.entropy })) },
+			statement: "Verifier carved executable overlays by offset/size and matched overlay hashes for packed payload or config follow-up.",
+			confidence: 0.9,
+			rerunCommand: "python3 malware-config-verifier.py <target> malware-quicklook.json malware-config-verification.json",
+		});
+	}
+	if (verifiedImports.length) {
+		addClaim({
+			id: "malware-import-parser-verification-" + shortHash(verifiedImports.map((row) => `${row.file}:${row.dll}:${row.name}`).join("|")),
+			claimType: "malware-import-capability-verification-proof",
+			sourceBinding: { artifact: "malware-config-verification.json", imports: verifiedImports.slice(0, 48).map((row) => ({ file: row.file, import: `${row.dll}!${row.name}` })) },
+			evidenceBinding: { verifiedImports: verifiedImports.slice(0, 48).map((row) => ({ file: row.file, dll: row.dll, name: row.name, capability: row.capability })) },
+			statement: "Verifier reran the executable import parser and matched suspicious capability imports.",
+			confidence: 0.84,
+			rerunCommand: "python3 malware-config-verifier.py <target> malware-quicklook.json malware-config-verification.json",
+		});
+	}
+	if (passedControls.length) {
+		addClaim({
+			id: "malware-verifier-negative-control-" + shortHash(passedControls.map((row) => row.id).join("|")),
+			claimType: "malware-verifier-negative-control-proof",
+			sourceBinding: { artifact: "malware-config-verification.json", controls: passedControls.map((row) => row.id) },
+			evidenceBinding: { passedControls },
+			statement: "Verifier executed deterministic negative controls proving mismatched hashes or mutated offsets are rejected rather than promoted.",
+			confidence: 0.86,
+			rerunCommand: "python3 malware-config-verifier.py <target> malware-quicklook.json malware-config-verification.json",
+		});
+	}
+	const identityClaim = claimLedger.find((claim) => claim.claimType === "malware-sample-hash-verification-proof");
+	const iocClaim = claimLedger.find((claim) => claim.claimType === "malware-ioc-offset-verification-proof");
+	const configClaim = claimLedger.find((claim) => claim.claimType === "malware-config-verification-proof");
+	const overlayClaim = claimLedger.find((claim) => claim.claimType === "malware-overlay-carve-verifier-proof");
+	const importClaim = claimLedger.find((claim) => claim.claimType === "malware-import-capability-verification-proof");
+	const controlClaim = claimLedger.find((claim) => claim.claimType === "malware-verifier-negative-control-proof");
+	if (identityClaim && (iocClaim || configClaim || overlayClaim || importClaim) && controlClaim) {
+		const segments = [identityClaim, iocClaim, configClaim, overlayClaim, importClaim, controlClaim].filter(Boolean);
+		const composed = {
+			id: "malware-ioc-config-proof-path-" + shortHash(segments.map((claim) => claim.id).join(">")),
+			claimType: "malware-ioc-config-proof-path",
+			sourceBinding: { segments: segments.map((claim) => ({ id: claim.id, claimType: claim.claimType, artifact: claim.sourceBinding?.artifact })) },
+			evidenceBinding: {
+				sampleSha256: verifiedIdentity[0]?.expected?.sha256,
+				hasIocOffsetProof: Boolean(iocClaim),
+				hasConfigOracle: Boolean(configClaim),
+				hasOverlayCarveProof: Boolean(overlayClaim),
+				hasImportParserProof: Boolean(importClaim),
+				hasNegativeControl: Boolean(controlClaim),
+			},
+			statement: "Verifier evidence composes sample identity, IOC/config/import/overlay checks, and negative controls into a rerunnable malware proof path.",
+			verdict: "promoted",
+			confidence: overlayClaim && iocClaim ? 0.9 : 0.84,
+			blockers: [],
+			rerunCommand: "python3 malware-config-verifier.py <target> malware-quicklook.json malware-config-verification.json",
+		};
+		claimLedger.push(composed);
+		composedPaths.push(composed);
+	}
+	return { claimLedger, composedPaths };
+}
+
+function malwareConfigVerificationSummary(target, summary) {
+	const fileIdentity = malwareVerifyFileIdentity(target, summary);
+	const overlayCarves = malwareVerifyOverlayCarves(target, summary);
+	const signalChecks = malwareVerifySignalRows(target, summary);
+	const configChecks = malwareVerifyConfigFields(target, summary);
+	const importChecks = malwareVerifyImports(target, summary);
+	const negativeControls = malwareVerifierNegativeControls(signalChecks, overlayCarves, fileIdentity);
+	const claims = malwareConfigVerificationClaims(summary, { fileIdentity, overlayCarves, signalChecks, configChecks, importChecks, negativeControls });
+	const verifiedIdentity = fileIdentity.some((row) => row.verified);
+	const verifiedNetworkIoc = signalChecks.some((row) => row.verified && ["urls", "domains", "ipv4"].includes(row.kind));
+	const verifiedConfig = configChecks.some((row) => row.verified);
+	const overlayExpected = overlayCarves.length > 0;
+	const verifiedOverlay = overlayCarves.some((row) => row.verified);
+	const verifiedImport = importChecks.some((row) => row.verified);
+	const negativeControl = negativeControls.some((row) => row.passed);
+	const blockers = [];
+	if (!verifiedIdentity) blockers.push("missing-sample-hash-verification");
+	if (!verifiedNetworkIoc && (summary.signals?.urls?.length || summary.signals?.domains?.length || summary.signals?.ipv4?.length)) blockers.push("missing-ioc-offset-verification");
+	if (!verifiedConfig && (summary.signals?.configHints?.length || configChecks.length)) blockers.push("missing-config-extraction-oracle");
+	if (overlayExpected && !verifiedOverlay) blockers.push("missing-overlay-carve-verifier");
+	if ((summary.files ?? []).some((file) => file.staticStructure?.suspiciousImports?.length) && !verifiedImport) blockers.push("missing-import-parser-verification");
+	if (!negativeControl) blockers.push("missing-network-ioc-negative-control");
+	const repairActions = {
+		"missing-sample-hash-verification": "Rerun the verifier against the original sample path and require SHA-256/size/header equality before composing behavior claims.",
+		"missing-ioc-offset-verification": "Bind each network IOC to sourceOffset/valueSha256/valueLength and rerun malware-config-verifier.py.",
+		"missing-config-extraction-oracle": "Extract config fields from source-bound decoded strings or FLOSS output, then verify field source offsets and hashes.",
+		"missing-overlay-carve-verifier": "Recompute executable overlay offset/size and carve hash; do not promote packed payload claims until the carve hash matches.",
+		"missing-import-parser-verification": "Rerun the executable import parser and require suspicious API imports to match fresh parser output.",
+		"missing-network-ioc-negative-control": "Add a mismatch/offset negative control so IOC evidence proves rejection behavior as well as matches.",
+	};
+	const repairQueue = blockers.map((blocker) => ({
+		id: "malware-config-verification-" + blocker,
+		blocker,
+		action: repairActions[blocker] ?? "Collect verifier-bound malware evidence and rerun malware-config-verifier.py.",
+		rerunCommand: "python3 malware-config-verifier.py <target> malware-quicklook.json malware-config-verification.json",
+	}));
+	const promotedClaims = claims.claimLedger.filter((claim) => claim.verdict === "promoted");
+	return {
+		kind: "repi-malware-config-verification",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		target: redact(target),
+		quicklookSha256: createHash("sha256").update(JSON.stringify(summary)).digest("hex"),
+		proofReady: promotedClaims.length > 0 && blockers.length < 3,
+		stats: {
+			filesVerified: fileIdentity.filter((row) => row.verified).length,
+			overlaysVerified: overlayCarves.filter((row) => row.verified).length,
+			signalsVerified: signalChecks.filter((row) => row.verified).length,
+			configsVerified: configChecks.filter((row) => row.verified).length,
+			importsVerified: importChecks.filter((row) => row.verified).length,
+			negativeControlsPassed: negativeControls.filter((row) => row.passed).length,
+		},
+		fileIdentity,
+		overlayCarves,
+		signalChecks,
+		configChecks,
+		importChecks,
+		negativeControls,
+		claimLedger: claims.claimLedger,
+		composedPaths: claims.composedPaths,
+		promotionReport: {
+			proofReady: promotedClaims.length > 0,
+			promotedClaims,
+			blockers,
+		},
+		repairQueue,
+	};
+}
+
+
+function malwareBehaviorClaims(summary, verification) {
 	const signals = summary.signals ?? {};
 	const claimLedger = [];
 	const configFields = malwareConfigFields(signals.configHints ?? []);
@@ -10479,6 +10973,18 @@ function malwareBehaviorClaims(summary) {
 			rerunCommand: "cat malware-behavior-claims.json | jq '.configFields'",
 		});
 	}
+	for (const claim of verification?.claimLedger ?? []) {
+		if (claim.verdict !== "promoted") continue;
+		addClaim({
+			...claim,
+			id: claim.id || "malware-verifier-claim-" + shortHash(JSON.stringify(claim)),
+			sourceBinding: {
+				artifact: "malware-config-verification.json",
+				...(claim.sourceBinding ?? {}),
+			},
+			rerunCommand: claim.rerunCommand ?? "python3 malware-config-verifier.py <target> malware-quicklook.json malware-config-verification.json",
+		});
+	}
 	const promotedClaims = claimLedger.filter((claim) => claim.verdict === "promoted");
 	const identityClaim = promotedClaims.find((claim) => claim.claimType === "malware-executable-sample-identity");
 	const networkClaim = promotedClaims.find((claim) => /^malware-network-/.test(claim.claimType));
@@ -10487,9 +10993,28 @@ function malwareBehaviorClaims(summary) {
 	const configClaim = promotedClaims.find((claim) => claim.claimType === "malware-config-field");
 	const ruleClaim = promotedClaims.find((claim) => claim.claimType === "malware-rule-or-capability-hit");
 	const overlayClaim = promotedClaims.find((claim) => claim.claimType === "malware-overlay-carve-target");
+	const verifierIocClaim = promotedClaims.find((claim) => claim.claimType === "malware-ioc-offset-verification-proof");
+	const verifierConfigClaim = promotedClaims.find((claim) => claim.claimType === "malware-config-verification-proof");
+	const verifierOverlayClaim = promotedClaims.find((claim) => claim.claimType === "malware-overlay-carve-verifier-proof");
+	const verifierImportClaim = promotedClaims.find((claim) => claim.claimType === "malware-import-capability-verification-proof");
+	const verifierNegativeControlClaim = promotedClaims.find((claim) => claim.claimType === "malware-verifier-negative-control-proof");
 	const composedPaths = [];
+	for (const path of verification?.composedPaths ?? []) {
+		const composed = {
+			...path,
+			id: path.id || "malware-verifier-path-" + shortHash(JSON.stringify(path)),
+			sourceBinding: {
+				artifact: "malware-config-verification.json",
+				...(path.sourceBinding ?? {}),
+			},
+			rerunCommand: path.rerunCommand ?? "python3 malware-config-verifier.py <target> malware-quicklook.json malware-config-verification.json",
+		};
+		claimLedger.push(composed);
+		promotedClaims.push(composed);
+		composedPaths.push(composed);
+	}
 	if (identityClaim && (networkClaim || persistenceClaim || injectionClaim || configClaim)) {
-		const segments = [identityClaim, networkClaim, persistenceClaim, injectionClaim, configClaim, ruleClaim, overlayClaim].filter(Boolean);
+		const segments = [identityClaim, networkClaim, persistenceClaim, injectionClaim, configClaim, ruleClaim, overlayClaim, verifierIocClaim, verifierConfigClaim, verifierOverlayClaim, verifierImportClaim, verifierNegativeControlClaim].filter(Boolean);
 		const composed = {
 			id: "malware-behavior-chain-" + shortHash(segments.map((claim) => claim.id).join(">")),
 			claimType: "malware-behavior-chain",
@@ -10509,10 +11034,15 @@ function malwareBehaviorClaims(summary) {
 				hasConfig: Boolean(configClaim),
 				hasRuleCorroboration: Boolean(ruleClaim),
 				hasOverlayCarve: Boolean(overlayClaim),
+				hasVerifierIocOffsetProof: Boolean(verifierIocClaim),
+				hasVerifierConfigOracle: Boolean(verifierConfigClaim),
+				hasVerifierOverlayCarveProof: Boolean(verifierOverlayClaim),
+				hasVerifierImportParserProof: Boolean(verifierImportClaim),
+				hasVerifierNegativeControl: Boolean(verifierNegativeControlClaim),
 			},
-			statement: "Malware evidence composes identity, IOC/config, capability, persistence, and optional rule/overlay corroboration into one behavior proof path.",
+			statement: "Malware evidence composes identity, IOC/config, capability, persistence, rule/overlay corroboration, and verifier negative controls into one behavior proof path.",
 			verdict: "promoted",
-			confidence: ruleClaim && injectionClaim ? 0.86 : injectionClaim || networkClaim ? 0.8 : 0.72,
+			confidence: verifierNegativeControlClaim && verifierIocClaim ? 0.9 : ruleClaim && injectionClaim ? 0.86 : injectionClaim || networkClaim ? 0.8 : 0.72,
 			blockers: [],
 			rerunCommand: "cat malware-behavior-claims.json | jq '.composedPaths'",
 		};
@@ -10527,6 +11057,9 @@ function malwareBehaviorClaims(summary) {
 	if (!injectionClaim) blockers.push("missing-capability-evidence");
 	if (!configClaim) blockers.push("missing-config-fields");
 	if (!ruleClaim && !overlayClaim) blockers.push("missing-corroboration");
+	for (const blocker of verification?.promotionReport?.blockers ?? []) {
+		if (!blockers.includes(blocker)) blockers.push(blocker);
+	}
 	const repairActions = {
 		"missing-sample-identity": "Bind each sample to file type, SHA-256, size, architecture, and packer/static structure before promoting behavior.",
 		"missing-network-ioc": "Extract C2 URLs, domains, IPs, or callback behavior and bind them to string offsets, decoded config, or PCAP evidence.",
@@ -10534,19 +11067,28 @@ function malwareBehaviorClaims(summary) {
 		"missing-capability-evidence": "Corroborate imports/strings with capa/FLOSS/YARA or behavior traces for injection, execution, credential, or crypto capabilities.",
 		"missing-config-fields": "Normalize mutex, user-agent, beacon interval, campaign, bot ID, wallet/key, or C2 panel fields from decoded strings/config.",
 		"missing-corroboration": "Add at least one corroborator such as capa/YARA/FLOSS hit, overlay carve, decoded config, or sandbox/strace behavior.",
+		"missing-sample-hash-verification": "Rerun malware-config-verifier.py against original bytes and require SHA-256/size/header equality.",
+		"missing-ioc-offset-verification": "Bind IOC rows to exact sourceOffset/valueSha256/valueLength and rerun the verifier.",
+		"missing-config-extraction-oracle": "Tie config fields to decoded-string/FLOSS source offsets and hash-bound verifier output.",
+		"missing-overlay-carve-verifier": "Carve executable overlay by offset/size and match SHA-256 before claiming packed payload/config follow-up.",
+		"missing-import-parser-verification": "Rerun import parsing and require suspicious API names to match fresh parser output.",
+		"missing-network-ioc-negative-control": "Add mismatch/offset negative controls so IOC/config matches have an explicit rejection oracle.",
 	};
 	const repairQueue = blockers.map((blocker) => ({
 		id: "malware-behavior-" + blocker,
 		blocker,
 		action: repairActions[blocker] ?? "Collect source-bound malware evidence and rerun behavior claim promotion.",
-		rerunCommand: "repi engage <malware-sample-or-dir> --json",
+		rerunCommand: /^missing-(?:sample-hash|ioc-offset|config-extraction|overlay-carve|import-parser|network-ioc-negative-control)/.test(blocker)
+			? "python3 malware-config-verifier.py <target> malware-quicklook.json malware-config-verification.json"
+			: "repi engage <malware-sample-or-dir> --json",
 	}));
 	return {
 		kind: "repi-malware-behavior-claims",
-		schemaVersion: 1,
+		schemaVersion: 2,
 		generatedAt: new Date().toISOString(),
 		proofReady: promotedClaims.length > 0,
 		configFields,
+		verificationStats: verification?.stats ?? null,
 		claimLedger,
 		composedPaths,
 		promotionReport: {
@@ -10557,6 +11099,251 @@ function malwareBehaviorClaims(summary) {
 		repairQueue,
 	};
 }
+
+function malwareConfigVerifierSource() {
+	return String.raw`#!/usr/bin/env python3
+import argparse
+import hashlib
+import json
+import os
+import re
+import sys
+import tempfile
+
+
+def sha256(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def redact(value):
+    text = str(value or "")
+    text = re.sub(r"\bBearer\s+[A-Za-z0-9._~+/=-]{8,}", "Bearer <redacted>", text, flags=re.I)
+    text = re.sub(r"([?&](?:api[_-]?key|token|access_token|refresh_token|client_secret|secret|password)=)[^&\\s\"'<>]{8,}", r"\1<redacted>", text, flags=re.I)
+    text = re.sub(r"((?:authorization|x-api-key|api-key|cookie|set-cookie)\s*[:=]\s*[\"']?)([^\"'\n;]{8,})", r"\1<redacted>", text, flags=re.I)
+    text = re.sub(r"([\"']?(?:api[_-]?key|token|secret|password|client_secret|access_token|refresh_token)[\"']?\s*[:=]\s*[\"'])([^\"']{8,})([\"'])", r"\1<redacted>\3", text, flags=re.I)
+    return text
+
+
+def resolve_path(target, name):
+    if os.path.isfile(target):
+        return target
+    direct = os.path.join(target, name or "")
+    if os.path.isfile(direct):
+        return direct
+    base = os.path.basename(name or "")
+    if not base or not os.path.isdir(target):
+        return None
+    for root, dirs, files in os.walk(target):
+        dirs[:] = [d for d in dirs if d not in {".git", "node_modules", "__pycache__", ".venv", "venv"}]
+        for filename in files:
+            candidate = os.path.join(root, filename)
+            rel = os.path.relpath(candidate, target).replace(os.sep, "/")
+            if rel == name or filename == base:
+                return candidate
+    return None
+
+
+def bind_signal(row):
+    text = str(row.get("text") or "")
+    file_name = row.get("file")
+    clean_text = text
+    if not file_name:
+        match = re.match(r"^([^:\n]{1,260}):\s*([\s\S]*)$", text)
+        if match:
+            file_name = match.group(1)
+            clean_text = match.group(2)
+    elif text.startswith(str(file_name) + ":"):
+        clean_text = text.split(":", 1)[1].lstrip()
+    return {
+        "file": file_name,
+        "sourceOffset": row.get("sourceOffset", row.get("offset")),
+        "redactedText": clean_text,
+        "valueSha256": row.get("valueSha256"),
+        "valueLength": row.get("valueLength"),
+    }
+
+
+def verify(target, quicklook_path):
+    with open(quicklook_path, "r", encoding="utf-8") as handle:
+        summary = json.load(handle)
+    file_identity = []
+    overlay_carves = []
+    for file_row in summary.get("files", []):
+        name = file_row.get("name")
+        path = resolve_path(target, name)
+        actual = {}
+        verified = False
+        reason = "missing-file"
+        negative_control = None
+        data = b""
+        if path:
+            try:
+                with open(path, "rb") as handle:
+                    data = handle.read()
+                actual = {"size": len(data), "sha256": sha256(data), "headerHex": data[:16].hex()}
+                if data:
+                    mutated = bytearray(data)
+                    mutated[0] ^= 0xFF
+                    mutated_sha256 = sha256(bytes(mutated))
+                    negative_control = {"controlType": "sample-byte-mutation-rejection", "mutatedSha256": mutated_sha256, "passed": mutated_sha256 != file_row.get("sha256")}
+                verified = actual["size"] == file_row.get("size") and actual["sha256"] == file_row.get("sha256") and actual["headerHex"] == file_row.get("headerHex")
+                reason = "identity-hash-size-header-match" if verified else "identity-mismatch"
+            except Exception as exc:
+                reason = redact(exc)
+        file_identity.append({"file": name, "format": file_row.get("format"), "expected": {"size": file_row.get("size"), "sha256": file_row.get("sha256"), "headerHex": file_row.get("headerHex")}, "actual": actual, "verified": verified, "reason": reason, "negativeControl": negative_control})
+        overlay = (((file_row.get("staticStructure") or {}).get("overlay")) or None)
+        if overlay:
+            ov_actual = {}
+            ov_verified = False
+            ov_reason = "missing-file"
+            ov_negative_control = None
+            if path and data:
+                off = int(overlay.get("offset", -1))
+                size = int(overlay.get("size", -1))
+                if off < 0 or size < 0 or off + size > len(data):
+                    ov_reason = "overlay-out-of-range"
+                else:
+                    chunk = data[off:off + size]
+                    ov_actual = {"offset": off, "size": len(chunk), "sha256": sha256(chunk), "headerHex": chunk[:16].hex()}
+                    mutated_offset = off + 1 if off + 1 + size <= len(data) else (off - 1 if off > 0 else None)
+                    if mutated_offset is not None:
+                        mutated = data[mutated_offset:mutated_offset + size]
+                        mutated_sha256 = sha256(mutated)
+                        ov_negative_control = {"controlType": "overlay-mutated-offset-rejection", "mutatedOffset": mutated_offset, "mutatedSha256": mutated_sha256, "passed": mutated_sha256 != overlay.get("sha256")}
+                    ov_verified = ov_actual["sha256"] == overlay.get("sha256") and ov_actual["size"] == overlay.get("size") and ov_actual["headerHex"] == overlay.get("headerHex")
+                    ov_reason = "overlay-carve-hash-match" if ov_verified else "overlay-carve-mismatch"
+            overlay_carves.append({"file": name, "expected": overlay, "actual": ov_actual, "verified": ov_verified, "reason": ov_reason, "negativeControl": ov_negative_control})
+    signal_checks = []
+    for kind, values in (summary.get("signals") or {}).items():
+        if not isinstance(values, list):
+            continue
+        for row in values[:80]:
+            binding = bind_signal(row)
+            path = resolve_path(target, binding.get("file")) if binding.get("file") else None
+            actual = {}
+            verified = False
+            reason = "missing-file-binding"
+            try:
+                offset = int(binding.get("sourceOffset"))
+                length = int(binding.get("valueLength"))
+            except Exception:
+                offset = -1
+                length = -1
+            expected_hash = binding.get("valueSha256")
+            negative_control = None
+            if path and offset >= 0 and length > 0 and expected_hash:
+                try:
+                    with open(path, "rb") as handle:
+                        data = handle.read()
+                    if offset + length > len(data):
+                        reason = "signal-offset-out-of-range"
+                    else:
+                        chunk = data[offset:offset + length]
+                        actual = {"sha256": sha256(chunk), "length": len(chunk)}
+                        if chunk:
+                            mutated = bytearray(chunk)
+                            mutated[0] ^= 0xFF
+                            mutated_sha256 = sha256(bytes(mutated))
+                            negative_control = {"controlType": "signal-byte-mutation-rejection", "mutatedSha256": mutated_sha256, "passed": mutated_sha256 != expected_hash}
+                        verified = actual["sha256"] == expected_hash and actual["length"] == length
+                        reason = "signal-offset-hash-match" if verified else "signal-offset-hash-mismatch"
+                except Exception as exc:
+                    reason = redact(exc)
+            signal_checks.append({"kind": kind, "file": binding.get("file"), "sourceOffset": offset if offset >= 0 else None, "redactedText": redact(binding.get("redactedText")), "valueSha256": expected_hash, "valueLength": length if length > 0 else None, "actual": actual, "verified": verified, "reason": reason, "negativeControl": negative_control})
+    config_checks = []
+    for row in signal_checks:
+        if row["kind"] == "configHints":
+            config_checks.append({"field": "configHint", "value": row["redactedText"], "file": row["file"], "sourceOffset": row["sourceOffset"], "valueSha256": row["valueSha256"], "valueLength": row["valueLength"], "actual": row["actual"], "verified": row["verified"], "reason": row["reason"]})
+    import_checks = []
+    for file_row in summary.get("files", []):
+        path = resolve_path(target, file_row.get("name"))
+        data = b""
+        if path:
+            try:
+                with open(path, "rb") as handle:
+                    data = handle.read()
+            except Exception:
+                data = b""
+        for imp in (((file_row.get("staticStructure") or {}).get("suspiciousImports")) or [])[:80]:
+            dll = str(imp.get("dll") or "")
+            name = str(imp.get("name") or "")
+            verified = bool(data and name.encode("ascii", "ignore") in data and (not dll or dll.encode("ascii", "ignore") in data))
+            import_checks.append({"file": file_row.get("name"), "dll": dll, "name": name, "verified": verified, "reason": "binary-string-import-match" if verified else "import-string-not-found"})
+    negative_controls = []
+    verified_signal = next((row for row in signal_checks if row.get("verified") and row.get("valueSha256")), None)
+    if verified_signal:
+        control = verified_signal.get("negativeControl") or {}
+        negative_controls.append({"id": "malware-ioc-hash-mismatch-negative-control", "controlType": control.get("controlType", "hash-mismatch-rejection"), "sourceBinding": {"file": verified_signal.get("file"), "sourceOffset": verified_signal.get("sourceOffset"), "kind": verified_signal.get("kind")}, "expected": "mutated-source-bytes-must-not-equal-source-value-sha256", "observed": "mutation-rejected" if control.get("passed") else "unexpected-match", "mutatedSha256": control.get("mutatedSha256"), "passed": bool(control.get("passed"))})
+    verified_overlay = next((row for row in overlay_carves if row.get("verified")), None)
+    if verified_overlay:
+        control = verified_overlay.get("negativeControl") or {}
+        negative_controls.append({"id": "malware-overlay-offset-negative-control", "controlType": control.get("controlType", "offset-boundary-rejection"), "sourceBinding": {"file": verified_overlay.get("file"), "offset": (verified_overlay.get("expected") or {}).get("offset")}, "expected": "mutated-offset-must-not-share-overlay-sha256", "observed": "mutated-offset-rejected" if control.get("passed") else "unexpected-match", "mutatedOffset": control.get("mutatedOffset"), "mutatedSha256": control.get("mutatedSha256"), "passed": bool(control.get("passed"))})
+    verified_identity = next((row for row in file_identity if row.get("verified")), None)
+    if verified_identity:
+        control = verified_identity.get("negativeControl") or {}
+        negative_controls.append({"id": "malware-sample-hash-negative-control", "controlType": control.get("controlType", "sample-hash-mismatch-rejection"), "sourceBinding": {"file": verified_identity.get("file")}, "expected": "mutated-sample-digest-must-not-equal-source-sha256", "observed": "mutation-rejected" if control.get("passed") else "unexpected-match", "mutatedSha256": control.get("mutatedSha256"), "passed": bool(control.get("passed"))})
+    proof_ready = any(row.get("verified") for row in file_identity) and (any(row.get("verified") for row in signal_checks) or any(row.get("verified") for row in overlay_carves) or any(row.get("verified") for row in import_checks)) and any(row.get("passed") for row in negative_controls)
+    blockers = []
+    if not any(row.get("verified") for row in file_identity):
+        blockers.append("missing-sample-hash-verification")
+    if not any(row.get("verified") and row.get("kind") in {"urls", "domains", "ipv4"} for row in signal_checks) and any((summary.get("signals") or {}).get(k) for k in ("urls", "domains", "ipv4")):
+        blockers.append("missing-ioc-offset-verification")
+    if not any(row.get("verified") for row in config_checks) and (summary.get("signals") or {}).get("configHints"):
+        blockers.append("missing-config-extraction-oracle")
+    if overlay_carves and not any(row.get("verified") for row in overlay_carves):
+        blockers.append("missing-overlay-carve-verifier")
+    if not any(row.get("passed") for row in negative_controls):
+        blockers.append("missing-network-ioc-negative-control")
+    repair_queue = [{"id": "malware-config-verification-" + blocker, "blocker": blocker, "action": "Collect verifier-bound malware evidence and rerun malware-config-verifier.py.", "rerunCommand": "python3 malware-config-verifier.py <target> malware-quicklook.json malware-config-verification.json"} for blocker in blockers]
+    return {"kind": "repi-malware-config-verification", "schemaVersion": 1, "target": redact(target), "quicklookSha256": sha256(json.dumps(summary, sort_keys=True).encode()), "proofReady": proof_ready, "stats": {"filesVerified": sum(1 for row in file_identity if row.get("verified")), "overlaysVerified": sum(1 for row in overlay_carves if row.get("verified")), "signalsVerified": sum(1 for row in signal_checks if row.get("verified")), "configsVerified": sum(1 for row in config_checks if row.get("verified")), "importsVerified": sum(1 for row in import_checks if row.get("verified")), "negativeControlsPassed": sum(1 for row in negative_controls if row.get("passed"))}, "fileIdentity": file_identity, "overlayCarves": overlay_carves, "signalChecks": signal_checks, "configChecks": config_checks, "importChecks": import_checks, "negativeControls": negative_controls, "repairQueue": repair_queue, "promotionReport": {"proofReady": proof_ready, "blockers": blockers}}
+
+
+def self_test():
+    with tempfile.TemporaryDirectory() as tmp:
+        sample = os.path.join(tmp, "sample.bin")
+        payload = b"MZ" + b"A" * 62 + b"http://c2.example.com/a\x00mutex Global\\x\x00CreateRemoteThread\x00OVERLAY"
+        with open(sample, "wb") as handle:
+            handle.write(payload)
+        url = b"http://c2.example.com/a"
+        mutex = b"mutex Global\\x"
+        overlay = b"OVERLAY"
+        summary = {"kind": "repi-malware-quicklook", "files": [{"name": "sample.bin", "format": "PE", "size": len(payload), "sha256": sha256(payload), "headerHex": payload[:16].hex(), "staticStructure": {"overlay": {"offset": payload.index(overlay), "size": len(overlay), "sha256": sha256(overlay), "headerHex": overlay[:16].hex()}, "suspiciousImports": []}}], "signals": {"urls": [{"file": "sample.bin", "text": "sample.bin: http://c2.example.com/a", "sourceOffset": payload.index(url), "valueSha256": sha256(url), "valueLength": len(url)}], "configHints": [{"file": "sample.bin", "text": "sample.bin: mutex Global\\x", "sourceOffset": payload.index(mutex), "valueSha256": sha256(mutex), "valueLength": len(mutex)}]}}
+        quicklook = os.path.join(tmp, "malware-quicklook.json")
+        with open(quicklook, "w", encoding="utf-8") as handle:
+            json.dump(summary, handle)
+        result = verify(tmp, quicklook)
+        assert result["proofReady"], json.dumps(result, sort_keys=True)
+        assert result["stats"]["filesVerified"] == 1
+        assert result["stats"]["signalsVerified"] >= 2
+        assert result["stats"]["negativeControlsPassed"] >= 1
+        print(json.dumps({"kind": "repi-malware-config-verifier-self-test", "status": "ok", "stats": result["stats"]}, sort_keys=True))
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Verify REPI malware quicklook evidence against source bytes without executing the sample.")
+    parser.add_argument("target", nargs="?", help="sample file or malware directory")
+    parser.add_argument("quicklook", nargs="?", default="malware-quicklook.json")
+    parser.add_argument("output", nargs="?", default="malware-config-verification.json")
+    parser.add_argument("--self-test", action="store_true")
+    args = parser.parse_args()
+    if args.self_test:
+        self_test()
+        return 0
+    if not args.target:
+        parser.error("target is required unless --self-test is used")
+    result = verify(args.target, args.quicklook)
+    with open(args.output, "w", encoding="utf-8") as handle:
+        json.dump(result, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    print(json.dumps({"kind": result["kind"], "proofReady": result["proofReady"], "stats": result["stats"], "output": args.output}, sort_keys=True))
+    return 0 if result["proofReady"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+`;
+}
+
 
 function malwareTriagePlanSource(target) {
 	return `#!/usr/bin/env bash
@@ -10596,8 +11383,9 @@ cat > "$OUT/next.txt" <<'EOF'
 1. Bind sample identity first: sha256, format, architecture, packer/entropy, and execution preconditions.
 2. Extract normalized IOC set: C2 URLs/domains/IPs, mutexes, registry/service/cron paths, filenames, user-agent, campaign/config keys.
 3. Cross-check each IOC against source: raw string offset, decoded FLOSS/config output, capa/YARA hit, or behavior trace line.
-4. Build minimal behavior proof: persistence, network callback, credential/file access, process injection, or payload drop.
-5. Emit report with false-positive notes; do not promote strings with no static/runtime corroboration.
+4. Rerun malware-config-verifier.py when present; require offset/value-hash matches plus mismatch negative controls before proof promotion.
+5. Build minimal behavior proof: persistence, network callback, credential/file access, process injection, or payload drop.
+6. Emit report with false-positive notes; do not promote strings with no static/runtime corroboration.
 EOF
 `;
 }
@@ -10605,8 +11393,10 @@ EOF
 function malwareRows(target, artifactDir) {
 	try {
 		const summary = malwareQuicklookSummary(target);
-		const behaviorClaims = malwareBehaviorClaims(summary);
+		const configVerification = malwareConfigVerificationSummary(target, summary);
+		const behaviorClaims = malwareBehaviorClaims(summary, configVerification);
 		if (!noWrite && artifactDir) writePrivate(join(artifactDir, "malware-quicklook.json"), `${JSON.stringify(summary, null, 2)}\n`);
+		if (!noWrite && artifactDir) writePrivate(join(artifactDir, "malware-config-verification.json"), `${JSON.stringify(configVerification, null, 2)}\n`);
 		if (!noWrite && artifactDir) writePrivate(join(artifactDir, "malware-behavior-claims.json"), `${JSON.stringify(behaviorClaims, null, 2)}\n`);
 		const rows = [
 			{
@@ -10622,6 +11412,18 @@ function malwareRows(target, artifactDir) {
 				error: summary.fileCount || summary.risks.length ? undefined : "no malware artifacts",
 			},
 			{
+				id: "malware-config-verification",
+				command: "internal",
+				args: [redact(target)],
+				cwd: root,
+				exit: configVerification.proofReady ? 0 : 1,
+				signal: null,
+				durationMs: 0,
+				stdout: `${JSON.stringify(configVerification, null, 2)}\n`,
+				stderr: "",
+				error: configVerification.proofReady ? undefined : "malware config verification blockers present",
+			},
+			{
 				id: "malware-behavior-claims",
 				command: "internal",
 				args: [redact(target)],
@@ -10635,6 +11437,20 @@ function malwareRows(target, artifactDir) {
 			},
 		];
 		if (!noWrite && artifactDir) {
+			const verifierPath = join(artifactDir, "malware-config-verifier.py");
+			writePrivate(verifierPath, malwareConfigVerifierSource(), 0o700);
+			rows.push({
+				id: "malware-config-verifier-artifact",
+				command: "internal",
+				args: [redact(verifierPath)],
+				cwd: root,
+				exit: 0,
+				signal: null,
+				durationMs: 0,
+				stdout: `verifier=${redact(verifierPath)}\nrun=python3 ${redact(verifierPath)} ${redact(target)} ${redact(join(artifactDir, "malware-quicklook.json"))} ${redact(join(artifactDir, "malware-config-verification.json"))}\n`,
+				stderr: "",
+				error: undefined,
+			});
 			const planPath = join(artifactDir, "malware-triage-plan.sh");
 			writePrivate(planPath, malwareTriagePlanSource(target), 0o700);
 			rows.push({
@@ -16125,9 +16941,11 @@ function nextQueue(targetInfo, artifactDir, toolState) {
 	}
 	if (targetInfo.lane === "malware") {
 		if (!noWrite) q.push(`cat ${shellQuote(join(artifactDir, "malware-quicklook.json"))}`);
+		if (!noWrite && existsSync(join(artifactDir, "malware-config-verification.json"))) q.push(`cat ${shellQuote(join(artifactDir, "malware-config-verification.json"))}`);
 		if (!noWrite && existsSync(join(artifactDir, "malware-behavior-claims.json"))) q.push(`cat ${shellQuote(join(artifactDir, "malware-behavior-claims.json"))}`);
+		if (!noWrite && existsSync(join(artifactDir, "malware-config-verifier.py"))) q.push(`python3 ${shellQuote(join(artifactDir, "malware-config-verifier.py"))} ${quotedTarget} ${shellQuote(join(artifactDir, "malware-quicklook.json"))} ${shellQuote(join(artifactDir, "malware-config-verification.json"))}`);
 		if (!noWrite) q.push(`bash ${shellQuote(join(artifactDir, "malware-triage-plan.sh"))} ${quotedTarget}`);
-		q.push(`repi -p ${shellQuote(`Continue malware analysis from ${artifactDir}: normalize IOCs from malware-quicklook.json plus malware-behavior-claims.json claimLedger/configFields/composedPaths, use staticStructure sections/imports/overlay to prioritize packer and injection leads, verify capa/FLOSS/YARA or behavior anchors, and produce one corroborated capability/config proof.`)}`);
+		q.push(`repi -p ${shellQuote(`Continue malware analysis from ${artifactDir}: normalize IOCs from malware-quicklook.json plus malware-config-verification.json and malware-behavior-claims.json claimLedger/configFields/composedPaths/repairQueue, use staticStructure sections/imports/overlay to prioritize packer and injection leads, rerun malware-config-verifier.py for offset/hash/negative-control proof, verify capa/FLOSS/YARA or behavior anchors, and produce one corroborated capability/config proof.`)}`);
 	}
 	if (targetInfo.lane === "pcap-dfir") {
 		if (!noWrite) q.push(`cat ${shellQuote(join(artifactDir, "pcap-flow-summary.json"))}`);
@@ -16247,8 +17065,9 @@ function summarizeEvidence(rows, targetInfo, toolState) {
 		if (/process-network-correlation-signal|credential-context-correlation-signal|timeline-correlation-signal|processNetwork|credentialContext|memory-credential-network-pivot|claimLedger/i.test(text) && targetInfo.lane === "memory-forensics") anchors.push("memory correlation anchors");
 		if (/repi-windows-ad-quicklook|windows-ad-quicklook|windows-ad-triage|krbtgt|Kerberoast|DCSync|ADCS|Certipy|BloodHound|4769|4624/i.test(text) && targetInfo.lane === "windows-ad") anchors.push("Windows/AD identity anchors");
 		if (/bloodhound-graph-data-present|bloodhound-privilege-edge-signal|bloodhound-owned-principal-signal|bloodhound-owned-to-high-value-path|relationCounts|privilegeEdges|highValue|attackPaths|windows-ad-attack-path|windows-ad-credential-graph-pivot|windows-ad-adcs-graph-pivot|claimLedger|composedPaths|repairQueue/i.test(text) && targetInfo.lane === "windows-ad") anchors.push("BloodHound graph anchors");
-		if (/repi-malware-quicklook|malware-quicklook|malware-behavior-claims|malware-triage|malware-behavior-chain|claimLedger|configFields|network-ioc-signal|CreateRemoteThread|VirtualAlloc|FLOSS|YARA|capa|ATT&CK|mutex|User-Agent/i.test(text) && targetInfo.lane === "malware") anchors.push("malware IOC/capability anchors");
+		if (/repi-malware-quicklook|malware-quicklook|malware-behavior-claims|malware-config-verification|malware-config-verifier|malware-triage|malware-behavior-chain|malware-ioc-config-proof-path|claimLedger|configFields|network-ioc-signal|CreateRemoteThread|VirtualAlloc|FLOSS|YARA|capa|ATT&CK|mutex|User-Agent/i.test(text) && targetInfo.lane === "malware") anchors.push("malware IOC/capability anchors");
 		if (/staticStructure|malware-overlay-signal|malware-suspicious-import-signal|suspiciousImports|overlay-data-present|rwx-section-signal|structured-executable-analysis-signal|malware-overlay-carve-target|malware-rwx-section/i.test(text) && targetInfo.lane === "malware") anchors.push("malware static structure anchors");
+		if (/malware-config-verification|malware-config-verifier|malware-overlay-carve-verifier-proof|signal-offset-hash-match|negative-control|malware-ioc-config-proof-path/i.test(text) && targetInfo.lane === "malware") anchors.push("malware verifier proof anchors");
 		if (/repi-firmware-quicklook|firmware-quicklook|firmware-attack-surface|firmware-extract-plan|claimLedger|extractionTargets|management-credential-pivot|SquashFS|UBI|uImage|dropbear|telnetd|cgi-bin|hardcoded-credential-signal/i.test(text) && targetInfo.lane === "firmware-iot") anchors.push("firmware quicklook anchors");
 		if (/firmware-container-header-parsed|filesystem-superblock-parsed|ubi-header-parsed|partitionOffsets|bytesUsed|vidHeaderOffset/i.test(text) && targetInfo.lane === "firmware-iot") anchors.push("firmware structure anchors");
 		if (/repi-agent-boundary-map|agent-boundary|prompt-injection|llm-to-shell-tool-boundary|tool-secret-exfiltration-boundary|tool_call|system-prompt/i.test(text) && targetInfo.lane === "agent-boundary") anchors.push("agent boundary anchors");
