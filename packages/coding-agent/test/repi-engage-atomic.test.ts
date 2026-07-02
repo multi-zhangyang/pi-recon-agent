@@ -1067,29 +1067,40 @@ describe("repi-engage artifact writes", () => {
 		expect(report.commands.map((row) => row.id)).toContain("workspace-route-replay-harness-artifact");
 		expect(report.commands.map((row) => row.id)).toContain("workspace-route-replay-plan");
 		expect(report.commands.map((row) => row.id)).toContain("workspace-source-runtime-claims");
+		expect(report.commands.map((row) => row.id)).toContain("workspace-source-runtime-verifier-artifact");
+		expect(report.commands.map((row) => row.id)).toContain("workspace-source-runtime-verification");
 		expect(report.commands.map((row) => row.id)).toContain("proof-harness-self-test");
 		expect(report.summary.anchors).toContain("workspace source-to-runtime anchors");
 		expect(report.summary.anchors).toContain("workspace route replay/authz anchors");
 		expect(report.summary.anchors).toContain("workspace source-runtime claim anchors");
+		expect(report.summary.anchors).toContain("workspace source-runtime verifier anchors");
 		expect(report.summary.anchors).toContain("proof harness/self-test anchors");
 		const mapPath = join(report.artifactDir, "workspace-source-runtime-map.json");
 		const harnessPath = join(report.artifactDir, "workspace-source-runtime-harness.mjs");
+		const verifierPath = join(report.artifactDir, "workspace-source-runtime-verifier.mjs");
+		const verificationPath = join(report.artifactDir, "workspace-source-runtime-verification.json");
 		const routeReplayHarnessPath = join(report.artifactDir, "workspace-route-replay-harness.mjs");
 		const routeReplayPlanPath = join(report.artifactDir, "workspace-route-replay-plan.json");
 		const routeClaimPromotionPath = join(report.artifactDir, "workspace-route-claim-promotion.json");
 		const routeRepairQueuePath = join(report.artifactDir, "workspace-route-repair-queue.json");
 		const workspaceClaimsPath = join(report.artifactDir, "workspace-source-runtime-claims.json");
+		const proofGraphPath = join(report.artifactDir, "repi-proof-graph.json");
 		const proofMatrixPath = join(report.artifactDir, "proof-matrix.json");
 		expect(existsSync(mapPath)).toBe(true);
 		expect(existsSync(harnessPath)).toBe(true);
+		expect(existsSync(verifierPath)).toBe(true);
+		expect(existsSync(verificationPath)).toBe(true);
 		expect(existsSync(routeReplayHarnessPath)).toBe(true);
 		expect(existsSync(routeReplayPlanPath)).toBe(true);
 		expect(existsSync(routeClaimPromotionPath)).toBe(true);
 		expect(existsSync(routeRepairQueuePath)).toBe(true);
 		expect(existsSync(workspaceClaimsPath)).toBe(true);
+		expect(existsSync(proofGraphPath)).toBe(true);
 		expect(existsSync(proofMatrixPath)).toBe(true);
 		expect(statSync(mapPath).mode & 0o777).toBe(0o600);
 		expect(statSync(harnessPath).mode & 0o777).toBe(0o700);
+		expect(statSync(verifierPath).mode & 0o777).toBe(0o700);
+		expect(statSync(verificationPath).mode & 0o777).toBe(0o600);
 		expect(statSync(routeReplayHarnessPath).mode & 0o777).toBe(0o700);
 		expect(statSync(routeReplayPlanPath).mode & 0o777).toBe(0o600);
 		expect(statSync(routeClaimPromotionPath).mode & 0o777).toBe(0o600);
@@ -1173,16 +1184,77 @@ describe("repi-engage artifact writes", () => {
 		expect(workspaceClaims.composedPaths.length).toBe(0);
 		expect(workspaceClaims.promotionReport.blockers).toContain("missing-base-url");
 		expect(workspaceClaims.repairQueue.map((row) => row.blocker)).toContain("missing-base-url");
+		const verification = JSON.parse(readFileSync(verificationPath, "utf8")) as {
+			proofReady: boolean;
+			runtimeProofReady: boolean;
+			exploitProofReady: boolean;
+			sourceLineVerification: { verified: boolean };
+			routeTemplateVerification: { verified: boolean };
+			replayGateVerification: { verified: boolean };
+			repairQueueVerification: { verified: boolean };
+			negativeControlVerification: { verified: boolean };
+			stats: {
+				verifiedRows: number;
+				matchedRoutes: number;
+				liveRuntimeProofs: number;
+				negativeControlsPassed: number;
+			};
+			claimLedger: Array<{ claimType: string; verdict: string }>;
+			composedPaths: Array<{ claimType: string; verdict: string; blockers: string[] }>;
+			repairQueue: Array<{ blocker: string }>;
+		};
+		const proofGraph = JSON.parse(readFileSync(proofGraphPath, "utf8")) as {
+			exploitProofReady: boolean;
+			claimLedger: Array<{ claimType: string; verdict: string }>;
+			composedPaths: Array<{ claimType: string; verdict: string }>;
+		};
+		expect(verification.proofReady).toBe(true);
+		expect(verification.runtimeProofReady).toBe(false);
+		expect(verification.exploitProofReady).toBe(false);
+		expect(verification.sourceLineVerification.verified).toBe(true);
+		expect(verification.routeTemplateVerification.verified).toBe(true);
+		expect(verification.replayGateVerification.verified).toBe(true);
+		expect(verification.repairQueueVerification.verified).toBe(true);
+		expect(verification.negativeControlVerification.verified).toBe(true);
+		expect(verification.stats.verifiedRows).toBeGreaterThan(0);
+		expect(verification.stats.matchedRoutes).toBeGreaterThanOrEqual(2);
+		expect(verification.stats.liveRuntimeProofs).toBe(0);
+		expect(verification.stats.negativeControlsPassed).toBeGreaterThanOrEqual(4);
+		expect(verification.claimLedger.map((claim) => claim.claimType)).toEqual(
+			expect.arrayContaining([
+				"workspace-source-line-verification-proof",
+				"workspace-route-template-verification-proof",
+				"workspace-replay-gate-verification-proof",
+				"workspace-repair-queue-verification-proof",
+				"workspace-verifier-negative-control-proof",
+			]),
+		);
+		expect(verification.composedPaths.map((path) => path.claimType)).toContain(
+			"workspace-source-runtime-verification-blocked-path",
+		);
+		expect(verification.composedPaths[0].verdict).toBe("blocked");
+		expect(verification.composedPaths[0].blockers).toContain("missing-workspace-live-route-replay-proof");
+		expect(verification.repairQueue.map((row) => row.blocker)).toContain("missing-workspace-live-route-replay-proof");
+		expect(proofGraph.exploitProofReady).toBe(false);
+		expect(proofGraph.claimLedger.map((claim) => claim.claimType)).toContain(
+			"workspace-source-line-verification-proof",
+		);
+		expect(proofGraph.composedPaths.map((path) => path.claimType)).toContain(
+			"workspace-source-runtime-verification-blocked-path",
+		);
 		const proofMatrix = JSON.parse(readFileSync(proofMatrixPath, "utf8")) as {
 			artifacts: Array<{ relPath: string }>;
 			liveChecks: Array<{ id: string }>;
 		};
 		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("workspace-source-runtime-map.json");
+		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("workspace-source-runtime-verification.json");
+		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("workspace-source-runtime-verifier.mjs");
 		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("workspace-route-replay-harness.mjs");
 		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("workspace-route-claim-promotion.json");
 		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("workspace-route-repair-queue.json");
 		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("workspace-source-runtime-claims.json");
 		expect(proofMatrix.liveChecks.map((row) => row.id)).toContain("workspace-source-runtime-harness-self-test");
+		expect(proofMatrix.liveChecks.map((row) => row.id)).toContain("workspace-source-runtime-verifier-self-test");
 		expect(proofMatrix.liveChecks.map((row) => row.id)).toContain("workspace-route-replay-harness-self-test");
 		expect(
 			report.nextQueue.some(
@@ -1197,6 +1269,10 @@ describe("repi-engage artifact writes", () => {
 		expect(report.nextQueue.some((command) => command.includes("workspace-route-claim-promotion.json"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("workspace-route-repair-queue.json"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("workspace-source-runtime-claims.json"))).toBe(true);
+		expect(report.nextQueue.some((command) => command.includes("workspace-source-runtime-verification.json"))).toBe(
+			true,
+		);
+		expect(report.nextQueue.some((command) => command.includes("workspace-source-runtime-verifier.mjs"))).toBe(true);
 		expect(
 			report.nextQueue.some((command) => command.includes("claimLedger") && command.includes("composedPaths")),
 		).toBe(true);
@@ -1234,6 +1310,12 @@ describe("repi-engage artifact writes", () => {
 		expect(selfTestReport.repairQueue.length).toBe(0);
 		expect(selfTestReport.rows[0].variants.map((row) => row.control)).toContain("anonymous");
 		expect(selfTestReport.rows[0].variants.map((row) => row.control)).toContain("session");
+		const verifierSelfTest = spawnSync(process.execPath, [verifierPath, "--self-test"], {
+			encoding: "utf8",
+			timeout: 15_000,
+		});
+		expect(verifierSelfTest.status, `${verifierSelfTest.stderr}\n${verifierSelfTest.stdout}`).toBe(0);
+		expect(verifierSelfTest.stdout).toContain("repi-workspace-source-runtime-verifier-self-test");
 	});
 
 	it("summarizes memory images and emits triage plans without requiring volatility", () => {

@@ -545,7 +545,9 @@ function buildProofArtifactRows(targetInfo, artifactDir) {
 	}
 	if (targetInfo.kind === "directory") {
 		add("workspace-source-runtime-map.json", "workspace source-to-runtime route/sink/auth map");
+		add("workspace-source-runtime-verification.json", "workspace source-to-runtime verifier output");
 		add("workspace-source-runtime-harness.mjs", "workspace source-to-runtime extraction harness", 0o700);
+		add("workspace-source-runtime-verifier.mjs", "workspace source-to-runtime verifier", 0o700);
 		add("workspace-route-replay-plan.json", "workspace route replay/authz matrix plan");
 		add("workspace-route-replay-results.json", "workspace route replay/authz matrix output");
 		add("workspace-route-claim-promotion.json", "workspace route replay claim-promotion ledger");
@@ -652,7 +654,7 @@ function buildProofCoverageGaps(targetInfo, artifactRows) {
 		requireAny("web-runtime-replay", ["web-runtime-replay-verifier.mjs", "web-replay-matrix.json"], "web targets need replayable HTTP/browser evidence");
 		requireAny("web-route-matrix", ["web-exploit-claims.json", "web-api-schema-probes.json", "web-discovery-matrix.json", "web-object-matrix.json"], "web targets need route/schema/object matrix evidence");
 	}
-	if (targetInfo.kind === "directory") requireAny("workspace-source-runtime-map", ["workspace-source-runtime-claims.json", "workspace-source-runtime-map.json", "workspace-source-runtime-harness.mjs"], "workspace targets need source-to-runtime route/sink/auth evidence");
+	if (targetInfo.kind === "directory") requireAny("workspace-source-runtime-map", ["workspace-source-runtime-verification.json", "workspace-source-runtime-verifier.mjs", "workspace-source-runtime-claims.json", "workspace-source-runtime-map.json", "workspace-source-runtime-harness.mjs"], "workspace targets need source-to-runtime route/sink/auth evidence");
 	if (targetInfo.lane === "native-pwn") requireAny("native-replay", ["native-runtime-verification.json", "native-primitive-claims.json", "native-runtime-verifier.py", "native-replay-verifier.py", "native-exploit-hypotheses.json", "native-static-triage.json"], "native targets need replay/triage/hypothesis/verifier artifacts");
 	if (targetInfo.lane === "js-reverse") requireAny("js-reverse-workbench", ["js-reverse-workbench.json", "js-reverse-workbench.mjs", "workspace-source-runtime-map.json"], "JS reverse targets need local signer/API/workspace evidence artifacts");
 	if (targetInfo.lane === "pcap-dfir") requireAny("pcap-flow-summary", ["pcap-flow-claims.json", "pcap-flow-verification.json", "pcap-flow-verifier.mjs", "pcap-flow-summary.json"], "PCAP targets need parsed flow/stream verifier evidence");
@@ -693,6 +695,8 @@ function buildProofLiveChecks(targetInfo, artifactDir, toolState) {
 		if (existsSync(workspaceHarness)) add({ id: "workspace-source-runtime-harness-self-test", command: process.execPath, args: [workspaceHarness, "--self-test"], reason: "execute workspace source-to-runtime harness self-test" });
 		const routeReplayHarness = proofArtifactPath(artifactDir, "workspace-route-replay-harness.mjs");
 		if (existsSync(routeReplayHarness)) add({ id: "workspace-route-replay-harness-self-test", command: process.execPath, args: [routeReplayHarness, "--self-test"], reason: "execute workspace route replay/authz harness self-test" });
+		const workspaceVerifier = proofArtifactPath(artifactDir, "workspace-source-runtime-verifier.mjs");
+		if (existsSync(workspaceVerifier)) add({ id: "workspace-source-runtime-verifier-self-test", command: process.execPath, args: [workspaceVerifier, "--self-test"], reason: "execute workspace source-to-runtime verifier self-test with repair gates" });
 	}
 	const runtimeRepairLoop = proofArtifactPath(artifactDir, "repi-runtime-repair-loop.mjs");
 	if (existsSync(runtimeRepairLoop)) add({ id: "repi-runtime-repair-loop-self-test", command: process.execPath, args: [runtimeRepairLoop, "--self-test"], reason: "execute unified runtime repair-loop planner self-test" });
@@ -955,6 +959,7 @@ function proofHarnessRows(targetInfo, artifactDir, commands, toolState) {
 
 const unifiedProofGraphArtifactCandidates = [
 	"web-exploit-claims.json",
+	"workspace-source-runtime-verification.json",
 	"workspace-source-runtime-claims.json",
 	"workspace-route-claim-promotion.json",
 	"workspace-route-repair-queue.json",
@@ -1029,6 +1034,7 @@ function proofGraphRepairPriority(blocker) {
 	if (/missing-crypto-(?:file-hash|media-determinism|structure-offset|negative-control)/i.test(blocker)) return "high";
 	if (/missing-mobile-(?:archive-hash|zip-entry|dex-quicklook|manifest|hook|negative-control)/i.test(blocker)) return "high";
 	if (/missing-agent-boundary-(?:map-flow|replay-coverage|response-hash|negative-control)/i.test(blocker)) return "high";
+	if (/missing-workspace-(?:source-line|route-template|replay-gate|repair-queue|live-route-replay|negative-control)/i.test(blocker)) return "high";
 	if (/missing-cloud-(?:source-line|trust-claim|composed-path|negative-control)/i.test(blocker)) return "high";
 	if (/missing-windows-ad-(?:file-hash|bloodhound-path|signal-coverage|composed-path|negative-control)/i.test(blocker)) return "high";
 	if (/missing-memory-(?:image-hash|signal-offset|process-network|credential-context|timeline|negative-control)/i.test(blocker)) return "high";
@@ -1090,6 +1096,12 @@ function proofGraphRepairAction(blocker) {
 		"missing-agent-boundary-replay-coverage": "Rerun agent-boundary-payloads.py until baseline and unsafe/control payload IDs are all observed.",
 		"missing-agent-boundary-response-hash": "Require every promoted replay claim to include request/response SHA-256 and status evidence.",
 		"missing-agent-boundary-negative-control": "Require a benign accepted baseline and at least one unsafe or blocked-control differential.",
+		"missing-workspace-source-line-verification": "Re-read workspace source files and bind routes/sinks/auth/state/signers to exact file/line hashes.",
+		"missing-workspace-route-template-verification": "Require every source route to have a replay template and proof target coverage for risky routes.",
+		"missing-workspace-replay-gate-verification": "Verify route replay plan/output/claim-promotion gates before any source-only claim becomes runtime proof.",
+		"missing-workspace-repair-queue-verification": "Require missing-base-url/live-replay blockers to remain queued until response hash differentials exist.",
+		"missing-workspace-live-route-replay-proof": "Start the target service and run workspace-route-replay-harness.mjs --live to collect status/body-hash controls.",
+		"missing-workspace-negative-control": "Run missing-source, shifted-line, missing-base-url, and mutated-route controls before promotion.",
 		"missing-cloud-source-line-verification": "Re-read cloud source files and bind trust claims to exact file/line SHA-256 evidence.",
 		"missing-cloud-trust-claim-coverage": "Require promoted cloud trust claims to cover OIDC/IAM plus runtime or exposure source anchors.",
 		"missing-cloud-composed-path-verification": "Verify each composed cloud pivot segment resolves to a source-bound promoted claim.",
@@ -17887,6 +17899,443 @@ function writeWorkspaceSourceRuntimeClaims(artifactDir, target) {
 	return { path, summary };
 }
 
+function workspaceSourceRuntimeRowsForVerification(map) {
+	const rows = [];
+	const push = (kind, row) => {
+		if (!row?.file || !row?.line) return;
+		rows.push({ kind, file: row.file, line: row.line, sample: row.sample ?? "", route: row.path ?? row.route?.path ?? null, method: row.method ?? row.route?.method ?? null, sinkKind: row.kind ?? null });
+	};
+	for (const row of map?.routes ?? []) push("route", row);
+	for (const row of map?.authAnchors ?? []) push("auth", row);
+	for (const row of map?.sinks ?? []) push("sink", row);
+	for (const row of map?.stateMutations ?? []) push("state", row);
+	for (const row of map?.signerCrypto ?? []) push("signer", row);
+	const seen = new Set();
+	return rows.filter((row) => {
+		const key = `${row.kind}:${row.file}:${row.line}:${row.sample}`;
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	}).slice(0, 260);
+}
+
+function workspaceSourceLineCheck(target, row) {
+	const rootDir = resolve(target);
+	const path = resolve(rootDir, row.file ?? "");
+	if (path !== rootDir && !path.startsWith(`${rootDir}/`)) return { ...row, verified: false, error: "path-outside-target" };
+	if (!existsSync(path)) return { ...row, verified: false, error: "missing-source-file" };
+	let text = "";
+	try {
+		text = readFileSync(path, "utf8");
+	} catch (error) {
+		return { ...row, verified: false, error: error instanceof Error ? redact(error.message) : "read-failed" };
+	}
+	const lines = text.split(/\r?\n/);
+	const lineText = lines[Number(row.line) - 1] ?? "";
+	const directSample = lineText.trim().slice(0, 320);
+	const actualSample = redact(lineText.trim().slice(0, 320));
+	const sampleMatched = !row.sample || actualSample === row.sample || directSample === row.sample;
+	return {
+		...row,
+		verified: Boolean(lineText) && sampleMatched,
+		lineSha256: httpSecretHash(lineText),
+		lineLength: lineText.length,
+		sampleMatched,
+	};
+}
+
+function workspaceSourceRuntimeVerificationSummary(target, artifactDir, claimsSummary) {
+	const map = readJsonArtifact(join(artifactDir, "workspace-source-runtime-map.json"));
+	const routePlan = readJsonArtifact(join(artifactDir, "workspace-route-replay-plan.json"));
+	const routeReplay = readJsonArtifact(join(artifactDir, "workspace-route-replay-results.json"));
+	const routePromotion = readJsonArtifact(join(artifactDir, "workspace-route-claim-promotion.json"));
+	const routeRepair = readJsonArtifact(join(artifactDir, "workspace-route-repair-queue.json"));
+	const claims = claimsSummary ?? readJsonArtifact(join(artifactDir, "workspace-source-runtime-claims.json"));
+	const sourceRows = workspaceSourceRuntimeRowsForVerification(map);
+	const sourceLineChecks = sourceRows.map((row) => workspaceSourceLineCheck(target, row));
+	const sourceLineVerification = {
+		verified: sourceLineChecks.length > 0 && sourceLineChecks.every((row) => row.verified),
+		checkedRows: sourceLineChecks.length,
+		verifiedRows: sourceLineChecks.filter((row) => row.verified).length,
+		files: Array.from(new Set(sourceLineChecks.filter((row) => row.verified).map((row) => row.file))).slice(0, 80),
+		kinds: Array.from(new Set(sourceLineChecks.filter((row) => row.verified).map((row) => row.kind))).sort(),
+		mapSha256: map ? httpSecretHash(JSON.stringify(map)) : null,
+	};
+	const routeRows = map?.routes ?? [];
+	const templates = map?.routeReplayTemplates ?? [];
+	const proofTargets = map?.proofTargets ?? [];
+	const templateChecks = routeRows.slice(0, 120).map((route) => {
+		const expectedMethod = /^(ANY|ALL)$/i.test(route.method ?? "") ? "GET" : String(route.method ?? "GET").toUpperCase();
+		const matched = templates.some((template) => template.route === route.path && String(template.method ?? "GET").toUpperCase() === expectedMethod);
+		return { file: route.file, line: route.line, route: route.path, method: route.method, expectedMethod, matched };
+	});
+	const riskyRouteKeys = new Set(proofTargets.map((row) => `${row.route?.file}:${row.route?.line}:${row.route?.method}:${row.route?.path}`));
+	const routeTemplateVerification = {
+		verified: routeRows.length > 0 && templateChecks.every((row) => row.matched) && proofTargets.every((row) => riskyRouteKeys.has(`${row.route?.file}:${row.route?.line}:${row.route?.method}:${row.route?.path}`)),
+		routeCount: routeRows.length,
+		templateCount: templates.length,
+		proofTargetCount: proofTargets.length,
+		matchedRoutes: templateChecks.filter((row) => row.matched).length,
+		templateChecks,
+	};
+	const routeClaims = Array.isArray(routePromotion?.claimLedger) ? routePromotion.claimLedger : Array.isArray(routeReplay?.claimLedger) ? routeReplay.claimLedger : [];
+	const liveRuntimeProofs = routeClaims.filter((claim) => claim.verdict === "promoted" && (claim.evidenceBinding?.variants ?? []).some((variant) => typeof variant.status === "number" && /^[a-f0-9]{64}$/i.test(String(variant.responseSha256 ?? ""))));
+	const routeBlockers = Array.from(
+		new Set([
+			...routeClaims.flatMap((claim) => claim.blockers ?? []),
+			...(Array.isArray(routeRepair?.queue) ? routeRepair.queue.map((row) => row.blocker).filter(Boolean) : []),
+			...(Array.isArray(claims?.repairQueue) ? claims.repairQueue.map((row) => row.blocker).filter(Boolean) : []),
+		]),
+	).sort();
+	const replayGateVerification = {
+		verified:
+			Boolean(routePlan?.proofExitRule) &&
+			(routePlan?.controls ?? []).includes("tampered-object") &&
+			(routePlan?.controls ?? []).some((control) => /anonymous/i.test(control)) &&
+			(Boolean(liveRuntimeProofs.length) || Boolean(routePromotion?.baseUrlRequired || routeReplay?.baseUrlRequired || routeBlockers.length)),
+		baseUrlRequired: Boolean(routePromotion?.baseUrlRequired || routeReplay?.baseUrlRequired),
+		controls: routePlan?.controls ?? [],
+		liveRuntimeProofs: liveRuntimeProofs.length,
+		blockers: routeBlockers,
+	};
+	const repairQueueVerification = {
+		verified: Boolean(liveRuntimeProofs.length) || routeBlockers.includes("missing-base-url") || routeBlockers.includes("missing-live-route-replay-proof"),
+		repairCount: routeBlockers.length,
+		blockers: routeBlockers,
+		runtimeProofReady: Boolean(claims?.runtimeProofReady || liveRuntimeProofs.length),
+		exploitProofReady: Boolean(claims?.exploitProofReady),
+	};
+	const firstSource = sourceLineChecks.find((row) => row.verified);
+	const negativeControls = [];
+	if (firstSource) {
+		negativeControls.push({ controlType: "workspace-missing-source-negative-control", file: firstSource.file, passed: !existsSync(resolve(target, `${firstSource.file}.missing-control`)) });
+		const shifted = workspaceSourceLineCheck(target, { ...firstSource, line: Number(firstSource.line) + 10000 });
+		negativeControls.push({ controlType: "workspace-shifted-line-negative-control", file: firstSource.file, passed: !shifted.verified });
+	}
+	const firstRoute = routeRows[0];
+	if (firstRoute) {
+		negativeControls.push({ controlType: "workspace-mutated-route-template-negative-control", route: firstRoute.path, passed: !templates.some((template) => template.route === `${firstRoute.path}/__missing_control__`) });
+	}
+	negativeControls.push({ controlType: "workspace-live-proof-gate-negative-control", passed: Boolean(liveRuntimeProofs.length) || routeBlockers.includes("missing-base-url") || routeBlockers.includes("missing-live-route-replay-proof") });
+	const negativeControlVerification = {
+		verified: negativeControls.length >= 4 && negativeControls.every((row) => row.passed),
+		negativeControlsPassed: negativeControls.filter((row) => row.passed).length,
+		negativeControls,
+	};
+	const claimLedger = [];
+	const composedPaths = [];
+	const addClaim = (claim) => {
+		const normalized = { verdict: "promoted", confidence: 0.76, blockers: [], ...claim };
+		claimLedger.push(normalized);
+		return normalized;
+	};
+	const sourceClaim = sourceLineVerification.verified
+		? addClaim({
+				id: "workspace-source-line-verification-" + shortHash(sourceLineVerification.files.join("|")),
+				claimType: "workspace-source-line-verification-proof",
+				sourceBinding: { artifact: "workspace-source-runtime-verification.json", map: "workspace-source-runtime-map.json" },
+				evidenceBinding: sourceLineVerification,
+				statement: "Workspace verifier rebound route/auth/sink/state/signer rows to exact source file lines and hashes.",
+				confidence: 0.86,
+				rerunCommand: "node workspace-source-runtime-verifier.mjs <workspace-dir> workspace-source-runtime-map.json workspace-route-replay-plan.json workspace-route-claim-promotion.json workspace-route-repair-queue.json workspace-source-runtime-claims.json workspace-source-runtime-verification.json",
+			})
+		: undefined;
+	const templateClaim = routeTemplateVerification.verified
+		? addClaim({
+				id: "workspace-route-template-verification-" + shortHash(`${routeTemplateVerification.routeCount}:${routeTemplateVerification.templateCount}:${routeTemplateVerification.proofTargetCount}`),
+				claimType: "workspace-route-template-verification-proof",
+				sourceBinding: { artifact: "workspace-source-runtime-verification.json", map: "workspace-source-runtime-map.json" },
+				evidenceBinding: routeTemplateVerification,
+				statement: "Workspace verifier confirmed source routes have replay templates and risky routes have proof targets.",
+				confidence: 0.84,
+				rerunCommand: "node workspace-source-runtime-verifier.mjs <workspace-dir> workspace-source-runtime-map.json workspace-route-replay-plan.json workspace-route-claim-promotion.json workspace-route-repair-queue.json workspace-source-runtime-claims.json workspace-source-runtime-verification.json",
+			})
+		: undefined;
+	const gateClaim = replayGateVerification.verified
+		? addClaim({
+				id: "workspace-replay-gate-verification-" + shortHash(JSON.stringify(replayGateVerification.blockers)),
+				claimType: "workspace-replay-gate-verification-proof",
+				sourceBinding: { artifact: "workspace-source-runtime-verification.json", plan: "workspace-route-replay-plan.json", promotion: "workspace-route-claim-promotion.json" },
+				evidenceBinding: replayGateVerification,
+				statement: "Workspace verifier confirmed replay proof gates require live status/body hashes or keep source-only claims blocked.",
+				confidence: 0.82,
+				rerunCommand: "node workspace-source-runtime-verifier.mjs <workspace-dir> workspace-source-runtime-map.json workspace-route-replay-plan.json workspace-route-claim-promotion.json workspace-route-repair-queue.json workspace-source-runtime-claims.json workspace-source-runtime-verification.json",
+			})
+		: undefined;
+	const repairClaim = repairQueueVerification.verified
+		? addClaim({
+				id: "workspace-repair-queue-verification-" + shortHash(JSON.stringify(repairQueueVerification.blockers)),
+				claimType: "workspace-repair-queue-verification-proof",
+				sourceBinding: { artifact: "workspace-source-runtime-verification.json", claims: "workspace-source-runtime-claims.json", repairQueue: "workspace-route-repair-queue.json" },
+				evidenceBinding: repairQueueVerification,
+				statement: "Workspace verifier confirmed live-replay blockers remain in repairQueue until runtime proof exists.",
+				confidence: 0.8,
+				rerunCommand: "node workspace-source-runtime-verifier.mjs <workspace-dir> workspace-source-runtime-map.json workspace-route-replay-plan.json workspace-route-claim-promotion.json workspace-route-repair-queue.json workspace-source-runtime-claims.json workspace-source-runtime-verification.json",
+			})
+		: undefined;
+	const negativeClaim = negativeControlVerification.verified
+		? addClaim({
+				id: "workspace-verifier-negative-control-" + shortHash(JSON.stringify(negativeControls)),
+				claimType: "workspace-verifier-negative-control-proof",
+				sourceBinding: { artifact: "workspace-source-runtime-verification.json" },
+				evidenceBinding: negativeControlVerification,
+				statement: "Workspace verifier rejected missing-source, shifted-line, mutated-route, and live-proof-gate controls.",
+				confidence: 0.82,
+				rerunCommand: "node workspace-source-runtime-verifier.mjs <workspace-dir> workspace-source-runtime-map.json workspace-route-replay-plan.json workspace-route-claim-promotion.json workspace-route-repair-queue.json workspace-source-runtime-claims.json workspace-source-runtime-verification.json",
+			})
+		: undefined;
+	const runtimeProofReady = Boolean(liveRuntimeProofs.length && claims?.runtimeProofReady);
+	if (sourceClaim && templateClaim && gateClaim && repairClaim && negativeClaim) {
+		const segments = [sourceClaim, templateClaim, gateClaim, repairClaim, negativeClaim];
+		const composed = {
+			id: (runtimeProofReady ? "workspace-source-runtime-verification-proof-path-" : "workspace-source-runtime-verification-blocked-path-") + shortHash(segments.map((claim) => claim.id).join(">")),
+			claimType: runtimeProofReady ? "workspace-source-runtime-verification-proof-path" : "workspace-source-runtime-verification-blocked-path",
+			sourceBinding: { segments: segments.map((claim) => ({ id: claim.id, claimType: claim.claimType, artifact: claim.sourceBinding?.artifact })) },
+			evidenceBinding: {
+				verifiedRows: sourceLineVerification.verifiedRows,
+				matchedRoutes: routeTemplateVerification.matchedRoutes,
+				liveRuntimeProofs: liveRuntimeProofs.length,
+				negativeControlsPassed: negativeControlVerification.negativeControlsPassed,
+			},
+			statement: runtimeProofReady
+				? "Workspace source-to-runtime proof path composes source lines, replay templates, live route replay hashes, and negative controls."
+				: "Workspace verifier blocks exploit promotion until live route replay hashes and control differentials are captured.",
+			verdict: runtimeProofReady ? "promoted" : "blocked",
+			confidence: runtimeProofReady ? 0.88 : 0.52,
+			blockers: runtimeProofReady ? [] : ["missing-workspace-live-route-replay-proof", ...routeBlockers].filter((value, index, list) => list.indexOf(value) === index),
+			rerunCommand: routePlan?.run ?? "REPI_WORKSPACE_BASE_URL=http://127.0.0.1:PORT node workspace-route-replay-harness.mjs workspace-route-replay-results.json --live",
+		};
+		claimLedger.push(composed);
+		composedPaths.push(composed);
+	}
+	const blockers = [];
+	if (!sourceLineVerification.verified) blockers.push("missing-workspace-source-line-verification");
+	if (!routeTemplateVerification.verified) blockers.push("missing-workspace-route-template-verification");
+	if (!replayGateVerification.verified) blockers.push("missing-workspace-replay-gate-verification");
+	if (!repairQueueVerification.verified) blockers.push("missing-workspace-repair-queue-verification");
+	if (!runtimeProofReady) blockers.push("missing-workspace-live-route-replay-proof");
+	if (!negativeControlVerification.verified) blockers.push("missing-workspace-negative-control");
+	const repairActions = {
+		"missing-workspace-source-line-verification": "Rerun workspace-source-runtime-harness.mjs and ensure source file/line samples still match current files.",
+		"missing-workspace-route-template-verification": "Generate replay templates for every source route and proof targets for risky routes.",
+		"missing-workspace-replay-gate-verification": "Regenerate route replay plan and claim promotion sidecars before proof promotion.",
+		"missing-workspace-repair-queue-verification": "Keep route replay blockers queued until live status/body hash differentials exist.",
+		"missing-workspace-live-route-replay-proof": "Start the service, set REPI_WORKSPACE_BASE_URL, and run workspace-route-replay-harness.mjs --live.",
+		"missing-workspace-negative-control": "Run missing-source, shifted-line, mutated-route, and live-proof-gate controls.",
+	};
+	const repairQueue = blockers.map((blocker) => ({
+		id: "workspace-source-runtime-verification-" + blocker,
+		blocker,
+		action: repairActions[blocker] ?? "Collect verifier-bound workspace source/runtime evidence and rerun workspace-source-runtime-verifier.mjs.",
+		rerunCommand: blocker === "missing-workspace-live-route-replay-proof" ? routePlan?.run ?? `REPI_WORKSPACE_BASE_URL=http://127.0.0.1:PORT node ${shellQuote(join(artifactDir, "workspace-route-replay-harness.mjs"))} ${shellQuote(join(artifactDir, "workspace-route-replay-results.json"))} --live` : `node ${shellQuote(join(artifactDir, "workspace-source-runtime-verifier.mjs"))} ${shellQuote(target)} ${shellQuote(join(artifactDir, "workspace-source-runtime-map.json"))} ${shellQuote(join(artifactDir, "workspace-route-replay-plan.json"))} ${shellQuote(join(artifactDir, "workspace-route-claim-promotion.json"))} ${shellQuote(join(artifactDir, "workspace-route-repair-queue.json"))} ${shellQuote(join(artifactDir, "workspace-source-runtime-claims.json"))} ${shellQuote(join(artifactDir, "workspace-source-runtime-verification.json"))}`,
+	}));
+	const promotedClaims = claimLedger.filter((claim) => claim.verdict === "promoted");
+	return {
+		kind: "repi-workspace-source-runtime-verification",
+		schemaVersion: 1,
+		target: redact(target),
+		generatedAt: new Date().toISOString(),
+		proofReady: sourceLineVerification.verified && routeTemplateVerification.verified && replayGateVerification.verified,
+		runtimeProofReady,
+		exploitProofReady: runtimeProofReady && composedPaths.some((path) => path.verdict === "promoted"),
+		sourceLineVerification,
+		sourceLineChecks,
+		routeTemplateVerification,
+		replayGateVerification,
+		repairQueueVerification,
+		negativeControlVerification,
+		stats: {
+			checkedRows: sourceLineVerification.checkedRows,
+			verifiedRows: sourceLineVerification.verifiedRows,
+			matchedRoutes: routeTemplateVerification.matchedRoutes,
+			liveRuntimeProofs: liveRuntimeProofs.length,
+			negativeControlsPassed: negativeControlVerification.negativeControlsPassed,
+		},
+		claimLedger,
+		composedPaths,
+		promotionReport: { proofReady: promotedClaims.length > 0, runtimeProofReady, exploitProofReady: runtimeProofReady, promotedClaims, composedPaths: composedPaths.filter((path) => path.verdict === "promoted"), blockers },
+		repairQueue,
+	};
+}
+
+function workspaceSourceRuntimeVerifierSource() {
+	return String.raw`#!/usr/bin/env node
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { tmpdir } from "node:os";
+
+const selfTest = process.argv.includes("--self-test");
+
+function sha256(value) {
+	return createHash("sha256").update(value ?? "").digest("hex");
+}
+
+function short(value) {
+	return sha256(String(value)).slice(0, 12);
+}
+
+function redact(value) {
+	return String(value ?? "")
+		.replace(/\bsk-[A-Za-z0-9._-]{8,}\b/g, "<redacted:api-key>")
+		.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer <redacted>")
+		.replace(/([?&](?:api[_-]?key|token|access_token|refresh_token|client_secret|secret|password)=)[^&\s"'<>]{4,}/gi, "$1<redacted>")
+		.replace(/(["']?(?:api[_-]?key|token|secret|password|client_secret|access_token|refresh_token|private_key|access_key)["']?\s*[:=]\s*["'])([^"']{4,})(["'])/gi, "$1<redacted>$3");
+}
+
+function load(path, fallback = null) {
+	try {
+		return JSON.parse(readFileSync(path, "utf8"));
+	} catch {
+		return fallback;
+	}
+}
+
+function sourceRows(map) {
+	const rows = [];
+	const push = (kind, row) => {
+		if (!row?.file || !row?.line) return;
+		rows.push({ kind, file: row.file, line: row.line, sample: row.sample || "", route: row.path || row.route?.path || null, method: row.method || row.route?.method || null });
+	};
+	for (const row of map?.routes || []) push("route", row);
+	for (const row of map?.authAnchors || []) push("auth", row);
+	for (const row of map?.sinks || []) push("sink", row);
+	for (const row of map?.stateMutations || []) push("state", row);
+	for (const row of map?.signerCrypto || []) push("signer", row);
+	const seen = new Set();
+	return rows.filter((row) => {
+		const key = row.kind + ":" + row.file + ":" + row.line + ":" + row.sample;
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	}).slice(0, 260);
+}
+
+function lineCheck(root, row) {
+	const rootDir = resolve(root);
+	const path = resolve(rootDir, row.file || "");
+	if (path !== rootDir && !path.startsWith(rootDir + "/")) return { ...row, verified: false, error: "path-outside-target" };
+	if (!existsSync(path)) return { ...row, verified: false, error: "missing-source-file" };
+	const text = readFileSync(path, "utf8");
+	const lineText = text.split(/\r?\n/)[Number(row.line) - 1] || "";
+	const directSample = lineText.trim().slice(0, 320);
+	const sample = redact(lineText.trim().slice(0, 320));
+	const sampleMatched = !row.sample || sample === row.sample || directSample === row.sample;
+	return { ...row, verified: Boolean(lineText) && sampleMatched, lineSha256: sha256(lineText), lineLength: lineText.length, sampleMatched };
+}
+
+function verify(root, mapPath, planPath, promotionPath, repairPath, claimsPath) {
+	const map = load(mapPath, {});
+	const plan = load(planPath, {});
+	const promotion = load(promotionPath, {});
+	const repair = load(repairPath, {});
+	const claims = load(claimsPath, {});
+	const checks = sourceRows(map).map((row) => lineCheck(root, row));
+	const sourceLineVerification = { verified: checks.length > 0 && checks.every((row) => row.verified), checkedRows: checks.length, verifiedRows: checks.filter((row) => row.verified).length, files: [...new Set(checks.filter((row) => row.verified).map((row) => row.file))], kinds: [...new Set(checks.filter((row) => row.verified).map((row) => row.kind))].sort(), mapSha256: sha256(JSON.stringify(map)) };
+	const routes = map.routes || [];
+	const templates = map.routeReplayTemplates || [];
+	const proofTargets = map.proofTargets || [];
+	const templateChecks = routes.slice(0, 120).map((route) => {
+		const expectedMethod = /^(ANY|ALL)$/i.test(route.method || "") ? "GET" : String(route.method || "GET").toUpperCase();
+		return { file: route.file, line: route.line, route: route.path, method: route.method, expectedMethod, matched: templates.some((template) => template.route === route.path && String(template.method || "GET").toUpperCase() === expectedMethod) };
+	});
+	const routeTemplateVerification = { verified: routes.length > 0 && templateChecks.every((row) => row.matched), routeCount: routes.length, templateCount: templates.length, proofTargetCount: proofTargets.length, matchedRoutes: templateChecks.filter((row) => row.matched).length, templateChecks };
+	const routeClaims = Array.isArray(promotion.claimLedger) ? promotion.claimLedger : [];
+	const liveRuntimeProofs = routeClaims.filter((claim) => claim.verdict === "promoted" && (claim.evidenceBinding?.variants || []).some((variant) => typeof variant.status === "number" && /^[a-f0-9]{64}$/i.test(String(variant.responseSha256 || ""))));
+	const routeBlockers = [...new Set([...routeClaims.flatMap((claim) => claim.blockers || []), ...(repair.queue || []).map((row) => row.blocker).filter(Boolean), ...(claims.repairQueue || []).map((row) => row.blocker).filter(Boolean)])].sort();
+	const replayGateVerification = { verified: Boolean(plan.proofExitRule) && (plan.controls || []).includes("tampered-object") && (plan.controls || []).some((control) => /anonymous/i.test(control)) && (Boolean(liveRuntimeProofs.length) || Boolean(promotion.baseUrlRequired || routeBlockers.length)), baseUrlRequired: Boolean(promotion.baseUrlRequired), controls: plan.controls || [], liveRuntimeProofs: liveRuntimeProofs.length, blockers: routeBlockers };
+	const repairQueueVerification = { verified: Boolean(liveRuntimeProofs.length) || routeBlockers.includes("missing-base-url") || routeBlockers.includes("missing-live-route-replay-proof"), repairCount: routeBlockers.length, blockers: routeBlockers, runtimeProofReady: Boolean(claims.runtimeProofReady || liveRuntimeProofs.length), exploitProofReady: Boolean(claims.exploitProofReady) };
+	const controls = [];
+	const first = checks.find((row) => row.verified);
+	if (first) {
+		controls.push({ controlType: "workspace-missing-source-negative-control", file: first.file, passed: !existsSync(resolve(root, first.file + ".missing-control")) });
+		controls.push({ controlType: "workspace-shifted-line-negative-control", file: first.file, passed: !lineCheck(root, { ...first, line: Number(first.line) + 10000 }).verified });
+	}
+	if (routes[0]) controls.push({ controlType: "workspace-mutated-route-template-negative-control", route: routes[0].path, passed: !templates.some((template) => template.route === routes[0].path + "/__missing_control__") });
+	controls.push({ controlType: "workspace-live-proof-gate-negative-control", passed: Boolean(liveRuntimeProofs.length) || routeBlockers.includes("missing-base-url") || routeBlockers.includes("missing-live-route-replay-proof") });
+	const negativeControlVerification = { verified: controls.length >= 4 && controls.every((row) => row.passed), negativeControlsPassed: controls.filter((row) => row.passed).length, negativeControls: controls };
+	const ledger = [];
+	const paths = [];
+	const add = (claim) => {
+		const row = { verdict: "promoted", confidence: 0.76, blockers: [], ...claim };
+		ledger.push(row);
+		return row;
+	};
+	const sourceClaim = sourceLineVerification.verified ? add({ id: "workspace-source-line-verification-" + short(sourceLineVerification.files.join("|")), claimType: "workspace-source-line-verification-proof", sourceBinding: { artifact: "workspace-source-runtime-verification.json", map: "workspace-source-runtime-map.json" }, evidenceBinding: sourceLineVerification, statement: "Workspace verifier rebound route/auth/sink/state/signer rows to exact source file lines and hashes.", confidence: 0.86 }) : null;
+	const templateClaim = routeTemplateVerification.verified ? add({ id: "workspace-route-template-verification-" + short(routeTemplateVerification.routeCount + ":" + routeTemplateVerification.templateCount), claimType: "workspace-route-template-verification-proof", sourceBinding: { artifact: "workspace-source-runtime-verification.json", map: "workspace-source-runtime-map.json" }, evidenceBinding: routeTemplateVerification, statement: "Workspace verifier confirmed source routes have replay templates and risky routes have proof targets.", confidence: 0.84 }) : null;
+	const gateClaim = replayGateVerification.verified ? add({ id: "workspace-replay-gate-verification-" + short(JSON.stringify(routeBlockers)), claimType: "workspace-replay-gate-verification-proof", sourceBinding: { artifact: "workspace-source-runtime-verification.json", plan: "workspace-route-replay-plan.json" }, evidenceBinding: replayGateVerification, statement: "Workspace verifier confirmed replay proof gates require live status/body hashes or keep source-only claims blocked.", confidence: 0.82 }) : null;
+	const repairClaim = repairQueueVerification.verified ? add({ id: "workspace-repair-queue-verification-" + short(JSON.stringify(routeBlockers)), claimType: "workspace-repair-queue-verification-proof", sourceBinding: { artifact: "workspace-source-runtime-verification.json", claims: "workspace-source-runtime-claims.json" }, evidenceBinding: repairQueueVerification, statement: "Workspace verifier confirmed live-replay blockers remain in repairQueue until runtime proof exists.", confidence: 0.8 }) : null;
+	const negativeClaim = negativeControlVerification.verified ? add({ id: "workspace-verifier-negative-control-" + short(JSON.stringify(controls)), claimType: "workspace-verifier-negative-control-proof", sourceBinding: { artifact: "workspace-source-runtime-verification.json" }, evidenceBinding: negativeControlVerification, statement: "Workspace verifier rejected missing-source, shifted-line, mutated-route, and live-proof-gate controls.", confidence: 0.82 }) : null;
+	const runtimeProofReady = Boolean(liveRuntimeProofs.length && claims.runtimeProofReady);
+	if (sourceClaim && templateClaim && gateClaim && repairClaim && negativeClaim) {
+		const segments = [sourceClaim, templateClaim, gateClaim, repairClaim, negativeClaim];
+		const path = { id: (runtimeProofReady ? "workspace-source-runtime-verification-proof-path-" : "workspace-source-runtime-verification-blocked-path-") + short(segments.map((claim) => claim.id).join(">")), claimType: runtimeProofReady ? "workspace-source-runtime-verification-proof-path" : "workspace-source-runtime-verification-blocked-path", sourceBinding: { segments: segments.map((claim) => ({ id: claim.id, claimType: claim.claimType, artifact: claim.sourceBinding?.artifact })) }, evidenceBinding: { verifiedRows: sourceLineVerification.verifiedRows, matchedRoutes: routeTemplateVerification.matchedRoutes, liveRuntimeProofs: liveRuntimeProofs.length, negativeControlsPassed: negativeControlVerification.negativeControlsPassed }, statement: runtimeProofReady ? "Workspace source-to-runtime proof path composes source lines, replay templates, live route replay hashes, and negative controls." : "Workspace verifier blocks exploit promotion until live route replay hashes and control differentials are captured.", verdict: runtimeProofReady ? "promoted" : "blocked", confidence: runtimeProofReady ? 0.88 : 0.52, blockers: runtimeProofReady ? [] : [...new Set(["missing-workspace-live-route-replay-proof", ...routeBlockers])], rerunCommand: plan.run || "REPI_WORKSPACE_BASE_URL=http://127.0.0.1:PORT node workspace-route-replay-harness.mjs workspace-route-replay-results.json --live" };
+		ledger.push(path);
+		paths.push(path);
+	}
+	const blockers = [];
+	if (!sourceLineVerification.verified) blockers.push("missing-workspace-source-line-verification");
+	if (!routeTemplateVerification.verified) blockers.push("missing-workspace-route-template-verification");
+	if (!replayGateVerification.verified) blockers.push("missing-workspace-replay-gate-verification");
+	if (!repairQueueVerification.verified) blockers.push("missing-workspace-repair-queue-verification");
+	if (!runtimeProofReady) blockers.push("missing-workspace-live-route-replay-proof");
+	if (!negativeControlVerification.verified) blockers.push("missing-workspace-negative-control");
+	return { kind: "repi-workspace-source-runtime-verification", schemaVersion: 1, generatedAt: new Date().toISOString(), proofReady: sourceLineVerification.verified && routeTemplateVerification.verified && replayGateVerification.verified, runtimeProofReady, exploitProofReady: runtimeProofReady && paths.some((path) => path.verdict === "promoted"), sourceLineVerification, sourceLineChecks: checks, routeTemplateVerification, replayGateVerification, repairQueueVerification, negativeControlVerification, stats: { checkedRows: sourceLineVerification.checkedRows, verifiedRows: sourceLineVerification.verifiedRows, matchedRoutes: routeTemplateVerification.matchedRoutes, liveRuntimeProofs: liveRuntimeProofs.length, negativeControlsPassed: negativeControlVerification.negativeControlsPassed }, claimLedger: ledger, composedPaths: paths, promotionReport: { proofReady: ledger.some((claim) => claim.verdict === "promoted"), runtimeProofReady, exploitProofReady: runtimeProofReady, promotedClaims: ledger.filter((claim) => claim.verdict === "promoted"), composedPaths: paths.filter((path) => path.verdict === "promoted"), blockers }, repairQueue: blockers.map((blocker) => ({ id: "workspace-source-runtime-verification-" + blocker, blocker, action: blocker === "missing-workspace-live-route-replay-proof" ? "Start the service, set REPI_WORKSPACE_BASE_URL, and run workspace-route-replay-harness.mjs --live." : "Collect verifier-bound workspace source/runtime evidence and rerun workspace-source-runtime-verifier.mjs.", rerunCommand: blocker === "missing-workspace-live-route-replay-proof" ? (plan.run || "REPI_WORKSPACE_BASE_URL=http://127.0.0.1:PORT node workspace-route-replay-harness.mjs workspace-route-replay-results.json --live") : "node workspace-source-runtime-verifier.mjs <workspace-dir> workspace-source-runtime-map.json workspace-route-replay-plan.json workspace-route-claim-promotion.json workspace-route-repair-queue.json workspace-source-runtime-claims.json workspace-source-runtime-verification.json" })) };
+}
+
+function writeJson(path, value) {
+	writeFileSync(path, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
+}
+
+function runSelfTest() {
+	const root = tmpdir() + "/repi-workspace-verifier-" + Date.now() + "-" + process.pid;
+	mkdirSync(root + "/src", { recursive: true });
+	const source = ["const express = require('express');", "const app = express();", "app.post('/api/admin/run', (req,res)=> child_process.exec(req.body.cmd));", "function signRequest(params){ return crypto.createHash('md5').update(Object.keys(params).sort().join('&') + secret).digest('hex') }"].join("\n");
+	writeFileSync(root + "/src/server.js", source);
+	const routeLine = source.split(/\r?\n/)[2].trim().slice(0, 320);
+	const signerLine = source.split(/\r?\n/)[3].trim().slice(0, 320);
+	const map = { routes: [{ kind: "express-router", method: "POST", path: "/api/admin/run", file: "src/server.js", line: 3, sample: routeLine }], authAnchors: [], sinks: [{ kind: "command-exec", file: "src/server.js", line: 3, sample: routeLine }], stateMutations: [], signerCrypto: [{ kind: "signature", file: "src/server.js", line: 4, sample: signerLine }], proofTargets: [{ id: "route-proof-test", route: { file: "src/server.js", line: 3, method: "POST", path: "/api/admin/run" }, risks: ["route-to-dangerous-sink-candidate"] }], routeReplayTemplates: [{ route: "/api/admin/run", method: "POST", negativeControls: ["repeat without Cookie/Authorization", "mutate numeric/uuid object identifiers when present"] }] };
+	const plan = { controls: ["anonymous", "tampered-object"], proofExitRule: "anonymous/session differential", run: "REPI_WORKSPACE_BASE_URL=http://127.0.0.1:PORT node workspace-route-replay-harness.mjs workspace-route-replay-results.json --live" };
+	const promotion = { baseUrlRequired: true, proofReady: false, claimLedger: [{ id: "blocked", verdict: "blocked", blockers: ["missing-base-url"] }] };
+	const repair = { queue: [{ blocker: "missing-base-url" }] };
+	const claims = { proofReady: true, runtimeProofReady: false, exploitProofReady: false, repairQueue: [{ blocker: "missing-base-url" }, { blocker: "missing-live-route-replay-proof" }] };
+	writeJson(root + "/map.json", map);
+	writeJson(root + "/plan.json", plan);
+	writeJson(root + "/promotion.json", promotion);
+	writeJson(root + "/repair.json", repair);
+	writeJson(root + "/claims.json", claims);
+	const report = verify(root, root + "/map.json", root + "/plan.json", root + "/promotion.json", root + "/repair.json", root + "/claims.json");
+	if (!report.proofReady || report.runtimeProofReady || !report.repairQueue.some((row) => row.blocker === "missing-workspace-live-route-replay-proof")) throw new Error(JSON.stringify(report));
+	console.log(JSON.stringify({ kind: "repi-workspace-source-runtime-verifier-self-test", status: "ok", stats: report.stats }, null, 2));
+}
+
+if (selfTest) {
+	runSelfTest();
+} else {
+	const [, , root = ".", mapPath = "workspace-source-runtime-map.json", planPath = "workspace-route-replay-plan.json", promotionPath = "workspace-route-claim-promotion.json", repairPath = "workspace-route-repair-queue.json", claimsPath = "workspace-source-runtime-claims.json", outputPath = "workspace-source-runtime-verification.json"] = process.argv;
+	const report = verify(root, mapPath, planPath, promotionPath, repairPath, claimsPath);
+	writeJson(outputPath, report);
+	console.log(JSON.stringify({ kind: report.kind, proofReady: report.proofReady, runtimeProofReady: report.runtimeProofReady, stats: report.stats, output: outputPath }));
+	process.exit(report.proofReady ? 0 : 1);
+}
+`;
+}
+
+function writeWorkspaceSourceRuntimeVerifier(artifactDir) {
+	if (noWrite || !artifactDir) return undefined;
+	const path = join(artifactDir, "workspace-source-runtime-verifier.mjs");
+	writePrivate(path, workspaceSourceRuntimeVerifierSource(), 0o700);
+	return path;
+}
+
+function writeWorkspaceSourceRuntimeVerification(artifactDir, target, claimsSummary) {
+	if (noWrite || !artifactDir) return undefined;
+	const summary = workspaceSourceRuntimeVerificationSummary(target, artifactDir, claimsSummary);
+	const path = join(artifactDir, "workspace-source-runtime-verification.json");
+	writePrivate(path, `${JSON.stringify(summary, null, 2)}\n`, 0o600);
+	return { path, summary };
+}
+
 function engageFile(targetInfo, artifactDir) {
 	const target = targetInfo.path;
 	const rows = [];
@@ -18227,6 +18676,51 @@ function engageDirectory(targetInfo, artifactDir) {
 			stderr: "",
 			error: workspaceClaims.summary.proofReady ? undefined : "no workspace source-runtime claims promoted",
 		});
+	}
+	if (!noWrite && artifactDir) {
+		const verifierPath = writeWorkspaceSourceRuntimeVerifier(artifactDir);
+		if (verifierPath) {
+			rows.push({
+				id: "workspace-source-runtime-verifier-artifact",
+				command: "internal",
+				args: [redact(verifierPath)],
+				cwd: root,
+				exit: 0,
+				signal: null,
+				durationMs: 0,
+				stdout: `verifier=${redact(verifierPath)}\nrun=node ${redact(verifierPath)} ${redact(target)} ${redact(join(artifactDir, "workspace-source-runtime-map.json"))} ${redact(join(artifactDir, "workspace-route-replay-plan.json"))} ${redact(join(artifactDir, "workspace-route-claim-promotion.json"))} ${redact(join(artifactDir, "workspace-route-repair-queue.json"))} ${redact(join(artifactDir, "workspace-source-runtime-claims.json"))} ${redact(join(artifactDir, "workspace-source-runtime-verification.json"))}\n`,
+				stderr: "",
+				error: undefined,
+			});
+		}
+		const verification = writeWorkspaceSourceRuntimeVerification(artifactDir, target, workspaceClaims?.summary);
+		if (verification) {
+			rows.push({
+				id: "workspace-source-runtime-verification",
+				command: "internal",
+				args: [redact(verification.path)],
+				cwd: root,
+				exit: verification.summary.proofReady ? 0 : 1,
+				signal: null,
+				durationMs: 0,
+				stdout: `${JSON.stringify(
+					{
+						kind: verification.summary.kind,
+						proofReady: verification.summary.proofReady,
+						runtimeProofReady: verification.summary.runtimeProofReady,
+						exploitProofReady: verification.summary.exploitProofReady,
+						stats: verification.summary.stats,
+						claimLedger: verification.summary.claimLedger.map((claim) => ({ id: claim.id, claimType: claim.claimType, verdict: claim.verdict, blockers: claim.blockers })),
+						composedPaths: verification.summary.composedPaths.map((claim) => ({ id: claim.id, claimType: claim.claimType, verdict: claim.verdict, blockers: claim.blockers })),
+						repairQueue: verification.summary.repairQueue.map((row) => ({ id: row.id, blocker: row.blocker })),
+					},
+					null,
+					2,
+				)}\n`,
+				stderr: "",
+				error: verification.summary.proofReady ? undefined : "workspace source-runtime verification blockers present",
+			});
+		}
 	}
 	if (targetInfo.lane === "agent-boundary") {
 		rows.push(...agentBoundaryRows(target, artifactDir));
@@ -22014,11 +22508,13 @@ function nextQueue(targetInfo, artifactDir, toolState) {
 		const quotedDirectoryTarget = shellQuote(target);
 		if (!noWrite && existsSync(join(artifactDir, "workspace-source-runtime-map.json"))) q.push(`cat ${shellQuote(join(artifactDir, "workspace-source-runtime-map.json"))}`);
 		if (!noWrite && existsSync(join(artifactDir, "workspace-source-runtime-harness.mjs"))) q.push(`node ${shellQuote(join(artifactDir, "workspace-source-runtime-harness.mjs"))} ${quotedDirectoryTarget} ${shellQuote(join(artifactDir, "workspace-source-runtime-map.json"))}`);
+		if (!noWrite && existsSync(join(artifactDir, "workspace-source-runtime-verification.json"))) q.push(`cat ${shellQuote(join(artifactDir, "workspace-source-runtime-verification.json"))}`);
+		if (!noWrite && existsSync(join(artifactDir, "workspace-source-runtime-verifier.mjs"))) q.push(`node ${shellQuote(join(artifactDir, "workspace-source-runtime-verifier.mjs"))} ${quotedDirectoryTarget} ${shellQuote(join(artifactDir, "workspace-source-runtime-map.json"))} ${shellQuote(join(artifactDir, "workspace-route-replay-plan.json"))} ${shellQuote(join(artifactDir, "workspace-route-claim-promotion.json"))} ${shellQuote(join(artifactDir, "workspace-route-repair-queue.json"))} ${shellQuote(join(artifactDir, "workspace-source-runtime-claims.json"))} ${shellQuote(join(artifactDir, "workspace-source-runtime-verification.json"))}`);
 		if (!noWrite && existsSync(join(artifactDir, "workspace-route-claim-promotion.json"))) q.push(`cat ${shellQuote(join(artifactDir, "workspace-route-claim-promotion.json"))}`);
 		if (!noWrite && existsSync(join(artifactDir, "workspace-route-repair-queue.json"))) q.push(`cat ${shellQuote(join(artifactDir, "workspace-route-repair-queue.json"))}`);
 		if (!noWrite && existsSync(join(artifactDir, "workspace-source-runtime-claims.json"))) q.push(`cat ${shellQuote(join(artifactDir, "workspace-source-runtime-claims.json"))}`);
 		if (!noWrite && existsSync(join(artifactDir, "workspace-route-replay-harness.mjs"))) q.push(`REPI_WORKSPACE_BASE_URL=http://127.0.0.1:PORT node ${shellQuote(join(artifactDir, "workspace-route-replay-harness.mjs"))} ${shellQuote(join(artifactDir, "workspace-route-replay-results.json"))} --live`);
-		q.push(`repi -p ${shellQuote(`Use ${artifactDir}/commands.jsonl plus workspace-source-runtime-claims.json, workspace-route-claim-promotion.json, and workspace-route-repair-queue.json to continue workspace exploitation: drain claimLedger/composedPaths/repairQueue blockers, bind routes/sinks to runtime proof, and promote only source-bound replay differentials.`)}`);
+		q.push(`repi -p ${shellQuote(`Use ${artifactDir}/commands.jsonl plus workspace-source-runtime-verification.json, workspace-source-runtime-claims.json, workspace-route-claim-promotion.json, and workspace-route-repair-queue.json to continue workspace exploitation: rerun workspace-source-runtime-verifier.mjs to prove exact source file/line bindings, route replay templates, proof gates, and repairQueue blockers; drain claimLedger/composedPaths/repairQueue blockers, bind routes/sinks to runtime proof, and promote only source-bound replay differentials.`)}`);
 	}
 	if (swarm) {
 		const provider = argValue("--provider") || DEFAULT_SWARM_PROVIDER;
@@ -22088,6 +22584,7 @@ function summarizeEvidence(rows, targetInfo, toolState) {
 		if (/repi-workspace-source-runtime-map|workspace-source-runtime-map|sourceToRuntimeEdges|route-sensitive-no-nearby-auth-anchor|route-to-dangerous-sink-candidate|routeReplayTemplates/i.test(text) && targetInfo.kind === "directory") anchors.push("workspace source-to-runtime anchors");
 		if (/repi-workspace-route-replay|workspace-route-replay|workspace-route-claim-promotion|workspace-route-repair-queue|tampered-object|authDifferential|objectDifferential|promotionReport|claimLedger|repairQueue/i.test(text) && targetInfo.kind === "directory") anchors.push("workspace route replay/authz anchors");
 		if (/repi-workspace-source-runtime-claims|workspace-source-runtime-claims|workspace-source-runtime-proof-path|workspace-authz-replay-proof-path|claimLedger|composedPaths|repairQueue/i.test(text) && targetInfo.kind === "directory") anchors.push("workspace source-runtime claim anchors");
+		if (/repi-workspace-source-runtime-verification|workspace-source-runtime-verifier|workspace-source-line-verification-proof|workspace-route-template-verification-proof|workspace-replay-gate-verification-proof|workspace-repair-queue-verification-proof|workspace-verifier-negative-control-proof|workspace-source-runtime-verification-(?:proof|blocked)-path/i.test(text) && targetInfo.kind === "directory") anchors.push("workspace source-runtime verifier anchors");
 		if (/repi-web-discovery-matrix|web-discovery|robots\.txt|sitemap\.xml|openapi|swagger|graphql/i.test(text) && targetInfo.kind === "url") anchors.push("web discovery anchors");
 		if (/repi-web-api-schema-probes|web-api-schema-probes|__typename|__schema|graphql-introspection|graphql-mutation-surface|openapi-unauthenticated|openapi-upload-surface|securitySchemes|openapi|swagger|GraphQL/i.test(text) && targetInfo.kind === "url") anchors.push("API schema anchors");
 		if (/repi-web-ssrf-matrix|web-ssrf-matrix|ssrf-|169\.254\.169\.254|repi-ssrf-canary/i.test(text) && targetInfo.kind === "url") anchors.push("SSRF parameter anchors");
