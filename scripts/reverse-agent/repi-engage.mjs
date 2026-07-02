@@ -23305,6 +23305,7 @@ function renderMarkdown(report) {
 				lines.push(`- runId: ${report.swarm.summary.runId ?? "<unknown>"}`);
 				lines.push(`- finalPromotionReady: ${report.swarm.summary.finalPromotionReady}`);
 				lines.push(`- routeProofReady: ${report.swarm.summary.routeProofReady}; missingProofRoutes=${report.swarm.summary.missingProofRoutes.join(",") || "<none>"}`);
+				if (report.swarm.summary.mergeVerification) lines.push(`- mergeVerificationProofReady: ${report.swarm.summary.mergeVerification.proofReady}; blockers=${report.swarm.summary.mergeVerification.blockers.join(",") || "<none>"}`);
 				if (report.swarm.summary.mergeFailureReason) lines.push(`- mergeFailureReason: ${report.swarm.summary.mergeFailureReason}`);
 			}
 		}
@@ -23367,6 +23368,16 @@ function summarizeSwarmJson(parsed) {
 		routeReadinessRows,
 		promotedClaims: Array.isArray(merge.promotedClaims) ? merge.promotedClaims.length : 0,
 		proofReadyPromotedClaims: Array.isArray(merge.proofReadyPromotedClaims) ? merge.proofReadyPromotedClaims.length : 0,
+		mergeVerification: merge.mergeVerification
+			? {
+					proofReady: Boolean(merge.mergeVerification.proofReady),
+					finalPromotionReady: Boolean(merge.mergeVerification.finalPromotionReady),
+					blockers: Array.isArray(merge.mergeVerification.promotionReport?.blockers)
+						? merge.mergeVerification.promotionReport.blockers.map((item) => redact(String(item))).slice(0, 12)
+						: [],
+					stats: merge.mergeVerification.stats ?? {},
+				}
+			: undefined,
 		nextCommands: Array.isArray(merge.nextCommands) ? merge.nextCommands.map((command) => redact(String(command))).slice(0, 12) : [],
 	};
 }

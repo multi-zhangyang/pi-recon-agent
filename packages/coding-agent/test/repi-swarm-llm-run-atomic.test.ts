@@ -98,6 +98,7 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
 		const report = JSON.parse(result.stdout) as {
 			ok: boolean;
+			runId: string;
 			evidenceRoot: string;
 			plan: {
 				proofDoctrine: { UniversalProofDoctrineV1: boolean; order: string[] };
@@ -131,6 +132,18 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 					toolProbeCommand: string;
 					techniqueHints: { domains: string[]; techniqueIds: string[] };
 				}>;
+				mergeVerification: {
+					proofReady: boolean;
+					finalPromotionReady: boolean;
+					stats: {
+						verifiedWorkers: number;
+						verifiedClaims: number;
+						verifiedRoutes: number;
+						negativeControlsPassed: number;
+					};
+					claimLedger: Array<{ claimType: string; verdict: string }>;
+					composedPaths: Array<{ claimType: string; verdict: string }>;
+				};
 			};
 		};
 		expect(report.ok).toBe(true);
@@ -170,11 +183,35 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 			negativeControls: true,
 		});
 		expect(report.merge.proofChecklists[0].proofReady).toBe(true);
+		expect(report.merge.mergeVerification).toMatchObject({
+			proofReady: true,
+			finalPromotionReady: true,
+			stats: {
+				verifiedWorkers: 1,
+				verifiedClaims: 1,
+				verifiedRoutes: 1,
+				negativeControlsPassed: 3,
+			},
+		});
+		expect(report.merge.mergeVerification.claimLedger.map((claim) => claim.claimType)).toEqual(
+			expect.arrayContaining([
+				"swarm-worker-transcript-hash-proof",
+				"swarm-claim-proof-gate-proof",
+				"swarm-route-proof-gate-proof",
+				"swarm-merge-negative-control-proof",
+			]),
+		);
+		expect(
+			report.merge.mergeVerification.composedPaths.some(
+				(path) => path.claimType === "swarm-merge-verification-proof-path" && path.verdict === "promoted",
+			),
+		).toBe(true);
 
 		for (const name of [
 			"plan.json",
 			"report.json",
 			"merge-report.json",
+			"merge-verification.json",
 			"worker-1.stdout.txt",
 			"worker-1.stderr.txt",
 		]) {
@@ -185,6 +222,43 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		expect(readFileSync(join(report.evidenceRoot, "worker-1.stdout.txt"), "utf8")).toContain("ret2win primitive");
 		expect(JSON.parse(readFileSync(join(report.evidenceRoot, "merge-report.json"), "utf8")).finalPromotionReady).toBe(
 			true,
+		);
+		const persistedVerification = JSON.parse(
+			readFileSync(join(report.evidenceRoot, "merge-verification.json"), "utf8"),
+		) as {
+			proofReady: boolean;
+			claimLedger: Array<{ claimType: string }>;
+		};
+		expect(persistedVerification.proofReady).toBe(true);
+		expect(
+			persistedVerification.claimLedger.some((claim) => claim.claimType === "swarm-worker-transcript-hash-proof"),
+		).toBe(true);
+		writeFileSync(
+			join(report.evidenceRoot, "worker-1.stdout.txt"),
+			`${readFileSync(join(report.evidenceRoot, "worker-1.stdout.txt"), "utf8")}\nmutated transcript\n`,
+		);
+		const tamperedMerge = spawnSync(process.execPath, [SWARM, fakeRoot, "merge", report.runId, "--json"], {
+			encoding: "utf8",
+			env: {
+				...process.env,
+				REPI_CODING_AGENT_DIR: agentDir,
+			},
+			timeout: 10_000,
+		});
+		expect(tamperedMerge.status, `${tamperedMerge.stderr}\n${tamperedMerge.stdout}`).toBe(0);
+		const tamperedReport = JSON.parse(tamperedMerge.stdout) as {
+			mergeVerification: {
+				proofReady: boolean;
+				promotionReport: { blockers: string[] };
+				repairQueue: Array<{ blocker: string }>;
+			};
+		};
+		expect(tamperedReport.mergeVerification.proofReady).toBe(false);
+		expect(tamperedReport.mergeVerification.promotionReport.blockers).toContain(
+			"missing-swarm-transcript-hash-verification",
+		);
+		expect(tamperedReport.mergeVerification.repairQueue).toContainEqual(
+			expect.objectContaining({ blocker: "missing-swarm-transcript-hash-verification" }),
 		);
 		expect(collectTmp(agentDir)).toEqual([]);
 	});
@@ -300,6 +374,12 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		const report = JSON.parse(result.stdout) as {
 			evidenceRoot: string;
 			workersReport: Array<{ harvestedArtifacts: Array<{ artifactPath: string; sha256: string }> }>;
+			merge: {
+				mergeVerification: {
+					artifactVerification: { artifactCount: number; verifiedArtifacts: number };
+					claimLedger: Array<{ claimType: string }>;
+				};
+			};
 		};
 		const harvested = report.workersReport[0].harvestedArtifacts[0];
 		expect(harvested.artifactPath).toContain("worker-1-artifacts");
@@ -308,6 +388,15 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		expect(readFileSync(harvested.artifactPath, "utf8")).toBe("signed replay accepted\n");
 		expect(existsSync(join(report.evidenceRoot, "worker-1-artifacts.json"))).toBe(true);
 		expect(harvested.sha256).toMatch(/^[a-f0-9]{64}$/);
+		expect(report.merge.mergeVerification.artifactVerification).toMatchObject({
+			artifactCount: 1,
+			verifiedArtifacts: 1,
+		});
+		expect(
+			report.merge.mergeVerification.claimLedger.some(
+				(claim) => claim.claimType === "swarm-harvested-artifact-integrity-proof",
+			),
+		).toBe(true);
 	});
 
 	it("extracts structured merge JSON after noisy brace-containing prose", () => {
