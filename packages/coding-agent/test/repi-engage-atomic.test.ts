@@ -1219,7 +1219,7 @@ describe("repi-engage artifact writes", () => {
 				sourceBinding: { file: string };
 				evidenceBinding: { variants: Array<{ control: string; responseSha256: string }> };
 			}>;
-			repairQueue: unknown[];
+			repairQueue: Array<{ blocker: string; action: string }>;
 			rows: Array<{ variants: Array<{ control: string }> }>;
 		};
 		expect(selfTestReport.proofReady).toBe(true);
@@ -1490,14 +1490,20 @@ describe("repi-engage artifact writes", () => {
 		expect(report.nextQueue.some((command) => command.includes("windows-ad-quicklook.json"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("windows-ad-attack-paths.json"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("windows-ad-triage-plan.sh"))).toBe(true);
+		expect(
+			report.nextQueue.some((command) => command.includes("claimLedger") && command.includes("composedPaths")),
+		).toBe(true);
 		const summaryPath = join(report.artifactDir, "windows-ad-quicklook.json");
 		const attackPathsPath = join(report.artifactDir, "windows-ad-attack-paths.json");
+		const proofGraphPath = join(report.artifactDir, "repi-proof-graph.json");
 		const planPath = join(report.artifactDir, "windows-ad-triage-plan.sh");
 		expect(existsSync(summaryPath)).toBe(true);
 		expect(existsSync(attackPathsPath)).toBe(true);
+		expect(existsSync(proofGraphPath)).toBe(true);
 		expect(existsSync(planPath)).toBe(true);
 		expect(statSync(summaryPath).mode & 0o777).toBe(0o600);
 		expect(statSync(attackPathsPath).mode & 0o777).toBe(0o600);
+		expect(statSync(proofGraphPath).mode & 0o777).toBe(0o600);
 		expect(statSync(planPath).mode & 0o777).toBe(0o700);
 		const summary = JSON.parse(readFileSync(summaryPath, "utf8")) as {
 			files: Array<{ name: string; type: string }>;
@@ -1523,15 +1529,29 @@ describe("repi-engage artifact writes", () => {
 		};
 		const attackPaths = JSON.parse(readFileSync(attackPathsPath, "utf8")) as {
 			proofReady: boolean;
+			attackPathProofReady: boolean;
+			pivotProofReady: boolean;
 			attackPaths: Array<{
 				source: string;
 				target: string;
 				relationships: string[];
 				evidence: { edgeCount: number };
 			}>;
-			claimLedger: Array<{ verdict: string; sourceBinding: { source: string; target: string; files: string[] } }>;
-			promotionReport: { promotedClaims: unknown[] };
-			repairQueue: unknown[];
+			claimLedger: Array<{
+				claimType: string;
+				verdict: string;
+				sourceBinding: { source?: string; target?: string; files?: string[] };
+			}>;
+			composedPaths: Array<{ claimType: string; verdict: string }>;
+			promotionReport: {
+				promotedClaims: Array<{ claimType: string }>;
+				composedPaths: Array<{ claimType: string }>;
+			};
+			repairQueue: Array<{ blocker: string; action: string }>;
+		};
+		const proofGraph = JSON.parse(readFileSync(proofGraphPath, "utf8")) as {
+			claimLedger: Array<{ claimType: string }>;
+			composedPaths: Array<{ claimType: string }>;
 		};
 		expect(JSON.stringify(summary)).not.toContain(secret);
 		expect(JSON.stringify(attackPaths)).not.toContain(secret);
@@ -1564,6 +1584,8 @@ describe("repi-engage artifact writes", () => {
 		expect(summary.bloodhound.privilegeEdges.some((row) => row.relationship === "GenericAll")).toBe(true);
 		expect(summary.bloodhound.attackPaths.some((row) => row.relationships.includes("GenericAll"))).toBe(true);
 		expect(attackPaths.proofReady).toBe(true);
+		expect(attackPaths.attackPathProofReady).toBe(true);
+		expect(attackPaths.pivotProofReady).toBe(true);
 		expect(attackPaths.attackPaths[0]).toMatchObject({
 			source: "ALICE@CORP.EXAMPLE.COM",
 			evidence: { edgeCount: 1 },
@@ -1573,7 +1595,22 @@ describe("repi-engage artifact writes", () => {
 			sourceBinding: { source: "ALICE@CORP.EXAMPLE.COM" },
 		});
 		expect(attackPaths.promotionReport.promotedClaims.length).toBeGreaterThan(0);
-		expect(attackPaths.repairQueue.length).toBe(0);
+		expect(attackPaths.claimLedger.map((claim) => claim.claimType)).toContain("windows-ad-attack-path");
+		expect(attackPaths.claimLedger.map((claim) => claim.claimType)).toContain(
+			"windows-ad-offline-domain-credential-dump-surface",
+		);
+		expect(attackPaths.claimLedger.map((claim) => claim.claimType)).toContain("windows-ad-kerberos-ticket-surface");
+		expect(attackPaths.claimLedger.map((claim) => claim.claimType)).toContain("windows-ad-adcs-esc-surface");
+		expect(attackPaths.claimLedger.map((claim) => claim.claimType)).toContain("windows-ad-logon-event-correlation");
+		expect(attackPaths.composedPaths.map((path) => path.claimType)).toContain("windows-ad-credential-graph-pivot");
+		expect(attackPaths.composedPaths.map((path) => path.claimType)).toContain("windows-ad-adcs-graph-pivot");
+		expect(attackPaths.promotionReport.composedPaths.map((path) => path.claimType)).toContain(
+			"windows-ad-credential-graph-pivot",
+		);
+		expect(proofGraph.claimLedger.map((claim) => claim.claimType)).toContain("windows-ad-attack-path");
+		expect(proofGraph.composedPaths.map((path) => path.claimType)).toContain("windows-ad-credential-graph-pivot");
+		expect(attackPaths.repairQueue.map((row) => row.blocker)).toContain("needs-template-enrollment-proof");
+		expect(attackPaths.repairQueue[0].action).toContain("ADCS");
 		expect(summary.signals.domains.some((row) => row.text.includes("CORP.EXAMPLE.COM"))).toBe(true);
 		expect(summary.signals.principals.some((row) => row.text.includes("CORP\\alice"))).toBe(true);
 		expect(summary.signals.kerberos.some((row) => row.text.includes("Kerberoast"))).toBe(true);

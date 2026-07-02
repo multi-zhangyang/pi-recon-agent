@@ -9646,54 +9646,230 @@ function windowsAdBloodhoundAttackPaths(nodes, edges, owned, highValue) {
 
 function windowsAdAttackPathClaims(summary) {
 	const bloodhound = summary.bloodhound ?? {};
+	const signals = summary.signals ?? {};
 	const attackPaths = Array.isArray(bloodhound.attackPaths) ? bloodhound.attackPaths : [];
+	const fileRows = Array.isArray(summary.files) ? summary.files : [];
 	const blockers = [];
 	if (!(bloodhound.owned ?? []).length) blockers.push("missing-owned-principal");
 	if (!(bloodhound.highValue ?? []).length) blockers.push("missing-high-value-target");
 	if (!attackPaths.length) blockers.push("missing-owned-to-high-value-path");
-	const claims = attackPaths.map((path) => ({
-		id: "windows-ad-attack-path-" + shortHash(path.id),
-		pathId: path.id,
-		sourceBinding: {
-			source: path.source,
-			target: path.target,
-			relationships: path.relationships,
-			files: path.evidence?.files ?? [],
-		},
-		evidenceBinding: {
-			nodes: path.nodes,
-			edges: path.edges,
-			sourceOwned: Boolean(path.evidence?.sourceOwned),
-			targetHighValue: Boolean(path.evidence?.targetHighValue),
-			edgeCount: path.evidence?.edgeCount ?? path.length,
-		},
-		statement: "BloodHound data contains an owned-principal to high-value target attack path with concrete edge evidence.",
-		verdict: "promoted",
-		confidence: path.priority === "critical" ? 0.9 : path.priority === "high" ? 0.84 : 0.76,
-		blockers: [],
-		rerunCommand: "cat windows-ad-quicklook.json | jq '.bloodhound.attackPaths'",
-	}));
-	const repairQueue = blockers.map((blocker) => ({
+	const claimLedger = [];
+	const addClaim = (claim) => {
+		const normalized = {
+			verdict: "promoted",
+			confidence: 0.72,
+			blockers: [],
+			...claim,
+		};
+		if (!normalized.id || claimLedger.some((row) => row.id === normalized.id)) return undefined;
+		claimLedger.push(normalized);
+		return normalized;
+	};
+	const attackPathClaims = attackPaths
+		.map((path) =>
+			addClaim({
+				id: "windows-ad-attack-path-" + shortHash(path.id),
+				claimType: "windows-ad-attack-path",
+				pathId: path.id,
+				sourceBinding: {
+					source: path.source,
+					target: path.target,
+					relationships: path.relationships,
+					files: path.evidence?.files ?? [],
+				},
+				evidenceBinding: {
+					nodes: path.nodes,
+					edges: path.edges,
+					sourceOwned: Boolean(path.evidence?.sourceOwned),
+					targetHighValue: Boolean(path.evidence?.targetHighValue),
+					edgeCount: path.evidence?.edgeCount ?? path.length,
+					priority: path.priority ?? null,
+				},
+				statement: "BloodHound data contains an owned-principal to high-value target attack path with concrete edge evidence.",
+				confidence: path.priority === "critical" ? 0.9 : path.priority === "high" ? 0.84 : 0.76,
+				rerunCommand: "cat windows-ad-quicklook.json | jq '.bloodhound.attackPaths'",
+			}),
+		)
+		.filter(Boolean);
+	const credentialRows = Array.isArray(signals.credentials) ? signals.credentials : [];
+	const kerberosRows = Array.isArray(signals.kerberos) ? signals.kerberos : [];
+	const adcsRows = Array.isArray(signals.adcs) ? signals.adcs : [];
+	const eventRows = Array.isArray(signals.events) ? signals.events : [];
+	const commandRows = Array.isArray(signals.commands) ? signals.commands : [];
+	const principalRows = Array.isArray(signals.principals) ? signals.principals : [];
+	const hasNtds = fileRows.some((row) => row.type === "ntds");
+	const hasRegistryHive = fileRows.some((row) => row.type === "registry-hive");
+	const hasKerberosArtifact = fileRows.some((row) => row.type === "kirbi" || row.type === "ccache");
+	const hasEvtx = fileRows.some((row) => row.type === "evtx");
+	const credentialClaim =
+		credentialRows.length || hasNtds || hasRegistryHive
+			? addClaim({
+					id: "windows-ad-credential-material-" + shortHash(`${credentialRows.map((row) => row.text).join("|")}:${hasNtds}:${hasRegistryHive}`),
+					claimType: hasNtds && hasRegistryHive ? "windows-ad-offline-domain-credential-dump-surface" : "windows-ad-credential-material-surface",
+					sourceBinding: {
+						artifact: "windows-ad-quicklook.json",
+						fields: ["files", "signals.credentials"],
+						fileTypes: fileRows.filter((row) => ["ntds", "registry-hive"].includes(row.type)).map((row) => row.type),
+					},
+					evidenceBinding: {
+						hasNtds,
+						hasRegistryHive,
+						credentialSignals: credentialRows.slice(0, 16),
+					},
+					statement: hasNtds && hasRegistryHive
+						? "Windows/AD evidence contains NTDS plus registry hive material; hash extraction may be verifiable with a matching bootkey."
+						: "Windows/AD evidence contains credential-material signals that need usability verification before replay.",
+					confidence: hasNtds && hasRegistryHive ? 0.84 : 0.7,
+					blockers: hasNtds && hasRegistryHive ? [] : ["missing-matching-ntds-system-hive"],
+					rerunCommand: "cat windows-ad-quicklook.json | jq '.files,.signals.credentials'",
+				})
+			: undefined;
+	const kerberosClaim =
+		kerberosRows.length || hasKerberosArtifact
+			? addClaim({
+					id: "windows-ad-kerberos-ticket-" + shortHash(`${kerberosRows.map((row) => row.text).join("|")}:${hasKerberosArtifact}`),
+					claimType: "windows-ad-kerberos-ticket-surface",
+					sourceBinding: {
+						artifact: "windows-ad-quicklook.json",
+						fields: ["files", "signals.kerberos"],
+						kerberosArtifacts: fileRows.filter((row) => row.type === "kirbi" || row.type === "ccache").map((row) => row.name),
+					},
+					evidenceBinding: {
+						hasKerberosArtifact,
+						kerberosSignals: kerberosRows.slice(0, 16),
+						principals: principalRows.slice(0, 12),
+					},
+					statement: "Kerberos ticket/SPN/log evidence identifies replay, roast, or cracking pivots that require realm/time/service validation.",
+					confidence: hasKerberosArtifact ? 0.82 : 0.72,
+					rerunCommand: "cat windows-ad-quicklook.json | jq '.files,.signals.kerberos,.signals.principals'",
+				})
+			: undefined;
+	const adcsClaim = adcsRows.length
+		? addClaim({
+				id: "windows-ad-adcs-esc-" + shortHash(adcsRows.map((row) => row.text).join("|")),
+				claimType: "windows-ad-adcs-esc-surface",
+				sourceBinding: { artifact: "windows-ad-quicklook.json", field: "signals.adcs" },
+				evidenceBinding: { adcsSignals: adcsRows.slice(0, 20), principals: principalRows.slice(0, 12) },
+				statement: "ADCS/ESC evidence identifies certificate-abuse triage targets that need template enrollment proof before exploitation.",
+				confidence: adcsRows.some((row) => /ESC[1-9]|Certipy/i.test(row.text)) ? 0.78 : 0.68,
+				rerunCommand: "cat windows-ad-quicklook.json | jq '.signals.adcs'",
+			})
+		: undefined;
+	const logonClaim =
+		eventRows.length || hasEvtx
+			? addClaim({
+					id: "windows-ad-logon-event-correlation-" + shortHash(`${eventRows.map((row) => row.text).join("|")}:${hasEvtx}`),
+					claimType: "windows-ad-logon-event-correlation",
+					sourceBinding: { artifact: "windows-ad-quicklook.json", fields: ["files", "signals.events"] },
+					evidenceBinding: { hasEvtx, events: eventRows.slice(0, 20), principals: principalRows.slice(0, 12) },
+					statement: "Windows event evidence gives logon/privilege timestamps to correlate credential usability with graph edges.",
+					confidence: eventRows.some((row) => /4624|4672/i.test(row.text)) ? 0.78 : 0.62,
+					rerunCommand: "cat windows-ad-quicklook.json | jq '.signals.events'",
+				})
+			: undefined;
+	if (commandRows.length) {
+		addClaim({
+			id: "windows-ad-offensive-tool-command-surface-" + shortHash(commandRows.map((row) => row.text).join("|")),
+			claimType: "windows-ad-offensive-tool-command-surface",
+			sourceBinding: { artifact: "windows-ad-quicklook.json", field: "signals.commands" },
+			evidenceBinding: { commands: commandRows.slice(0, 20) },
+			statement: "Windows/AD artifact strings contain offensive or administrative command anchors for timeline and operator-intent correlation.",
+			confidence: 0.66,
+			rerunCommand: "cat windows-ad-quicklook.json | jq '.signals.commands'",
+		});
+	}
+	const composedPaths = [];
+	const pivotClaim = attackPathClaims[0];
+	if (pivotClaim && (credentialClaim || kerberosClaim || logonClaim)) {
+		const segments = [credentialClaim, kerberosClaim, logonClaim, pivotClaim].filter(Boolean);
+		const composed = {
+			id: "windows-ad-credential-graph-pivot-" + shortHash(segments.map((claim) => claim.id).join(">")),
+			claimType: "windows-ad-credential-graph-pivot",
+			sourceBinding: {
+				segments: segments.map((claim) => ({
+					id: claim.id,
+					claimType: claim.claimType,
+					source: claim.sourceBinding?.source,
+					target: claim.sourceBinding?.target,
+					artifact: claim.sourceBinding?.artifact,
+				})),
+			},
+			evidenceBinding: {
+				hasCredentialMaterial: Boolean(credentialClaim),
+				hasKerberosArtifactOrSignal: Boolean(kerberosClaim),
+				hasLogonEvents: Boolean(logonClaim),
+				attackPath: {
+					source: pivotClaim.sourceBinding.source,
+					target: pivotClaim.sourceBinding.target,
+					relationships: pivotClaim.sourceBinding.relationships,
+					edgeCount: pivotClaim.evidenceBinding.edgeCount,
+				},
+				files: Array.from(new Set([...(pivotClaim.sourceBinding.files ?? []), ...fileRows.map((row) => row.name).slice(0, 12)])).slice(0, 24),
+			},
+			statement: "Credential/Kerberos/logon evidence composes with an owned-to-high-value BloodHound path into a prioritized AD pivot proof path.",
+			verdict: "promoted",
+			confidence: credentialClaim && kerberosClaim ? 0.88 : 0.82,
+			blockers: [],
+			rerunCommand: "cat windows-ad-attack-paths.json | jq '.composedPaths'",
+		};
+		claimLedger.push(composed);
+		composedPaths.push(composed);
+	}
+	if (adcsClaim && pivotClaim) {
+		const composed = {
+			id: "windows-ad-adcs-graph-pivot-" + shortHash(`${adcsClaim.id}>${pivotClaim.id}`),
+			claimType: "windows-ad-adcs-graph-pivot",
+			sourceBinding: {
+				segments: [
+					{ id: adcsClaim.id, claimType: adcsClaim.claimType, artifact: adcsClaim.sourceBinding?.artifact },
+					{ id: pivotClaim.id, claimType: pivotClaim.claimType, source: pivotClaim.sourceBinding.source, target: pivotClaim.sourceBinding.target },
+				],
+			},
+			evidenceBinding: {
+				adcsSignals: adcsClaim.evidenceBinding.adcsSignals,
+				attackPath: {
+					source: pivotClaim.sourceBinding.source,
+					target: pivotClaim.sourceBinding.target,
+					relationships: pivotClaim.sourceBinding.relationships,
+				},
+			},
+			statement: "ADCS/ESC signals and a high-value graph path compose into a certificate-abuse triage pivot candidate.",
+			verdict: "promoted",
+			confidence: 0.8,
+			blockers: ["needs-template-enrollment-proof"],
+			rerunCommand: "cat windows-ad-quicklook.json | jq '.signals.adcs' && cat windows-ad-attack-paths.json | jq '.attackPaths'",
+		};
+		claimLedger.push(composed);
+		composedPaths.push(composed);
+	}
+	const repairActions = {
+		"missing-owned-principal": "Import BloodHound owned/pwned principal data or mark a verified credential as owned.",
+		"missing-high-value-target": "Import BloodHound high-value nodes such as Domain Admins, Enterprise Admins, DCs, or krbtgt.",
+		"missing-owned-to-high-value-path": "Import relationship/ACL/session edges or run path collection until an owned-to-high-value chain exists.",
+		"needs-template-enrollment-proof": "Enumerate ADCS templates and prove enrollment/ESC conditions before treating the certificate pivot as executable.",
+	};
+	const repairQueue = Array.from(new Set([...blockers, ...composedPaths.flatMap((path) => path.blockers ?? [])])).map((blocker) => ({
 		id: "windows-ad-attack-path-" + blocker,
 		blocker,
-		action:
-			blocker === "missing-owned-principal"
-				? "Import BloodHound owned/pwned principal data or mark a verified credential as owned."
-				: blocker === "missing-high-value-target"
-					? "Import BloodHound high-value nodes such as Domain Admins, Enterprise Admins, DCs, or krbtgt."
-					: "Import relationship/ACL/session edges or run path collection until an owned-to-high-value chain exists.",
+		action: repairActions[blocker] ?? "Collect Windows/AD evidence and rerun attack-path claim promotion.",
 		rerunCommand: "repi engage <windows-ad-artifact-dir> --json",
 	}));
 	return {
 		kind: "repi-windows-ad-attack-paths",
 		schemaVersion: 1,
 		generatedAt: new Date().toISOString(),
-		proofReady: claims.length > 0,
+		proofReady: claimLedger.some((claim) => claim.verdict === "promoted"),
+		attackPathProofReady: attackPathClaims.length > 0,
+		pivotProofReady: composedPaths.length > 0,
 		attackPaths,
-		claimLedger: claims,
+		claimLedger,
+		composedPaths,
 		promotionReport: {
-			proofReady: claims.length > 0,
-			promotedClaims: claims,
+			proofReady: claimLedger.some((claim) => claim.verdict === "promoted"),
+			attackPathProofReady: attackPathClaims.length > 0,
+			pivotProofReady: composedPaths.length > 0,
+			promotedClaims: claimLedger.filter((claim) => claim.verdict === "promoted"),
+			composedPaths,
 			observations: [],
 			blockers,
 		},
@@ -15945,7 +16121,7 @@ function nextQueue(targetInfo, artifactDir, toolState) {
 		if (!noWrite) q.push(`cat ${shellQuote(join(artifactDir, "windows-ad-quicklook.json"))}`);
 		if (!noWrite && existsSync(join(artifactDir, "windows-ad-attack-paths.json"))) q.push(`cat ${shellQuote(join(artifactDir, "windows-ad-attack-paths.json"))}`);
 		if (!noWrite) q.push(`bash ${shellQuote(join(artifactDir, "windows-ad-triage-plan.sh"))} ${quotedTarget}`);
-		q.push(`repi -p ${shellQuote(`Continue Windows/AD identity work from ${artifactDir}: use windows-ad-quicklook.json and windows-ad-attack-paths.json to bind BloodHound owned principals to high-value targets with exact edge chains, then verify one credential usability, ADCS, DCSync, or high-value graph path.`)}`);
+		q.push(`repi -p ${shellQuote(`Continue Windows/AD identity work from ${artifactDir}: use windows-ad-quicklook.json plus windows-ad-attack-paths.json claimLedger/composedPaths/repairQueue to bind credential/Kerberos/logon/ADCS evidence to BloodHound owned principals and high-value targets with exact edge chains, then verify one credential usability, ADCS, DCSync, or high-value graph path.`)}`);
 	}
 	if (targetInfo.lane === "malware") {
 		if (!noWrite) q.push(`cat ${shellQuote(join(artifactDir, "malware-quicklook.json"))}`);
@@ -16070,7 +16246,7 @@ function summarizeEvidence(rows, targetInfo, toolState) {
 		if (/repi-memory-quicklook|memory-quicklook|memory-evidence-claims|memory-triage-plan|credential-string-signal|network-artifact-signal|suspicious-commandline-signal/i.test(text) && targetInfo.lane === "memory-forensics") anchors.push("memory quicklook anchors");
 		if (/process-network-correlation-signal|credential-context-correlation-signal|timeline-correlation-signal|processNetwork|credentialContext|memory-credential-network-pivot|claimLedger/i.test(text) && targetInfo.lane === "memory-forensics") anchors.push("memory correlation anchors");
 		if (/repi-windows-ad-quicklook|windows-ad-quicklook|windows-ad-triage|krbtgt|Kerberoast|DCSync|ADCS|Certipy|BloodHound|4769|4624/i.test(text) && targetInfo.lane === "windows-ad") anchors.push("Windows/AD identity anchors");
-		if (/bloodhound-graph-data-present|bloodhound-privilege-edge-signal|bloodhound-owned-principal-signal|bloodhound-owned-to-high-value-path|relationCounts|privilegeEdges|highValue|attackPaths|windows-ad-attack-path/i.test(text) && targetInfo.lane === "windows-ad") anchors.push("BloodHound graph anchors");
+		if (/bloodhound-graph-data-present|bloodhound-privilege-edge-signal|bloodhound-owned-principal-signal|bloodhound-owned-to-high-value-path|relationCounts|privilegeEdges|highValue|attackPaths|windows-ad-attack-path|windows-ad-credential-graph-pivot|windows-ad-adcs-graph-pivot|claimLedger|composedPaths|repairQueue/i.test(text) && targetInfo.lane === "windows-ad") anchors.push("BloodHound graph anchors");
 		if (/repi-malware-quicklook|malware-quicklook|malware-behavior-claims|malware-triage|malware-behavior-chain|claimLedger|configFields|network-ioc-signal|CreateRemoteThread|VirtualAlloc|FLOSS|YARA|capa|ATT&CK|mutex|User-Agent/i.test(text) && targetInfo.lane === "malware") anchors.push("malware IOC/capability anchors");
 		if (/staticStructure|malware-overlay-signal|malware-suspicious-import-signal|suspiciousImports|overlay-data-present|rwx-section-signal|structured-executable-analysis-signal|malware-overlay-carve-target|malware-rwx-section/i.test(text) && targetInfo.lane === "malware") anchors.push("malware static structure anchors");
 		if (/repi-firmware-quicklook|firmware-quicklook|firmware-attack-surface|firmware-extract-plan|claimLedger|extractionTargets|management-credential-pivot|SquashFS|UBI|uImage|dropbear|telnetd|cgi-bin|hardcoded-credential-signal/i.test(text) && targetInfo.lane === "firmware-iot") anchors.push("firmware quicklook anchors");
