@@ -587,6 +587,7 @@ function buildProofArtifactRows(targetInfo, artifactDir) {
 	}
 	if (targetInfo.lane === "malware") {
 		add("malware-quicklook.json", "malware IOC/capability quicklook output");
+		add("malware-behavior-claims.json", "malware IOC/config/capability claim ledger");
 		add("malware-triage-plan.sh", "malware triage harness", 0o700);
 	}
 	if (targetInfo.lane === "firmware-iot") {
@@ -632,7 +633,7 @@ function buildProofCoverageGaps(targetInfo, artifactRows) {
 	if (targetInfo.lane === "firmware-iot") requireAny("firmware-extract-plan", ["firmware-attack-surface.json", "firmware-extract-plan.sh", "firmware-quicklook.json"], "firmware targets need structure/extraction anchors");
 	if (targetInfo.lane === "memory-forensics") requireAny("memory-triage-plan", ["memory-evidence-claims.json", "memory-triage-plan.sh", "memory-quicklook.json"], "memory targets need triage/correlation anchors");
 	if (targetInfo.lane === "windows-ad") requireAny("windows-ad-triage-plan", ["windows-ad-triage-plan.sh", "windows-ad-quicklook.json"], "identity targets need AD graph/credential triage anchors");
-	if (targetInfo.lane === "malware") requireAny("malware-triage-plan", ["malware-triage-plan.sh", "malware-quicklook.json"], "malware targets need IOC/capability triage anchors");
+	if (targetInfo.lane === "malware") requireAny("malware-triage-plan", ["malware-behavior-claims.json", "malware-triage-plan.sh", "malware-quicklook.json"], "malware targets need IOC/capability triage anchors");
 	if (targetInfo.lane === "agent-boundary") requireAny("agent-boundary-replay", ["agent-boundary-payloads.py", "agent-boundary-map.json"], "agent-boundary targets need replay payloads and flow map");
 	if (targetInfo.lane === "cloud-identity") requireAny("cloud-identity-verify", ["cloud-identity-trust-claims.json", "cloud-identity-verify.sh", "cloud-identity-map.json"], "cloud targets need trust-chain verification anchors");
 	return gaps;
@@ -8305,6 +8306,333 @@ function malwareQuicklookSummary(target) {
 	};
 }
 
+function malwareSignalBinding(row) {
+	const text = String(row?.text ?? "");
+	const match = text.match(/^([^:\n]{1,260}):\s*([\s\S]*)$/);
+	return {
+		file: match ? match[1] : null,
+		offset: row?.offset ?? null,
+		text: match ? match[2] : text,
+	};
+}
+
+function malwareImportCapability(name) {
+	if (/CreateRemoteThread|WriteProcessMemory|VirtualAlloc|OpenProcess|QueueUserAPC|SetWindowsHookEx/i.test(name)) return "process-injection";
+	if (/InternetOpen|InternetConnect|WinHttp|URLDownloadToFile|socket|connect|send|recv/i.test(name)) return "network";
+	if (/Crypt(?:AcquireContext|Decrypt|Encrypt)|BCrypt|NCrypt/i.test(name)) return "crypto";
+	if (/WinExec|ShellExecute|CreateProcess|system|execve/i.test(name)) return "command-execution";
+	return "suspicious-import";
+}
+
+function malwareConfigFields(rows) {
+	const fields = [];
+	const addField = (field, value, row) => {
+		if (!value) return;
+		const binding = malwareSignalBinding(row);
+		const text = redact(String(value).slice(0, 220));
+		if (!text || fields.some((existing) => existing.field === field && existing.value === text)) return;
+		fields.push({ field, value: text, source: binding });
+	};
+	for (const row of rows ?? []) {
+		const binding = malwareSignalBinding(row);
+		const text = binding.text;
+		for (const match of text.matchAll(/\bmutex\s+([A-Za-z0-9_ .\\/-]{3,120})/gi)) addField("mutex", match[1].trim(), row);
+		for (const match of text.matchAll(/\bUser-Agent\s+([^\0\r\n;]{3,180})/gi)) addField("userAgent", match[1].trim(), row);
+		for (const match of text.matchAll(/\b(?:sleep|interval)\s*[=: ]\s*([0-9]{1,8})/gi)) addField("sleep", match[1], row);
+		for (const match of text.matchAll(/\b(?:bot_id|campaign)\s*[=: ]\s*([A-Za-z0-9._-]{2,120})/gi)) addField(match[1] ? "campaignOrBotId" : "config", match[1], row);
+		for (const match of text.matchAll(/\b(?:gate\.php|panel|beacon|C2|command-and-control)\b[^\0\r\n]{0,120}/gi)) addField("c2Hint", match[0], row);
+	}
+	return fields.slice(0, 80);
+}
+
+function malwareBehaviorClaims(summary) {
+	const signals = summary.signals ?? {};
+	const claimLedger = [];
+	const configFields = malwareConfigFields(signals.configHints ?? []);
+	const addClaim = (claim) => {
+		claimLedger.push({
+			verdict: "promoted",
+			confidence: 0.7,
+			blockers: [],
+			...claim,
+		});
+	};
+	for (const file of summary.files ?? []) {
+		const executable = /^(?:PE|ELF|Mach-O)$/i.test(file.format);
+		addClaim({
+			id: "malware-sample-identity-" + shortHash(`${file.name}:${file.sha256}:${file.format}`),
+			claimType: executable ? "malware-executable-sample-identity" : "malware-artifact-identity",
+			sourceBinding: {
+				file: file.name,
+				artifact: "malware-quicklook.json",
+			},
+			evidenceBinding: {
+				format: file.format,
+				size: file.size,
+				sha256: file.sha256,
+				headerHex: file.headerHex,
+				entropy: file.entropy,
+			},
+			statement: "Malware quicklook binds sample identity to size, hash, format, header, and entropy evidence.",
+			confidence: executable ? 0.84 : 0.68,
+			rerunCommand: "cat malware-quicklook.json | jq '.files'",
+		});
+		for (const section of file.staticStructure?.sections ?? []) {
+			if (!(section.executable && section.writable)) continue;
+			addClaim({
+				id: "malware-rwx-section-" + shortHash(`${file.name}:${section.name}:${section.rawPointer}:${section.rawSize}`),
+				claimType: "malware-rwx-section",
+				sourceBinding: {
+					file: file.name,
+					artifact: "malware-quicklook.json",
+					section: section.name,
+				},
+				evidenceBinding: {
+					virtualAddress: section.virtualAddress,
+					virtualSize: section.virtualSize,
+					rawPointer: section.rawPointer,
+					rawSize: section.rawSize,
+					entropy: section.entropy,
+				},
+				statement: "Executable writable section evidence indicates unpacking, shellcode, or injection staging surface.",
+				confidence: 0.8,
+				rerunCommand: "cat malware-quicklook.json | jq '.files[].staticStructure.sections'",
+			});
+		}
+		if (file.staticStructure?.overlay) {
+			addClaim({
+				id: "malware-overlay-carve-" + shortHash(`${file.name}:${file.staticStructure.overlay.offset}:${file.staticStructure.overlay.sha256}`),
+				claimType: "malware-overlay-carve-target",
+				sourceBinding: {
+					file: file.name,
+					artifact: "malware-quicklook.json",
+					offset: file.staticStructure.overlay.offset,
+				},
+				evidenceBinding: file.staticStructure.overlay,
+				statement: "Executable overlay evidence identifies a concrete carve/decode target for packed payload or config data.",
+				confidence: 0.82,
+				rerunCommand: "cat malware-quicklook.json | jq '.files[].staticStructure.overlay'",
+			});
+		}
+		for (const imp of file.staticStructure?.suspiciousImports ?? []) {
+			const capability = malwareImportCapability(`${imp.dll}!${imp.name}`);
+			addClaim({
+				id: "malware-import-capability-" + shortHash(`${file.name}:${imp.dll}:${imp.name}:${capability}`),
+				claimType: `malware-${capability}-import`,
+				sourceBinding: {
+					file: file.name,
+					artifact: "malware-quicklook.json",
+					import: `${imp.dll}!${imp.name}`,
+				},
+				evidenceBinding: {
+					dll: imp.dll,
+					name: imp.name,
+					capability,
+				},
+				statement: "Executable import evidence binds a suspicious API surface to a capability hypothesis.",
+				confidence: capability === "process-injection" ? 0.84 : 0.74,
+				rerunCommand: "cat malware-quicklook.json | jq '.files[].staticStructure.suspiciousImports'",
+			});
+		}
+	}
+	for (const [kind, rows] of [
+		["url", signals.urls ?? []],
+		["domain", signals.domains ?? []],
+		["ipv4", signals.ipv4 ?? []],
+	]) {
+		for (const row of rows.slice(0, 40)) {
+			const binding = malwareSignalBinding(row);
+			addClaim({
+				id: "malware-network-ioc-" + shortHash(`${kind}:${binding.file}:${binding.offset}:${binding.text}`),
+				claimType: `malware-network-${kind}-ioc`,
+				sourceBinding: {
+					file: binding.file,
+					artifact: "malware-quicklook.json",
+					offset: binding.offset,
+				},
+				evidenceBinding: {
+					kind,
+					value: binding.text,
+				},
+				statement: "Malware string evidence identifies a network IOC for sinkhole, replay, or PCAP correlation.",
+				confidence: kind === "url" ? 0.82 : 0.72,
+				rerunCommand: `cat malware-quicklook.json | jq '.signals.${kind === "ipv4" ? "ipv4" : `${kind}s`}'`,
+			});
+		}
+	}
+	for (const row of (signals.registryPersistence ?? []).slice(0, 40)) {
+		const binding = malwareSignalBinding(row);
+		addClaim({
+			id: "malware-persistence-" + shortHash(`${binding.file}:${binding.offset}:${binding.text}`),
+			claimType: "malware-persistence-indicator",
+			sourceBinding: {
+				file: binding.file,
+				artifact: "malware-quicklook.json",
+				offset: binding.offset,
+			},
+			evidenceBinding: {
+				text: binding.text,
+			},
+			statement: "Malware string evidence identifies persistence via registry, service, scheduled task, launch agent, systemd, or cron surface.",
+			confidence: 0.78,
+			rerunCommand: "cat malware-quicklook.json | jq '.signals.registryPersistence'",
+		});
+	}
+	for (const row of (signals.capabilities ?? []).slice(0, 50)) {
+		const binding = malwareSignalBinding(row);
+		const injection = /CreateRemoteThread|VirtualAlloc|WriteProcessMemory|OpenProcess|QueueUserAPC/i.test(binding.text);
+		addClaim({
+			id: "malware-capability-" + shortHash(`${binding.file}:${binding.offset}:${binding.text}`),
+			claimType: injection ? "malware-process-injection-capability" : "malware-execution-capability",
+			sourceBinding: {
+				file: binding.file,
+				artifact: "malware-quicklook.json",
+				offset: binding.offset,
+			},
+			evidenceBinding: {
+				text: binding.text,
+				injection,
+			},
+			statement: injection
+				? "Malware string evidence identifies a process-injection capability cluster."
+				: "Malware string evidence identifies an execution, crypto, network, or process capability.",
+			confidence: injection ? 0.82 : 0.7,
+			rerunCommand: "cat malware-quicklook.json | jq '.signals.capabilities'",
+		});
+	}
+	for (const row of (signals.packerEvasion ?? []).slice(0, 40)) {
+		const binding = malwareSignalBinding(row);
+		addClaim({
+			id: "malware-evasion-" + shortHash(`${binding.file}:${binding.offset}:${binding.text}`),
+			claimType: "malware-packer-or-evasion-signal",
+			sourceBinding: {
+				file: binding.file,
+				artifact: "malware-quicklook.json",
+				offset: binding.offset,
+			},
+			evidenceBinding: {
+				text: binding.text,
+			},
+			statement: "Malware string evidence identifies packer, anti-debug, anti-VM, or sandbox-evasion behavior.",
+			confidence: 0.72,
+			rerunCommand: "cat malware-quicklook.json | jq '.signals.packerEvasion'",
+		});
+	}
+	for (const row of (signals.ruleHits ?? []).slice(0, 40)) {
+		const binding = malwareSignalBinding(row);
+		addClaim({
+			id: "malware-rule-hit-" + shortHash(`${binding.file}:${binding.offset}:${binding.text}`),
+			claimType: "malware-rule-or-capability-hit",
+			sourceBinding: {
+				file: binding.file,
+				artifact: "malware-quicklook.json",
+				offset: binding.offset,
+			},
+			evidenceBinding: {
+				text: binding.text,
+			},
+			statement: "Malware analysis artifact contains capa/FLOSS/YARA/ATT&CK capability corroboration.",
+			confidence: 0.76,
+			rerunCommand: "cat malware-quicklook.json | jq '.signals.ruleHits'",
+		});
+	}
+	for (const field of configFields) {
+		addClaim({
+			id: "malware-config-field-" + shortHash(`${field.field}:${field.value}:${field.source?.file}:${field.source?.offset}`),
+			claimType: "malware-config-field",
+			sourceBinding: {
+				file: field.source?.file ?? null,
+				artifact: "malware-quicklook.json",
+				offset: field.source?.offset ?? null,
+			},
+			evidenceBinding: {
+				field: field.field,
+				value: field.value,
+			},
+			statement: "Malware config hint evidence extracts a normalized configuration field such as mutex, user-agent, beacon, sleep, or campaign.",
+			confidence: field.field === "mutex" ? 0.78 : 0.7,
+			rerunCommand: "cat malware-behavior-claims.json | jq '.configFields'",
+		});
+	}
+	const promotedClaims = claimLedger.filter((claim) => claim.verdict === "promoted");
+	const identityClaim = promotedClaims.find((claim) => claim.claimType === "malware-executable-sample-identity");
+	const networkClaim = promotedClaims.find((claim) => /^malware-network-/.test(claim.claimType));
+	const persistenceClaim = promotedClaims.find((claim) => claim.claimType === "malware-persistence-indicator");
+	const injectionClaim = promotedClaims.find((claim) => /process-injection/.test(claim.claimType));
+	const configClaim = promotedClaims.find((claim) => claim.claimType === "malware-config-field");
+	const ruleClaim = promotedClaims.find((claim) => claim.claimType === "malware-rule-or-capability-hit");
+	const overlayClaim = promotedClaims.find((claim) => claim.claimType === "malware-overlay-carve-target");
+	const composedPaths = [];
+	if (identityClaim && (networkClaim || persistenceClaim || injectionClaim || configClaim)) {
+		const segments = [identityClaim, networkClaim, persistenceClaim, injectionClaim, configClaim, ruleClaim, overlayClaim].filter(Boolean);
+		const composed = {
+			id: "malware-behavior-chain-" + shortHash(segments.map((claim) => claim.id).join(">")),
+			claimType: "malware-behavior-chain",
+			sourceBinding: {
+				segments: segments.map((claim) => ({
+					id: claim.id,
+					claimType: claim.claimType,
+					file: claim.sourceBinding?.file,
+					offset: claim.sourceBinding?.offset,
+				})),
+			},
+			evidenceBinding: {
+				sampleSha256: identityClaim.evidenceBinding?.sha256,
+				hasNetworkIoc: Boolean(networkClaim),
+				hasPersistence: Boolean(persistenceClaim),
+				hasInjection: Boolean(injectionClaim),
+				hasConfig: Boolean(configClaim),
+				hasRuleCorroboration: Boolean(ruleClaim),
+				hasOverlayCarve: Boolean(overlayClaim),
+			},
+			statement: "Malware evidence composes identity, IOC/config, capability, persistence, and optional rule/overlay corroboration into one behavior proof path.",
+			verdict: "promoted",
+			confidence: ruleClaim && injectionClaim ? 0.86 : injectionClaim || networkClaim ? 0.8 : 0.72,
+			blockers: [],
+			rerunCommand: "cat malware-behavior-claims.json | jq '.composedPaths'",
+		};
+		claimLedger.push(composed);
+		promotedClaims.push(composed);
+		composedPaths.push(composed);
+	}
+	const blockers = [];
+	if (!identityClaim) blockers.push("missing-sample-identity");
+	if (!networkClaim) blockers.push("missing-network-ioc");
+	if (!persistenceClaim) blockers.push("missing-persistence-evidence");
+	if (!injectionClaim) blockers.push("missing-capability-evidence");
+	if (!configClaim) blockers.push("missing-config-fields");
+	if (!ruleClaim && !overlayClaim) blockers.push("missing-corroboration");
+	const repairActions = {
+		"missing-sample-identity": "Bind each sample to file type, SHA-256, size, architecture, and packer/static structure before promoting behavior.",
+		"missing-network-ioc": "Extract C2 URLs, domains, IPs, or callback behavior and bind them to string offsets, decoded config, or PCAP evidence.",
+		"missing-persistence-evidence": "Search registry/service/task/launch-agent/systemd/cron/file-drop surfaces and tie persistence to offsets or behavior logs.",
+		"missing-capability-evidence": "Corroborate imports/strings with capa/FLOSS/YARA or behavior traces for injection, execution, credential, or crypto capabilities.",
+		"missing-config-fields": "Normalize mutex, user-agent, beacon interval, campaign, bot ID, wallet/key, or C2 panel fields from decoded strings/config.",
+		"missing-corroboration": "Add at least one corroborator such as capa/YARA/FLOSS hit, overlay carve, decoded config, or sandbox/strace behavior.",
+	};
+	const repairQueue = blockers.map((blocker) => ({
+		id: "malware-behavior-" + blocker,
+		blocker,
+		action: repairActions[blocker] ?? "Collect source-bound malware evidence and rerun behavior claim promotion.",
+		rerunCommand: "repi engage <malware-sample-or-dir> --json",
+	}));
+	return {
+		kind: "repi-malware-behavior-claims",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		proofReady: promotedClaims.length > 0,
+		configFields,
+		claimLedger,
+		composedPaths,
+		promotionReport: {
+			proofReady: promotedClaims.length > 0,
+			promotedClaims,
+			blockers,
+		},
+		repairQueue,
+	};
+}
+
 function malwareTriagePlanSource(target) {
 	return `#!/usr/bin/env bash
 set -euo pipefail
@@ -8352,7 +8680,9 @@ EOF
 function malwareRows(target, artifactDir) {
 	try {
 		const summary = malwareQuicklookSummary(target);
+		const behaviorClaims = malwareBehaviorClaims(summary);
 		if (!noWrite && artifactDir) writePrivate(join(artifactDir, "malware-quicklook.json"), `${JSON.stringify(summary, null, 2)}\n`);
+		if (!noWrite && artifactDir) writePrivate(join(artifactDir, "malware-behavior-claims.json"), `${JSON.stringify(behaviorClaims, null, 2)}\n`);
 		const rows = [
 			{
 				id: "malware-quicklook",
@@ -8365,6 +8695,18 @@ function malwareRows(target, artifactDir) {
 				stdout: `${JSON.stringify(summary, null, 2)}\n`,
 				stderr: "",
 				error: summary.fileCount || summary.risks.length ? undefined : "no malware artifacts",
+			},
+			{
+				id: "malware-behavior-claims",
+				command: "internal",
+				args: [redact(target)],
+				cwd: root,
+				exit: behaviorClaims.proofReady ? 0 : 1,
+				signal: null,
+				durationMs: 0,
+				stdout: `${JSON.stringify(behaviorClaims, null, 2)}\n`,
+				stderr: "",
+				error: behaviorClaims.proofReady ? undefined : "no malware behavior claims promoted",
 			},
 		];
 		if (!noWrite && artifactDir) {
@@ -12998,8 +13340,9 @@ function nextQueue(targetInfo, artifactDir, toolState) {
 	}
 	if (targetInfo.lane === "malware") {
 		if (!noWrite) q.push(`cat ${shellQuote(join(artifactDir, "malware-quicklook.json"))}`);
+		if (!noWrite && existsSync(join(artifactDir, "malware-behavior-claims.json"))) q.push(`cat ${shellQuote(join(artifactDir, "malware-behavior-claims.json"))}`);
 		if (!noWrite) q.push(`bash ${shellQuote(join(artifactDir, "malware-triage-plan.sh"))} ${quotedTarget}`);
-		q.push(`repi -p ${shellQuote(`Continue malware analysis from ${artifactDir}: normalize IOCs from malware-quicklook.json, use staticStructure sections/imports/overlay to prioritize packer and injection leads, verify capa/FLOSS/YARA or behavior anchors, and produce one corroborated capability/config proof.`)}`);
+		q.push(`repi -p ${shellQuote(`Continue malware analysis from ${artifactDir}: normalize IOCs from malware-quicklook.json plus malware-behavior-claims.json claimLedger/configFields/composedPaths, use staticStructure sections/imports/overlay to prioritize packer and injection leads, verify capa/FLOSS/YARA or behavior anchors, and produce one corroborated capability/config proof.`)}`);
 	}
 	if (targetInfo.lane === "pcap-dfir") {
 		if (!noWrite && existsSync(join(artifactDir, "pcap-http-objects.json"))) q.push(`python3 ${shellQuote(join(artifactDir, "pcap-http-object-verifier.py"))} ${shellQuote(join(artifactDir, "pcap-http-objects.json"))}`);
@@ -13111,8 +13454,8 @@ function summarizeEvidence(rows, targetInfo, toolState) {
 		if (/process-network-correlation-signal|credential-context-correlation-signal|timeline-correlation-signal|processNetwork|credentialContext|memory-credential-network-pivot|claimLedger/i.test(text) && targetInfo.lane === "memory-forensics") anchors.push("memory correlation anchors");
 		if (/repi-windows-ad-quicklook|windows-ad-quicklook|windows-ad-triage|krbtgt|Kerberoast|DCSync|ADCS|Certipy|BloodHound|4769|4624/i.test(text) && targetInfo.lane === "windows-ad") anchors.push("Windows/AD identity anchors");
 		if (/bloodhound-graph-data-present|bloodhound-privilege-edge-signal|bloodhound-owned-principal-signal|bloodhound-owned-to-high-value-path|relationCounts|privilegeEdges|highValue|attackPaths|windows-ad-attack-path/i.test(text) && targetInfo.lane === "windows-ad") anchors.push("BloodHound graph anchors");
-		if (/repi-malware-quicklook|malware-quicklook|malware-triage|network-ioc-signal|CreateRemoteThread|VirtualAlloc|FLOSS|YARA|capa|ATT&CK|mutex|User-Agent/i.test(text) && targetInfo.lane === "malware") anchors.push("malware IOC/capability anchors");
-		if (/staticStructure|malware-overlay-signal|malware-suspicious-import-signal|suspiciousImports|overlay-data-present|rwx-section-signal|structured-executable-analysis-signal/i.test(text) && targetInfo.lane === "malware") anchors.push("malware static structure anchors");
+		if (/repi-malware-quicklook|malware-quicklook|malware-behavior-claims|malware-triage|malware-behavior-chain|claimLedger|configFields|network-ioc-signal|CreateRemoteThread|VirtualAlloc|FLOSS|YARA|capa|ATT&CK|mutex|User-Agent/i.test(text) && targetInfo.lane === "malware") anchors.push("malware IOC/capability anchors");
+		if (/staticStructure|malware-overlay-signal|malware-suspicious-import-signal|suspiciousImports|overlay-data-present|rwx-section-signal|structured-executable-analysis-signal|malware-overlay-carve-target|malware-rwx-section/i.test(text) && targetInfo.lane === "malware") anchors.push("malware static structure anchors");
 		if (/repi-firmware-quicklook|firmware-quicklook|firmware-attack-surface|firmware-extract-plan|claimLedger|extractionTargets|management-credential-pivot|SquashFS|UBI|uImage|dropbear|telnetd|cgi-bin|hardcoded-credential-signal/i.test(text) && targetInfo.lane === "firmware-iot") anchors.push("firmware quicklook anchors");
 		if (/firmware-container-header-parsed|filesystem-superblock-parsed|ubi-header-parsed|partitionOffsets|bytesUsed|vidHeaderOffset/i.test(text) && targetInfo.lane === "firmware-iot") anchors.push("firmware structure anchors");
 		if (/repi-agent-boundary-map|agent-boundary|prompt-injection|llm-to-shell-tool-boundary|tool-secret-exfiltration-boundary|tool_call|system-prompt/i.test(text) && targetInfo.lane === "agent-boundary") anchors.push("agent boundary anchors");

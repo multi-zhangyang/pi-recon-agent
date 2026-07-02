@@ -1982,16 +1982,22 @@ jobs:
 		expect(JSON.stringify(report)).not.toContain(secret);
 		expect(report.target.lane).toBe("malware");
 		expect(report.commands.map((row) => row.id)).toContain("malware-quicklook");
+		expect(report.commands.map((row) => row.id)).toContain("malware-behavior-claims");
 		expect(report.commands.map((row) => row.id)).toContain("malware-triage-plan-artifact");
 		expect(report.summary.anchors).toContain("malware IOC/capability anchors");
 		expect(report.summary.missingCritical).not.toContain("strings");
 		expect(report.nextQueue.some((command) => command.includes("malware-quicklook.json"))).toBe(true);
+		expect(report.nextQueue.some((command) => command.includes("malware-behavior-claims.json"))).toBe(true);
+		expect(report.nextQueue.some((command) => command.includes("claimLedger"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("malware-triage-plan.sh"))).toBe(true);
 		const summaryPath = join(report.artifactDir, "malware-quicklook.json");
+		const behaviorClaimsPath = join(report.artifactDir, "malware-behavior-claims.json");
 		const planPath = join(report.artifactDir, "malware-triage-plan.sh");
 		expect(existsSync(summaryPath)).toBe(true);
+		expect(existsSync(behaviorClaimsPath)).toBe(true);
 		expect(existsSync(planPath)).toBe(true);
 		expect(statSync(summaryPath).mode & 0o777).toBe(0o600);
+		expect(statSync(behaviorClaimsPath).mode & 0o777).toBe(0o600);
 		expect(statSync(planPath).mode & 0o777).toBe(0o700);
 		const summary = JSON.parse(readFileSync(summaryPath, "utf8")) as {
 			files: Array<{
@@ -2017,6 +2023,45 @@ jobs:
 			risks: string[];
 		};
 		expect(JSON.stringify(summary)).not.toContain(secret);
+		const behaviorClaims = JSON.parse(readFileSync(behaviorClaimsPath, "utf8")) as {
+			proofReady: boolean;
+			configFields: Array<{ field: string; value: string }>;
+			claimLedger: Array<{ claimType: string; verdict: string; evidenceBinding: Record<string, unknown> }>;
+			composedPaths: Array<{ claimType: string; verdict: string }>;
+			promotionReport: { promotedClaims: Array<{ claimType: string }> };
+			repairQueue: Array<{ blocker: string }>;
+		};
+		expect(JSON.stringify(behaviorClaims)).not.toContain(secret);
+		expect(behaviorClaims.proofReady).toBe(true);
+		expect(behaviorClaims.configFields.some((field) => field.field === "mutex")).toBe(true);
+		expect(
+			behaviorClaims.claimLedger.some(
+				(claim) => claim.claimType === "malware-network-url-ioc" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			behaviorClaims.claimLedger.some(
+				(claim) => claim.claimType === "malware-persistence-indicator" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			behaviorClaims.claimLedger.some(
+				(claim) => claim.claimType === "malware-process-injection-capability" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			behaviorClaims.claimLedger.some(
+				(claim) => claim.claimType === "malware-overlay-carve-target" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			behaviorClaims.claimLedger.some(
+				(claim) => claim.claimType === "malware-behavior-chain" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			behaviorClaims.promotionReport.promotedClaims.some((claim) => claim.claimType === "malware-behavior-chain"),
+		).toBe(true);
 		expect(summary.files[0]).toMatchObject({ name: "malware-sample.bin", format: "PE" });
 		expect(summary.risks).toEqual(
 			expect.arrayContaining([
@@ -2056,6 +2101,12 @@ jobs:
 		expect(plan).toContain("capa");
 		expect(plan).toContain("floss");
 		expect(plan).toContain("YARA");
+		const proofMatrixPath = join(report.artifactDir, "proof-matrix.json");
+		expect(existsSync(proofMatrixPath)).toBe(true);
+		const proofMatrix = JSON.parse(readFileSync(proofMatrixPath, "utf8")) as {
+			artifacts: Array<{ relPath: string }>;
+		};
+		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("malware-behavior-claims.json");
 		expect(collectTmp(agentDir)).toEqual([]);
 	});
 
