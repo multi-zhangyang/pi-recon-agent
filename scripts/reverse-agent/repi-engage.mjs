@@ -622,8 +622,10 @@ function buildProofArtifactRows(targetInfo, artifactDir) {
 	if (targetInfo.lane === "agent-boundary") {
 		add("agent-boundary-map.json", "agent prompt/tool boundary evidence map");
 		add("agent-boundary-replay-results.json", "agent boundary runtime replay/self-test output");
+		add("agent-boundary-verification.json", "agent boundary map/replay verifier output");
 		add("agent-boundary-claim-promotion.json", "agent boundary replay claim-promotion ledger");
 		add("agent-boundary-repair-queue.json", "agent boundary replay repair queue");
+		add("agent-boundary-verifier.py", "agent boundary verification harness", 0o700);
 		add("agent-boundary-payloads.py", "agent boundary replay payload harness", 0o700);
 	}
 	if (targetInfo.lane === "cloud-identity") {
@@ -656,7 +658,7 @@ function buildProofCoverageGaps(targetInfo, artifactRows) {
 	if (targetInfo.lane === "memory-forensics") requireAny("memory-triage-plan", ["memory-evidence-claims.json", "memory-evidence-verification.json", "memory-evidence-verifier.py", "memory-triage-plan.sh", "memory-quicklook.json"], "memory targets need triage/correlation verifier anchors");
 	if (targetInfo.lane === "windows-ad") requireAny("windows-ad-triage-plan", ["windows-ad-triage-plan.sh", "windows-ad-quicklook.json"], "identity targets need AD graph/credential triage anchors");
 	if (targetInfo.lane === "malware") requireAny("malware-triage-plan", ["malware-behavior-claims.json", "malware-config-verification.json", "malware-config-verifier.py", "malware-triage-plan.sh", "malware-quicklook.json"], "malware targets need IOC/capability triage and verifier anchors");
-	if (targetInfo.lane === "agent-boundary") requireAny("agent-boundary-replay", ["agent-boundary-payloads.py", "agent-boundary-map.json"], "agent-boundary targets need replay payloads and flow map");
+	if (targetInfo.lane === "agent-boundary") requireAny("agent-boundary-replay", ["agent-boundary-verification.json", "agent-boundary-verifier.py", "agent-boundary-payloads.py", "agent-boundary-map.json"], "agent-boundary targets need replay payloads and flow map");
 	if (targetInfo.lane === "cloud-identity") requireAny("cloud-identity-verify", ["cloud-identity-trust-claims.json", "cloud-identity-verify.sh", "cloud-identity-map.json"], "cloud targets need trust-chain verification anchors");
 	return gaps;
 }
@@ -735,6 +737,7 @@ function buildProofLiveChecks(targetInfo, artifactDir, toolState) {
 			["crypto-stego-verifier-pycompile", "crypto-stego-verifier.py", "syntax-check crypto/stego verifier"],
 			["crypto-stego-solver-pycompile", "crypto-stego-solver.py", "syntax-check crypto/stego solver harness"],
 			["mobile-archive-verifier-pycompile", "mobile-archive-verifier.py", "syntax-check mobile archive verifier"],
+			["agent-boundary-verifier-pycompile", "agent-boundary-verifier.py", "syntax-check agent boundary verifier"],
 			["agent-boundary-payloads-pycompile", "agent-boundary-payloads.py", "syntax-check agent boundary payload harness"],
 			["memory-evidence-verifier-pycompile", "memory-evidence-verifier.py", "syntax-check memory evidence verifier"],
 			["malware-config-verifier-pycompile", "malware-config-verifier.py", "syntax-check malware config verifier"],
@@ -745,6 +748,8 @@ function buildProofLiveChecks(targetInfo, artifactDir, toolState) {
 		}
 		const agentBoundaryPayloads = proofArtifactPath(artifactDir, "agent-boundary-payloads.py");
 		if (existsSync(agentBoundaryPayloads)) add({ id: "agent-boundary-payloads-self-test", command: python, args: [agentBoundaryPayloads, "--self-test"], reason: "execute agent boundary replay harness self-test with unsafe/control payloads" });
+		const agentBoundaryVerifier = proofArtifactPath(artifactDir, "agent-boundary-verifier.py");
+		if (existsSync(agentBoundaryVerifier)) add({ id: "agent-boundary-verifier-self-test", command: python, args: [agentBoundaryVerifier, "--self-test"], reason: "execute agent boundary verifier self-test with replay negative controls" });
 		const cryptoVerifier = proofArtifactPath(artifactDir, "crypto-stego-verifier.py");
 		if (existsSync(cryptoVerifier)) add({ id: "crypto-stego-verifier-self-test", command: python, args: [cryptoVerifier, "--self-test"], reason: "execute crypto/stego verifier self-test with offset/hash negative controls" });
 		const mobileVerifier = proofArtifactPath(artifactDir, "mobile-archive-verifier.py");
@@ -958,6 +963,7 @@ const unifiedProofGraphArtifactCandidates = [
 	"malware-behavior-claims.json",
 	"firmware-extraction-verification.json",
 	"firmware-attack-surface.json",
+	"agent-boundary-verification.json",
 	"agent-boundary-claim-promotion.json",
 	"agent-boundary-repair-queue.json",
 	"cloud-identity-trust-claims.json",
@@ -1010,6 +1016,7 @@ function proofGraphRepairPriority(blocker) {
 	if (/missing-native-(?:target-hash|replay-case|crash-differential|cyclic-payload|runtime-negative-control)/i.test(blocker)) return "high";
 	if (/missing-crypto-(?:file-hash|media-determinism|structure-offset|negative-control)/i.test(blocker)) return "high";
 	if (/missing-mobile-(?:archive-hash|zip-entry|dex-quicklook|manifest|hook|negative-control)/i.test(blocker)) return "high";
+	if (/missing-agent-boundary-(?:map-flow|replay-coverage|response-hash|negative-control)/i.test(blocker)) return "high";
 	if (/missing-memory-(?:image-hash|signal-offset|process-network|credential-context|timeline|negative-control)/i.test(blocker)) return "high";
 	if (/missing-(?:ioc-offset|config-extraction|overlay-carve|sample-hash|import-parser|network-ioc-negative-control)/i.test(blocker)) return "high";
 	if (/missing-(?:firmware-image-hash|signature-offset|rootfs-carve|firmware-extraction-negative-control)|rootfs-carve-truncated/i.test(blocker)) return "high";
@@ -1065,6 +1072,10 @@ function proofGraphRepairAction(blocker) {
 		"missing-mobile-manifest-verification": "Bind AndroidManifest.xml, Info.plist, or entitlements fields to exact archive entry bytes.",
 		"missing-mobile-hook-verification": "Hash and syntax-check mobile-frida-hooks.js against promoted hook targets.",
 		"missing-mobile-negative-control": "Add archive byte mutation and entry-metadata mismatch controls before promoting runtime pivots.",
+		"missing-agent-boundary-map-flow-verification": "Verify agent-boundary-map.json has source-bound boundaryFlows and payload IDs before replay proof.",
+		"missing-agent-boundary-replay-coverage": "Rerun agent-boundary-payloads.py until baseline and unsafe/control payload IDs are all observed.",
+		"missing-agent-boundary-response-hash": "Require every promoted replay claim to include request/response SHA-256 and status evidence.",
+		"missing-agent-boundary-negative-control": "Require a benign accepted baseline and at least one unsafe or blocked-control differential.",
 	};
 	return actions[blocker] ?? "Drain this blocker by collecting source-bound runtime evidence and rerun the relevant harness.";
 }
@@ -12293,6 +12304,421 @@ if __name__ == "__main__":
 `;
 }
 
+function agentBoundaryVerificationSummary(target, artifactDir) {
+	const mapPath = join(artifactDir, "agent-boundary-map.json");
+	const replayPath = join(artifactDir, "agent-boundary-replay-results.json");
+	const map = readJsonArtifact(mapPath);
+	const replay = readJsonArtifact(replayPath);
+	const payloadIds = ["benign-baseline", "markdown-hidden-instruction", "tool-arg-shell-metacharacters", "ssrf-url-tool", "secret-exfiltration-policy", "mcp-tool-confusion"];
+	const replayRows = replay?.rows ?? [];
+	const mapFlows = map?.boundaryFlows ?? [];
+	const hexSha256 = (value) => /^[a-f0-9]{64}$/i.test(String(value ?? ""));
+	const observedPayloads = new Set(replayRows.map((row) => row.payloadId).filter(Boolean));
+	const sourceBoundFlows = mapFlows.filter(
+		(flow) =>
+			flow?.file &&
+			flow?.type &&
+			Array.isArray(flow?.payloadIds) &&
+			flow.payloadIds.some((payloadId) => payloadIds.includes(payloadId)) &&
+			Array.isArray(flow?.evidence) &&
+			flow.evidence.length > 0,
+	);
+	const flowPayloadIds = Array.from(new Set(sourceBoundFlows.flatMap((flow) => flow.payloadIds ?? []).filter((payloadId) => payloadIds.includes(payloadId)))).sort();
+	const promotedClaims = (replay?.claimLedger ?? []).filter((claim) => ["unsafe-promoted", "control-promoted"].includes(claim.verdict));
+	const baseline = replayRows.find((row) => row.payloadId === "benign-baseline");
+	const unsafeRows = replayRows.filter((row) => row.payloadId !== "benign-baseline" && ((row.signals ?? []).length || row.blocked));
+	const mapFlowVerification = {
+		verified: sourceBoundFlows.length > 0,
+		flowCount: mapFlows.length,
+		sourceBoundFlowCount: sourceBoundFlows.length,
+		unboundFlowCount: Math.max(0, mapFlows.length - sourceBoundFlows.length),
+		riskCount: map?.risks?.length ?? 0,
+		mapSha256: map ? httpSecretHash(JSON.stringify(map)) : null,
+		flowTypes: Array.from(new Set(sourceBoundFlows.map((flow) => flow.type).filter(Boolean))).sort().slice(0, 40),
+		payloadIdsBound: flowPayloadIds,
+	};
+	const replayCoverage = {
+		verified: payloadIds.every((id) => observedPayloads.has(id)),
+		expectedPayloads: payloadIds,
+		observedPayloads: Array.from(observedPayloads).sort(),
+		missingPayloads: payloadIds.filter((id) => !observedPayloads.has(id)),
+		replaySha256: replay ? httpSecretHash(JSON.stringify(replay)) : null,
+	};
+	const responseHashOracle = {
+		verified:
+			promotedClaims.length > 0 &&
+			promotedClaims.every((claim) => hexSha256(claim.evidenceBinding?.responseSha256) && hexSha256(claim.evidenceBinding?.requestSha256)),
+		promotedCount: promotedClaims.length,
+		responseHashes: promotedClaims.map((claim) => claim.evidenceBinding?.responseSha256).filter(Boolean).slice(0, 40),
+	};
+	const negativeControls = [];
+	const baselineControlPassed = Boolean(baseline?.status && baseline.status >= 200 && baseline.status < 400 && hexSha256(baseline.responseSha256));
+	if (baselineControlPassed) {
+		negativeControls.push({
+			controlType: "agent-boundary-benign-baseline-accepted",
+			payloadId: "benign-baseline",
+			status: baseline.status,
+			responseSha256: baseline.responseSha256,
+			passed: true,
+		});
+	}
+	for (const row of unsafeRows.slice(0, 12)) {
+		if (hexSha256(row.responseSha256) && baselineControlPassed && row.responseSha256 !== baseline.responseSha256) {
+			negativeControls.push({
+				controlType: row.blocked ? "agent-boundary-blocked-control-differential" : "agent-boundary-unsafe-response-differential",
+				payloadId: row.payloadId,
+				status: row.status ?? null,
+				responseSha256: row.responseSha256,
+				baselineResponseSha256: baseline.responseSha256,
+				signals: row.signals ?? [],
+				blocked: Boolean(row.blocked),
+				passed: true,
+			});
+		}
+	}
+	const hasUnsafeOrBlockedDifferential = negativeControls.some((row) => row.controlType !== "agent-boundary-benign-baseline-accepted");
+	const negativeControlVerified = baselineControlPassed && hasUnsafeOrBlockedDifferential;
+	const claimLedger = [];
+	const composedPaths = [];
+	const addClaim = (claim) => {
+		const normalized = { verdict: "promoted", confidence: 0.76, blockers: [], ...claim };
+		claimLedger.push(normalized);
+		return normalized;
+	};
+	const mapClaim = mapFlowVerification.verified
+		? addClaim({
+				id: "agent-boundary-map-flow-verification-" + shortHash(JSON.stringify(mapFlowVerification.flowTypes)),
+				claimType: "agent-boundary-map-flow-verification-proof",
+				sourceBinding: { artifact: "agent-boundary-verification.json", map: "agent-boundary-map.json" },
+				evidenceBinding: mapFlowVerification,
+				statement: "Agent-boundary verifier bound source findings to boundaryFlows and replay payload families.",
+				confidence: 0.86,
+				rerunCommand: "python3 agent-boundary-verifier.py agent-boundary-map.json agent-boundary-replay-results.json agent-boundary-verification.json",
+			})
+		: undefined;
+	const coverageClaim = replayCoverage.verified
+		? addClaim({
+				id: "agent-boundary-replay-coverage-" + shortHash(replayCoverage.observedPayloads.join("|")),
+				claimType: "agent-boundary-replay-coverage-proof",
+				sourceBinding: { artifact: "agent-boundary-verification.json", replay: "agent-boundary-replay-results.json" },
+				evidenceBinding: replayCoverage,
+				statement: "Agent-boundary verifier confirmed baseline and unsafe/control payload coverage in replay results.",
+				confidence: 0.86,
+				rerunCommand: "python3 agent-boundary-verifier.py agent-boundary-map.json agent-boundary-replay-results.json agent-boundary-verification.json",
+			})
+		: undefined;
+	const responseClaim = responseHashOracle.verified
+		? addClaim({
+				id: "agent-boundary-response-hash-oracle-" + shortHash(responseHashOracle.responseHashes.join("|")),
+				claimType: "agent-boundary-response-hash-oracle-proof",
+				sourceBinding: { artifact: "agent-boundary-verification.json", replay: "agent-boundary-replay-results.json" },
+				evidenceBinding: responseHashOracle,
+				statement: "Agent-boundary verifier confirmed promoted replay claims carry request/response hash oracles.",
+				confidence: 0.88,
+				rerunCommand: "python3 agent-boundary-verifier.py agent-boundary-map.json agent-boundary-replay-results.json agent-boundary-verification.json",
+			})
+		: undefined;
+	const controlClaim = negativeControlVerified
+		? addClaim({
+				id: "agent-boundary-negative-control-" + shortHash(JSON.stringify(negativeControls)),
+				claimType: "agent-boundary-negative-control-proof",
+				sourceBinding: { artifact: "agent-boundary-verification.json", replay: "agent-boundary-replay-results.json" },
+				evidenceBinding: { passedControls: negativeControls, baselineAccepted: baselineControlPassed, hasUnsafeOrBlockedDifferential },
+				statement: "Agent-boundary verifier confirmed benign baseline and unsafe/blocked response differentials.",
+				confidence: 0.84,
+				rerunCommand: "python3 agent-boundary-verifier.py agent-boundary-map.json agent-boundary-replay-results.json agent-boundary-verification.json",
+			})
+		: undefined;
+	if (mapClaim && coverageClaim && responseClaim && controlClaim) {
+		const segments = [mapClaim, coverageClaim, responseClaim, controlClaim];
+		const composed = {
+			id: "agent-boundary-verification-proof-path-" + shortHash(segments.map((claim) => claim.id).join(">")),
+			claimType: "agent-boundary-verification-proof-path",
+			sourceBinding: { segments: segments.map((claim) => ({ id: claim.id, claimType: claim.claimType, artifact: claim.sourceBinding?.artifact })) },
+			evidenceBinding: {
+				flowCount: mapFlowVerification.flowCount,
+				sourceBoundFlowCount: mapFlowVerification.sourceBoundFlowCount,
+				promotedCount: responseHashOracle.promotedCount,
+				negativeControls: negativeControls.length,
+				hasUnsafeOrBlockedDifferential,
+			},
+			statement: "Agent-boundary proof path composes source boundary flows, replay payload coverage, response hashes, and negative controls.",
+			verdict: "promoted",
+			confidence: 0.88,
+			blockers: [],
+			rerunCommand: "python3 agent-boundary-verifier.py agent-boundary-map.json agent-boundary-replay-results.json agent-boundary-verification.json",
+		};
+		claimLedger.push(composed);
+		composedPaths.push(composed);
+	}
+	const blockers = [];
+	if (!mapFlowVerification.verified) blockers.push("missing-agent-boundary-map-flow-verification");
+	if (!replayCoverage.verified) blockers.push("missing-agent-boundary-replay-coverage");
+	if (!responseHashOracle.verified) blockers.push("missing-agent-boundary-response-hash");
+	if (!negativeControlVerified) blockers.push("missing-agent-boundary-negative-control");
+	const repairActions = {
+		"missing-agent-boundary-map-flow-verification": "Collect source-bound boundaryFlows with payload IDs from agent-boundary-map.json.",
+		"missing-agent-boundary-replay-coverage": "Rerun agent-boundary-payloads.py until baseline and unsafe/control payloads are all represented.",
+		"missing-agent-boundary-response-hash": "Require promoted replay rows to carry requestSha256 and responseSha256 oracles.",
+		"missing-agent-boundary-negative-control": "Require benign baseline acceptance and unsafe/blocked response differentials.",
+	};
+	const repairQueue = blockers.map((blocker) => ({
+		id: "agent-boundary-verification-" + blocker,
+		blocker,
+		action: repairActions[blocker] ?? "Collect verifier-bound agent boundary evidence and rerun agent-boundary-verifier.py.",
+		rerunCommand: `python3 ${shellQuote(join(artifactDir, "agent-boundary-verifier.py"))} ${shellQuote(mapPath)} ${shellQuote(replayPath)} ${shellQuote(join(artifactDir, "agent-boundary-verification.json"))}`,
+	}));
+	const promoted = claimLedger.filter((claim) => claim.verdict === "promoted");
+	const proofReady = composedPaths.length > 0;
+	return {
+		kind: "repi-agent-boundary-verification",
+		schemaVersion: 1,
+		target: redact(target),
+		generatedAt: new Date().toISOString(),
+		proofReady,
+		unsafeProofReady: composedPaths.length > 0,
+		mapFlowVerification,
+		replayCoverage,
+		responseHashOracle,
+		negativeControls,
+		stats: {
+			flowCount: mapFlowVerification.flowCount,
+			sourceBoundFlowCount: mapFlowVerification.sourceBoundFlowCount,
+			payloadsObserved: replayCoverage.observedPayloads.length,
+			promotedResponseHashes: responseHashOracle.responseHashes.length,
+			negativeControlsPassed: negativeControls.length,
+			negativeControlVerified,
+		},
+		claimLedger,
+		composedPaths,
+		promotionReport: { proofReady, unsafeProofReady: composedPaths.length > 0, promotedClaims: promoted, blockers },
+		repairQueue,
+	};
+}
+
+function agentBoundaryVerifierSource() {
+	return String.raw`#!/usr/bin/env python3
+import argparse
+import hashlib
+import json
+import os
+import tempfile
+import time
+
+PAYLOAD_IDS = ["benign-baseline", "markdown-hidden-instruction", "tool-arg-shell-metacharacters", "ssrf-url-tool", "secret-exfiltration-policy", "mcp-tool-confusion"]
+
+def sha256(value):
+    if isinstance(value, str):
+        value = value.encode("utf-8", "replace")
+    return hashlib.sha256(value or b"").hexdigest()
+
+def load(path):
+    with open(path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+def is_hex64(value):
+    text = str(value or "")
+    return len(text) == 64 and all(ch in "0123456789abcdefABCDEF" for ch in text)
+
+def short_hash(value):
+    return sha256(str(value))[:12]
+
+def add_claim(claims, **claim):
+    row = {"verdict": "promoted", "confidence": 0.76, "blockers": []}
+    row.update(claim)
+    claims.append(row)
+    return row
+
+def verify(map_path, replay_path):
+    boundary_map = load(map_path)
+    replay = load(replay_path)
+    rows = replay.get("rows") or []
+    replay_claims = replay.get("claimLedger") or []
+    promoted = [claim for claim in replay_claims if claim.get("verdict") in {"unsafe-promoted", "control-promoted"}]
+    observed = sorted({row.get("payloadId") for row in rows if row.get("payloadId")})
+    flows = boundary_map.get("boundaryFlows") or []
+    source_bound_flows = [
+        flow for flow in flows
+        if flow.get("file")
+        and flow.get("type")
+        and isinstance(flow.get("payloadIds"), list)
+        and any(pid in PAYLOAD_IDS for pid in flow.get("payloadIds") or [])
+        and bool(flow.get("evidence") or [])
+    ]
+    payload_ids_bound = sorted({pid for flow in source_bound_flows for pid in (flow.get("payloadIds") or []) if pid in PAYLOAD_IDS})
+    baseline = next((row for row in rows if row.get("payloadId") == "benign-baseline"), None)
+    unsafe_rows = [row for row in rows if row.get("payloadId") != "benign-baseline" and (row.get("signals") or row.get("blocked"))]
+    map_flow = {
+        "verified": bool(source_bound_flows),
+        "flowCount": len(flows),
+        "sourceBoundFlowCount": len(source_bound_flows),
+        "unboundFlowCount": max(0, len(flows) - len(source_bound_flows)),
+        "flowTypes": sorted({flow.get("type") for flow in source_bound_flows if flow.get("type")}),
+        "payloadIdsBound": payload_ids_bound,
+        "mapSha256": sha256(json.dumps(boundary_map, sort_keys=True)),
+    }
+    coverage = {
+        "verified": all(pid in observed for pid in PAYLOAD_IDS),
+        "expectedPayloads": PAYLOAD_IDS,
+        "observedPayloads": observed,
+        "missingPayloads": [pid for pid in PAYLOAD_IDS if pid not in observed],
+        "replaySha256": sha256(json.dumps(replay, sort_keys=True)),
+    }
+    response_hashes = [claim.get("evidenceBinding", {}).get("responseSha256") for claim in promoted if claim.get("evidenceBinding", {}).get("responseSha256")]
+    response_oracle = {
+        "verified": bool(promoted) and all(is_hex64(claim.get("evidenceBinding", {}).get("responseSha256")) and is_hex64(claim.get("evidenceBinding", {}).get("requestSha256")) for claim in promoted),
+        "promotedCount": len(promoted),
+        "responseHashes": response_hashes[:40],
+    }
+    controls = []
+    try:
+        baseline_status = int(baseline.get("status")) if baseline and baseline.get("status") is not None else None
+    except (TypeError, ValueError):
+        baseline_status = None
+    baseline_accepted = bool(baseline_status is not None and 200 <= baseline_status < 400 and is_hex64(baseline.get("responseSha256") if baseline else None))
+    if baseline_accepted:
+        controls.append({"controlType": "agent-boundary-benign-baseline-accepted", "payloadId": "benign-baseline", "status": baseline_status, "responseSha256": baseline.get("responseSha256"), "passed": True})
+    for row in unsafe_rows[:12]:
+        if baseline_accepted and is_hex64(row.get("responseSha256")) and row.get("responseSha256") != baseline.get("responseSha256"):
+            controls.append({"controlType": "agent-boundary-blocked-control-differential" if row.get("blocked") else "agent-boundary-unsafe-response-differential", "payloadId": row.get("payloadId"), "status": row.get("status"), "responseSha256": row.get("responseSha256"), "baselineResponseSha256": baseline.get("responseSha256"), "signals": row.get("signals") or [], "blocked": bool(row.get("blocked")), "passed": True})
+    has_differential = any(row.get("controlType") != "agent-boundary-benign-baseline-accepted" for row in controls)
+    negative_verified = baseline_accepted and has_differential
+    claim_ledger = []
+    composed_paths = []
+    map_claim = add_claim(
+        claim_ledger,
+        id="agent-boundary-map-flow-verification-" + short_hash(json.dumps(map_flow.get("flowTypes"), sort_keys=True)),
+        claimType="agent-boundary-map-flow-verification-proof",
+        sourceBinding={"artifact": "agent-boundary-verification.json", "map": "agent-boundary-map.json"},
+        evidenceBinding=map_flow,
+        statement="Agent-boundary verifier bound source findings to boundaryFlows and replay payload families.",
+        confidence=0.86,
+        rerunCommand="python3 agent-boundary-verifier.py agent-boundary-map.json agent-boundary-replay-results.json agent-boundary-verification.json",
+    ) if map_flow["verified"] else None
+    coverage_claim = add_claim(
+        claim_ledger,
+        id="agent-boundary-replay-coverage-" + short_hash("|".join(coverage.get("observedPayloads") or [])),
+        claimType="agent-boundary-replay-coverage-proof",
+        sourceBinding={"artifact": "agent-boundary-verification.json", "replay": "agent-boundary-replay-results.json"},
+        evidenceBinding=coverage,
+        statement="Agent-boundary verifier confirmed baseline and unsafe/control payload coverage in replay results.",
+        confidence=0.86,
+        rerunCommand="python3 agent-boundary-verifier.py agent-boundary-map.json agent-boundary-replay-results.json agent-boundary-verification.json",
+    ) if coverage["verified"] else None
+    response_claim = add_claim(
+        claim_ledger,
+        id="agent-boundary-response-hash-oracle-" + short_hash("|".join(response_oracle.get("responseHashes") or [])),
+        claimType="agent-boundary-response-hash-oracle-proof",
+        sourceBinding={"artifact": "agent-boundary-verification.json", "replay": "agent-boundary-replay-results.json"},
+        evidenceBinding=response_oracle,
+        statement="Agent-boundary verifier confirmed promoted replay claims carry request/response hash oracles.",
+        confidence=0.88,
+        rerunCommand="python3 agent-boundary-verifier.py agent-boundary-map.json agent-boundary-replay-results.json agent-boundary-verification.json",
+    ) if response_oracle["verified"] else None
+    control_claim = add_claim(
+        claim_ledger,
+        id="agent-boundary-negative-control-" + short_hash(json.dumps(controls, sort_keys=True)),
+        claimType="agent-boundary-negative-control-proof",
+        sourceBinding={"artifact": "agent-boundary-verification.json", "replay": "agent-boundary-replay-results.json"},
+        evidenceBinding={"passedControls": controls, "baselineAccepted": baseline_accepted, "hasUnsafeOrBlockedDifferential": has_differential},
+        statement="Agent-boundary verifier confirmed benign baseline and unsafe/blocked response differentials.",
+        confidence=0.84,
+        rerunCommand="python3 agent-boundary-verifier.py agent-boundary-map.json agent-boundary-replay-results.json agent-boundary-verification.json",
+    ) if negative_verified else None
+    if map_claim and coverage_claim and response_claim and control_claim:
+        segments = [map_claim, coverage_claim, response_claim, control_claim]
+        composed = {
+            "id": "agent-boundary-verification-proof-path-" + short_hash(">".join([claim["id"] for claim in segments])),
+            "claimType": "agent-boundary-verification-proof-path",
+            "sourceBinding": {"segments": [{"id": claim["id"], "claimType": claim["claimType"], "artifact": claim.get("sourceBinding", {}).get("artifact")} for claim in segments]},
+            "evidenceBinding": {"flowCount": map_flow["flowCount"], "sourceBoundFlowCount": map_flow["sourceBoundFlowCount"], "promotedCount": response_oracle["promotedCount"], "negativeControls": len(controls), "hasUnsafeOrBlockedDifferential": has_differential},
+            "statement": "Agent-boundary proof path composes source boundary flows, replay payload coverage, response hashes, and negative controls.",
+            "verdict": "promoted",
+            "confidence": 0.88,
+            "blockers": [],
+            "rerunCommand": "python3 agent-boundary-verifier.py agent-boundary-map.json agent-boundary-replay-results.json agent-boundary-verification.json",
+        }
+        claim_ledger.append(composed)
+        composed_paths.append(composed)
+    blockers = []
+    if not map_flow["verified"]:
+        blockers.append("missing-agent-boundary-map-flow-verification")
+    if not coverage["verified"]:
+        blockers.append("missing-agent-boundary-replay-coverage")
+    if not response_oracle["verified"]:
+        blockers.append("missing-agent-boundary-response-hash")
+    if not negative_verified:
+        blockers.append("missing-agent-boundary-negative-control")
+    proof_ready = bool(composed_paths)
+    return {
+        "kind": "repi-agent-boundary-verification",
+        "schemaVersion": 1,
+        "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "proofReady": proof_ready,
+        "unsafeProofReady": proof_ready,
+        "mapFlowVerification": map_flow,
+        "replayCoverage": coverage,
+        "responseHashOracle": response_oracle,
+        "negativeControls": controls,
+        "stats": {"flowCount": map_flow["flowCount"], "sourceBoundFlowCount": map_flow["sourceBoundFlowCount"], "payloadsObserved": len(observed), "promotedResponseHashes": len(response_hashes), "negativeControlsPassed": len(controls), "negativeControlVerified": negative_verified},
+        "claimLedger": claim_ledger,
+        "composedPaths": composed_paths,
+        "repairQueue": [{"id": "agent-boundary-verification-" + blocker, "blocker": blocker, "action": "Collect verifier-bound agent-boundary evidence and rerun agent-boundary-verifier.py.", "rerunCommand": "python3 agent-boundary-verifier.py agent-boundary-map.json agent-boundary-replay-results.json agent-boundary-verification.json"} for blocker in blockers],
+        "promotionReport": {"proofReady": proof_ready, "unsafeProofReady": proof_ready, "promotedClaims": claim_ledger, "blockers": blockers},
+    }
+
+def self_test():
+    with tempfile.TemporaryDirectory() as tmp:
+        map_path = os.path.join(tmp, "agent-boundary-map.json")
+        replay_path = os.path.join(tmp, "agent-boundary-replay-results.json")
+        flow = {"file": "agent.ts", "type": "tool-secret-exfiltration-boundary", "severity": "high", "payloadIds": ["secret-exfiltration-policy"], "evidence": [{"line": 1, "category": "secret-surface"}]}
+        rows = [{"payloadId": "benign-baseline", "status": 200, "responseSha256": "a" * 64}, *[{"payloadId": pid, "status": 200 if pid != "ssrf-url-tool" else 403, "responseSha256": sha256(pid), "requestSha256": sha256("req:" + pid), "signals": ["system-prompt-leak"] if pid == "secret-exfiltration-policy" else [], "blocked": pid == "ssrf-url-tool"} for pid in PAYLOAD_IDS if pid != "benign-baseline"]]
+        claims = [{"verdict": "unsafe-promoted", "evidenceBinding": {"responseSha256": sha256("secret-exfiltration-policy"), "requestSha256": sha256("req:secret-exfiltration-policy")}}]
+        with open(map_path, "w", encoding="utf-8") as handle:
+            json.dump({"boundaryFlows": [flow]}, handle)
+        with open(replay_path, "w", encoding="utf-8") as handle:
+            json.dump({"rows": rows, "claimLedger": claims}, handle)
+        result = verify(map_path, replay_path)
+        assert result["proofReady"], json.dumps(result, sort_keys=True)
+        print(json.dumps({"kind": "repi-agent-boundary-verifier-self-test", "status": "ok", "stats": result["stats"]}, sort_keys=True))
+
+def main():
+    parser = argparse.ArgumentParser(description="Verify REPI agent-boundary map/replay evidence and negative controls.")
+    parser.add_argument("map", nargs="?", default="agent-boundary-map.json")
+    parser.add_argument("replay", nargs="?", default="agent-boundary-replay-results.json")
+    parser.add_argument("output", nargs="?", default="agent-boundary-verification.json")
+    parser.add_argument("--self-test", action="store_true")
+    args = parser.parse_args()
+    if args.self_test:
+        self_test()
+        return 0
+    result = verify(args.map, args.replay)
+    with open(args.output, "w", encoding="utf-8") as handle:
+        json.dump(result, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    print(json.dumps({"kind": result["kind"], "proofReady": result["proofReady"], "stats": result["stats"], "output": args.output}, sort_keys=True))
+    return 0 if result["proofReady"] else 1
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+`;
+}
+
+function writeAgentBoundaryVerifier(artifactDir) {
+	if (noWrite || !artifactDir) return undefined;
+	const path = join(artifactDir, "agent-boundary-verifier.py");
+	writePrivate(path, agentBoundaryVerifierSource(), 0o700);
+	return path;
+}
+
+function writeAgentBoundaryVerification(artifactDir, target) {
+	if (noWrite || !artifactDir) return undefined;
+	const summary = agentBoundaryVerificationSummary(target, artifactDir);
+	const path = join(artifactDir, "agent-boundary-verification.json");
+	writePrivate(path, `${JSON.stringify(summary, null, 2)}\n`, 0o600);
+	return { path, summary };
+}
+
 function agentBoundaryRows(target, artifactDir) {
 	try {
 		const summary = agentBoundarySummary(target);
@@ -12350,6 +12776,36 @@ function agentBoundaryRows(target, artifactDir) {
 			});
 			const python = commandExists("python3") ? "python3" : commandExists("python") ? "python" : undefined;
 			if (python) rows.push(run(python, [harnessPath, outputPath, "--self-test"], { id: "agent-boundary-replay-self-test", timeout: timeoutMs + 5000 }));
+			const verifierPath = writeAgentBoundaryVerifier(artifactDir);
+			if (verifierPath) {
+				rows.push({
+					id: "agent-boundary-verifier-artifact",
+					command: "internal",
+					args: [redact(verifierPath)],
+					cwd: root,
+					exit: 0,
+					signal: null,
+					durationMs: 0,
+					stdout: `verifier=${redact(verifierPath)}\nrun=python3 ${redact(verifierPath)} ${redact(join(artifactDir, "agent-boundary-map.json"))} ${redact(outputPath)} ${redact(join(artifactDir, "agent-boundary-verification.json"))}\n`,
+					stderr: "",
+					error: undefined,
+				});
+			}
+			const verification = writeAgentBoundaryVerification(artifactDir, target);
+			if (verification) {
+				rows.push({
+					id: "agent-boundary-verification",
+					command: "internal",
+					args: [redact(verification.path)],
+					cwd: root,
+					exit: verification.summary.proofReady ? 0 : 1,
+					signal: null,
+					durationMs: 0,
+					stdout: `${JSON.stringify(verification.summary, null, 2)}\n`,
+					stderr: "",
+					error: verification.summary.proofReady ? undefined : "agent boundary verification blockers present",
+				});
+			}
 		}
 		return rows;
 	} catch (error) {
@@ -20562,10 +21018,12 @@ function nextQueue(targetInfo, artifactDir, toolState) {
 	}
 	if (targetInfo.lane === "agent-boundary") {
 		if (!noWrite) q.push(`cat ${shellQuote(join(artifactDir, "agent-boundary-map.json"))}`);
+		if (!noWrite && existsSync(join(artifactDir, "agent-boundary-verification.json"))) q.push(`cat ${shellQuote(join(artifactDir, "agent-boundary-verification.json"))}`);
 		if (!noWrite && existsSync(join(artifactDir, "agent-boundary-claim-promotion.json"))) q.push(`cat ${shellQuote(join(artifactDir, "agent-boundary-claim-promotion.json"))}`);
 		if (!noWrite && existsSync(join(artifactDir, "agent-boundary-repair-queue.json"))) q.push(`cat ${shellQuote(join(artifactDir, "agent-boundary-repair-queue.json"))}`);
+		if (!noWrite && existsSync(join(artifactDir, "agent-boundary-verifier.py"))) q.push(`python3 ${shellQuote(join(artifactDir, "agent-boundary-verifier.py"))} ${shellQuote(join(artifactDir, "agent-boundary-map.json"))} ${shellQuote(join(artifactDir, "agent-boundary-replay-results.json"))} ${shellQuote(join(artifactDir, "agent-boundary-verification.json"))}`);
 		if (!noWrite) q.push(`python3 ${shellQuote(join(artifactDir, "agent-boundary-payloads.py"))} <chat-or-agent-endpoint> ${shellQuote(join(artifactDir, "agent-boundary-replay-results.json"))} --execute`);
-		q.push(`repi -p ${shellQuote(`Continue agent-boundary pentest from ${artifactDir}: use agent-boundary-map.json boundaryFlows plus agent-boundary-claim-promotion.json claimLedger/composedPaths and agent-boundary-repair-queue.json repairQueue to bind untrusted input to prompts/tools/credentials, replay HTTP payloads from agent-boundary-payloads.py, and prove one unsafe leak/tool execution or baseline-accepted blocked-control flow with response hashes.`)}`);
+		q.push(`repi -p ${shellQuote(`Continue agent-boundary pentest from ${artifactDir}: use agent-boundary-verification.json, agent-boundary-map.json boundaryFlows, agent-boundary-claim-promotion.json claimLedger/composedPaths, and agent-boundary-repair-queue.json repairQueue to bind untrusted input to prompts/tools/credentials, replay HTTP payloads from agent-boundary-payloads.py, rerun agent-boundary-verifier.py for source-bound map flow coverage, response hash oracle, and negative controls, then prove one unsafe leak/tool execution or baseline-accepted blocked-control flow with request/response hashes.`)}`);
 	}
 	if (targetInfo.lane === "cloud-identity") {
 		if (!noWrite) q.push(`cat ${shellQuote(join(artifactDir, "cloud-identity-map.json"))}`);
@@ -20673,6 +21131,7 @@ function summarizeEvidence(rows, targetInfo, toolState) {
 		if (/repi-agent-boundary-map|agent-boundary|prompt-injection|llm-to-shell-tool-boundary|tool-secret-exfiltration-boundary|tool_call|system-prompt/i.test(text) && targetInfo.lane === "agent-boundary") anchors.push("agent boundary anchors");
 		if (/boundaryFlows|untrusted-input-to-shell-execution-flow|llm-to-shell-execution-flow|tool-secret-exfiltration-flow|prompt-injection-evidence-flow/i.test(text) && targetInfo.lane === "agent-boundary") anchors.push("agent boundary flow anchors");
 		if (/repi-agent-boundary-replay|agent-boundary-(?:claim-promotion|repair-queue)|agent-boundary-unsafe-tool-proof-path|agent-boundary-blocked-control-proof-path|unsafe-promoted|control-promoted|responseSha256|composedPaths|claimLedger/i.test(text) && targetInfo.lane === "agent-boundary") anchors.push("agent boundary replay anchors");
+		if (/repi-agent-boundary-verification|agent-boundary-verifier|agent-boundary-map-flow-verification-proof|agent-boundary-replay-coverage-proof|agent-boundary-response-hash-oracle-proof|agent-boundary-negative-control-proof|agent-boundary-verification-proof-path/i.test(text) && targetInfo.lane === "agent-boundary") anchors.push("agent boundary verifier anchors");
 		if (/repi-cloud-identity-map|cloud-identity|terraform|ClusterRoleBinding|aws_iam|id-token|public-network-exposure|ci-oidc-deployment-trust-chain/i.test(text) && targetInfo.lane === "cloud-identity") anchors.push("cloud identity anchors");
 		if (/trustChains|cloud-identity-trust-claims|cloud-trust-chain-pivot|claimLedger|repairQueue|github-oidc-role-assumption-signal|terraform-wildcard-iam-policy-signal|kubernetes-privileged-service-account-signal|kubernetes-clusterrolebinding-signal|container-build-runtime-risk-signal/i.test(text) && targetInfo.lane === "cloud-identity") anchors.push("cloud trust-chain anchors");
 		if (/ExifTool|PNG|IHDR|zsteg|binwalk|PK|flag|ctf|cipher|nonce|salt|base64|xor/i.test(text) && targetInfo.lane === "crypto-stego") anchors.push("crypto/stego anchors");

@@ -1757,16 +1757,21 @@ export async function runAgent(req) {
 		expect(report.commands.map((row) => row.id)).toContain("agent-boundary-map");
 		expect(report.commands.map((row) => row.id)).toContain("agent-boundary-payload-harness");
 		expect(report.commands.map((row) => row.id)).toContain("agent-boundary-replay-self-test");
+		expect(report.commands.map((row) => row.id)).toContain("agent-boundary-verifier-artifact");
+		expect(report.commands.map((row) => row.id)).toContain("agent-boundary-verification");
 		expect(report.commands.map((row) => row.id)).toContain("repi-proof-graph");
 		expect(report.commands.map((row) => row.id)).toContain("repi-runtime-repair-loop-artifact");
 		expect(report.commands.map((row) => row.id)).toContain("proof-harness-self-test");
 		expect(report.summary.anchors).toContain("agent boundary anchors");
 		expect(report.summary.anchors).toContain("agent boundary flow anchors");
 		expect(report.summary.anchors).toContain("agent boundary replay anchors");
+		expect(report.summary.anchors).toContain("agent boundary verifier anchors");
 		expect(report.summary.anchors).toContain("unified proof graph anchors");
 		expect(report.nextQueue.some((command) => command.includes("agent-boundary-map.json"))).toBe(true);
+		expect(report.nextQueue.some((command) => command.includes("agent-boundary-verification.json"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("agent-boundary-claim-promotion.json"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("agent-boundary-repair-queue.json"))).toBe(true);
+		expect(report.nextQueue.some((command) => command.includes("agent-boundary-verifier.py"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("boundaryFlows"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("repi-proof-graph.json"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("runtimeRepairLoop"))).toBe(true);
@@ -1782,6 +1787,8 @@ export async function runAgent(req) {
 		const mapPath = join(report.artifactDir, "agent-boundary-map.json");
 		const harnessPath = join(report.artifactDir, "agent-boundary-payloads.py");
 		const replayPath = join(report.artifactDir, "agent-boundary-replay-results.json");
+		const verifierPath = join(report.artifactDir, "agent-boundary-verifier.py");
+		const verificationPath = join(report.artifactDir, "agent-boundary-verification.json");
 		const claimPromotionPath = join(report.artifactDir, "agent-boundary-claim-promotion.json");
 		const repairQueuePath = join(report.artifactDir, "agent-boundary-repair-queue.json");
 		const proofGraphPath = join(report.artifactDir, "repi-proof-graph.json");
@@ -1790,6 +1797,8 @@ export async function runAgent(req) {
 		expect(existsSync(mapPath)).toBe(true);
 		expect(existsSync(harnessPath)).toBe(true);
 		expect(existsSync(replayPath)).toBe(true);
+		expect(existsSync(verifierPath)).toBe(true);
+		expect(existsSync(verificationPath)).toBe(true);
 		expect(existsSync(claimPromotionPath)).toBe(true);
 		expect(existsSync(repairQueuePath)).toBe(true);
 		expect(existsSync(proofGraphPath)).toBe(true);
@@ -1798,6 +1807,8 @@ export async function runAgent(req) {
 		expect(statSync(mapPath).mode & 0o777).toBe(0o600);
 		expect(statSync(harnessPath).mode & 0o777).toBe(0o700);
 		expect(statSync(replayPath).mode & 0o777).toBe(0o600);
+		expect(statSync(verifierPath).mode & 0o777).toBe(0o700);
+		expect(statSync(verificationPath).mode & 0o777).toBe(0o600);
 		expect(statSync(claimPromotionPath).mode & 0o777).toBe(0o600);
 		expect(statSync(repairQueuePath).mode & 0o777).toBe(0o600);
 		expect(statSync(proofGraphPath).mode & 0o777).toBe(0o600);
@@ -1863,6 +1874,14 @@ export async function runAgent(req) {
 		const repairQueue = JSON.parse(readFileSync(repairQueuePath, "utf8")) as {
 			queue: Array<{ blocker: string; rerunCommand: string }>;
 		};
+		const verification = JSON.parse(readFileSync(verificationPath, "utf8")) as {
+			proofReady: boolean;
+			unsafeProofReady: boolean;
+			stats: { negativeControlsPassed: number; sourceBoundFlowCount: number; negativeControlVerified: boolean };
+			claimLedger: Array<{ claimType: string; verdict: string }>;
+			composedPaths: Array<{ claimType: string; evidenceBinding: { hasUnsafeOrBlockedDifferential: boolean } }>;
+			repairQueue: Array<{ blocker: string }>;
+		};
 		const proofGraph = JSON.parse(readFileSync(proofGraphPath, "utf8")) as {
 			proofReady: boolean;
 			exploitProofReady: boolean;
@@ -1893,10 +1912,34 @@ export async function runAgent(req) {
 		);
 		expect(claimPromotion.claimLedger.some((claim) => claim.verdict === "control-promoted")).toBe(true);
 		expect(repairQueue.queue[0].rerunCommand).toContain("agent-boundary-payloads.py");
+		expect(verification.proofReady).toBe(true);
+		expect(verification.unsafeProofReady).toBe(true);
+		expect(verification.stats.sourceBoundFlowCount).toBeGreaterThan(0);
+		expect(verification.stats.negativeControlsPassed).toBeGreaterThanOrEqual(2);
+		expect(verification.stats.negativeControlVerified).toBe(true);
+		expect(verification.claimLedger.map((claim) => claim.claimType)).toEqual(
+			expect.arrayContaining([
+				"agent-boundary-map-flow-verification-proof",
+				"agent-boundary-replay-coverage-proof",
+				"agent-boundary-response-hash-oracle-proof",
+				"agent-boundary-negative-control-proof",
+			]),
+		);
+		expect(verification.composedPaths.map((path) => path.claimType)).toContain(
+			"agent-boundary-verification-proof-path",
+		);
+		expect(verification.composedPaths[0].evidenceBinding.hasUnsafeOrBlockedDifferential).toBe(true);
+		expect(verification.repairQueue).toEqual([]);
 		expect(proofGraph.proofReady).toBe(true);
 		expect(proofGraph.exploitProofReady).toBe(true);
 		expect(proofGraph.claimLedger.map((claim) => claim.claimType)).toContain("agent-boundary-unsafe-replay");
+		expect(proofGraph.claimLedger.map((claim) => claim.claimType)).toContain(
+			"agent-boundary-map-flow-verification-proof",
+		);
 		expect(proofGraph.composedPaths.map((path) => path.claimType)).toContain("agent-boundary-unsafe-tool-proof-path");
+		expect(proofGraph.composedPaths.map((path) => path.claimType)).toContain(
+			"agent-boundary-verification-proof-path",
+		);
 		expect(proofGraph.repairQueue.map((row) => row.blocker)).toContain("no-boundary-differential");
 		expect(
 			proofGraph.runtimeRepairLoop.nextCommands.some((command) => command.includes("agent-boundary-payloads.py")),
@@ -1904,11 +1947,14 @@ export async function runAgent(req) {
 		expect(proofGraph.graph.nodes.some((node) => node.nodeType === "composed-path")).toBe(true);
 		expect(proofGraph.graph.edges.some((edge) => edge.relation === "segment-of")).toBe(true);
 		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("agent-boundary-replay-results.json");
+		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("agent-boundary-verification.json");
+		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("agent-boundary-verifier.py");
 		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("agent-boundary-claim-promotion.json");
 		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("agent-boundary-repair-queue.json");
 		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("repi-proof-graph.json");
 		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("repi-runtime-repair-loop.mjs");
 		expect(proofMatrix.liveChecks.map((row) => row.id)).toContain("agent-boundary-payloads-self-test");
+		expect(proofMatrix.liveChecks.map((row) => row.id)).toContain("agent-boundary-verifier-self-test");
 		expect(proofMatrix.liveChecks.map((row) => row.id)).toContain("repi-runtime-repair-loop-self-test");
 		const repairLoop = spawnSync(process.execPath, [runtimeRepairLoopPath, "--self-test", "--max", "8"], {
 			encoding: "utf8",
@@ -1929,6 +1975,12 @@ export async function runAgent(req) {
 		expect(harness.stdout).toContain("repi-agent-boundary-replay-results");
 		expect(harness.stdout).toContain("unsafe-promoted");
 		expect(harness.stdout).toContain("ssrf-url-tool");
+		const verifier = spawnSync("python3", [verifierPath, "--self-test"], {
+			encoding: "utf8",
+			timeout: 15_000,
+		});
+		expect(verifier.status, `${verifier.stderr}\n${verifier.stdout}`).toBe(0);
+		expect(verifier.stdout).toContain("repi-agent-boundary-verifier-self-test");
 		expect(collectTmp(agentDir)).toEqual([]);
 	});
 
