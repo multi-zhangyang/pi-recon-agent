@@ -1066,9 +1066,11 @@ describe("repi-engage artifact writes", () => {
 		expect(report.commands.map((row) => row.id)).toContain("workspace-source-runtime-map");
 		expect(report.commands.map((row) => row.id)).toContain("workspace-route-replay-harness-artifact");
 		expect(report.commands.map((row) => row.id)).toContain("workspace-route-replay-plan");
+		expect(report.commands.map((row) => row.id)).toContain("workspace-source-runtime-claims");
 		expect(report.commands.map((row) => row.id)).toContain("proof-harness-self-test");
 		expect(report.summary.anchors).toContain("workspace source-to-runtime anchors");
 		expect(report.summary.anchors).toContain("workspace route replay/authz anchors");
+		expect(report.summary.anchors).toContain("workspace source-runtime claim anchors");
 		expect(report.summary.anchors).toContain("proof harness/self-test anchors");
 		const mapPath = join(report.artifactDir, "workspace-source-runtime-map.json");
 		const harnessPath = join(report.artifactDir, "workspace-source-runtime-harness.mjs");
@@ -1076,6 +1078,7 @@ describe("repi-engage artifact writes", () => {
 		const routeReplayPlanPath = join(report.artifactDir, "workspace-route-replay-plan.json");
 		const routeClaimPromotionPath = join(report.artifactDir, "workspace-route-claim-promotion.json");
 		const routeRepairQueuePath = join(report.artifactDir, "workspace-route-repair-queue.json");
+		const workspaceClaimsPath = join(report.artifactDir, "workspace-source-runtime-claims.json");
 		const proofMatrixPath = join(report.artifactDir, "proof-matrix.json");
 		expect(existsSync(mapPath)).toBe(true);
 		expect(existsSync(harnessPath)).toBe(true);
@@ -1083,6 +1086,7 @@ describe("repi-engage artifact writes", () => {
 		expect(existsSync(routeReplayPlanPath)).toBe(true);
 		expect(existsSync(routeClaimPromotionPath)).toBe(true);
 		expect(existsSync(routeRepairQueuePath)).toBe(true);
+		expect(existsSync(workspaceClaimsPath)).toBe(true);
 		expect(existsSync(proofMatrixPath)).toBe(true);
 		expect(statSync(mapPath).mode & 0o777).toBe(0o600);
 		expect(statSync(harnessPath).mode & 0o777).toBe(0o700);
@@ -1090,6 +1094,7 @@ describe("repi-engage artifact writes", () => {
 		expect(statSync(routeReplayPlanPath).mode & 0o777).toBe(0o600);
 		expect(statSync(routeClaimPromotionPath).mode & 0o777).toBe(0o600);
 		expect(statSync(routeRepairQueuePath).mode & 0o777).toBe(0o600);
+		expect(statSync(workspaceClaimsPath).mode & 0o777).toBe(0o600);
 		const sourceMap = JSON.parse(readFileSync(mapPath, "utf8")) as {
 			counts: { routes: number; sinks: number; proofTargets: number };
 			risks: string[];
@@ -1144,6 +1149,30 @@ describe("repi-engage artifact writes", () => {
 		expect(routeClaimPromotion.claimLedger[0].evidenceBinding.negativeControls.anonymous).toBe(false);
 		expect(routeClaimPromotion.claimLedger[0].rerunCommand).toContain("REPI_WORKSPACE_BASE_URL");
 		expect(routeRepairQueue.queue.map((row) => row.blocker)).toContain("missing-base-url");
+		const workspaceClaims = JSON.parse(readFileSync(workspaceClaimsPath, "utf8")) as {
+			proofReady: boolean;
+			runtimeProofReady: boolean;
+			exploitProofReady: boolean;
+			claimLedger: Array<{ claimType: string; verdict: string; blockers: string[] }>;
+			composedPaths: Array<{ claimType: string }>;
+			promotionReport: { blockers: string[] };
+			repairQueue: Array<{ blocker: string }>;
+		};
+		expect(workspaceClaims.proofReady).toBe(true);
+		expect(workspaceClaims.runtimeProofReady).toBe(false);
+		expect(workspaceClaims.exploitProofReady).toBe(false);
+		expect(workspaceClaims.claimLedger.map((claim) => claim.claimType)).toContain(
+			"workspace-route-dangerous-sink-surface",
+		);
+		expect(workspaceClaims.claimLedger.map((claim) => claim.claimType)).toContain(
+			"workspace-state-changing-route-surface",
+		);
+		expect(workspaceClaims.claimLedger.map((claim) => claim.claimType)).toContain(
+			"workspace-runtime-replay-plan-blocked",
+		);
+		expect(workspaceClaims.composedPaths.length).toBe(0);
+		expect(workspaceClaims.promotionReport.blockers).toContain("missing-base-url");
+		expect(workspaceClaims.repairQueue.map((row) => row.blocker)).toContain("missing-base-url");
 		const proofMatrix = JSON.parse(readFileSync(proofMatrixPath, "utf8")) as {
 			artifacts: Array<{ relPath: string }>;
 			liveChecks: Array<{ id: string }>;
@@ -1152,6 +1181,7 @@ describe("repi-engage artifact writes", () => {
 		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("workspace-route-replay-harness.mjs");
 		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("workspace-route-claim-promotion.json");
 		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("workspace-route-repair-queue.json");
+		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("workspace-source-runtime-claims.json");
 		expect(proofMatrix.liveChecks.map((row) => row.id)).toContain("workspace-source-runtime-harness-self-test");
 		expect(proofMatrix.liveChecks.map((row) => row.id)).toContain("workspace-route-replay-harness-self-test");
 		expect(
@@ -1166,6 +1196,10 @@ describe("repi-engage artifact writes", () => {
 		).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("workspace-route-claim-promotion.json"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("workspace-route-repair-queue.json"))).toBe(true);
+		expect(report.nextQueue.some((command) => command.includes("workspace-source-runtime-claims.json"))).toBe(true);
+		expect(
+			report.nextQueue.some((command) => command.includes("claimLedger") && command.includes("composedPaths")),
+		).toBe(true);
 		const routeReplaySelfTest = spawnSync(process.execPath, [routeReplayHarnessPath, "--self-test"], {
 			encoding: "utf8",
 			timeout: 15_000,

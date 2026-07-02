@@ -550,6 +550,7 @@ function buildProofArtifactRows(targetInfo, artifactDir) {
 		add("workspace-route-replay-results.json", "workspace route replay/authz matrix output");
 		add("workspace-route-claim-promotion.json", "workspace route replay claim-promotion ledger");
 		add("workspace-route-repair-queue.json", "workspace route replay repair queue");
+		add("workspace-source-runtime-claims.json", "workspace source-to-runtime exploit claim ledger");
 		add("workspace-route-replay-harness.mjs", "workspace route replay/authz matrix harness", 0o700);
 	}
 	if (targetInfo.lane === "native-pwn") {
@@ -629,7 +630,7 @@ function buildProofCoverageGaps(targetInfo, artifactRows) {
 		requireAny("web-runtime-replay", ["web-runtime-replay-verifier.mjs", "web-replay-matrix.json"], "web targets need replayable HTTP/browser evidence");
 		requireAny("web-route-matrix", ["web-exploit-claims.json", "web-api-schema-probes.json", "web-discovery-matrix.json", "web-object-matrix.json"], "web targets need route/schema/object matrix evidence");
 	}
-	if (targetInfo.kind === "directory") requireAny("workspace-source-runtime-map", ["workspace-source-runtime-map.json", "workspace-source-runtime-harness.mjs"], "workspace targets need source-to-runtime route/sink/auth evidence");
+	if (targetInfo.kind === "directory") requireAny("workspace-source-runtime-map", ["workspace-source-runtime-claims.json", "workspace-source-runtime-map.json", "workspace-source-runtime-harness.mjs"], "workspace targets need source-to-runtime route/sink/auth evidence");
 	if (targetInfo.lane === "native-pwn") requireAny("native-replay", ["native-primitive-claims.json", "native-replay-verifier.py", "native-exploit-hypotheses.json", "native-static-triage.json"], "native targets need replay/triage/hypothesis artifacts");
 	if (targetInfo.lane === "js-reverse") requireAny("js-reverse-workbench", ["js-reverse-workbench.json", "js-reverse-workbench.mjs", "workspace-source-runtime-map.json"], "JS reverse targets need local signer/API/workspace evidence artifacts");
 	if (targetInfo.lane === "pcap-dfir") requireAny("pcap-flow-summary", ["pcap-flow-claims.json", "pcap-flow-summary.json"], "PCAP targets need parsed flow/stream evidence");
@@ -11113,6 +11114,370 @@ function writeWorkspaceRouteReplayHarness(artifactDir) {
 	return { harnessPath, planPath, outputPath, claimPromotionPath, repairQueuePath };
 }
 
+function workspaceSourceRuntimeClaims(target, artifactDir) {
+	const map = readJsonArtifact(join(artifactDir, "workspace-source-runtime-map.json"));
+	const routeReplay = readJsonArtifact(join(artifactDir, "workspace-route-replay-results.json"));
+	const routePromotion = readJsonArtifact(join(artifactDir, "workspace-route-claim-promotion.json"));
+	const routeRepair = readJsonArtifact(join(artifactDir, "workspace-route-repair-queue.json"));
+	const routePlan = readJsonArtifact(join(artifactDir, "workspace-route-replay-plan.json"));
+	const artifactFiles = [
+		map ? "workspace-source-runtime-map.json" : null,
+		existsSync(join(artifactDir, "workspace-source-runtime-harness.mjs")) ? "workspace-source-runtime-harness.mjs" : null,
+		routePlan ? "workspace-route-replay-plan.json" : null,
+		routeReplay ? "workspace-route-replay-results.json" : null,
+		routePromotion ? "workspace-route-claim-promotion.json" : null,
+		routeRepair ? "workspace-route-repair-queue.json" : null,
+		existsSync(join(artifactDir, "workspace-route-replay-harness.mjs")) ? "workspace-route-replay-harness.mjs" : null,
+	].filter(Boolean);
+	const claimLedger = [];
+	const addClaim = (claim) => {
+		if (!claim?.id || claimLedger.some((row) => row.id === claim.id)) return undefined;
+		const normalized = {
+			verdict: "promoted",
+			confidence: 0.7,
+			blockers: [],
+			...claim,
+		};
+		claimLedger.push(normalized);
+		return normalized;
+	};
+	const mapEdges = Array.isArray(map?.sourceToRuntimeEdges) ? map.sourceToRuntimeEdges : [];
+	const proofTargets = Array.isArray(map?.proofTargets) ? map.proofTargets : [];
+	const routeRows = Array.isArray(map?.routes) ? map.routes : [];
+	const routeSample = (rows) =>
+		rows.slice(0, 24).map((row) => ({
+			method: row.method ?? row.route?.method ?? null,
+			path: row.path ?? row.route?.path ?? null,
+			file: row.file ?? row.route?.file ?? null,
+			line: row.line ?? row.route?.line ?? null,
+			risks: row.risks ?? [],
+		}));
+	const edgeSample = (rows) =>
+		rows.slice(0, 16).map((edge) => ({
+			route: edge.route
+				? {
+						method: edge.route.method ?? null,
+						path: edge.route.path ?? null,
+						file: edge.route.file ?? null,
+						line: edge.route.line ?? null,
+					}
+				: null,
+			risks: edge.risks ?? [],
+			nearbyAuthCount: Array.isArray(edge.nearbyAuth) ? edge.nearbyAuth.length : 0,
+			nearbySinkKinds: Array.from(new Set((edge.nearbySinks ?? []).map((row) => row.kind).filter(Boolean))).slice(0, 12),
+			nearbyStateKinds: Array.from(new Set((edge.nearbyState ?? []).map((row) => row.kind).filter(Boolean))).slice(0, 12),
+			nearbySignerKinds: Array.from(new Set((edge.nearbySignerCrypto ?? []).map((row) => row.kind).filter(Boolean))).slice(0, 12),
+		}));
+	if (routeRows.length) {
+		addClaim({
+			id: "workspace-source-route-surface-" + shortHash(`${target}:${routeRows.length}:${JSON.stringify(routeRows.slice(0, 12))}`),
+			claimType: "workspace-source-route-surface",
+			sourceBinding: { artifact: "workspace-source-runtime-map.json", field: "routes" },
+			evidenceBinding: {
+				counts: map?.counts ?? {},
+				routes: routeSample(routeRows),
+				runtimeCommands: (map?.runtimeCommands ?? []).slice(0, 12),
+				risks: map?.risks ?? [],
+			},
+			statement: "Workspace source scan bound framework route declarations to replay templates and runtime-start hints.",
+			confidence: proofTargets.length ? 0.78 : 0.68,
+			rerunCommand: `node ${shellQuote(join(artifactDir, "workspace-source-runtime-harness.mjs"))} ${shellQuote(target)} ${shellQuote(join(artifactDir, "workspace-source-runtime-map.json"))}`,
+		});
+	}
+	const dangerousSinkEdges = mapEdges.filter((edge) => (edge.risks ?? []).includes("route-to-dangerous-sink-candidate") || (edge.nearbySinks ?? []).length);
+	if (dangerousSinkEdges.length || (map?.sinks ?? []).length) {
+		addClaim({
+			id: "workspace-route-dangerous-sink-surface-" + shortHash(`${target}:${JSON.stringify(dangerousSinkEdges.slice(0, 12))}:${JSON.stringify((map?.sinks ?? []).slice(0, 12))}`),
+			claimType: "workspace-route-dangerous-sink-surface",
+			sourceBinding: { artifact: "workspace-source-runtime-map.json", fields: ["sourceToRuntimeEdges", "sinks"] },
+			evidenceBinding: {
+				edgeCount: dangerousSinkEdges.length,
+				sinkCount: Array.isArray(map?.sinks) ? map.sinks.length : 0,
+				edges: edgeSample(dangerousSinkEdges),
+				sinkKinds: Array.from(new Set((map?.sinks ?? []).map((row) => row.kind).filter(Boolean))).slice(0, 24),
+			},
+			statement: "Source-only evidence identifies route-adjacent dangerous sinks; do not call this exploitable until live replay reaches the sink with controls.",
+			confidence: dangerousSinkEdges.length ? 0.76 : 0.62,
+			rerunCommand: "cat workspace-source-runtime-map.json | jq '.sourceToRuntimeEdges[] | select(.risks[]? == \"route-to-dangerous-sink-candidate\")'",
+		});
+	}
+	const authGapEdges = mapEdges.filter((edge) => (edge.risks ?? []).includes("route-sensitive-no-nearby-auth-anchor"));
+	if (authGapEdges.length) {
+		addClaim({
+			id: "workspace-route-auth-gap-surface-" + shortHash(`${target}:${JSON.stringify(authGapEdges.slice(0, 16))}`),
+			claimType: "workspace-route-auth-gap-surface",
+			sourceBinding: { artifact: "workspace-source-runtime-map.json", field: "sourceToRuntimeEdges" },
+			evidenceBinding: {
+				edgeCount: authGapEdges.length,
+				edges: edgeSample(authGapEdges),
+			},
+			statement: "Sensitive-looking source routes lack a nearby auth anchor and need anonymous/session replay before promotion.",
+			confidence: 0.72,
+			rerunCommand: "cat workspace-source-runtime-map.json | jq '.sourceToRuntimeEdges[] | select(.risks[]? == \"route-sensitive-no-nearby-auth-anchor\")'",
+		});
+	}
+	const stateEdges = mapEdges.filter((edge) => (edge.risks ?? []).includes("state-changing-route-candidate") || (edge.nearbyState ?? []).length);
+	if (stateEdges.length || (map?.stateMutations ?? []).length) {
+		addClaim({
+			id: "workspace-state-changing-route-surface-" + shortHash(`${target}:${JSON.stringify(stateEdges.slice(0, 16))}:${JSON.stringify((map?.stateMutations ?? []).slice(0, 12))}`),
+			claimType: "workspace-state-changing-route-surface",
+			sourceBinding: { artifact: "workspace-source-runtime-map.json", fields: ["sourceToRuntimeEdges", "stateMutations"] },
+			evidenceBinding: {
+				edgeCount: stateEdges.length,
+				stateMutationCount: Array.isArray(map?.stateMutations) ? map.stateMutations.length : 0,
+				edges: edgeSample(stateEdges),
+			},
+			statement: "State-changing route candidates are source-bound and require CSRF/authz/session negative controls at runtime.",
+			confidence: stateEdges.length ? 0.76 : 0.64,
+			rerunCommand: "cat workspace-source-runtime-map.json | jq '.sourceToRuntimeEdges[] | select(.risks[]? == \"state-changing-route-candidate\")'",
+		});
+	}
+	const signerEdges = mapEdges.filter((edge) => (edge.risks ?? []).includes("route-near-signature-crypto-candidate") || (edge.nearbySignerCrypto ?? []).length);
+	if (signerEdges.length || (map?.signerCrypto ?? []).length) {
+		addClaim({
+			id: "workspace-signer-crypto-surface-" + shortHash(`${target}:${JSON.stringify(signerEdges.slice(0, 16))}:${JSON.stringify((map?.signerCrypto ?? []).slice(0, 12))}`),
+			claimType: "workspace-signer-crypto-surface",
+			sourceBinding: { artifact: "workspace-source-runtime-map.json", fields: ["signerCrypto", "sourceToRuntimeEdges"] },
+			evidenceBinding: {
+				signerSignalCount: Array.isArray(map?.signerCrypto) ? map.signerCrypto.length : 0,
+				edges: edgeSample(signerEdges),
+				signerKinds: Array.from(new Set((map?.signerCrypto ?? []).map((row) => row.kind).filter(Boolean))).slice(0, 20),
+			},
+			statement: "Source evidence contains signer/crypto/canonicalization signals that need captured signed success plus tamper/missing-signature controls.",
+			confidence: signerEdges.length ? 0.78 : 0.68,
+			rerunCommand: "cat workspace-source-runtime-map.json | jq '.signerCrypto,.sourceToRuntimeEdges[]?.nearbySignerCrypto'",
+		});
+	}
+	const routeClaims = Array.isArray(routePromotion?.claimLedger)
+		? routePromotion.claimLedger
+		: Array.isArray(routeReplay?.claimLedger)
+			? routeReplay.claimLedger
+			: [];
+	const hasStatusHash = (claim) =>
+		(claim?.evidenceBinding?.variants ?? []).some(
+			(variant) => typeof variant.status === "number" && /^[a-f0-9]{64}$/i.test(String(variant.responseSha256 ?? "")),
+		);
+	const hasDifferential = (claim) => {
+		const controls = claim?.evidenceBinding?.negativeControls ?? {};
+		return Boolean(controls.authDifferential || controls.objectDifferential);
+	};
+	const promotedRouteClaims = routeClaims.filter((claim) => claim.verdict === "promoted" && hasStatusHash(claim) && hasDifferential(claim));
+	for (const claim of promotedRouteClaims.slice(0, 16)) {
+		addClaim({
+			id: "workspace-runtime-replay-proof-" + shortHash(`${target}:${claim.id}:${JSON.stringify(claim.sourceBinding ?? {})}`),
+			claimType: "workspace-runtime-replay-proof",
+			sourceBinding: {
+				artifact: "workspace-route-claim-promotion.json",
+				routeClaimId: claim.id,
+				...(claim.sourceBinding ?? {}),
+			},
+			evidenceBinding: {
+				baseUrl: claim.evidenceBinding?.baseUrl ?? routePromotion?.baseUrl ?? routeReplay?.baseUrl ?? null,
+				variants: (claim.evidenceBinding?.variants ?? []).slice(0, 8),
+				negativeControls: claim.evidenceBinding?.negativeControls ?? {},
+				headerNames: claim.evidenceBinding?.headerNames ?? [],
+				paramBindings: claim.evidenceBinding?.paramBindings ?? {},
+			},
+			statement: "Live workspace replay bound a source route to HTTP status/body hashes and an auth/object-control differential.",
+			confidence: 0.88,
+			rerunCommand: claim.rerunCommand ?? routePlan?.run ?? `REPI_WORKSPACE_BASE_URL=http://127.0.0.1:PORT node ${shellQuote(join(artifactDir, "workspace-route-replay-harness.mjs"))} ${shellQuote(join(artifactDir, "workspace-route-replay-results.json"))} --live`,
+		});
+	}
+	const blockedRouteClaims = routeClaims.filter((claim) => claim.verdict === "blocked" || (claim.blockers ?? []).length);
+	const routeBlockers = Array.from(
+		new Set([
+			...blockedRouteClaims.flatMap((claim) => claim.blockers ?? []),
+			...(Array.isArray(routeRepair?.queue) ? routeRepair.queue.map((row) => row.blocker).filter(Boolean) : []),
+			...(routeReplay?.baseUrlRequired || routePromotion?.baseUrlRequired ? ["missing-base-url"] : []),
+		]),
+	).sort();
+	if (routeBlockers.length || blockedRouteClaims.length) {
+		addClaim({
+			id: "workspace-runtime-replay-plan-blocked-" + shortHash(`${target}:${routeBlockers.join(",")}:${blockedRouteClaims.length}`),
+			claimType: "workspace-runtime-replay-plan-blocked",
+			sourceBinding: { artifacts: ["workspace-route-replay-results.json", "workspace-route-claim-promotion.json", "workspace-route-repair-queue.json"].filter((name) => artifactFiles.includes(name)) },
+			evidenceBinding: {
+				baseUrlRequired: Boolean(routeReplay?.baseUrlRequired || routePromotion?.baseUrlRequired),
+				blockedClaimCount: blockedRouteClaims.length,
+				blockers: routeBlockers,
+				blockedClaims: blockedRouteClaims.slice(0, 16).map((claim) => ({
+					id: claim.id,
+					route: claim.sourceBinding?.route ?? null,
+					method: claim.sourceBinding?.method ?? null,
+					proofTargetId: claim.sourceBinding?.proofTargetId ?? null,
+					blockers: claim.blockers ?? [],
+					verdict: claim.verdict,
+				})),
+			},
+			statement: "Workspace route replay is not promoted yet; blockers must be drained before claiming live exploitability.",
+			verdict: "blocked",
+			confidence: 0.18,
+			blockers: routeBlockers,
+			rerunCommand: routePlan?.run ?? blockedRouteClaims[0]?.rerunCommand ?? `REPI_WORKSPACE_BASE_URL=http://127.0.0.1:PORT node ${shellQuote(join(artifactDir, "workspace-route-replay-harness.mjs"))} ${shellQuote(join(artifactDir, "workspace-route-replay-results.json"))} --live`,
+		});
+	}
+	if (!map) {
+		addClaim({
+			id: "workspace-source-runtime-map-missing-" + shortHash(target),
+			claimType: "workspace-source-runtime-map-missing",
+			sourceBinding: { artifact: "workspace-source-runtime-map.json" },
+			evidenceBinding: { artifactFiles },
+			statement: "Workspace source-to-runtime map is missing; route/sink/auth claims cannot be promoted.",
+			verdict: "blocked",
+			confidence: 0.1,
+			blockers: ["missing-source-runtime-map"],
+			rerunCommand: `node ${shellQuote(join(artifactDir, "workspace-source-runtime-harness.mjs"))} ${shellQuote(target)} ${shellQuote(join(artifactDir, "workspace-source-runtime-map.json"))}`,
+		});
+	}
+	const composedPaths = [];
+	const sourceSurfaceClaim = claimLedger.find((claim) => claim.claimType === "workspace-source-route-surface");
+	const dangerousSurfaceClaim = claimLedger.find((claim) => claim.claimType === "workspace-route-dangerous-sink-surface");
+	const stateSurfaceClaim = claimLedger.find((claim) => claim.claimType === "workspace-state-changing-route-surface");
+	const authGapClaim = claimLedger.find((claim) => claim.claimType === "workspace-route-auth-gap-surface");
+	const runtimeProofClaims = claimLedger.filter((claim) => claim.claimType === "workspace-runtime-replay-proof");
+	for (const runtimeClaim of runtimeProofClaims.slice(0, 8)) {
+		const segments = [sourceSurfaceClaim, dangerousSurfaceClaim, stateSurfaceClaim, runtimeClaim].filter(Boolean);
+		const sourceRuntimePath = {
+			id: "workspace-source-runtime-proof-path-" + shortHash(segments.map((claim) => claim.id).join(">")),
+			claimType: "workspace-source-runtime-proof-path",
+			sourceBinding: {
+				target: redact(target),
+				segments: segments.map((claim) => ({ id: claim.id, claimType: claim.claimType })),
+			},
+			evidenceBinding: {
+				route: runtimeClaim.sourceBinding?.route ?? null,
+				method: runtimeClaim.sourceBinding?.method ?? null,
+				file: runtimeClaim.sourceBinding?.file ?? null,
+				line: runtimeClaim.sourceBinding?.line ?? null,
+				hasRuntimeStatusHash: true,
+				negativeControls: runtimeClaim.evidenceBinding?.negativeControls ?? {},
+				artifactFiles,
+			},
+			statement: "Source route, nearby risk surface, and live replay evidence compose into a rerunnable source-to-runtime proof path.",
+			verdict: "promoted",
+			confidence: 0.88,
+			blockers: [],
+			rerunCommand: runtimeClaim.rerunCommand,
+		};
+		claimLedger.push(sourceRuntimePath);
+		composedPaths.push(sourceRuntimePath);
+		const controls = runtimeClaim.evidenceBinding?.negativeControls ?? {};
+		if (controls.authDifferential || controls.objectDifferential) {
+			const authSegments = [authGapClaim, runtimeClaim].filter(Boolean);
+			const authzPath = {
+				id: "workspace-authz-replay-proof-path-" + shortHash(`${runtimeClaim.id}:${JSON.stringify(controls)}:${authSegments.map((claim) => claim.id).join(">")}`),
+				claimType: "workspace-authz-replay-proof-path",
+				sourceBinding: {
+					target: redact(target),
+					segments: authSegments.length ? authSegments.map((claim) => ({ id: claim.id, claimType: claim.claimType })) : [{ id: runtimeClaim.id, claimType: runtimeClaim.claimType }],
+				},
+				evidenceBinding: {
+					route: runtimeClaim.sourceBinding?.route ?? null,
+					method: runtimeClaim.sourceBinding?.method ?? null,
+					file: runtimeClaim.sourceBinding?.file ?? null,
+					line: runtimeClaim.sourceBinding?.line ?? null,
+					authDifferential: Boolean(controls.authDifferential),
+					objectDifferential: Boolean(controls.objectDifferential),
+					variantCount: (runtimeClaim.evidenceBinding?.variants ?? []).length,
+					artifactFiles,
+				},
+				statement: "Anonymous/session/object controls produced a live status/hash differential tied back to a source route.",
+				verdict: "promoted",
+				confidence: 0.86,
+				blockers: [],
+				rerunCommand: runtimeClaim.rerunCommand,
+			};
+			claimLedger.push(authzPath);
+			composedPaths.push(authzPath);
+		}
+	}
+	const promotedClaims = claimLedger.filter((claim) => claim.verdict === "promoted");
+	const observationClaims = claimLedger.filter((claim) => claim.verdict === "observation");
+	const blockedClaims = claimLedger.filter((claim) => claim.verdict === "blocked");
+	const blockers = Array.from(
+		new Set([
+			...(map ? [] : ["missing-source-runtime-map"]),
+			...(routePlan || routeReplay || routePromotion ? [] : ["missing-route-replay-plan"]),
+			...blockedClaims.flatMap((claim) => claim.blockers ?? []),
+			...(composedPaths.length ? [] : promotedRouteClaims.length ? [] : routeRows.length ? ["missing-live-route-replay-proof"] : []),
+		]),
+	).sort();
+	const repairActions = {
+		"missing-source-runtime-map": "Run workspace-source-runtime-harness.mjs against the workspace and keep source file/line bindings.",
+		"missing-route-replay-plan": "Generate workspace-route-replay-harness.mjs and route replay sidecars before claim promotion.",
+		"missing-base-url": "Start the service and set REPI_WORKSPACE_BASE_URL or pass --base-url to the replay harness.",
+		"no-status": "Fix host/port/routes/params until replay captures at least one HTTP status.",
+		"no-differential": "Replay anonymous, session, and object mutation controls until status/body hashes diverge.",
+		"missing-session-credentials": "Provide REPI_REPLAY_COOKIE or REPI_REPLAY_AUTHORIZATION for session replay.",
+		"object-mutation-inconclusive": "Bind concrete REPI_ROUTE_PARAM_<NAME> values for owned and tampered objects.",
+		"missing-live-route-replay-proof": "Run workspace-route-replay-harness.mjs --live and promote only rows with status/body hash plus a control differential.",
+	};
+	const routeQueue = Array.isArray(routeRepair?.queue) ? routeRepair.queue : Array.isArray(routeReplay?.repairQueue) ? routeReplay.repairQueue : [];
+	const repairQueue = [
+		...routeQueue.slice(0, 80).map((row) => ({
+			id: row.id ?? "workspace-route-repair-" + shortHash(`${row.claimId ?? ""}:${row.blocker ?? ""}:${row.route ?? ""}`),
+			claimId: row.claimId ?? null,
+			route: row.route ?? row.sourceBinding?.route ?? null,
+			method: row.method ?? row.sourceBinding?.method ?? null,
+			proofTargetId: row.proofTargetId ?? row.sourceBinding?.proofTargetId ?? null,
+			blocker: row.blocker ?? "unknown-route-replay-blocker",
+			action: row.action ?? repairActions[row.blocker] ?? "Drain route replay blocker and rerun claim promotion.",
+			sourceBinding: row.sourceBinding ?? null,
+			rerunCommand: row.rerunCommand ?? routePlan?.run ?? null,
+		})),
+		...blockers
+			.filter((blocker) => !routeQueue.some((row) => row.blocker === blocker))
+			.map((blocker) => ({
+				id: "workspace-source-runtime-" + blocker,
+				claimId: null,
+				route: null,
+				method: null,
+				proofTargetId: null,
+				blocker,
+				action: repairActions[blocker] ?? "Collect missing source/runtime evidence and rerun claim promotion.",
+				sourceBinding: { artifact: "workspace-source-runtime-claims.json" },
+				rerunCommand: `repi engage ${shellQuote(target)} --json`,
+			})),
+	];
+	return {
+		kind: "repi-workspace-source-runtime-claims",
+		schemaVersion: 1,
+		target: redact(target),
+		generatedAt: new Date().toISOString(),
+		artifactFiles,
+		counts: {
+			routes: routeRows.length,
+			proofTargets: proofTargets.length,
+			sourceEdges: mapEdges.length,
+			routeClaims: routeClaims.length,
+			runtimeProofClaims: runtimeProofClaims.length,
+		},
+		proofReady: promotedClaims.length > 0,
+		runtimeProofReady: runtimeProofClaims.length > 0,
+		exploitProofReady: composedPaths.length > 0,
+		claimLedger,
+		composedPaths,
+		promotionReport: {
+			proofReady: promotedClaims.length > 0,
+			runtimeProofReady: runtimeProofClaims.length > 0,
+			exploitProofReady: composedPaths.length > 0,
+			promotedClaims,
+			observations: observationClaims,
+			blockedClaims,
+			blockers,
+		},
+		repairQueue,
+	};
+}
+
+function writeWorkspaceSourceRuntimeClaims(artifactDir, target) {
+	if (noWrite || !artifactDir) return undefined;
+	const summary = workspaceSourceRuntimeClaims(target, artifactDir);
+	const path = join(artifactDir, "workspace-source-runtime-claims.json");
+	writePrivate(path, `${JSON.stringify(summary, null, 2)}\n`, 0o600);
+	return { path, summary };
+}
+
 function engageFile(targetInfo, artifactDir) {
 	const target = targetInfo.path;
 	const rows = [];
@@ -11331,6 +11696,33 @@ function engageDirectory(targetInfo, artifactDir) {
 		const replayPlanRun = run(process.execPath, [routeReplayArtifacts.harnessPath, routeReplayArtifacts.outputPath], { id: "workspace-route-replay-plan", timeout: timeoutMs + 3000 });
 		rows.push(replayPlanRun);
 		if (!existsSync(routeReplayArtifacts.outputPath) && replayPlanRun.stdout.trim()) writePrivate(routeReplayArtifacts.outputPath, replayPlanRun.stdout, 0o600);
+	}
+	const workspaceClaims = writeWorkspaceSourceRuntimeClaims(artifactDir, target);
+	if (workspaceClaims) {
+		rows.push({
+			id: "workspace-source-runtime-claims",
+			command: "internal",
+			args: [redact(workspaceClaims.path)],
+			cwd: root,
+			exit: workspaceClaims.summary.proofReady ? 0 : 1,
+			signal: null,
+			durationMs: 0,
+			stdout: `${JSON.stringify(
+				{
+					kind: workspaceClaims.summary.kind,
+					proofReady: workspaceClaims.summary.proofReady,
+					runtimeProofReady: workspaceClaims.summary.runtimeProofReady,
+					exploitProofReady: workspaceClaims.summary.exploitProofReady,
+					claimLedger: workspaceClaims.summary.claimLedger.map((claim) => ({ id: claim.id, claimType: claim.claimType, verdict: claim.verdict, blockers: claim.blockers })),
+					composedPaths: workspaceClaims.summary.composedPaths.map((claim) => ({ id: claim.id, claimType: claim.claimType, verdict: claim.verdict })),
+					repairQueue: workspaceClaims.summary.repairQueue.map((row) => ({ id: row.id, blocker: row.blocker, route: row.route })),
+				},
+				null,
+				2,
+			)}\n`,
+			stderr: "",
+			error: workspaceClaims.summary.proofReady ? undefined : "no workspace source-runtime claims promoted",
+		});
 	}
 	if (targetInfo.lane === "agent-boundary") {
 		rows.push(...agentBoundaryRows(target, artifactDir));
@@ -15092,8 +15484,9 @@ function nextQueue(targetInfo, artifactDir, toolState) {
 		if (!noWrite && existsSync(join(artifactDir, "workspace-source-runtime-harness.mjs"))) q.push(`node ${shellQuote(join(artifactDir, "workspace-source-runtime-harness.mjs"))} ${quotedDirectoryTarget} ${shellQuote(join(artifactDir, "workspace-source-runtime-map.json"))}`);
 		if (!noWrite && existsSync(join(artifactDir, "workspace-route-claim-promotion.json"))) q.push(`cat ${shellQuote(join(artifactDir, "workspace-route-claim-promotion.json"))}`);
 		if (!noWrite && existsSync(join(artifactDir, "workspace-route-repair-queue.json"))) q.push(`cat ${shellQuote(join(artifactDir, "workspace-route-repair-queue.json"))}`);
+		if (!noWrite && existsSync(join(artifactDir, "workspace-source-runtime-claims.json"))) q.push(`cat ${shellQuote(join(artifactDir, "workspace-source-runtime-claims.json"))}`);
 		if (!noWrite && existsSync(join(artifactDir, "workspace-route-replay-harness.mjs"))) q.push(`REPI_WORKSPACE_BASE_URL=http://127.0.0.1:PORT node ${shellQuote(join(artifactDir, "workspace-route-replay-harness.mjs"))} ${shellQuote(join(artifactDir, "workspace-route-replay-results.json"))} --live`);
-		q.push(`repi -p ${shellQuote(`Use ${artifactDir}/commands.jsonl plus workspace-route-claim-promotion.json and workspace-route-repair-queue.json to continue workspace exploitation: drain blockers, bind routes/sinks to runtime proof, and promote only source-bound replay differentials.`)}`);
+		q.push(`repi -p ${shellQuote(`Use ${artifactDir}/commands.jsonl plus workspace-source-runtime-claims.json, workspace-route-claim-promotion.json, and workspace-route-repair-queue.json to continue workspace exploitation: drain claimLedger/composedPaths/repairQueue blockers, bind routes/sinks to runtime proof, and promote only source-bound replay differentials.`)}`);
 	}
 	if (swarm) {
 		const provider = argValue("--provider") || DEFAULT_SWARM_PROVIDER;
@@ -15158,6 +15551,7 @@ function summarizeEvidence(rows, targetInfo, toolState) {
 		if (/endpoint|graphql|oauth|api\/|\/api|form|fetch|axios/i.test(text) && targetInfo.kind === "url") anchors.push("route/API anchors");
 		if (/repi-workspace-source-runtime-map|workspace-source-runtime-map|sourceToRuntimeEdges|route-sensitive-no-nearby-auth-anchor|route-to-dangerous-sink-candidate|routeReplayTemplates/i.test(text) && targetInfo.kind === "directory") anchors.push("workspace source-to-runtime anchors");
 		if (/repi-workspace-route-replay|workspace-route-replay|workspace-route-claim-promotion|workspace-route-repair-queue|tampered-object|authDifferential|objectDifferential|promotionReport|claimLedger|repairQueue/i.test(text) && targetInfo.kind === "directory") anchors.push("workspace route replay/authz anchors");
+		if (/repi-workspace-source-runtime-claims|workspace-source-runtime-claims|workspace-source-runtime-proof-path|workspace-authz-replay-proof-path|claimLedger|composedPaths|repairQueue/i.test(text) && targetInfo.kind === "directory") anchors.push("workspace source-runtime claim anchors");
 		if (/repi-web-discovery-matrix|web-discovery|robots\.txt|sitemap\.xml|openapi|swagger|graphql/i.test(text) && targetInfo.kind === "url") anchors.push("web discovery anchors");
 		if (/repi-web-api-schema-probes|web-api-schema-probes|__typename|__schema|graphql-introspection|graphql-mutation-surface|openapi-unauthenticated|openapi-upload-surface|securitySchemes|openapi|swagger|GraphQL/i.test(text) && targetInfo.kind === "url") anchors.push("API schema anchors");
 		if (/repi-web-ssrf-matrix|web-ssrf-matrix|ssrf-|169\.254\.169\.254|repi-ssrf-canary/i.test(text) && targetInfo.kind === "url") anchors.push("SSRF parameter anchors");
