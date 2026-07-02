@@ -2398,6 +2398,7 @@ jobs:
 		expect(JSON.stringify(report)).not.toContain(secret);
 		expect(report.target.lane).toBe("mobile");
 		expect(report.commands.map((row) => row.id)).toContain("mobile-archive-quicklook");
+		expect(report.commands.map((row) => row.id)).toContain("mobile-attack-surface-claims");
 		expect(report.commands.map((row) => row.id)).toContain("mobile-frida-hook-artifact");
 		expect(report.summary.missingCritical).not.toContain("unzip");
 		expect(report.summary.anchors).toContain("mobile package anchors");
@@ -2405,13 +2406,18 @@ jobs:
 		expect(report.summary.anchors).toContain("mobile DEX quicklook anchors");
 		expect(report.summary.anchors).toContain("mobile manifest attack-surface anchors");
 		expect(report.nextQueue.some((command) => command.includes("mobile-archive-summary.json"))).toBe(true);
+		expect(report.nextQueue.some((command) => command.includes("mobile-attack-surface-claims.json"))).toBe(true);
+		expect(report.nextQueue.some((command) => command.includes("claimLedger"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("mobile-frida-hooks.js"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("dexQuicklook"))).toBe(true);
 		const summaryPath = join(report.artifactDir, "mobile-archive-summary.json");
+		const attackSurfacePath = join(report.artifactDir, "mobile-attack-surface-claims.json");
 		const hookPath = join(report.artifactDir, "mobile-frida-hooks.js");
 		expect(existsSync(summaryPath)).toBe(true);
+		expect(existsSync(attackSurfacePath)).toBe(true);
 		expect(existsSync(hookPath)).toBe(true);
 		expect(statSync(summaryPath).mode & 0o777).toBe(0o600);
+		expect(statSync(attackSurfacePath).mode & 0o777).toBe(0o600);
 		expect(statSync(hookPath).mode & 0o777).toBe(0o600);
 		const summary = JSON.parse(readFileSync(summaryPath, "utf8")) as {
 			platform: string;
@@ -2451,6 +2457,42 @@ jobs:
 			signalLines: string[];
 		};
 		expect(JSON.stringify(summary)).not.toContain(secret);
+		const attackSurface = JSON.parse(readFileSync(attackSurfacePath, "utf8")) as {
+			proofReady: boolean;
+			hookTargets: Array<{ id: string; platform: string; hook: string }>;
+			claimLedger: Array<{ claimType: string; verdict: string; evidenceBinding: Record<string, unknown> }>;
+			composedPaths: Array<{ claimType: string; verdict: string }>;
+			promotionReport: { promotedClaims: Array<{ claimType: string }> };
+			repairQueue: Array<{ blocker: string }>;
+		};
+		expect(JSON.stringify(attackSurface)).not.toContain(secret);
+		expect(attackSurface.proofReady).toBe(true);
+		expect(attackSurface.hookTargets.map((row) => row.id)).toEqual(
+			expect.arrayContaining(["android-tls-pinning-bypass", "android-root-anti-tamper", "android-native-load"]),
+		);
+		expect(
+			attackSurface.claimLedger.some(
+				(claim) => claim.claimType === "android-exported-component-entrypoint" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			attackSurface.claimLedger.some(
+				(claim) => claim.claimType === "mobile-network-endpoint" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			attackSurface.claimLedger.some(
+				(claim) => claim.claimType === "mobile-tls-pinning-surface" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			attackSurface.claimLedger.some(
+				(claim) => claim.claimType === "mobile-runtime-pivot" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			attackSurface.promotionReport.promotedClaims.some((claim) => claim.claimType === "mobile-runtime-pivot"),
+		).toBe(true);
 		expect(summary.platform).toBe("android");
 		expect(summary.dex[0].name).toBe("classes.dex");
 		expect(summary.dexQuicklook[0]).toMatchObject({
@@ -2514,6 +2556,12 @@ jobs:
 		);
 		expect(summary.signalLines.some((line) => line.includes("access_token=<redacted>"))).toBe(true);
 		expect(readFileSync(hookPath, "utf8")).toContain("CertificatePinner");
+		const proofMatrixPath = join(report.artifactDir, "proof-matrix.json");
+		expect(existsSync(proofMatrixPath)).toBe(true);
+		const proofMatrix = JSON.parse(readFileSync(proofMatrixPath, "utf8")) as {
+			artifacts: Array<{ relPath: string }>;
+		};
+		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("mobile-attack-surface-claims.json");
 		expect(collectTmp(agentDir)).toEqual([]);
 	});
 
@@ -2581,15 +2629,21 @@ jobs:
 		};
 		expect(report.target.lane).toBe("mobile-ios");
 		expect(report.commands.map((row) => row.id)).toContain("mobile-archive-quicklook");
+		expect(report.commands.map((row) => row.id)).toContain("mobile-attack-surface-claims");
 		expect(report.commands.map((row) => row.id)).toContain("mobile-frida-hook-artifact");
 		expect(report.summary.anchors).toContain("mobile package anchors");
 		expect(report.summary.anchors).toContain("mobile iOS plist/entitlements anchors");
+		expect(report.summary.anchors).toContain("mobile runtime hook anchors");
 		expect(report.nextQueue.some((command) => command.includes("iosPlistAnalysis"))).toBe(true);
+		expect(report.nextQueue.some((command) => command.includes("mobile-attack-surface-claims.json"))).toBe(true);
 		const summaryPath = join(report.artifactDir, "mobile-archive-summary.json");
+		const attackSurfacePath = join(report.artifactDir, "mobile-attack-surface-claims.json");
 		const hookPath = join(report.artifactDir, "mobile-frida-hooks.js");
 		expect(existsSync(summaryPath)).toBe(true);
+		expect(existsSync(attackSurfacePath)).toBe(true);
 		expect(existsSync(hookPath)).toBe(true);
 		expect(statSync(summaryPath).mode & 0o777).toBe(0o600);
+		expect(statSync(attackSurfacePath).mode & 0o777).toBe(0o600);
 		expect(statSync(hookPath).mode & 0o777).toBe(0o600);
 		const summary = JSON.parse(readFileSync(summaryPath, "utf8")) as {
 			platform: string;
@@ -2617,6 +2671,34 @@ jobs:
 			}>;
 			risks: string[];
 		};
+		const attackSurface = JSON.parse(readFileSync(attackSurfacePath, "utf8")) as {
+			proofReady: boolean;
+			hookTargets: Array<{ id: string; platform: string }>;
+			claimLedger: Array<{ claimType: string; verdict: string }>;
+			promotionReport: { promotedClaims: Array<{ claimType: string }> };
+		};
+		expect(attackSurface.proofReady).toBe(true);
+		expect(attackSurface.hookTargets.map((row) => row.id)).toEqual(
+			expect.arrayContaining(["ios-trust-eval", "ios-jailbreak-path"]),
+		);
+		expect(
+			attackSurface.claimLedger.some(
+				(claim) => claim.claimType === "ios-url-scheme-entrypoint" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			attackSurface.claimLedger.some(
+				(claim) => claim.claimType === "ios-ats-insecure-transport" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			attackSurface.claimLedger.some(
+				(claim) => claim.claimType === "ios-debug-entitlement" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			attackSurface.promotionReport.promotedClaims.some((claim) => claim.claimType === "mobile-runtime-pivot"),
+		).toBe(true);
 		expect(summary.platform).toBe("ios");
 		expect(summary.nativeLibs[0]).toMatchObject({
 			platform: "ios",

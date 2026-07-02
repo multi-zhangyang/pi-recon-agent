@@ -568,6 +568,7 @@ function buildProofArtifactRows(targetInfo, artifactDir) {
 	}
 	if (targetInfo.lane === "mobile" || targetInfo.lane === "mobile-ios") {
 		add("mobile-archive-summary.json", "mobile archive manifest/plist/dex quicklook");
+		add("mobile-attack-surface-claims.json", "mobile manifest/plist/dex runtime claim ledger");
 		add("mobile-frida-hooks.js", "mobile runtime hook harness", 0o700);
 	}
 	if (targetInfo.lane === "pcap-dfir") {
@@ -630,7 +631,7 @@ function buildProofCoverageGaps(targetInfo, artifactRows) {
 	if (targetInfo.lane === "js-reverse") requireAny("js-reverse-workbench", ["js-reverse-workbench.json", "js-reverse-workbench.mjs", "workspace-source-runtime-map.json"], "JS reverse targets need local signer/API/workspace evidence artifacts");
 	if (targetInfo.lane === "pcap-dfir") requireAny("pcap-flow-summary", ["pcap-flow-claims.json", "pcap-flow-summary.json"], "PCAP targets need parsed flow/stream evidence");
 	if (targetInfo.lane === "crypto-stego") requireAny("crypto-transform-solver", ["crypto-stego-solver.py", "crypto-stego-media-quicklook.json"], "crypto/stego targets need a transform-chain verifier or media structure proof");
-	if (targetInfo.lane === "mobile" || targetInfo.lane === "mobile-ios") requireAny("mobile-runtime-hook", ["mobile-frida-hooks.js", "mobile-archive-summary.json"], "mobile targets need archive/runtime hook anchors");
+	if (targetInfo.lane === "mobile" || targetInfo.lane === "mobile-ios") requireAny("mobile-runtime-hook", ["mobile-attack-surface-claims.json", "mobile-frida-hooks.js", "mobile-archive-summary.json"], "mobile targets need archive/runtime hook anchors");
 	if (targetInfo.lane === "firmware-iot") requireAny("firmware-extract-plan", ["firmware-attack-surface.json", "firmware-extract-plan.sh", "firmware-quicklook.json"], "firmware targets need structure/extraction anchors");
 	if (targetInfo.lane === "memory-forensics") requireAny("memory-triage-plan", ["memory-evidence-claims.json", "memory-triage-plan.sh", "memory-quicklook.json"], "memory targets need triage/correlation anchors");
 	if (targetInfo.lane === "windows-ad") requireAny("windows-ad-triage-plan", ["windows-ad-triage-plan.sh", "windows-ad-quicklook.json"], "identity targets need AD graph/credential triage anchors");
@@ -5716,10 +5717,317 @@ function mobileArchiveSummary(target, lane) {
 	};
 }
 
+function mobileAttackSurfaceClaims(summary) {
+	const claimLedger = [];
+	const hookTargets = [];
+	const addHookTarget = (target) => {
+		if (!target?.id || hookTargets.some((row) => row.id === target.id)) return;
+		hookTargets.push(target);
+	};
+	const addClaim = (claim) => {
+		claimLedger.push({
+			verdict: "promoted",
+			confidence: 0.7,
+			blockers: [],
+			...claim,
+		});
+	};
+	for (const manifest of summary.manifestAnalysis ?? []) {
+		const app = manifest.application ?? {};
+		if (app.debuggable) {
+			addClaim({
+				id: "mobile-android-debuggable-" + shortHash(`${manifest.path}:${manifest.packageName}`),
+				claimType: "android-debuggable-application",
+				sourceBinding: { artifact: "mobile-archive-summary.json", file: manifest.path, packageName: manifest.packageName },
+				evidenceBinding: { debuggable: true, application: app },
+				statement: "Android manifest evidence enables debuggable application runtime inspection.",
+				confidence: 0.84,
+				rerunCommand: "cat mobile-archive-summary.json | jq '.manifestAnalysis'",
+			});
+		}
+		if (app.usesCleartextTraffic) {
+			addClaim({
+				id: "mobile-android-cleartext-" + shortHash(`${manifest.path}:${manifest.packageName}`),
+				claimType: "android-cleartext-traffic",
+				sourceBinding: { artifact: "mobile-archive-summary.json", file: manifest.path, packageName: manifest.packageName },
+				evidenceBinding: { usesCleartextTraffic: true, application: app },
+				statement: "Android manifest evidence allows cleartext traffic, creating a network replay/intercept path.",
+				confidence: 0.82,
+				rerunCommand: "cat mobile-archive-summary.json | jq '.manifestAnalysis'",
+			});
+		}
+		if (app.allowBackup) {
+			addClaim({
+				id: "mobile-android-backup-" + shortHash(`${manifest.path}:${manifest.packageName}`),
+				claimType: "android-backup-enabled",
+				sourceBinding: { artifact: "mobile-archive-summary.json", file: manifest.path, packageName: manifest.packageName },
+				evidenceBinding: { allowBackup: true, application: app },
+				statement: "Android manifest evidence enables backup/data extraction triage.",
+				confidence: 0.74,
+				rerunCommand: "cat mobile-archive-summary.json | jq '.manifestAnalysis'",
+			});
+		}
+		for (const permission of manifest.permissions ?? []) {
+			if (!permission.dangerous) continue;
+			addClaim({
+				id: "mobile-android-dangerous-permission-" + shortHash(`${manifest.path}:${permission.name}`),
+				claimType: "android-dangerous-permission",
+				sourceBinding: { artifact: "mobile-archive-summary.json", file: manifest.path, packageName: manifest.packageName },
+				evidenceBinding: { permission: permission.name, dangerous: true },
+				statement: "Android manifest evidence requests a dangerous permission that should be tied to runtime use.",
+				confidence: 0.72,
+				rerunCommand: "cat mobile-archive-summary.json | jq '.manifestAnalysis[].permissions'",
+			});
+		}
+		for (const component of manifest.components ?? []) {
+			if (!component.risk) continue;
+			addClaim({
+				id: "mobile-android-exported-component-" + shortHash(`${manifest.path}:${component.type}:${component.name}`),
+				claimType: "android-exported-component-entrypoint",
+				sourceBinding: { artifact: "mobile-archive-summary.json", file: manifest.path, packageName: manifest.packageName, component: component.name },
+				evidenceBinding: {
+					type: component.type,
+					name: component.name,
+					exported: component.exported,
+					hasIntentFilter: Boolean(component.hasIntentFilter),
+					permission: component.permission ?? null,
+				},
+				statement: "Android manifest evidence exposes a component entrypoint suitable for adb/am or deep-link replay.",
+				confidence: component.exported ? 0.86 : 0.78,
+				rerunCommand: "cat mobile-archive-summary.json | jq '.manifestAnalysis[].components'",
+			});
+		}
+	}
+	for (const dex of summary.dexQuicklook ?? []) {
+		for (const row of dex.signals?.endpoints ?? []) {
+			addClaim({
+				id: "mobile-dex-network-endpoint-" + shortHash(`${dex.path}:${row.index}:${row.text}`),
+				claimType: "mobile-network-endpoint",
+				sourceBinding: { artifact: "mobile-archive-summary.json", file: dex.path, stringIndex: row.index },
+				evidenceBinding: { endpoint: row.text },
+				statement: "DEX string evidence identifies a network endpoint for replay/interception.",
+				confidence: 0.78,
+				rerunCommand: "cat mobile-archive-summary.json | jq '.dexQuicklook[].signals.endpoints'",
+			});
+		}
+		for (const row of dex.signals?.secrets ?? []) {
+			addClaim({
+				id: "mobile-dex-secret-" + shortHash(`${dex.path}:${row.index}:${row.text}`),
+				claimType: "mobile-hardcoded-secret-signal",
+				sourceBinding: { artifact: "mobile-archive-summary.json", file: dex.path, stringIndex: row.index },
+				evidenceBinding: { text: row.text, redacted: /<redacted>|\bredacted\b/i.test(row.text) },
+				statement: "DEX string evidence contains a redacted credential/token/config secret signal.",
+				confidence: 0.78,
+				rerunCommand: "cat mobile-archive-summary.json | jq '.dexQuicklook[].signals.secrets'",
+			});
+		}
+		for (const row of dex.signals?.pinning ?? []) {
+			addHookTarget({ id: "android-tls-pinning-bypass", platform: "android", reason: "CertificatePinner/TrustManager signal", hook: "CertificatePinner.check / TrustManagerImpl.checkTrustedRecursive" });
+			addClaim({
+				id: "mobile-dex-pinning-" + shortHash(`${dex.path}:${row.index}:${row.text}`),
+				claimType: "mobile-tls-pinning-surface",
+				sourceBinding: { artifact: "mobile-archive-summary.json", file: dex.path, stringIndex: row.index },
+				evidenceBinding: { text: row.text, hookTargetId: "android-tls-pinning-bypass" },
+				statement: "DEX string evidence identifies certificate pinning/trust manager code and maps it to a Frida hook target.",
+				confidence: 0.84,
+				rerunCommand: "frida -U -f <package> -l mobile-frida-hooks.js --no-pause",
+			});
+		}
+		for (const row of dex.signals?.antiTamper ?? []) {
+			addHookTarget({ id: "android-root-anti-tamper", platform: "android", reason: "root/frida/xposed signal", hook: "Runtime.exec / SystemProperties.get" });
+			addClaim({
+				id: "mobile-dex-antitamper-" + shortHash(`${dex.path}:${row.index}:${row.text}`),
+				claimType: "mobile-anti-tamper-surface",
+				sourceBinding: { artifact: "mobile-archive-summary.json", file: dex.path, stringIndex: row.index },
+				evidenceBinding: { text: row.text, hookTargetId: "android-root-anti-tamper" },
+				statement: "DEX string evidence identifies root/debug/tamper detection and maps it to a runtime hook target.",
+				confidence: 0.78,
+				rerunCommand: "frida -U -f <package> -l mobile-frida-hooks.js --no-pause",
+			});
+		}
+		for (const row of dex.signals?.crypto ?? []) {
+			addClaim({
+				id: "mobile-dex-crypto-" + shortHash(`${dex.path}:${row.index}:${row.text}`),
+				claimType: "mobile-crypto-transform-surface",
+				sourceBinding: { artifact: "mobile-archive-summary.json", file: dex.path, stringIndex: row.index },
+				evidenceBinding: { text: row.text },
+				statement: "DEX string evidence identifies crypto/codec transform code for local reconstruction or hook tracing.",
+				confidence: 0.74,
+				rerunCommand: "cat mobile-archive-summary.json | jq '.dexQuicklook[].signals.crypto'",
+			});
+		}
+		for (const row of dex.signals?.nativeBridge ?? []) {
+			addHookTarget({ id: "android-native-load", platform: "android", reason: "System.loadLibrary/native bridge signal", hook: "System.loadLibrary / JNI_OnLoad tracing" });
+			addClaim({
+				id: "mobile-dex-native-bridge-" + shortHash(`${dex.path}:${row.index}:${row.text}`),
+				claimType: "mobile-native-bridge-surface",
+				sourceBinding: { artifact: "mobile-archive-summary.json", file: dex.path, stringIndex: row.index },
+				evidenceBinding: { text: row.text, hookTargetId: "android-native-load" },
+				statement: "DEX string evidence identifies a native bridge that should be tied to loaded libraries and JNI hooks.",
+				confidence: 0.78,
+				rerunCommand: "cat mobile-archive-summary.json | jq '.dexQuicklook[].signals.nativeBridge'",
+			});
+		}
+	}
+	for (const lib of summary.nativeLibs ?? []) {
+		addClaim({
+			id: "mobile-native-code-" + shortHash(`${lib.platform}:${lib.path}:${lib.size}`),
+			claimType: "mobile-native-code-surface",
+			sourceBinding: { artifact: "mobile-archive-summary.json", file: lib.path },
+			evidenceBinding: { platform: lib.platform, abi: lib.abi ?? null, name: lib.name, size: lib.size },
+			statement: "Mobile archive evidence contains native code that should be triaged with native tooling and runtime load hooks.",
+			confidence: 0.76,
+			rerunCommand: "cat mobile-archive-summary.json | jq '.nativeLibs'",
+		});
+	}
+	for (const plist of summary.iosPlistAnalysis ?? []) {
+		for (const scheme of plist.urlSchemes ?? []) {
+			addClaim({
+				id: "mobile-ios-url-scheme-" + shortHash(`${plist.path}:${scheme}`),
+				claimType: "ios-url-scheme-entrypoint",
+				sourceBinding: { artifact: "mobile-archive-summary.json", file: plist.path, bundleId: plist.bundleId },
+				evidenceBinding: { scheme },
+				statement: "iOS Info.plist evidence exposes a URL scheme entrypoint for deep-link replay.",
+				confidence: 0.82,
+				rerunCommand: "cat mobile-archive-summary.json | jq '.iosPlistAnalysis[].urlSchemes'",
+			});
+		}
+		if (plist.ats?.allowsArbitraryLoads || plist.ats?.allowsArbitraryLoadsInWebContent || (plist.ats?.exceptionDomains ?? []).some((domain) => domain.allowsInsecureHttp)) {
+			addHookTarget({ id: "ios-trust-eval", platform: "ios", reason: "ATS or trust-evaluation surface", hook: "SecTrustEvaluate / SecTrustEvaluateWithError" });
+			addClaim({
+				id: "mobile-ios-ats-" + shortHash(`${plist.path}:${JSON.stringify(plist.ats)}`),
+				claimType: "ios-ats-insecure-transport",
+				sourceBinding: { artifact: "mobile-archive-summary.json", file: plist.path, bundleId: plist.bundleId },
+				evidenceBinding: { ats: plist.ats, hookTargetId: "ios-trust-eval" },
+				statement: "iOS Info.plist evidence weakens ATS or defines insecure transport exceptions.",
+				confidence: 0.84,
+				rerunCommand: "cat mobile-archive-summary.json | jq '.iosPlistAnalysis[].ats'",
+			});
+		}
+	}
+	for (const entitlements of summary.iosEntitlements ?? []) {
+		if (entitlements.getTaskAllow) {
+			addClaim({
+				id: "mobile-ios-get-task-allow-" + shortHash(`${entitlements.path}:${entitlements.applicationIdentifier}`),
+				claimType: "ios-debug-entitlement",
+				sourceBinding: { artifact: "mobile-archive-summary.json", file: entitlements.path, applicationIdentifier: entitlements.applicationIdentifier },
+				evidenceBinding: { getTaskAllow: true, teamIdentifier: entitlements.teamIdentifier ?? null },
+				statement: "iOS entitlement evidence enables debugger attachment through get-task-allow.",
+				confidence: 0.9,
+				rerunCommand: "cat mobile-archive-summary.json | jq '.iosEntitlements'",
+			});
+		}
+		for (const group of entitlements.keychainAccessGroups ?? []) {
+			addClaim({
+				id: "mobile-ios-keychain-group-" + shortHash(`${entitlements.path}:${group}`),
+				claimType: "ios-keychain-access-group",
+				sourceBinding: { artifact: "mobile-archive-summary.json", file: entitlements.path, applicationIdentifier: entitlements.applicationIdentifier },
+				evidenceBinding: { group, teamIdentifier: entitlements.teamIdentifier ?? null },
+				statement: "iOS entitlement evidence exposes a keychain access group for credential storage triage.",
+				confidence: 0.78,
+				rerunCommand: "cat mobile-archive-summary.json | jq '.iosEntitlements[].keychainAccessGroups'",
+			});
+		}
+		for (const domain of entitlements.associatedDomains ?? []) {
+			addClaim({
+				id: "mobile-ios-associated-domain-" + shortHash(`${entitlements.path}:${domain}`),
+				claimType: "ios-associated-domain",
+				sourceBinding: { artifact: "mobile-archive-summary.json", file: entitlements.path, applicationIdentifier: entitlements.applicationIdentifier },
+				evidenceBinding: { domain },
+				statement: "iOS entitlement evidence binds an associated domain for universal-link or credential handoff testing.",
+				confidence: 0.72,
+				rerunCommand: "cat mobile-archive-summary.json | jq '.iosEntitlements[].associatedDomains'",
+			});
+		}
+	}
+	if (summary.platform === "ios" && (summary.iosPlistAnalysis ?? []).length) {
+		addHookTarget({ id: "ios-jailbreak-path", platform: "ios", reason: "iOS runtime path/trust hook scaffold", hook: "NSFileManager.fileExistsAtPath / SecTrustEvaluate" });
+	}
+	const promotedClaims = claimLedger.filter((claim) => claim.verdict === "promoted");
+	const entrypointClaim = promotedClaims.find((claim) => /entrypoint|url-scheme/.test(claim.claimType));
+	const endpointClaim = promotedClaims.find((claim) => claim.claimType === "mobile-network-endpoint");
+	const secretClaim = promotedClaims.find((claim) => claim.claimType === "mobile-hardcoded-secret-signal");
+	const hookClaim = promotedClaims.find((claim) => /pinning|anti-tamper|ats/.test(claim.claimType));
+	const nativeClaim = promotedClaims.find((claim) => /native|crypto/.test(claim.claimType));
+	const entitlementClaim = promotedClaims.find((claim) => /^ios-(?:debug|keychain|associated)/.test(claim.claimType));
+	const composedPaths = [];
+	if (entrypointClaim && (endpointClaim || secretClaim || hookClaim || nativeClaim || entitlementClaim)) {
+		const segments = [entrypointClaim, endpointClaim, secretClaim, hookClaim, nativeClaim, entitlementClaim].filter(Boolean);
+		const composed = {
+			id: "mobile-runtime-pivot-" + shortHash(segments.map((claim) => claim.id).join(">")),
+			claimType: "mobile-runtime-pivot",
+			sourceBinding: {
+				platform: summary.platform,
+				segments: segments.map((claim) => ({
+					id: claim.id,
+					claimType: claim.claimType,
+					file: claim.sourceBinding?.file,
+				})),
+			},
+			evidenceBinding: {
+				hasEntrypoint: Boolean(entrypointClaim),
+				hasNetworkEndpoint: Boolean(endpointClaim),
+				hasSecretSignal: Boolean(secretClaim),
+				hasHookTarget: Boolean(hookClaim),
+				hasNativeOrCrypto: Boolean(nativeClaim),
+				hasEntitlementPivot: Boolean(entitlementClaim),
+				hookTargets,
+			},
+			statement: "Mobile evidence composes entrypoint, endpoint/secret, hook target, and native/entitlement surface into one runtime proof path.",
+			verdict: "promoted",
+			confidence: endpointClaim && hookClaim ? 0.86 : 0.78,
+			blockers: [],
+			rerunCommand: "cat mobile-attack-surface-claims.json | jq '.composedPaths'",
+		};
+		claimLedger.push(composed);
+		promotedClaims.push(composed);
+		composedPaths.push(composed);
+	}
+	const blockers = [];
+	if (!entrypointClaim) blockers.push("missing-entrypoint");
+	if (!endpointClaim) blockers.push("missing-network-endpoint");
+	if (!hookTargets.length) blockers.push("missing-runtime-hook-target");
+	if (!secretClaim) blockers.push("missing-secret-or-config");
+	if (!nativeClaim) blockers.push("missing-native-or-crypto");
+	if (!(summary.manifestAnalysis ?? []).length && !(summary.iosPlistAnalysis ?? []).length) blockers.push("missing-platform-manifest");
+	const repairActions = {
+		"missing-entrypoint": "Identify an exported Android component or iOS URL scheme/universal link before claiming runtime reachability.",
+		"missing-network-endpoint": "Extract endpoints from DEX, plist, strings, or runtime traffic and bind them to source strings.",
+		"missing-runtime-hook-target": "Map pinning, trust, root/jailbreak, or native-load evidence to a concrete Frida hook target.",
+		"missing-secret-or-config": "Extract redacted token, API key, credential, or config fields from DEX/resources/plist without leaking values.",
+		"missing-native-or-crypto": "Bind crypto transforms or native library loading to DEX strings, native libs, or symbols.",
+		"missing-platform-manifest": "Parse AndroidManifest.xml, Info.plist, or entitlements; binary manifests need aapt/apktool/plutil conversion.",
+	};
+	const repairQueue = blockers.map((blocker) => ({
+		id: "mobile-attack-surface-" + blocker,
+		blocker,
+		action: repairActions[blocker] ?? "Collect mobile archive evidence and rerun attack-surface claim promotion.",
+		rerunCommand: "repi engage <apk-or-ipa> --json",
+	}));
+	return {
+		kind: "repi-mobile-attack-surface-claims",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		platform: summary.platform,
+		proofReady: promotedClaims.length > 0,
+		hookTargets,
+		claimLedger,
+		composedPaths,
+		promotionReport: {
+			proofReady: promotedClaims.length > 0,
+			promotedClaims,
+			blockers,
+		},
+		repairQueue,
+	};
+}
+
 function mobileArchiveQuicklookRows(target, artifactDir, lane) {
 	try {
 		const summary = mobileArchiveSummary(target, lane);
+		const attackSurface = mobileAttackSurfaceClaims(summary);
 		if (!noWrite && artifactDir) writePrivate(join(artifactDir, "mobile-archive-summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
+		if (!noWrite && artifactDir) writePrivate(join(artifactDir, "mobile-attack-surface-claims.json"), `${JSON.stringify(attackSurface, null, 2)}\n`);
 		return [
 			{
 				id: "mobile-archive-quicklook",
@@ -5732,6 +6040,18 @@ function mobileArchiveQuicklookRows(target, artifactDir, lane) {
 				stdout: `${JSON.stringify(summary, null, 2)}\n`,
 				stderr: "",
 				error: undefined,
+			},
+			{
+				id: "mobile-attack-surface-claims",
+				command: "internal",
+				args: [redact(target)],
+				cwd: root,
+				exit: attackSurface.proofReady ? 0 : 1,
+				signal: null,
+				durationMs: 0,
+				stdout: `${JSON.stringify(attackSurface, null, 2)}\n`,
+				stderr: "",
+				error: attackSurface.proofReady ? undefined : "no mobile attack-surface claims promoted",
 			},
 		];
 	} catch (error) {
@@ -13656,8 +13976,9 @@ function nextQueue(targetInfo, artifactDir, toolState) {
 	}
 	if (targetInfo.lane === "mobile" || targetInfo.lane === "mobile-ios") {
 		if (!noWrite && dataLooksLikeZip(primaryTarget)) q.push(`cat ${shellQuote(join(artifactDir, "mobile-archive-summary.json"))}`);
+		if (!noWrite && existsSync(join(artifactDir, "mobile-attack-surface-claims.json"))) q.push(`cat ${shellQuote(join(artifactDir, "mobile-attack-surface-claims.json"))}`);
 		if (!noWrite) q.push(`frida -U -f <package-or-bundle-id> -l ${shellQuote(join(artifactDir, "mobile-frida-hooks.js"))} --no-pause`);
-		q.push(`repi -p ${shellQuote(`Continue mobile reverse from ${artifactDir}: use mobile-archive-summary.json manifestAnalysis/iosPlistAnalysis/iosEntitlements/dexQuicklook to map manifest/plist exported entrypoints, permissions, URL schemes, ATS/entitlements, DEX endpoints/classes, native libs, crypto/pinning/root checks; adapt mobile-frida-hooks.js and replay the network path.`)}`);
+		q.push(`repi -p ${shellQuote(`Continue mobile reverse from ${artifactDir}: use mobile-archive-summary.json manifestAnalysis/iosPlistAnalysis/iosEntitlements/dexQuicklook plus mobile-attack-surface-claims.json claimLedger/hookTargets/repairQueue to map manifest/plist exported entrypoints, permissions, URL schemes, ATS/entitlements, DEX endpoints/classes, native libs, crypto/pinning/root checks; adapt mobile-frida-hooks.js and replay the network path.`)}`);
 	}
 	if (targetInfo.lane === "memory-forensics") {
 		if (!noWrite) q.push(`cat ${shellQuote(join(artifactDir, "memory-quicklook.json"))}`);
@@ -13762,9 +14083,9 @@ function summarizeEvidence(rows, targetInfo, toolState) {
 		if (/repi-web-signer-rebuild-workbench|web-signer-rebuild|assertByteForByte|canonicalUnsigned|byteForByteRule|regressionGates/i.test(text) && targetInfo.kind === "url") anchors.push("signer rebuild workbench anchors");
 		if (/repi-web-js-signature-control|web-js-signature-control|missing-signature|tampered-signature|assertPermutation|policy_gap_not_signer_proof/i.test(text) && targetInfo.kind === "url") anchors.push("JS signature control anchors");
 		if (/AndroidManifest|classes\.dex|Info\.plist|Payload\/|CFBundle|Mach-O/i.test(text) && (targetInfo.lane === "mobile" || targetInfo.lane === "mobile-ios")) anchors.push("mobile package anchors");
-		if (/repi-mobile-archive-quicklook|mobile-archive-summary|mobile-frida-hooks|CertificatePinner|TrustManager|network-or-pinning-signal/i.test(text) && (targetInfo.lane === "mobile" || targetInfo.lane === "mobile-ios")) anchors.push("mobile runtime hook anchors");
-		if (/manifestAnalysis|android-exported-component|android-debuggable|android-dangerous-permission|usesCleartextTraffic|AndroidManifest/i.test(text) && (targetInfo.lane === "mobile" || targetInfo.lane === "mobile-ios")) anchors.push("mobile manifest attack-surface anchors");
-		if (/iosPlistAnalysis|iosEntitlements|ios-ats-|ios-url-scheme|ios-get-task-allow|CFBundleURLSchemes|LSApplicationQueriesSchemes|keychain-access-groups/i.test(text) && (targetInfo.lane === "mobile" || targetInfo.lane === "mobile-ios")) anchors.push("mobile iOS plist/entitlements anchors");
+		if (/repi-mobile-archive-quicklook|mobile-archive-summary|mobile-attack-surface-claims|mobile-frida-hooks|hookTargets|mobile-runtime-pivot|CertificatePinner|TrustManager|network-or-pinning-signal/i.test(text) && (targetInfo.lane === "mobile" || targetInfo.lane === "mobile-ios")) anchors.push("mobile runtime hook anchors");
+		if (/manifestAnalysis|android-exported-component|android-debuggable|android-dangerous-permission|usesCleartextTraffic|AndroidManifest|android-exported-component-entrypoint|android-cleartext-traffic/i.test(text) && (targetInfo.lane === "mobile" || targetInfo.lane === "mobile-ios")) anchors.push("mobile manifest attack-surface anchors");
+		if (/iosPlistAnalysis|iosEntitlements|ios-ats-|ios-url-scheme|ios-get-task-allow|ios-debug-entitlement|ios-keychain-access-group|CFBundleURLSchemes|LSApplicationQueriesSchemes|keychain-access-groups/i.test(text) && (targetInfo.lane === "mobile" || targetInfo.lane === "mobile-ios")) anchors.push("mobile iOS plist/entitlements anchors");
 		if (/dexQuicklook|dex-pinning-signal|dex-crypto-transform-signal|dex-anti-tamper-signal|dex-native-bridge-signal|stringIdsSize/i.test(text) && (targetInfo.lane === "mobile" || targetInfo.lane === "mobile-ios")) anchors.push("mobile DEX quicklook anchors");
 		if (/pcap|ethernet|tcp|udp|http|dns|tls|sni/i.test(text) && targetInfo.lane === "pcap-dfir") anchors.push("traffic anchors");
 		if (/repi-pcap-quicklook|repi-pcap-flow-claims|pcap-flow-claims|HTTP-candidate|DNS-candidate|TLS-candidate|dnsAnswers|packetCount|claimLedger/i.test(text) && targetInfo.lane === "pcap-dfir") anchors.push("pcap quicklook anchors");
