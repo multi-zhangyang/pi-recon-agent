@@ -1761,18 +1761,24 @@ jobs:
 		expect(JSON.stringify(report)).not.toContain(secret);
 		expect(report.target.lane).toBe("cloud-identity");
 		expect(report.commands.map((row) => row.id)).toContain("cloud-identity-map");
+		expect(report.commands.map((row) => row.id)).toContain("cloud-identity-trust-claims");
 		expect(report.commands.map((row) => row.id)).toContain("cloud-identity-verify-artifact");
 		expect(report.summary.anchors).toContain("cloud identity anchors");
 		expect(report.summary.anchors).toContain("cloud trust-chain anchors");
 		expect(report.summary.missingCritical).not.toContain("terraform");
 		expect(report.nextQueue.some((command) => command.includes("cloud-identity-map.json"))).toBe(true);
+		expect(report.nextQueue.some((command) => command.includes("cloud-identity-trust-claims.json"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("cloud-identity-verify.sh"))).toBe(true);
+		expect(report.nextQueue.some((command) => command.includes("claimLedger"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("trustChains"))).toBe(true);
 		const mapPath = join(report.artifactDir, "cloud-identity-map.json");
+		const trustClaimsPath = join(report.artifactDir, "cloud-identity-trust-claims.json");
 		const verifyPath = join(report.artifactDir, "cloud-identity-verify.sh");
 		expect(existsSync(mapPath)).toBe(true);
+		expect(existsSync(trustClaimsPath)).toBe(true);
 		expect(existsSync(verifyPath)).toBe(true);
 		expect(statSync(mapPath).mode & 0o777).toBe(0o600);
+		expect(statSync(trustClaimsPath).mode & 0o777).toBe(0o600);
 		expect(statSync(verifyPath).mode & 0o777).toBe(0o700);
 		const map = JSON.parse(readFileSync(mapPath, "utf8")) as {
 			risks: string[];
@@ -1794,6 +1800,50 @@ jobs:
 		};
 		expect(JSON.stringify(map)).not.toContain(secret);
 		expect(JSON.stringify(map)).not.toContain("AKIAIOSFODNN7EXAMPLE");
+		const trustClaims = JSON.parse(readFileSync(trustClaimsPath, "utf8")) as {
+			proofReady: boolean;
+			claimLedger: Array<{
+				claimType: string;
+				verdict: string;
+				sourceBinding: Record<string, unknown>;
+				evidenceBinding: Record<string, unknown>;
+				blockers: string[];
+			}>;
+			composedPaths: Array<{ claimType: string; verdict: string }>;
+			promotionReport: { promotedClaims: Array<{ claimType: string }>; blockers: string[] };
+			repairQueue: Array<{ blocker: string; action: string }>;
+		};
+		expect(JSON.stringify(trustClaims)).not.toContain(secret);
+		expect(JSON.stringify(trustClaims)).not.toContain("AKIAIOSFODNN7EXAMPLE");
+		expect(trustClaims.proofReady).toBe(true);
+		expect(
+			trustClaims.claimLedger.some(
+				(claim) => claim.claimType === "github-oidc-pull-request-target" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			trustClaims.claimLedger.some(
+				(claim) => claim.claimType === "terraform-wildcard-iam-policy" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			trustClaims.claimLedger.some(
+				(claim) =>
+					(claim.claimType === "kubernetes-privileged-service-account" ||
+						claim.claimType === "kubernetes-cluster-admin-binding") &&
+					claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			trustClaims.claimLedger.some(
+				(claim) => claim.claimType === "cloud-trust-chain-pivot" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(trustClaims.composedPaths.some((claim) => claim.claimType === "cloud-trust-chain-pivot")).toBe(true);
+		expect(
+			trustClaims.promotionReport.promotedClaims.some((claim) => claim.claimType === "cloud-trust-chain-pivot"),
+		).toBe(true);
+		expect(trustClaims.repairQueue.some((row) => row.blocker === "missing-oidc-role")).toBe(false);
 		expect(map.risks).toEqual(
 			expect.arrayContaining([
 				"secret-or-credential-surface",
@@ -1833,6 +1883,12 @@ jobs:
 		expect(verify).toContain("terraform validate");
 		expect(verify).toContain("kubectl apply --dry-run=client");
 		expect(verify).toContain("high-risk-grep.txt");
+		const proofMatrixPath = join(report.artifactDir, "proof-matrix.json");
+		expect(existsSync(proofMatrixPath)).toBe(true);
+		const proofMatrix = JSON.parse(readFileSync(proofMatrixPath, "utf8")) as {
+			artifacts: Array<{ relPath: string }>;
+		};
+		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("cloud-identity-trust-claims.json");
 		expect(collectTmp(agentDir)).toEqual([]);
 	});
 

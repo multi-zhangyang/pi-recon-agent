@@ -605,6 +605,7 @@ function buildProofArtifactRows(targetInfo, artifactDir) {
 	}
 	if (targetInfo.lane === "cloud-identity") {
 		add("cloud-identity-map.json", "cloud/container identity trust-chain map");
+		add("cloud-identity-trust-claims.json", "cloud/container identity trust-chain claim ledger");
 		add("cloud-identity-verify.sh", "cloud identity verification harness", 0o700);
 	}
 	return candidates;
@@ -631,7 +632,7 @@ function buildProofCoverageGaps(targetInfo, artifactRows) {
 	if (targetInfo.lane === "windows-ad") requireAny("windows-ad-triage-plan", ["windows-ad-triage-plan.sh", "windows-ad-quicklook.json"], "identity targets need AD graph/credential triage anchors");
 	if (targetInfo.lane === "malware") requireAny("malware-triage-plan", ["malware-triage-plan.sh", "malware-quicklook.json"], "malware targets need IOC/capability triage anchors");
 	if (targetInfo.lane === "agent-boundary") requireAny("agent-boundary-replay", ["agent-boundary-payloads.py", "agent-boundary-map.json"], "agent-boundary targets need replay payloads and flow map");
-	if (targetInfo.lane === "cloud-identity") requireAny("cloud-identity-verify", ["cloud-identity-verify.sh", "cloud-identity-map.json"], "cloud targets need trust-chain verification anchors");
+	if (targetInfo.lane === "cloud-identity") requireAny("cloud-identity-verify", ["cloud-identity-trust-claims.json", "cloud-identity-verify.sh", "cloud-identity-map.json"], "cloud targets need trust-chain verification anchors");
 	return gaps;
 }
 
@@ -6836,6 +6837,231 @@ function cloudIdentitySummary(target) {
 	};
 }
 
+function cloudIdentityTrustClaims(summary) {
+	const trustChains = summary.trustChains ?? {};
+	const githubOidc = Array.isArray(trustChains.githubOidc) ? trustChains.githubOidc : [];
+	const terraformIam = Array.isArray(trustChains.terraformIam) ? trustChains.terraformIam : [];
+	const kubernetes = Array.isArray(trustChains.kubernetes) ? trustChains.kubernetes : [];
+	const containers = Array.isArray(trustChains.containers) ? trustChains.containers : [];
+	const findings = Array.isArray(summary.findings) ? summary.findings : [];
+	const categories = summary.categories ?? {};
+	const claimLedger = [];
+	const observations = [];
+	const addClaim = (claim) => {
+		const normalized = {
+			verdict: "promoted",
+			confidence: 0.75,
+			blockers: [],
+			...claim,
+		};
+		claimLedger.push(normalized);
+		if (normalized.verdict === "promoted") return;
+		observations.push(normalized);
+	};
+	for (const row of githubOidc) {
+		const rolePresent = Boolean(row.role);
+		const promoted = Boolean(row.idToken && rolePresent);
+		const pullRequestTarget = Boolean(row.pullRequestTarget);
+		const claimType = promoted && pullRequestTarget ? "github-oidc-pull-request-target" : promoted ? "github-oidc-role-assumption" : "github-oidc-token-permission";
+		addClaim({
+			id: "cloud-" + claimType + "-" + shortHash(`${row.file}:${row.line}:${row.role ?? ""}:${row.risk ?? ""}`),
+			claimType,
+			sourceBinding: {
+				file: row.file,
+				line: row.line,
+				provider: row.provider ?? "github-actions",
+				role: row.role ?? null,
+			},
+			evidenceBinding: {
+				idToken: Boolean(row.idToken),
+				pullRequestTarget,
+				rolePresent,
+				risk: row.risk ?? null,
+			},
+			statement: promoted
+				? "GitHub Actions workflow evidence binds id-token permission to a concrete cloud role assumption path."
+				: "GitHub Actions workflow evidence exposes OIDC token permission but lacks a concrete role binding.",
+			verdict: promoted ? "promoted" : "observation",
+			confidence: promoted && pullRequestTarget ? 0.9 : promoted ? 0.82 : 0.58,
+			blockers: promoted ? [] : ["missing-oidc-role"],
+			rerunCommand: "cat cloud-identity-map.json | jq '.trustChains.githubOidc'",
+		});
+	}
+	for (const row of terraformIam) {
+		const wildcard = Boolean(row.wildcard);
+		addClaim({
+			id: "cloud-terraform-iam-" + shortHash(`${row.file}:${row.line}:${row.resourceType}:${row.name}:${wildcard}`),
+			claimType: wildcard ? "terraform-wildcard-iam-policy" : "terraform-iam-principal",
+			sourceBinding: {
+				file: row.file,
+				line: row.line,
+				resourceType: row.resourceType,
+				name: row.name,
+			},
+			evidenceBinding: {
+				wildcard,
+				snippet: row.snippet ?? null,
+			},
+			statement: wildcard
+				? "Terraform IAM policy evidence contains wildcard Action or Resource material for privilege-boundary proof."
+				: "Terraform IAM evidence identifies a control-plane principal that still needs permission expansion proof.",
+			verdict: wildcard ? "promoted" : "observation",
+			confidence: wildcard ? 0.86 : 0.6,
+			blockers: wildcard ? [] : ["missing-iam-policy"],
+			rerunCommand: "cat cloud-identity-map.json | jq '.trustChains.terraformIam'",
+		});
+	}
+	for (const row of kubernetes) {
+		const clusterAdmin = Boolean(row.clusterAdmin);
+		const privilegedWorkload = Boolean(row.serviceAccount && (row.privileged || row.hostNetwork || row.hostPath));
+		const promoted = clusterAdmin || privilegedWorkload;
+		addClaim({
+			id: "cloud-kubernetes-" + shortHash(`${row.file}:${row.line}:${row.kind}:${row.serviceAccount ?? row.name ?? ""}:${clusterAdmin}:${privilegedWorkload}`),
+			claimType: clusterAdmin ? "kubernetes-cluster-admin-binding" : privilegedWorkload ? "kubernetes-privileged-service-account" : "kubernetes-workload-principal",
+			sourceBinding: {
+				file: row.file,
+				line: row.line,
+				kind: row.kind,
+				serviceAccount: row.serviceAccount ?? null,
+				name: row.name ?? null,
+			},
+			evidenceBinding: {
+				clusterAdmin,
+				privileged: Boolean(row.privileged),
+				hostNetwork: Boolean(row.hostNetwork),
+				hostPath: Boolean(row.hostPath),
+				image: row.image ?? null,
+			},
+			statement: promoted
+				? "Kubernetes manifest evidence binds a privileged workload or cluster-admin RBAC edge to a concrete principal."
+				: "Kubernetes manifest evidence identifies a workload principal that needs privilege or RBAC expansion proof.",
+			verdict: promoted ? "promoted" : "observation",
+			confidence: clusterAdmin ? 0.88 : privilegedWorkload ? 0.84 : 0.58,
+			blockers: promoted ? [] : ["missing-kubernetes-workload"],
+			rerunCommand: "cat cloud-identity-map.json | jq '.trustChains.kubernetes'",
+		});
+	}
+	for (const row of containers) {
+		const runtimeRisk = Boolean(row.rootUser || row.curlPipe || row.privileged);
+		addClaim({
+			id: "cloud-container-runtime-" + shortHash(`${row.file}:${row.line}:${row.rootUser}:${row.curlPipe}:${row.privileged}:${(row.exposed ?? []).join(",")}`),
+			claimType: runtimeRisk ? "container-build-runtime-risk" : "container-network-exposure",
+			sourceBinding: {
+				file: row.file,
+				line: row.line,
+			},
+			evidenceBinding: {
+				rootUser: Boolean(row.rootUser),
+				curlPipe: Boolean(row.curlPipe),
+				privileged: Boolean(row.privileged),
+				exposed: Array.isArray(row.exposed) ? row.exposed : [],
+			},
+			statement: runtimeRisk
+				? "Container build/runtime evidence exposes root execution, curl-pipe install, or privileged runtime configuration."
+				: "Container evidence exposes network ports that still need runtime principal binding.",
+			verdict: runtimeRisk ? "promoted" : "observation",
+			confidence: runtimeRisk ? 0.78 : 0.55,
+			blockers: runtimeRisk ? [] : ["missing-container-runtime"],
+			rerunCommand: "cat cloud-identity-map.json | jq '.trustChains.containers'",
+		});
+	}
+	const publicExposureFindings = findings.filter((row) => row.category === "public-exposure").slice(0, 12);
+	for (const row of publicExposureFindings) {
+		addClaim({
+			id: "cloud-public-exposure-" + shortHash(`${row.file}:${row.line}:${row.snippet}`),
+			claimType: "cloud-public-network-exposure",
+			sourceBinding: {
+				file: row.file,
+				line: row.line,
+				category: row.category,
+			},
+			evidenceBinding: {
+				snippet: row.snippet,
+			},
+			statement: "Cloud/deployment evidence contains a public network exposure anchor that should be tied to an identity boundary.",
+			verdict: "promoted",
+			confidence: 0.72,
+			blockers: [],
+			rerunCommand: "cat cloud-identity-map.json | jq '.findings[] | select(.category==\"public-exposure\")'",
+		});
+	}
+	const promotedClaims = claimLedger.filter((claim) => claim.verdict === "promoted");
+	const findPromoted = (typePattern) => promotedClaims.find((claim) => typePattern.test(claim.claimType));
+	const oidcClaim = findPromoted(/^github-oidc-/);
+	const iamClaim = findPromoted(/^terraform-wildcard-iam-policy$/);
+	const kubeClaim = findPromoted(/^kubernetes-(?:privileged-service-account|cluster-admin-binding)$/);
+	const containerClaim = findPromoted(/^container-build-runtime-risk$/);
+	const publicClaim = findPromoted(/^cloud-public-network-exposure$/);
+	const composedPaths = [];
+	if (oidcClaim && iamClaim && (kubeClaim || containerClaim || publicClaim)) {
+		const segments = [oidcClaim, iamClaim, kubeClaim, containerClaim, publicClaim].filter(Boolean);
+		const composed = {
+			id: "cloud-trust-chain-pivot-" + shortHash(segments.map((claim) => claim.id).join(">")),
+			claimType: "cloud-trust-chain-pivot",
+			sourceBinding: {
+				files: Array.from(new Set(segments.map((claim) => claim.sourceBinding?.file).filter(Boolean))),
+				segments: segments.map((claim) => ({
+					id: claim.id,
+					claimType: claim.claimType,
+					file: claim.sourceBinding?.file,
+					line: claim.sourceBinding?.line,
+				})),
+			},
+			evidenceBinding: {
+				oidcRole: oidcClaim.sourceBinding?.role ?? null,
+				iamWildcard: true,
+				kubernetesPrincipal: kubeClaim?.sourceBinding?.serviceAccount ?? kubeClaim?.sourceBinding?.name ?? null,
+				containerRuntimeRisk: Boolean(containerClaim),
+				publicExposure: Boolean(publicClaim),
+			},
+			statement: "Static trust-chain evidence composes CI OIDC role assumption, Terraform wildcard IAM, and deployment/runtime exposure into one pivot candidate.",
+			verdict: "promoted",
+			confidence: kubeClaim && containerClaim ? 0.84 : 0.79,
+			blockers: [],
+			rerunCommand: "cat cloud-identity-trust-claims.json | jq '.composedPaths'",
+		};
+		composedPaths.push(composed);
+		claimLedger.push(composed);
+		promotedClaims.push(composed);
+	}
+	const blockers = [];
+	if (!oidcClaim) blockers.push("missing-oidc-role");
+	if (!iamClaim) blockers.push("missing-iam-policy");
+	if (!kubeClaim) blockers.push("missing-kubernetes-workload");
+	if (!containerClaim) blockers.push("missing-container-runtime");
+	if (!publicClaim && !categories["public-exposure"]) blockers.push("missing-public-exposure");
+	if (!oidcClaim && !kubeClaim) blockers.push("missing-principal-binding");
+	const repairActions = {
+		"missing-oidc-role": "Bind CI OIDC permissions to a concrete cloud role or provider trust policy before promoting the deployment pivot.",
+		"missing-iam-policy": "Parse Terraform/provider state or IAM policy documents until wildcard or privilege-expanding permissions are source-bound.",
+		"missing-kubernetes-workload": "Bind Kubernetes service accounts/RBAC to a workload and verify privileged, host, or cluster-admin expansion.",
+		"missing-container-runtime": "Inspect Dockerfile/compose/runtime manifests for root, privileged, curl-pipe, exposed ports, or image provenance risk.",
+		"missing-public-exposure": "Identify ingress, load balancers, NodePorts, security groups, or 0.0.0.0/0 rules and bind them to the principal chain.",
+		"missing-principal-binding": "Correlate at least one CI/cloud principal with one runtime principal before claiming cross-plane reachability.",
+	};
+	const repairQueue = blockers.map((blocker) => ({
+		id: "cloud-identity-trust-" + blocker,
+		blocker,
+		action: repairActions[blocker] ?? "Collect source-bound cloud identity evidence and rerun claim promotion.",
+		rerunCommand: "repi engage <cloud-stack-dir> --json",
+	}));
+	return {
+		kind: "repi-cloud-identity-trust-claims",
+		schemaVersion: 1,
+		generatedAt: new Date().toISOString(),
+		proofReady: promotedClaims.length > 0,
+		claimLedger,
+		composedPaths,
+		promotionReport: {
+			proofReady: promotedClaims.length > 0,
+			promotedClaims,
+			observations,
+			blockers,
+		},
+		repairQueue,
+	};
+}
+
 function cloudIdentityVerifyPlanSource() {
 	return `#!/usr/bin/env bash
 set -euo pipefail
@@ -6874,7 +7100,9 @@ EOF
 function cloudIdentityRows(target, artifactDir) {
 	try {
 		const summary = cloudIdentitySummary(target);
+		const trustClaims = cloudIdentityTrustClaims(summary);
 		if (!noWrite && artifactDir) writePrivate(join(artifactDir, "cloud-identity-map.json"), `${JSON.stringify(summary, null, 2)}\n`);
+		if (!noWrite && artifactDir) writePrivate(join(artifactDir, "cloud-identity-trust-claims.json"), `${JSON.stringify(trustClaims, null, 2)}\n`);
 		const rows = [
 			{
 				id: "cloud-identity-map",
@@ -6887,6 +7115,18 @@ function cloudIdentityRows(target, artifactDir) {
 				stdout: `${JSON.stringify(summary, null, 2)}\n`,
 				stderr: "",
 				error: summary.findings.length ? undefined : "no cloud identity findings",
+			},
+			{
+				id: "cloud-identity-trust-claims",
+				command: "internal",
+				args: [redact(target)],
+				cwd: root,
+				exit: trustClaims.proofReady ? 0 : 1,
+				signal: null,
+				durationMs: 0,
+				stdout: `${JSON.stringify(trustClaims, null, 2)}\n`,
+				stderr: "",
+				error: trustClaims.proofReady ? undefined : "no cloud identity trust claims promoted",
 			},
 		];
 		if (!noWrite && artifactDir) {
@@ -12297,8 +12537,9 @@ function nextQueue(targetInfo, artifactDir, toolState) {
 	}
 	if (targetInfo.lane === "cloud-identity") {
 		if (!noWrite) q.push(`cat ${shellQuote(join(artifactDir, "cloud-identity-map.json"))}`);
+		if (!noWrite && existsSync(join(artifactDir, "cloud-identity-trust-claims.json"))) q.push(`cat ${shellQuote(join(artifactDir, "cloud-identity-trust-claims.json"))}`);
 		if (!noWrite) q.push(`bash ${shellQuote(join(artifactDir, "cloud-identity-verify.sh"))} ${quotedTarget}`);
-		q.push(`repi -p ${shellQuote(`Continue cloud/identity pentest from ${artifactDir}: use cloud-identity-map.json trustChains to bind GitHub OIDC roles, Terraform IAM, Kubernetes service accounts/RBAC, and container principals to deploy truth; verify privilege boundaries and produce one exact pivot or least-privilege proof.`)}`);
+		q.push(`repi -p ${shellQuote(`Continue cloud/identity pentest from ${artifactDir}: use cloud-identity-map.json trustChains plus cloud-identity-trust-claims.json claimLedger/repairQueue to bind GitHub OIDC roles, Terraform IAM, Kubernetes service accounts/RBAC, and container principals to deploy truth; verify privilege boundaries and promote one exact pivot or least-privilege proof.`)}`);
 	}
 	if (targetInfo.kind === "directory") {
 		const quotedDirectoryTarget = shellQuote(target);
@@ -12390,7 +12631,7 @@ function summarizeEvidence(rows, targetInfo, toolState) {
 		if (/boundaryFlows|untrusted-input-to-shell-execution-flow|llm-to-shell-execution-flow|tool-secret-exfiltration-flow|prompt-injection-evidence-flow/i.test(text) && targetInfo.lane === "agent-boundary") anchors.push("agent boundary flow anchors");
 		if (/repi-agent-boundary-replay|agent-boundary-(?:claim-promotion|repair-queue)|unsafe-promoted|control-promoted|responseSha256/i.test(text) && targetInfo.lane === "agent-boundary") anchors.push("agent boundary replay anchors");
 		if (/repi-cloud-identity-map|cloud-identity|terraform|ClusterRoleBinding|aws_iam|id-token|public-network-exposure|ci-oidc-deployment-trust-chain/i.test(text) && targetInfo.lane === "cloud-identity") anchors.push("cloud identity anchors");
-		if (/trustChains|github-oidc-role-assumption-signal|terraform-wildcard-iam-policy-signal|kubernetes-privileged-service-account-signal|kubernetes-clusterrolebinding-signal|container-build-runtime-risk-signal/i.test(text) && targetInfo.lane === "cloud-identity") anchors.push("cloud trust-chain anchors");
+		if (/trustChains|cloud-identity-trust-claims|cloud-trust-chain-pivot|claimLedger|repairQueue|github-oidc-role-assumption-signal|terraform-wildcard-iam-policy-signal|kubernetes-privileged-service-account-signal|kubernetes-clusterrolebinding-signal|container-build-runtime-risk-signal/i.test(text) && targetInfo.lane === "cloud-identity") anchors.push("cloud trust-chain anchors");
 		if (/ExifTool|PNG|IHDR|zsteg|binwalk|PK|flag|ctf|cipher|nonce|salt|base64|xor/i.test(text) && targetInfo.lane === "crypto-stego") anchors.push("crypto/stego anchors");
 		if (/repi-crypto-stego-media-quicklook|crypto-stego-media-quicklook|png-text-stego-signal|appended-data-after-iend|appended-zip-after-iend|private-or-nonstandard-png-chunk|embedded-zip-archive-parsed/i.test(text) && targetInfo.lane === "crypto-stego") anchors.push("PNG/stego structure anchors");
 		if (/wav-lsb-printable-signal|wav-info-metadata-signal|appended-data-after-riff|appended-zip-after-riff|embedded-zip-archive-parsed|audioData|RIFF|WAVE/i.test(text) && targetInfo.lane === "crypto-stego") anchors.push("WAV/stego structure anchors");
