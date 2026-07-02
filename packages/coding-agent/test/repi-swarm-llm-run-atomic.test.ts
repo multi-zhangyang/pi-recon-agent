@@ -562,6 +562,69 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		});
 	});
 
+	it("does not let unrelated worker-level proof make a weak claim proof-ready", () => {
+		const fakeRepiPath = join(fakeRoot, "repi");
+		writeFileSync(
+			fakeRepiPath,
+			`#!/usr/bin/env node\nconsole.log(JSON.stringify({workerId:"worker-1",role:"verifier",claims:[{id:"weak-source-claim",statement:"source comment says admin endpoint is open",evidence:["source comment says the admin endpoint is open"],confidence:0.9,blockers:[]}],evidence:["curl /health exited 0 HTTP 200 body hash sha256:${"ab".repeat(32)}","negative control: invalid token returned HTTP 403"],blockers:[],nextCommands:["curl -i http://example.test/health"]}, null, 2));\n`,
+		);
+		chmodSync(fakeRepiPath, 0o755);
+
+		const result = spawnSync(
+			process.execPath,
+			[
+				SWARM,
+				fakeRoot,
+				"run",
+				"./claim-level-proof",
+				"--workers",
+				"1",
+				"--max-concurrency",
+				"1",
+				"--cwd",
+				workspace,
+				"--timeout-ms",
+				"5000",
+				"--json",
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(1);
+		const report = JSON.parse(result.stdout) as {
+			mergeFailureReason: string;
+			merge: {
+				finalPromotionReady: boolean;
+				proofPromotionReady: boolean;
+				proofReadyPromotedClaims: unknown[];
+				proofChecklists: Array<{ proofReady: boolean }>;
+				claimRows: Array<{
+					claimId: string;
+					status: string;
+					proofReady: boolean;
+					proofCoverage: { passive: boolean; proofExit: boolean; negativeControls: boolean };
+				}>;
+			};
+		};
+		expect(report.merge.proofChecklists[0].proofReady).toBe(true);
+		expect(report.merge.claimRows[0]).toMatchObject({
+			claimId: "weak-source-claim",
+			status: "promoted",
+			proofReady: false,
+			proofCoverage: { passive: true, proofExit: false, negativeControls: false },
+		});
+		expect(report.merge.proofReadyPromotedClaims).toEqual([]);
+		expect(report.merge.proofPromotionReady).toBe(false);
+		expect(report.merge.finalPromotionReady).toBe(false);
+		expect(report.mergeFailureReason).toContain("route proof incomplete");
+	});
+
 	it("applies cross-worker conflicts globally before promotion", () => {
 		const fakeRepiPath = join(fakeRoot, "repi");
 		writeFileSync(

@@ -1441,6 +1441,19 @@ function claimQualitySignals(evidence, blockers, evidenceItems = []) {
 	};
 }
 
+function claimProofCoverage(qualitySignals) {
+	return {
+		passive: Number(qualitySignals?.evidenceCount ?? 0) > 0 || Number(qualitySignals?.evidenceItemCount ?? 0) > 0 || Boolean(qualitySignals?.hasArtifactPath) || Boolean(qualitySignals?.hasHash),
+		proofExit: Boolean(qualitySignals?.hasCommand) || Boolean(qualitySignals?.hasHash) || Boolean(qualitySignals?.hasDiffOrStatus) || Boolean(qualitySignals?.hasArtifactPath),
+		negativeControls: Boolean(qualitySignals?.hasNegativeControl),
+	};
+}
+
+function claimProofReady(claim) {
+	const coverage = claim?.proofCoverage ?? claimProofCoverage(claim?.qualitySignals ?? {});
+	return claim?.status === "promoted" && coverage.passive && coverage.proofExit && coverage.negativeControls;
+}
+
 function parsedEvidenceBundle(parsed, parsedClaims, stdout, evidenceItems = []) {
 	const evidence = [];
 	const blockers = [];
@@ -1802,6 +1815,7 @@ function buildMergeReport(evidenceRoot) {
 			const confidence = Number.isFinite(Number(claim.confidence)) ? Number(claim.confidence) : evidence.length > 0 ? 0.6 : 0;
 			const blockers = Array.isArray(claim.blockers) ? claim.blockers.map((item) => redact(String(item))).slice(0, 6) : [];
 			const qualitySignals = claimQualitySignals(evidence, blockers, allClaimEvidenceItems);
+			const proofCoverage = claimProofCoverage(qualitySignals);
 			const baseStatus = worker.status === "pass" && evidence.length > 0 && confidence >= 0.5 ? "promoted" : "observation";
 			claimRows.push({
 				claimId,
@@ -1815,6 +1829,8 @@ function buildMergeReport(evidenceRoot) {
 				status: "observation",
 				blockers,
 				qualitySignals,
+				proofCoverage,
+				proofReady: false,
 				evidenceItemIds: allClaimEvidenceItems.map((item) => item.evidenceItemId).slice(0, 12),
 				conflictResolution: conflictResolutionForClaim({ claimId, qualitySignals }, workerConflicts),
 			});
@@ -1859,7 +1875,8 @@ function buildMergeReport(evidenceRoot) {
 	}
 	const promotedClaims = claimRows.filter((claim) => claim.status === "promoted");
 	const proofReadyWorkerIds = new Set(proofChecklists.filter((row) => row.proofReady).map((row) => row.workerId));
-	const proofReadyPromotedClaims = promotedClaims.filter((claim) => proofReadyWorkerIds.has(claim.workerId));
+	for (const claim of claimRows) claim.proofReady = proofReadyWorkerIds.has(claim.workerId) && claimProofReady(claim);
+	const proofReadyPromotedClaims = promotedClaims.filter((claim) => claim.proofReady);
 	const routeReadinessRows = buildRouteReadinessRows(plan, workersReport, proofChecklists, promotedClaims, proofReadyPromotedClaims, routeCoverage);
 	for (const readiness of routeReadinessRows.filter((row) => !row.proofReady && row.assignedWorkerIds.length > 0)) {
 		const command = routeProofRepairCommand(plan, readiness);
