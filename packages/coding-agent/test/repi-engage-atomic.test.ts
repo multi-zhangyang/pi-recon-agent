@@ -1018,6 +1018,96 @@ describe("repi-engage artifact writes", () => {
 		expect(memoryReport.nextQueue.some((command) => command.includes("memory forensics"))).toBe(true);
 	});
 
+	it("maps workspace source routes into runtime proof targets", () => {
+		const appDir = join(workspace, "source-app");
+		const srcDir = join(appDir, "src");
+		mkdirSync(srcDir, { recursive: true });
+		writeFileSync(
+			join(appDir, "package.json"),
+			JSON.stringify({ scripts: { start: "node src/server.js" }, dependencies: { express: "1.0.0" } }),
+		);
+		writeFileSync(
+			join(srcDir, "server.js"),
+			[
+				"const express = require('express');",
+				"const child_process = require('child_process');",
+				"const app = express();",
+				"const requireAuth = (req,res,next)=> next();",
+				"app.get('/api/account/:id', requireAuth, (req,res)=> db.query('SELECT * FROM users WHERE id=' + req.params.id));",
+				"app.post('/api/admin/run', (req,res)=> child_process.exec(req.body.cmd));",
+				"function signRequest(params){ return crypto.createHash('md5').update(Object.keys(params).sort().join('&') + client_secret).digest('hex') }",
+			].join("\n"),
+		);
+
+		const result = spawnSync(
+			process.execPath,
+			[ENGAGE, workspace, appDir, "--no-mission", "--json", "--timeout-ms=5000"],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 15_000,
+			},
+		);
+
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			artifactDir: string;
+			target: { kind: string; lane: string };
+			commands: Array<{ id: string; stdout: string }>;
+			nextQueue: string[];
+			summary: { anchors: string[] };
+		};
+		expect(report.target.kind).toBe("directory");
+		expect(report.target.lane).toBe("js-reverse");
+		expect(report.commands.map((row) => row.id)).toContain("workspace-source-runtime-map");
+		expect(report.commands.map((row) => row.id)).toContain("proof-harness-self-test");
+		expect(report.summary.anchors).toContain("workspace source-to-runtime anchors");
+		expect(report.summary.anchors).toContain("proof harness/self-test anchors");
+		const mapPath = join(report.artifactDir, "workspace-source-runtime-map.json");
+		const harnessPath = join(report.artifactDir, "workspace-source-runtime-harness.mjs");
+		const proofMatrixPath = join(report.artifactDir, "proof-matrix.json");
+		expect(existsSync(mapPath)).toBe(true);
+		expect(existsSync(harnessPath)).toBe(true);
+		expect(existsSync(proofMatrixPath)).toBe(true);
+		expect(statSync(mapPath).mode & 0o777).toBe(0o600);
+		expect(statSync(harnessPath).mode & 0o777).toBe(0o700);
+		const sourceMap = JSON.parse(readFileSync(mapPath, "utf8")) as {
+			counts: { routes: number; sinks: number; proofTargets: number };
+			risks: string[];
+			routes: Array<{ path: string; method: string }>;
+			proofTargets: Array<{ risks: string[] }>;
+			routeReplayTemplates: Array<{ negativeControls: string[] }>;
+			runtimeCommands: Array<{ command: string }>;
+		};
+		expect(sourceMap.counts.routes).toBeGreaterThanOrEqual(2);
+		expect(sourceMap.counts.sinks).toBeGreaterThanOrEqual(1);
+		expect(sourceMap.counts.proofTargets).toBeGreaterThanOrEqual(1);
+		expect(sourceMap.risks).toContain("route-to-dangerous-sink-candidate");
+		expect(sourceMap.routes).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ method: "GET", path: "/api/account/:id" }),
+				expect.objectContaining({ method: "POST", path: "/api/admin/run" }),
+			]),
+		);
+		expect(sourceMap.proofTargets[0].risks.length).toBeGreaterThan(0);
+		expect(sourceMap.routeReplayTemplates[0].negativeControls).toContain("repeat without Cookie/Authorization");
+		expect(sourceMap.runtimeCommands.map((row) => row.command)).toContain("npm run start");
+		const proofMatrix = JSON.parse(readFileSync(proofMatrixPath, "utf8")) as {
+			artifacts: Array<{ relPath: string }>;
+			liveChecks: Array<{ id: string }>;
+		};
+		expect(proofMatrix.artifacts.map((row) => row.relPath)).toContain("workspace-source-runtime-map.json");
+		expect(proofMatrix.liveChecks.map((row) => row.id)).toContain("workspace-source-runtime-harness-self-test");
+		expect(
+			report.nextQueue.some(
+				(command) => command.includes("workspace-source-runtime-harness.mjs") && command.includes(appDir),
+			),
+		).toBe(true);
+	});
+
 	it("summarizes memory images and emits triage plans without requiring volatility", () => {
 		const memoryTarget = join(workspace, "incident.vmem");
 		const secret = "superMemorySecretToken123456789";

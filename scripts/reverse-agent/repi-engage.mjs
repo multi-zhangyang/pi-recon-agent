@@ -542,6 +542,10 @@ function buildProofArtifactRows(targetInfo, artifactDir) {
 		add("web-signer-rebuild-workbench.mjs", "JS signer byte-for-byte workbench", 0o700);
 		add("web-js-signature-control-harness.mjs", "JS signature negative-control harness", 0o700);
 	}
+	if (targetInfo.kind === "directory") {
+		add("workspace-source-runtime-map.json", "workspace source-to-runtime route/sink/auth map");
+		add("workspace-source-runtime-harness.mjs", "workspace source-to-runtime extraction harness", 0o700);
+	}
 	if (targetInfo.lane === "native-pwn") {
 		add("native-elf-hardening.json", "ELF mitigation/import/relocation parser output");
 		add("native-pe-quicklook.json", "PE mitigation/import parser output");
@@ -607,8 +611,9 @@ function buildProofCoverageGaps(targetInfo, artifactRows) {
 		requireAny("web-runtime-replay", ["web-runtime-replay-verifier.mjs", "web-replay-matrix.json"], "web targets need replayable HTTP/browser evidence");
 		requireAny("web-route-matrix", ["web-api-schema-probes.json", "web-discovery-matrix.json", "web-object-matrix.json"], "web targets need route/schema/object matrix evidence");
 	}
+	if (targetInfo.kind === "directory") requireAny("workspace-source-runtime-map", ["workspace-source-runtime-map.json", "workspace-source-runtime-harness.mjs"], "workspace targets need source-to-runtime route/sink/auth evidence");
 	if (targetInfo.lane === "native-pwn") requireAny("native-replay", ["native-replay-verifier.py", "native-exploit-hypotheses.json", "native-static-triage.json"], "native targets need replay/triage/hypothesis artifacts");
-	if (targetInfo.lane === "js-reverse") requireAny("js-reverse-workbench", ["js-reverse-workbench.json", "js-reverse-workbench.mjs"], "JS reverse targets need local signer/API workbench artifacts");
+	if (targetInfo.lane === "js-reverse") requireAny("js-reverse-workbench", ["js-reverse-workbench.json", "js-reverse-workbench.mjs", "workspace-source-runtime-map.json"], "JS reverse targets need local signer/API/workspace evidence artifacts");
 	if (targetInfo.lane === "pcap-dfir") requireAny("pcap-flow-summary", ["pcap-flow-summary.json"], "PCAP targets need parsed flow/stream evidence");
 	if (targetInfo.lane === "crypto-stego") requireAny("crypto-transform-solver", ["crypto-stego-solver.py", "crypto-stego-media-quicklook.json"], "crypto/stego targets need a transform-chain verifier or media structure proof");
 	if (targetInfo.lane === "mobile" || targetInfo.lane === "mobile-ios") requireAny("mobile-runtime-hook", ["mobile-frida-hooks.js", "mobile-archive-summary.json"], "mobile targets need archive/runtime hook anchors");
@@ -637,6 +642,10 @@ function buildProofLiveChecks(targetInfo, artifactDir, toolState) {
 	if (targetInfo.lane === "js-reverse") {
 		const jsWorkbench = proofArtifactPath(artifactDir, "js-reverse-workbench.mjs");
 		if (existsSync(jsWorkbench)) add({ id: "js-reverse-workbench-self-test", command: process.execPath, args: [jsWorkbench, "--self-test"], reason: "execute local JS reverse workbench self-test" });
+	}
+	if (targetInfo.kind === "directory") {
+		const workspaceHarness = proofArtifactPath(artifactDir, "workspace-source-runtime-harness.mjs");
+		if (existsSync(workspaceHarness)) add({ id: "workspace-source-runtime-harness-self-test", command: process.execPath, args: [workspaceHarness, "--self-test"], reason: "execute workspace source-to-runtime harness self-test" });
 	}
 	if (targetInfo.lane === "native-pwn" && python) {
 		const offsetHelper = proofArtifactPath(artifactDir, "native-cyclic-offset.py");
@@ -7192,6 +7201,374 @@ function writeJsReverseWorkbench(artifactDir, target) {
 	return path;
 }
 
+function workspaceSourceRuntimeHarnessSource() {
+	return String.raw`#!/usr/bin/env node
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { basename, join, relative } from "node:path";
+
+const selfTest = process.argv.includes("--self-test");
+const target = selfTest ? "<self-test>" : process.argv[2] || process.cwd();
+const output = process.argv[3] || "workspace-source-runtime-map.json";
+const maxFiles = Number(process.env.REPI_WORKSPACE_MAP_MAX_FILES || 420);
+const maxBytes = Number(process.env.REPI_WORKSPACE_MAP_MAX_BYTES || 260000);
+const maxDepth = Number(process.env.REPI_WORKSPACE_MAP_MAX_DEPTH || 6);
+
+function sha256(value) {
+	return createHash("sha256").update(value).digest("hex");
+}
+
+function redact(value) {
+	return String(value ?? "")
+		.replace(/\bsk-[A-Za-z0-9._-]{8,}\b/g, "<redacted:api-key>")
+		.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer <redacted>")
+		.replace(/([?&](?:api[_-]?key|token|access_token|refresh_token|client_secret|secret|password)=)[^&\s"'<>]{4,}/gi, "$1<redacted>")
+		.replace(/((?:authorization|x-api-key|api-key|cookie|set-cookie)\s*[:=]\s*["']?)([^"'\n;]{4,})/gi, "$1<redacted>")
+		.replace(/(["']?(?:api[_-]?key|token|secret|password|client_secret|access_token|refresh_token|private_key|access_key)["']?\s*[:=]\s*["'])([^"']{4,})(["'])/gi, "$1<redacted>$3");
+}
+
+function isTextSource(path) {
+	return /\.(?:js|mjs|cjs|ts|tsx|jsx|py|go|rs|java|kt|kts|php|rb|cs|scala|swift|json|ya?ml|toml|env|ini|conf|properties|tf|Dockerfile)$/i.test(path) || /(?:^|\/)(?:Dockerfile|docker-compose\.ya?ml|compose\.ya?ml|Makefile)$/i.test(path);
+}
+
+function walkFiles(root) {
+	const out = [];
+	const skip = new Set([".git", "node_modules", "dist", "build", ".next", "coverage", ".venv", "venv", "__pycache__", "target"]);
+	function walk(dir, depth) {
+		if (out.length >= maxFiles || depth > maxDepth) return;
+		let entries = [];
+		try {
+			entries = readdirSync(dir, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			if (out.length >= maxFiles) return;
+			const path = join(dir, entry.name);
+			if (entry.isDirectory()) {
+				if (!skip.has(entry.name)) walk(path, depth + 1);
+			} else if (entry.isFile() && isTextSource(path)) {
+				out.push(path);
+			}
+		}
+	}
+	if (!existsSync(root)) return [];
+	const stat = statSync(root);
+	if (stat.isFile()) return isTextSource(root) ? [root] : [];
+	walk(root, 0);
+	return out;
+}
+
+function lineRows(text) {
+	return String(text ?? "").split(/\r?\n/);
+}
+
+function relPath(root, path) {
+	if (root === "<self-test>") return path;
+	try {
+		return relative(root, path) || basename(path);
+	} catch {
+		return path;
+	}
+}
+
+function addRow(rows, limit, row) {
+	if (rows.length >= limit) return;
+	rows.push(row);
+}
+
+function routeMatches(line) {
+	const rows = [];
+	const patterns = [
+		{ kind: "express-router", regex: /\b(?:app|router|server|api)\s*\.\s*(get|post|put|patch|delete|all|use)\s*\(\s*["'\x60]([^"'\x60)]+)/gi },
+		{ kind: "fastify-route", regex: /\bfastify\s*\.\s*(get|post|put|patch|delete|all)\s*\(\s*["'\x60]([^"'\x60)]+)/gi },
+		{ kind: "flask-fastapi-route", regex: /@(?:app|router|blueprint|bp)\s*\.\s*(get|post|put|patch|delete|route)\s*\(\s*["']([^"']+)/gi },
+		{ kind: "django-path", regex: /\b(?:path|re_path)\s*\(\s*["']([^"']+)/gi, method: "ANY", pathGroup: 1 },
+		{ kind: "go-http", regex: /\b(?:http\.)?HandleFunc\s*\(\s*["']([^"']+)/gi, method: "ANY", pathGroup: 1 },
+		{ kind: "java-mapping", regex: /@(GetMapping|PostMapping|PutMapping|PatchMapping|DeleteMapping|RequestMapping)\s*(?:\([^"']*["']([^"']+)["'])?/gi },
+		{ kind: "rails-route", regex: /\b(get|post|put|patch|delete)\s+["']([^"']+)/gi },
+	];
+	for (const pattern of patterns) {
+		for (const match of line.matchAll(pattern.regex)) {
+			const method = pattern.method || String(match[1] || "ANY").replace(/Mapping$/i, "").toUpperCase();
+			const path = match[pattern.pathGroup || 2] || "/";
+			rows.push({ kind: pattern.kind, method: method.toUpperCase(), path: redact(path).slice(0, 240) });
+		}
+	}
+	return rows;
+}
+
+function authKind(line) {
+	const patterns = [
+		["jwt", /\b(jwt|jsonwebtoken|bearer|jwks|jwk|id_token|access_token)\b/i],
+		["session-cookie", /\b(session|cookie|csrf|xsrf|sameSite|secure:\s*true|httpOnly)\b/i],
+		["middleware-guard", /\b(auth|authenticate|authorize|guard|middleware|requireAuth|isAuthenticated|permission|role|rbac|acl)\b/i],
+		["oauth-sso", /\b(oauth|oidc|saml|passport|openid|callback_uri|redirect_uri)\b/i],
+		["api-key", /\b(api[_-]?key|x-api-key|client_secret|secret_key)\b/i],
+	];
+	for (const [kind, regex] of patterns) if (regex.test(line)) return kind;
+	return undefined;
+}
+
+function sinkKind(line) {
+	const patterns = [
+		["command-exec", /\b(child_process|execSync|exec\s*\(|spawn\s*\(|spawnSync\s*\(|system\s*\(|popen\s*\(|Runtime\.getRuntime\(\)\.exec|ProcessBuilder|subprocess\.(?:run|Popen|call)|os\.system)\b/i],
+		["sql-query", /\b(SELECT|INSERT|UPDATE|DELETE)\b[\s\S]{0,80}\+|\.query\s*\(|rawQuery\s*\(|execute\s*\(|cursor\.execute\s*\(|sequelize\.query\s*\(/i],
+		["deserialize", /\b(pickle\.loads?|yaml\.load\s*\(|ObjectInputStream|readObject\s*\(|JSON\.parse\s*\([^)]*req|deserialize\s*\()/i],
+		["ssrf-fetch", /\b(fetch|axios|request|got|urllib|requests\.|http\.get|curl)\s*\([^)]*(?:req\.|request\.|params|query|body)/i],
+		["file-write-read", /\b(readFile|writeFile|createReadStream|createWriteStream|sendFile|open\s*\(|FileInputStream|Path\.of|filepath|filename|upload|download)\b/i],
+		["template-render", /\b(render_template_string|Template\s*\(|innerHTML|dangerouslySetInnerHTML|eval\s*\(|new Function\s*\()/i],
+	];
+	for (const [kind, regex] of patterns) if (regex.test(line)) return kind;
+	return undefined;
+}
+
+function stateKind(line) {
+	const patterns = [
+		["db-write", /\b(INSERT|UPDATE|DELETE|UPSERT|\.save\s*\(|\.update\s*\(|\.delete\s*\(|\.create\s*\(|commit\s*\()\b/i],
+		["file-write", /\b(writeFile|appendFile|createWriteStream|openSync\s*\([^)]*["']w|fs\.promises\.writeFile)\b/i],
+		["queue-event", /\b(queue|publish|sendMessage|enqueue|kafka|rabbit|sqs|pubsub)\b/i],
+		["privilege-change", /\b(role|permission|isAdmin|admin|scope|grant|revoke)\b/i],
+	];
+	for (const [kind, regex] of patterns) if (regex.test(line)) return kind;
+	return undefined;
+}
+
+function signerKind(line) {
+	const patterns = [
+		["signature", /\b(sign|signature|x-signature|x-sign|sig|w_rid|wts)\b/i],
+		["crypto", /\b(crypto\.subtle|createHash|createHmac|md5|sha-?1|sha-?256|hmac|AES|RSA|ECDSA)\b/i],
+		["canonicalization", /\b(canonical|URLSearchParams|encodeURIComponent|sort\s*\(|nonce|timestamp|salt|secret|mixin|permutation)\b/i],
+	];
+	for (const [kind, regex] of patterns) if (regex.test(line)) return kind;
+	return undefined;
+}
+
+function cloudKind(line) {
+	const patterns = [
+		["github-oidc", /\b(id-token:\s*write|aws-actions\/configure-aws-credentials|workload_identity_provider)\b/i],
+		["iam-policy", /\b(aws_iam|Action:\s*["']?\*|Resource:\s*["']?\*|sts:AssumeRole|iam:PassRole)\b/i],
+		["kubernetes-rbac", /\b(ClusterRoleBinding|ServiceAccount|privileged:\s*true|hostPath|automountServiceAccountToken)\b/i],
+		["container-exposure", /(?:^\s*(?:FROM\s+\S+|EXPOSE\s+\d+)\b|\b(?:docker-compose|--privileged)\b|^\s*ports\s*:)/i],
+	];
+	for (const [kind, regex] of patterns) if (regex.test(line)) return kind;
+	return undefined;
+}
+
+function scanText(root, file, text) {
+	const routes = [];
+	const authAnchors = [];
+	const sinks = [];
+	const stateMutations = [];
+	const signerCrypto = [];
+	const cloudTrust = [];
+	const lines = lineRows(text);
+	for (const [index, line] of lines.entries()) {
+		const lineNo = index + 1;
+		const sample = redact(line.trim().slice(0, 320));
+		for (const route of routeMatches(line)) addRow(routes, 240, { ...route, file, line: lineNo, sample });
+		const auth = authKind(line);
+		if (auth) addRow(authAnchors, 240, { kind: auth, file, line: lineNo, sample });
+		const sink = sinkKind(line);
+		if (sink) addRow(sinks, 240, { kind: sink, file, line: lineNo, sample });
+		const state = stateKind(line);
+		if (state) addRow(stateMutations, 200, { kind: state, file, line: lineNo, sample });
+		const signer = signerKind(line);
+		if (signer) addRow(signerCrypto, 200, { kind: signer, file, line: lineNo, sample });
+		const cloud = cloudKind(line);
+		if (cloud) addRow(cloudTrust, 180, { kind: cloud, file, line: lineNo, sample });
+	}
+	return {
+		file,
+		lineCount: lines.length,
+		textSha256: sha256(text),
+		truncated: Buffer.byteLength(text, "utf8") >= maxBytes,
+		routes,
+		authAnchors,
+		sinks,
+		stateMutations,
+		signerCrypto,
+		cloudTrust,
+	};
+}
+
+function parseManifest(root) {
+	const manifests = [];
+	const runtimeCommands = [];
+	const addManifest = (path, kind, data = {}) => manifests.push({ path: relPath(root, path), kind, ...data });
+	const packageJson = join(root, "package.json");
+	if (existsSync(packageJson)) {
+		try {
+			const parsed = JSON.parse(readFileSync(packageJson, "utf8"));
+			const scripts = parsed && typeof parsed.scripts === "object" ? parsed.scripts : {};
+			addManifest(packageJson, "node-package", { scripts: Object.keys(scripts).slice(0, 40), dependencies: Object.keys(parsed.dependencies || {}).slice(0, 80) });
+			for (const name of ["dev", "start", "serve", "test", "build"]) {
+				if (scripts[name]) runtimeCommands.push({ kind: "npm-script", command: "npm run " + name, source: "package.json:scripts." + name });
+			}
+		} catch (error) {
+			addManifest(packageJson, "node-package-parse-error", { error: redact(error.message || String(error)) });
+		}
+	}
+	for (const [name, kind, command] of [
+		["pyproject.toml", "python-project", "python -m pytest"],
+		["requirements.txt", "python-requirements", "python -m pytest"],
+		["go.mod", "go-module", "go test ./..."],
+		["Cargo.toml", "rust-crate", "cargo test"],
+		["Dockerfile", "dockerfile", "docker build -t repi-target ."],
+		["docker-compose.yml", "docker-compose", "docker compose config"],
+		["compose.yml", "docker-compose", "docker compose config"],
+	]) {
+		const path = join(root, name);
+		if (existsSync(path)) {
+			addManifest(path, kind);
+			runtimeCommands.push({ kind, command, source: name });
+		}
+	}
+	return { manifests, runtimeCommands };
+}
+
+function buildEdges(routes, authAnchors, sinks, stateMutations, signerCrypto) {
+	const edges = [];
+	const proofTargets = [];
+	const replayTemplates = [];
+	for (const route of routes.slice(0, 120)) {
+		const sameFileAuth = authAnchors.filter((row) => row.file === route.file && Math.abs(row.line - route.line) <= 45).slice(0, 6);
+		const sameFileSinks = sinks.filter((row) => row.file === route.file && Math.abs(row.line - route.line) <= 90).slice(0, 8);
+		const sameFileState = stateMutations.filter((row) => row.file === route.file && Math.abs(row.line - route.line) <= 90).slice(0, 8);
+		const sameFileSigner = signerCrypto.filter((row) => row.file === route.file && Math.abs(row.line - route.line) <= 120).slice(0, 8);
+		const sensitive = /admin|account|user|order|payment|invoice|upload|download|file|debug|internal|token|secret|role|permission/i.test(route.path);
+		const risks = [];
+		if (sensitive && !sameFileAuth.length) risks.push("route-sensitive-no-nearby-auth-anchor");
+		if (sameFileSinks.length) risks.push("route-to-dangerous-sink-candidate");
+		if (sameFileState.length && /^(POST|PUT|PATCH|DELETE|ANY|ALL)$/i.test(route.method)) risks.push("state-changing-route-candidate");
+		if (sameFileSigner.length) risks.push("route-near-signature-crypto-candidate");
+		const edge = {
+			route,
+			nearbyAuth: sameFileAuth,
+			nearbySinks: sameFileSinks,
+			nearbyState: sameFileState,
+			nearbySignerCrypto: sameFileSigner,
+			risks,
+		};
+		edges.push(edge);
+		if (risks.length) {
+			proofTargets.push({
+				id: "route-proof-" + sha256(JSON.stringify([route.file, route.line, route.method, route.path])).slice(0, 12),
+				route,
+				risks,
+				proofNeed: "bind source route -> runtime request -> auth/session/negative-control response -> artifact hash",
+			});
+		}
+		replayTemplates.push({
+			route: route.path,
+			method: route.method === "ANY" || route.method === "ALL" ? "GET" : route.method,
+			command: "curl -i -sS -X " + (route.method === "ANY" || route.method === "ALL" ? "GET" : route.method) + " \"$BASE_URL" + route.path + "\"",
+			negativeControls: [
+				"repeat without Cookie/Authorization",
+				"repeat with low-privilege Cookie/Authorization",
+				"mutate numeric/uuid object identifiers when present",
+			],
+		});
+	}
+	return { edges, proofTargets, replayTemplates };
+}
+
+function aggregate(root, scans, manifest) {
+	const routes = scans.flatMap((scan) => scan.routes);
+	const authAnchors = scans.flatMap((scan) => scan.authAnchors);
+	const sinks = scans.flatMap((scan) => scan.sinks);
+	const stateMutations = scans.flatMap((scan) => scan.stateMutations);
+	const signerCrypto = scans.flatMap((scan) => scan.signerCrypto);
+	const cloudTrust = scans.flatMap((scan) => scan.cloudTrust);
+	const graph = buildEdges(routes, authAnchors, sinks, stateMutations, signerCrypto);
+	const risks = Array.from(new Set([...graph.proofTargets.flatMap((row) => row.risks), ...(cloudTrust.length ? ["cloud-identity-trust-chain-candidate"] : []), ...(signerCrypto.length ? ["workspace-signer-crypto-candidate"] : [])])).slice(0, 80);
+	return {
+		kind: "repi-workspace-source-runtime-map",
+		schemaVersion: 1,
+		target: redact(root),
+		generatedAt: new Date().toISOString(),
+		fileCount: scans.length,
+		manifests: manifest.manifests,
+		runtimeCommands: manifest.runtimeCommands,
+		counts: {
+			routes: routes.length,
+			authAnchors: authAnchors.length,
+			sinks: sinks.length,
+			stateMutations: stateMutations.length,
+			signerCrypto: signerCrypto.length,
+			cloudTrust: cloudTrust.length,
+			proofTargets: graph.proofTargets.length,
+		},
+		risks,
+		routes: routes.slice(0, 240),
+		authAnchors: authAnchors.slice(0, 160),
+		sinks: sinks.slice(0, 160),
+		stateMutations: stateMutations.slice(0, 140),
+		signerCrypto: signerCrypto.slice(0, 140),
+		cloudTrust: cloudTrust.slice(0, 120),
+		sourceToRuntimeEdges: graph.edges.slice(0, 160),
+		proofTargets: graph.proofTargets.slice(0, 120),
+		routeReplayTemplates: graph.replayTemplates.slice(0, 120),
+		proofExitRules: [
+			"Do not promote a source-only sink: bind source file/line to a runtime request, response status/body hash, and a negative control.",
+			"For authz/BOLA claims require at least two principals or anonymous-vs-session replay.",
+			"For signer claims require captured signed success plus missing/tampered signature rejection or byte-for-byte rebuilt signer samples.",
+		],
+	};
+}
+
+function analyzeWorkspace(root) {
+	const files = walkFiles(root);
+	const scans = [];
+	for (const path of files) {
+		let data;
+		try {
+			data = readFileSync(path);
+		} catch {
+			continue;
+		}
+		const text = data.subarray(0, maxBytes).toString("utf8");
+		scans.push(scanText(root, relPath(root, path), text));
+	}
+	return aggregate(root, scans, parseManifest(root));
+}
+
+function selfTestReport() {
+	const sample = [
+		"const express = require('express');",
+		"const child_process = require('child_process');",
+		"const app = express();",
+		"const requireAuth = (req,res,next)=> next();",
+		"app.get('/api/account/:id', requireAuth, (req,res)=> db.query('SELECT * FROM users WHERE id=' + req.params.id));",
+		"app.post('/api/admin/run', (req,res)=> child_process.exec(req.body.cmd));",
+		"function signRequest(params){ return crypto.createHash('md5').update(Object.keys(params).sort().join('&') + secret).digest('hex') }",
+	].join("\n");
+	return aggregate("<self-test>", [scanText("<self-test>", "src/server.js", sample)], { manifests: [{ path: "package.json", kind: "node-package", scripts: ["start"] }], runtimeCommands: [{ kind: "npm-script", command: "npm run start", source: "package.json:scripts.start" }] });
+}
+
+function main() {
+	const report = selfTest ? selfTestReport() : analyzeWorkspace(target);
+	if (!selfTest && output && output !== "-") writeFileSync(output, JSON.stringify(report, null, 2) + "\n", { mode: 0o600 });
+	console.log(JSON.stringify({ kind: report.kind, target: report.target, fileCount: report.fileCount, counts: report.counts, risks: report.risks, output: selfTest ? null : output }, null, 2));
+	process.exit(report.fileCount > 0 ? 0 : 1);
+}
+
+try {
+	main();
+} catch (error) {
+	console.error(redact(error?.stack || error?.message || String(error)));
+	process.exit(1);
+}
+`;
+}
+
+function writeWorkspaceSourceRuntimeHarness(artifactDir) {
+	if (noWrite || !artifactDir) return undefined;
+	const path = join(artifactDir, "workspace-source-runtime-harness.mjs");
+	writePrivate(path, workspaceSourceRuntimeHarnessSource(), 0o700);
+	return path;
+}
+
 function engageFile(targetInfo, artifactDir) {
 	const target = targetInfo.path;
 	const rows = [];
@@ -7357,6 +7734,11 @@ function engageDirectory(targetInfo, artifactDir) {
 	}
 	for (const manifest of ["package.json", "pyproject.toml", "requirements.txt", "go.mod", "Cargo.toml", "Dockerfile", "AndroidManifest.xml"]) {
 		if (existsSync(join(target, manifest))) rows.push(run("bash", ["-lc", `sed -n '1,180p' ${shellQuote(manifest)}`], { id: `manifest-${manifest.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`, cwd: target, timeout: timeoutMs }));
+	}
+	const workspaceHarnessPath = writeWorkspaceSourceRuntimeHarness(artifactDir);
+	if (workspaceHarnessPath) {
+		const outputPath = join(artifactDir, "workspace-source-runtime-map.json");
+		rows.push(run(process.execPath, [workspaceHarnessPath, target, outputPath], { id: "workspace-source-runtime-map", timeout: timeoutMs + 5000 }));
 	}
 	if (targetInfo.lane === "agent-boundary") {
 		rows.push(...agentBoundaryRows(target, artifactDir));
@@ -10672,6 +11054,9 @@ function nextQueue(targetInfo, artifactDir, toolState) {
 		q.push(`repi -p ${shellQuote(`Continue cloud/identity pentest from ${artifactDir}: use cloud-identity-map.json trustChains to bind GitHub OIDC roles, Terraform IAM, Kubernetes service accounts/RBAC, and container principals to deploy truth; verify privilege boundaries and produce one exact pivot or least-privilege proof.`)}`);
 	}
 	if (targetInfo.kind === "directory") {
+		const quotedDirectoryTarget = shellQuote(target);
+		if (!noWrite && existsSync(join(artifactDir, "workspace-source-runtime-map.json"))) q.push(`cat ${shellQuote(join(artifactDir, "workspace-source-runtime-map.json"))}`);
+		if (!noWrite && existsSync(join(artifactDir, "workspace-source-runtime-harness.mjs"))) q.push(`node ${shellQuote(join(artifactDir, "workspace-source-runtime-harness.mjs"))} ${quotedDirectoryTarget} ${shellQuote(join(artifactDir, "workspace-source-runtime-map.json"))}`);
 		q.push(`repi -p ${shellQuote(`Use ${artifactDir}/commands.jsonl to continue workspace exploitation: bind routes/sinks to runtime proof and create replay matrix.`)}`);
 	}
 	if (swarm) {
@@ -10733,6 +11118,7 @@ function summarizeEvidence(rows, targetInfo, toolState) {
 		if (/dnsTunnels|pcap-dns-(?:long-label|high-entropy-label|encoded-label|sensitive-label|deep-subdomain)|labelSignals|base32-like-label|base64url-like-label/i.test(text) && targetInfo.lane === "pcap-dfir") anchors.push("DNS tunnel/exfil anchors");
 		if (/TLS-candidate|client-hello|recordVersion|clientVersion|sni|alpn|ja3/i.test(text) && targetInfo.lane === "pcap-dfir") anchors.push("TLS/SNI anchors");
 		if (/endpoint|graphql|oauth|api\/|\/api|form|fetch|axios/i.test(text) && targetInfo.kind === "url") anchors.push("route/API anchors");
+		if (/repi-workspace-source-runtime-map|workspace-source-runtime-map|sourceToRuntimeEdges|route-sensitive-no-nearby-auth-anchor|route-to-dangerous-sink-candidate|routeReplayTemplates/i.test(text) && targetInfo.kind === "directory") anchors.push("workspace source-to-runtime anchors");
 		if (/repi-web-discovery-matrix|web-discovery|robots\.txt|sitemap\.xml|openapi|swagger|graphql/i.test(text) && targetInfo.kind === "url") anchors.push("web discovery anchors");
 		if (/repi-web-api-schema-probes|web-api-schema-probes|__typename|__schema|graphql-introspection|graphql-mutation-surface|openapi-unauthenticated|openapi-upload-surface|securitySchemes|openapi|swagger|GraphQL/i.test(text) && targetInfo.kind === "url") anchors.push("API schema anchors");
 		if (/repi-web-ssrf-matrix|web-ssrf-matrix|ssrf-|169\.254\.169\.254|repi-ssrf-canary/i.test(text) && targetInfo.kind === "url") anchors.push("SSRF parameter anchors");
