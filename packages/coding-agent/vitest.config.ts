@@ -9,6 +9,8 @@ export default defineConfig({
 	test: {
 		globals: true,
 		environment: "node",
+		pool: "threads",
+		reporters: ["dot"],
 		testTimeout: 30000,
 		server: {
 			deps: {

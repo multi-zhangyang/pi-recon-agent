@@ -129,4 +129,26 @@ describe("memory-consolidate.mjs atomic scoped writes", () => {
 		expect(existsSync(join(memoryDir, "procedural-memory.md"))).toBe(false);
 		expect(existsSync(join(memoryDir, "consolidation-report.json"))).toBe(false);
 	});
+
+	it("accepts --cwd=<dir> and does not fall back to the global memory root", () => {
+		const result = spawnSync(process.execPath, [CONSOLIDATE, workspace, `--cwd=${workspace}`, "--json"], {
+			encoding: "utf8",
+			env: {
+				...process.env,
+				REPI_CODING_AGENT_DIR: agentDir,
+			},
+			timeout: 10_000,
+		});
+
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			selectedCount: number;
+			projectMemoryPath: string;
+			proceduralMemoryPath: string;
+		};
+		expect(report.selectedCount).toBe(1);
+		expect(report.projectMemoryPath).toBe(join(memoryDir, "project-memory.md"));
+		expect(report.proceduralMemoryPath).toBe(join(memoryDir, "procedural-memory.md"));
+		expect(existsSync(join(agentDir, "recon", "memory", "project-memory.md"))).toBe(false);
+	});
 });

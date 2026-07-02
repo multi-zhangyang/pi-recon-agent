@@ -1113,13 +1113,16 @@ export const ADVANCED_TECHNIQUES: readonly TechniqueEntry[] = [
 			"Deobfuscate: `webcrack`/`de4js`/manual; trace inputs — what feeds the signature (body, path, nonce, timestamp, secret).",
 			"Recover the key: hardcoded in JS, or fetched at runtime (hook fetch/crypto.subtle with Frida-in-browser or a CDP snippet).",
 			"Reimplement in Python: replicate canonicalization (field order, encoding, case), the exact HMAC/hash alg, nonce/timestamp window.",
-			"Validate: your forged request is accepted by the server (200) for an action the app would sign; replay ≥2.",
+			"Validate with controls: compare signed vs missing-signature vs tampered-signature on the same route; do not call 200/code=0 proof unless the negative controls fail or a browser-captured signature matches byte-for-byte.",
+			"For permutation/table-based signing schemes, assert the table is a true permutation/no duplicates and pin the derived key to live asset IDs before replay.",
 		],
 		proofExit:
-			"Independently-signed request accepted by the server, reproducing the app's signature byte-for-byte for a sample payload; ≥2 samples.",
+			"Independently-signed request accepted by the server while missing/tampered signatures fail, or the reproduced signature matches a browser-captured app signature byte-for-byte; ≥2 samples/routes.",
 		pitfalls: [
 			"Canonicalization details (field ordering, `&` vs `,`, base64url vs base64, include/exclude trailing `&`) break signatures — diff against a real app signature.",
 			"Timestamp/nonce windows expire fast; clock-skew your forge to the server's window.",
+			"Some public endpoints accept unsigned or bad signatures; this proves a policy gap, not a correct signer. Keep the negative-control matrix in the evidence block.",
+			"Copied tables from stale posts can contain duplicate indices or wrong order; add a local assert that permutation tables cover every expected index exactly once.",
 		],
 		tools: ["node", "python3", "curl", "webcrack"],
 	},

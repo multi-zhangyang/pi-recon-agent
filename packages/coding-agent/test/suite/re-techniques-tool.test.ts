@@ -101,6 +101,16 @@ describe("repi advanced-technique catalog", () => {
 		expect(new Set(ids).size).toBe(ids.length);
 	});
 
+	it("JS signing rebuild requires negative controls and table sanity checks", () => {
+		const entry = techniqueById("js-signature-rebuild");
+		const text = `${entry?.procedure.join("\n")}\n${entry?.proofExit}\n${entry?.pitfalls.join("\n")}`;
+		expect(text).toContain("missing-signature");
+		expect(text).toContain("tampered-signature");
+		expect(text).toContain("byte-for-byte");
+		expect(text).toContain("permutation");
+		expect(text).toContain("duplicate");
+	});
+
 	it("covers the core offensive domains", () => {
 		const domains = new Set(techniqueDomains());
 		for (const required of [

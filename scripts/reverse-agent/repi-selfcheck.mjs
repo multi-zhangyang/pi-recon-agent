@@ -22,10 +22,15 @@ const root = resolve(process.argv[2] && !process.argv[2].startsWith("--") ? proc
 const args = process.argv.slice(process.argv[2] && !process.argv[2].startsWith("--") ? 3 : 2);
 const json = args.includes("--json");
 const deep = args.includes("--deep") || args.includes("--full");
+const strictMemory = args.includes("--strict-memory");
 
 function valueAfter(flag) {
-	const index = args.indexOf(flag);
-	return index >= 0 ? args[index + 1] : undefined;
+	for (let index = 0; index < args.length; index++) {
+		const arg = args[index];
+		if (arg === flag) return args[index + 1];
+		if (arg.startsWith(`${flag}=`)) return arg.slice(flag.length + 1);
+	}
+	return undefined;
 }
 
 const provider = valueAfter("--provider") ?? process.env.REPI_SELFCHECK_PROVIDER;
@@ -85,7 +90,7 @@ function runStep(id, cmd, stepArgs, options = {}) {
 	const stdout = redactFull(result.stdout);
 	const stderr = redactFull(result.stderr);
 	const exit = result.status ?? (result.signal ? 128 : 1);
-	return {
+	const row = {
 		id,
 		cmd: [cmd, ...stepArgs].join(" "),
 		exit,
@@ -95,6 +100,7 @@ function runStep(id, cmd, stepArgs, options = {}) {
 		stderrTail: stderr.slice(-4000),
 		error: result.error ? String(result.error.message || result.error) : undefined,
 	};
+	return options.normalize ? options.normalize(row, stdout, stderr) : row;
 }
 
 function runRepi(id, stepArgs, options = {}) {
@@ -192,10 +198,37 @@ function orchestrationSourceCheck() {
 
 const rows = [];
 
-rows.push(runRepi("doctor", ["doctor"], { timeoutMs: 60_000 }));
+rows.push(runRepi("doctor", ["doctor"], { timeoutMs: 120_000 }));
 rows.push(runRepi("model-doctor", ["model", "doctor"], { timeoutMs: 60_000 }));
 rows.push(runRepi("model-list", ["model", "list", "--json"], { timeoutMs: 60_000, expectStdout: /repi-model-list-report/ }));
-rows.push(runRepi("memory-doctor", ["memory", "doctor", "--json"], { timeoutMs: 60_000, expectStdout: /repi-memory-doctor-report/ }));
+rows.push(
+	runRepi("memory-doctor", ["memory", "doctor", "--json"], {
+		timeoutMs: 60_000,
+		expectStdout: /repi-memory-doctor-report/,
+		normalize: (row, stdout) => {
+			if (strictMemory || row.ok) return row;
+			try {
+				const parsed = JSON.parse(stdout);
+				const diagnostics = Array.isArray(parsed?.diagnostics) ? parsed.diagnostics : [];
+				const failIds = diagnostics
+					.filter((diagnostic) => diagnostic?.level === "fail")
+					.map((diagnostic) => String(diagnostic.id ?? ""));
+				if (parsed?.kind === "repi-memory-doctor-report" && failIds.length > 0 && failIds.every((id) => id === "memory-secret-scan")) {
+					return {
+						...row,
+						ok: true,
+						severity: "warn",
+						warning: "memory-secret-scan",
+						remediation: "Existing local memory contains redaction matches; run: repi memory sanitize --dry-run, then repi memory sanitize --apply --yes after review. Use --strict-memory to fail selfcheck on this warning.",
+					};
+				}
+			} catch {
+				// Keep the original failing row when stdout is not parseable.
+			}
+			return row;
+		},
+	}),
+);
 rows.push(runRepi("bugreport", ["bugreport", "--stdout"], { timeoutMs: 90_000, expectStdout: /repi-bugreport/ }));
 rows.push(
 	runRepi("swarm-plan", ["swarm", "plan", "local-selfcheck", "--workers", "2", "--json"], {
@@ -294,7 +327,9 @@ const report = {
 	provider: provider ?? "default",
 	model: model ?? "default",
 	deep,
+	strictMemory,
 	ok: rows.every((row) => row.ok),
+	warnings: rows.filter((row) => row.severity === "warn"),
 	rows,
 };
 

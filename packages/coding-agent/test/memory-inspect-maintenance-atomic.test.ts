@@ -10,11 +10,16 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const MEMORY_INSPECT = fileURLToPath(new URL("../../../scripts/reverse-agent/memory-inspect.mjs", import.meta.url));
+
+function encodeCwdForScope(cwd: string): string {
+	const resolvedCwd = resolve(cwd);
+	return `--${resolvedCwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+}
 
 function collectTmp(root: string): string[] {
 	if (!existsSync(root)) return [];
@@ -116,5 +121,49 @@ describe("repi memory maintenance atomic writes", () => {
 		});
 		expect(statSync(governancePath).mode & 0o777).toBe(0o600);
 		expect(collectTmp(agentDir)).toEqual([]);
+	});
+
+	it("does not mistake flag values for memory query/id positionals", () => {
+		const eventsPath = join(memoryDir, "events.jsonl");
+		writeFileSync(
+			eventsPath,
+			`${JSON.stringify({ kind: "repi-memory-event", id: "evt-real", outcome: "route proof", lessons: ["keep"] })}\n`,
+			{ mode: 0o600 },
+		);
+
+		const why = runMemory(["why", "--limit", "1", "evt-real"]);
+		expect(why.result.status, `${why.result.stderr}\n${why.result.stdout}`).toBe(0);
+		expect(why.report).toMatchObject({ ok: true, query: "evt-real" });
+
+		const forget = runMemory(["forget", "--reason", "operator rejected stale reverse path", "evt-real"]);
+		expect(forget.result.status, `${forget.result.stderr}\n${forget.result.stdout}`).toBe(0);
+		expect(forget.report).toMatchObject({
+			ok: true,
+			decision: {
+				action: "forget",
+				applied: true,
+				sourceEventId: "evt-real",
+				reason: "operator rejected stale reverse path",
+			},
+		});
+	});
+
+	it("accepts --cwd=<dir> and stays in the scoped memory tree", () => {
+		const scopedDir = join(agentDir, "recon", "memory", "projects", encodeCwdForScope(workspace));
+		mkdirSync(scopedDir, { recursive: true });
+		writeFileSync(
+			join(scopedDir, "events.jsonl"),
+			`${JSON.stringify({ kind: "repi-memory-event", id: "evt-scoped", outcome: "success" })}\n`,
+			{ mode: 0o600 },
+		);
+
+		const why = runMemory(["why", `--cwd=${workspace}`, "evt-scoped"]);
+		expect(why.result.status, `${why.result.stderr}\n${why.result.stdout}`).toBe(0);
+		expect(why.report).toMatchObject({
+			ok: true,
+			query: "evt-scoped",
+			memoryDir: scopedDir,
+		});
+		expect(existsSync(join(agentDir, "recon", "memory", "governance-ledger.jsonl"))).toBe(false);
 	});
 });

@@ -10,8 +10,15 @@ const knownCommands = new Set(["status", "list", "show", "diff", "why", "forget"
 // opt #273: --cwd <dir> scopes the memory tree to a specific project
 // (recon/memory/projects/<encoded-cwd>/) instead of the legacy global root.
 function valueAfterFlag(args, flag) {
-	const index = args.indexOf(flag);
-	return index >= 0 && index + 1 < args.length ? args[index + 1] : undefined;
+	for (let index = 0; index < args.length; index++) {
+		const arg = args[index];
+		if (arg === flag) {
+			const next = args[index + 1];
+			return next && !next.startsWith("--") ? next : undefined;
+		}
+		if (arg.startsWith(`${flag}=`)) return arg.slice(flag.length + 1);
+	}
+	return undefined;
 }
 const cwdScope = valueAfterFlag(rawArgs, "--cwd");
 let root = process.cwd();
@@ -115,8 +122,38 @@ function numberFlag(args, names, fallback = 0) {
 	return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+const valueFlags = new Set([
+	"--limit",
+	"--query",
+	"--id",
+	"--reason",
+	"--text",
+	"--output",
+	"-o",
+	"--older-than-days",
+	"--cwd",
+]);
+
 function positional(args, offset = 0) {
-	return args.filter((arg) => !arg.startsWith("--"))[offset];
+	const out = [];
+	for (let index = 0; index < args.length; index++) {
+		const arg = args[index];
+		if (arg === "--") {
+			out.push(...args.slice(index + 1));
+			break;
+		}
+		if (arg.startsWith("--")) {
+			const flag = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+			if (!arg.includes("=") && valueFlags.has(flag)) index += 1;
+			continue;
+		}
+		if (arg.startsWith("-") && valueFlags.has(arg)) {
+			index += 1;
+			continue;
+		}
+		out.push(arg);
+	}
+	return out[offset];
 }
 
 function readJson(path) {

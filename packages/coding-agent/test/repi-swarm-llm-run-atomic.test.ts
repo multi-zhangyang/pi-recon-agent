@@ -24,7 +24,7 @@ console.log(JSON.stringify({
 	claims: [{
 		id: "claim-1",
 		statement: "ret2win primitive is reachable",
-		evidence: ["checksec: NX enabled, no PIE", "poc.py exits 0"],
+		evidence: ["checksec: NX enabled, no PIE", "poc.py exits 0", "negative control: wrong offset exits 1"],
 		confidence: 0.9,
 		blockers: []
 	}],
@@ -99,10 +99,71 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		const report = JSON.parse(result.stdout) as {
 			ok: boolean;
 			evidenceRoot: string;
-			merge: { promotedClaims: unknown[] };
+			plan: {
+				proofDoctrine: { UniversalProofDoctrineV1: boolean; order: string[] };
+				evidencePriorityDoctrine: { EvidencePriorityDoctrineV1: boolean; order: Array<{ class: string }> };
+				capabilityMatrixDoctrine: { CapabilityMatrixDoctrineV1: boolean; gates: Array<{ gate: string }> };
+				workerPackets: Array<{
+					proofKit: { passive: string[]; proofExit: string[]; negativeControls: string[] };
+					commandPalette: { passive: string[]; proof: string[]; negative: string[] };
+					techniqueHints: { domains: string[]; techniqueIds: string[] };
+				}>;
+			};
+			workersReport: Array<{
+				route: { id: string };
+				proofKit: { proofExit: string[] };
+				commandPalette: { passive: string[]; proof: string[]; negative: string[] };
+				techniqueHints: { domains: string[]; techniqueIds: string[] };
+			}>;
+			merge: {
+				evidencePriorityDoctrine: { EvidencePriorityDoctrineV1: boolean };
+				promotedClaims: Array<{
+					qualitySignals: { evidenceCount: number; hasCommand: boolean; strongestEvidenceClass: string };
+				}>;
+				proofReadyPromotedClaims: unknown[];
+				proofPromotionReady: boolean;
+				proofChecklists: Array<{
+					proofReady: boolean;
+					coverage: { passive: boolean; proofExit: boolean; negativeControls: boolean };
+					route: { id: string };
+					techniqueHints: { domains: string[]; techniqueIds: string[] };
+				}>;
+			};
 		};
 		expect(report.ok).toBe(true);
+		expect(report.plan.proofDoctrine.UniversalProofDoctrineV1).toBe(true);
+		expect(report.plan.proofDoctrine.order.join("\n")).toContain("passive map first");
+		expect(report.plan.evidencePriorityDoctrine.EvidencePriorityDoctrineV1).toBe(true);
+		expect(report.plan.evidencePriorityDoctrine.order.map((row) => row.class)).toContain("runtime-behavior");
+		expect(report.plan.capabilityMatrixDoctrine.CapabilityMatrixDoctrineV1).toBe(true);
+		expect(report.plan.capabilityMatrixDoctrine.gates.map((row) => row.gate)).toContain("negative-control");
+		expect(report.plan.workerPackets[0].proofKit.passive.length).toBeGreaterThan(0);
+		expect(report.plan.workerPackets[0].proofKit.proofExit.length).toBeGreaterThan(0);
+		expect(report.plan.workerPackets[0].proofKit.negativeControls.length).toBeGreaterThan(0);
+		expect(report.plan.workerPackets[0].commandPalette.passive.length).toBeGreaterThan(0);
+		expect(report.plan.workerPackets[0].commandPalette.proof.length).toBeGreaterThan(0);
+		expect(report.plan.workerPackets[0].commandPalette.negative.length).toBeGreaterThan(0);
+		expect(report.plan.workerPackets[0].techniqueHints.domains).toContain("exploit-reliability");
+		expect(report.plan.workerPackets[0].techniqueHints.techniqueIds).toContain("reliability-replay-matrix");
+		expect(report.workersReport[0].route.id).toBe("reverse-pentest-general");
+		expect(report.workersReport[0].proofKit.proofExit.length).toBeGreaterThan(0);
+		expect(report.workersReport[0].commandPalette.proof.length).toBeGreaterThan(0);
+		expect(report.workersReport[0].techniqueHints.techniqueIds).toContain("reliability-replay-matrix");
 		expect(report.merge.promotedClaims.length).toBe(1);
+		expect(report.merge.proofReadyPromotedClaims.length).toBe(1);
+		expect(report.merge.proofPromotionReady).toBe(true);
+		expect(report.merge.evidencePriorityDoctrine.EvidencePriorityDoctrineV1).toBe(true);
+		expect(report.merge.promotedClaims[0].qualitySignals.evidenceCount).toBeGreaterThan(0);
+		expect(report.merge.promotedClaims[0].qualitySignals.hasCommand).toBe(true);
+		expect(report.merge.promotedClaims[0].qualitySignals.strongestEvidenceClass).toBe("runtime-behavior");
+		expect(report.merge.proofChecklists[0].route.id).toBe("reverse-pentest-general");
+		expect(report.merge.proofChecklists[0].techniqueHints.domains).toContain("exploit-reliability");
+		expect(report.merge.proofChecklists[0].coverage).toMatchObject({
+			passive: true,
+			proofExit: true,
+			negativeControls: true,
+		});
+		expect(report.merge.proofChecklists[0].proofReady).toBe(true);
 
 		for (const name of [
 			"plan.json",
@@ -120,6 +181,410 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 			true,
 		);
 		expect(collectTmp(agentDir)).toEqual([]);
+	});
+
+	it("merges structured worker JSON when output exceeds the old tail-only preview", () => {
+		const claims = Array.from({ length: 24 }, (_, index) => ({
+			id: `claim-${index + 1}`,
+			statement: `mapped asset ${index + 1} with replayable evidence anchor`,
+			evidence: [
+				`curl replay ${index + 1} exited 0 and body hash sha256:${String(index + 1)
+					.padStart(2, "0")
+					.repeat(32)}`,
+				`negative control ${index + 1}: tampered replay rejected HTTP 403`,
+			],
+			confidence: 0.8,
+			blockers: [],
+		}));
+		const fakeRepiPath = join(fakeRoot, "repi");
+		writeFileSync(
+			fakeRepiPath,
+			`#!/usr/bin/env node\nconsole.log(JSON.stringify({workerId:"worker-1",role:"mapper",claims:${JSON.stringify(claims)},blockers:[],nextCommands:["node verify.js"]}, null, 2));\n`,
+		);
+		chmodSync(fakeRepiPath, 0o755);
+
+		const result = spawnSync(
+			process.execPath,
+			[
+				SWARM,
+				fakeRoot,
+				"run",
+				"./large-json-worker",
+				"--workers",
+				"1",
+				"--max-concurrency",
+				"1",
+				"--cwd",
+				workspace,
+				"--timeout-ms",
+				"5000",
+				"--json",
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			evidenceRoot: string;
+			merge: {
+				finalPromotionReady: boolean;
+				promotedClaims: unknown[];
+				proofReadyPromotedClaims: unknown[];
+				proofPromotionReady: boolean;
+				narrativeOnlyBlocked: boolean;
+				proofChecklists: Array<{ missing: string[]; proofReady: boolean }>;
+				nextCommands: string[];
+			};
+		};
+		const workerStdout = readFileSync(join(report.evidenceRoot, "worker-1.stdout.txt"), "utf8");
+		expect(workerStdout.length).toBeGreaterThan(4000);
+		expect(workerStdout.trim().startsWith("{")).toBe(true);
+		expect(report.merge.finalPromotionReady).toBe(true);
+		expect(report.merge.narrativeOnlyBlocked).toBe(false);
+		expect(report.merge.promotedClaims.length).toBe(claims.length);
+		expect(report.merge.proofReadyPromotedClaims.length).toBe(claims.length);
+		expect(report.merge.proofPromotionReady).toBe(true);
+		expect(report.merge.proofChecklists[0].proofReady).toBe(true);
+		expect(report.merge.proofChecklists[0].missing).toEqual([]);
+	});
+
+	it("harvests bounded worker artifact paths into the swarm evidence directory", () => {
+		const fakeRepiPath = join(fakeRoot, "repi");
+		writeFileSync(
+			fakeRepiPath,
+			`#!/usr/bin/env node\nconst fs=require("node:fs");\nconst path=require("node:path");\nconst artifact=path.join(process.env.REPI_CODING_AGENT_DIR, "worker-proof.txt");\nfs.writeFileSync(artifact, "signed replay accepted\\n");\nconsole.log(JSON.stringify({workerId:"worker-1",role:"mapper",claims:[{id:"claim-artifact",statement:"artifact was produced",evidence:[artifact,"negative control: missing artifact path rejected"],confidence:0.9,blockers:[]}],artifacts:[artifact],blockers:[],nextCommands:[]}, null, 2));\n`,
+		);
+		chmodSync(fakeRepiPath, 0o755);
+
+		const result = spawnSync(
+			process.execPath,
+			[
+				SWARM,
+				fakeRoot,
+				"run",
+				"./artifact-worker",
+				"--workers",
+				"1",
+				"--max-concurrency",
+				"1",
+				"--cwd",
+				workspace,
+				"--timeout-ms",
+				"5000",
+				"--json",
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			evidenceRoot: string;
+			workersReport: Array<{ harvestedArtifacts: Array<{ artifactPath: string; sha256: string }> }>;
+		};
+		const harvested = report.workersReport[0].harvestedArtifacts[0];
+		expect(harvested.artifactPath).toContain("worker-1-artifacts");
+		expect(existsSync(harvested.artifactPath)).toBe(true);
+		expect(statSync(harvested.artifactPath).mode & 0o777).toBe(0o600);
+		expect(readFileSync(harvested.artifactPath, "utf8")).toBe("signed replay accepted\n");
+		expect(existsSync(join(report.evidenceRoot, "worker-1-artifacts.json"))).toBe(true);
+		expect(harvested.sha256).toMatch(/^[a-f0-9]{64}$/);
+	});
+
+	it("extracts structured merge JSON after noisy brace-containing prose", () => {
+		const fakeRepiPath = join(fakeRoot, "repi");
+		writeFileSync(
+			fakeRepiPath,
+			`#!/usr/bin/env node\nconsole.log("analysis note with braces {not json} before final report");\nconsole.log(JSON.stringify({workerId:"worker-1",role:"mapper",claims:[{id:"claim-json",statement:"structured suffix parsed",evidence:["curl exited 0","negative control: bad token got HTTP 403"],confidence:0.9,blockers:[]}],blockers:[],nextCommands:["curl http://example.test"]}, null, 2));\n`,
+		);
+		chmodSync(fakeRepiPath, 0o755);
+
+		const result = spawnSync(
+			process.execPath,
+			[
+				SWARM,
+				fakeRoot,
+				"run",
+				"./noisy-json-worker",
+				"--workers",
+				"1",
+				"--max-concurrency",
+				"1",
+				"--cwd",
+				workspace,
+				"--timeout-ms",
+				"5000",
+				"--json",
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			merge: { finalPromotionReady: boolean; promotedClaims: Array<{ claimId: string }>; nextCommands: string[] };
+		};
+		expect(report.merge.finalPromotionReady).toBe(true);
+		expect(report.merge.promotedClaims[0].claimId).toBe("claim-json");
+		expect(report.merge.nextCommands).toContain("curl http://example.test");
+	});
+
+	it("downgrades claims contradicted by higher-priority counter-evidence", () => {
+		const fakeRepiPath = join(fakeRoot, "repi");
+		writeFileSync(
+			fakeRepiPath,
+			`#!/usr/bin/env node\nconsole.log(JSON.stringify({workerId:"worker-1",role:"verifier",claims:[{id:"source-only",statement:"README says admin endpoint is open",evidence:["README comment says admin endpoint is open"],confidence:0.95,blockers:[],conflicts:[{claimId:"source-only",evidenceClass:"network-traffic",evidence:"negative control: curl /admin returned HTTP 403 body hash sha256:${"ab".repeat(32)}",reason:"live HTTP replay contradicts README",nextCommand:"curl -i http://example.test/admin"}]},{id:"runtime-proof",statement:"authz check rejects invalid token",evidence:["curl /api with valid token exited 0 HTTP 200 body hash sha256:${"cd".repeat(32)}","negative control: invalid token returned HTTP 403"],confidence:0.9,blockers:[]}],blockers:[],nextCommands:[]}, null, 2));\n`,
+		);
+		chmodSync(fakeRepiPath, 0o755);
+
+		const result = spawnSync(
+			process.execPath,
+			[
+				SWARM,
+				fakeRoot,
+				"run",
+				"./conflict-worker",
+				"--workers",
+				"1",
+				"--max-concurrency",
+				"1",
+				"--cwd",
+				workspace,
+				"--timeout-ms",
+				"5000",
+				"--json",
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			merge: {
+				finalPromotionReady: boolean;
+				conflictRows: Array<{ claimId: string; evidenceClass: string; evidencePriorityRank: number }>;
+				claimRows: Array<{
+					claimId: string;
+					status: string;
+					qualitySignals: { strongestEvidenceClass: string; evidencePriorityRank: number };
+					conflictResolution: { status: string; strongestConflictClass: string; downgraded: boolean };
+				}>;
+				promotedClaims: Array<{ claimId: string }>;
+				nextCommands: string[];
+			};
+		};
+		const sourceClaim = report.merge.claimRows.find((claim) => claim.claimId === "source-only");
+		const runtimeClaim = report.merge.claimRows.find((claim) => claim.claimId === "runtime-proof");
+		expect(report.merge.finalPromotionReady).toBe(true);
+		expect(report.merge.conflictRows[0]).toMatchObject({
+			claimId: "source-only",
+			evidenceClass: "network-traffic",
+		});
+		expect(report.merge.conflictRows[0].evidencePriorityRank).toBeGreaterThan(
+			sourceClaim?.qualitySignals.evidencePriorityRank ?? 0,
+		);
+		expect(sourceClaim?.status).toBe("observation");
+		expect(sourceClaim?.conflictResolution).toMatchObject({
+			status: "downgraded_by_equal_or_stronger_counterevidence",
+			strongestConflictClass: "network-traffic",
+			downgraded: true,
+		});
+		expect(runtimeClaim?.status).toBe("promoted");
+		expect(runtimeClaim?.qualitySignals.strongestEvidenceClass).toBe("runtime-behavior");
+		expect(report.merge.promotedClaims.map((claim) => claim.claimId)).toEqual(["runtime-proof"]);
+		expect(report.merge.nextCommands).toContain("curl -i http://example.test/admin");
+	});
+
+	it("promotes claims backed by explicit evidenceItems", () => {
+		const fakeRepiPath = join(fakeRoot, "repi");
+		writeFileSync(
+			fakeRepiPath,
+			`#!/usr/bin/env node\nconsole.log(JSON.stringify({workerId:"worker-1",role:"verifier",claims:[{id:"evidence-item-only",statement:"runtime replay proof is recorded as a structured evidence item",evidence:[],confidence:0.88,blockers:[]}],evidenceItems:[{claimId:"evidence-item-only",class:"runtime-behavior",locator:"curl /api/proof exited 0 HTTP 200 body hash sha256:${"ef".repeat(32)}",summary:"negative control: tampered replay rejected HTTP 403"}],blockers:[],nextCommands:[]}, null, 2));\n`,
+		);
+		chmodSync(fakeRepiPath, 0o755);
+
+		const result = spawnSync(
+			process.execPath,
+			[
+				SWARM,
+				fakeRoot,
+				"run",
+				"./evidence-items-worker",
+				"--workers",
+				"1",
+				"--max-concurrency",
+				"1",
+				"--cwd",
+				workspace,
+				"--timeout-ms",
+				"5000",
+				"--json",
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			merge: {
+				evidenceItemRows: Array<{ claimId: string; evidenceClass: string; evidencePriorityRank: number }>;
+				claimRows: Array<{
+					claimId: string;
+					status: string;
+					evidenceItemIds: string[];
+					qualitySignals: {
+						evidenceItemCount: number;
+						strongestEvidenceClass: string;
+						hasNegativeControl: boolean;
+					};
+				}>;
+				proofChecklists: Array<{ proofReady: boolean }>;
+				promotedClaims: Array<{ claimId: string }>;
+			};
+		};
+		expect(report.merge.evidenceItemRows).toHaveLength(1);
+		expect(report.merge.evidenceItemRows[0]).toMatchObject({
+			claimId: "evidence-item-only",
+			evidenceClass: "runtime-behavior",
+		});
+		const claim = report.merge.claimRows[0];
+		expect(claim.status).toBe("promoted");
+		expect(claim.evidenceItemIds).toHaveLength(1);
+		expect(claim.qualitySignals.evidenceItemCount).toBe(1);
+		expect(claim.qualitySignals.strongestEvidenceClass).toBe("runtime-behavior");
+		expect(claim.qualitySignals.hasNegativeControl).toBe(true);
+		expect(report.merge.proofChecklists[0].proofReady).toBe(true);
+		expect(report.merge.promotedClaims.map((row) => row.claimId)).toEqual(["evidence-item-only"]);
+	});
+
+	it("applies cross-worker conflicts globally before promotion", () => {
+		const fakeRepiPath = join(fakeRoot, "repi");
+		writeFileSync(
+			fakeRepiPath,
+			`#!/usr/bin/env node\nconst prompt = process.argv[process.argv.length - 1] || "";\nif (/worker 2/.test(prompt)) {\n  console.log(JSON.stringify({workerId:"worker-2",role:"verifier",claims:[{id:"runtime-control",statement:"invalid token is rejected",evidence:["curl /api/proof exited 0 HTTP 200 body hash sha256:${"12".repeat(32)}","negative control: invalid token returned HTTP 403"],confidence:0.9,blockers:[]}],conflicts:[{claimId:"source-only",evidenceClass:"network-traffic",evidence:"curl /admin returned HTTP 403 body hash sha256:${"34".repeat(32)}",reason:"live replay contradicts source-only claim"}],blockers:[],nextCommands:[]}, null, 2));\n} else {\n  console.log(JSON.stringify({workerId:"worker-1",role:"mapper",claims:[{id:"source-only",statement:"source comment claims admin is open",evidence:["source comment says /admin is open"],confidence:0.9,blockers:[]}],blockers:[],nextCommands:[]}, null, 2));\n}\n`,
+		);
+		chmodSync(fakeRepiPath, 0o755);
+
+		const result = spawnSync(
+			process.execPath,
+			[
+				SWARM,
+				fakeRoot,
+				"run",
+				"./cross-worker-conflict",
+				"--workers",
+				"2",
+				"--max-concurrency",
+				"1",
+				"--cwd",
+				workspace,
+				"--timeout-ms",
+				"5000",
+				"--json",
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			merge: {
+				claimRows: Array<{
+					claimId: string;
+					status: string;
+					conflictResolution: { downgraded: boolean; strongestConflictClass: string };
+				}>;
+				promotedClaims: Array<{ claimId: string }>;
+				conflictRows: Array<{ claimId: string; workerId: number }>;
+			};
+		};
+		const sourceClaim = report.merge.claimRows.find((claim) => claim.claimId === "source-only");
+		expect(report.merge.conflictRows).toEqual([expect.objectContaining({ claimId: "source-only", workerId: 2 })]);
+		expect(sourceClaim?.status).toBe("observation");
+		expect(sourceClaim?.conflictResolution).toMatchObject({
+			downgraded: true,
+			strongestConflictClass: "network-traffic",
+		});
+		expect(report.merge.promotedClaims.map((claim) => claim.claimId)).toEqual(["runtime-control"]);
+	});
+
+	it("reports worker execution failure before narrative-only merge failure", () => {
+		const fakeRepiPath = join(fakeRoot, "repi");
+		writeFileSync(fakeRepiPath, "#!/usr/bin/env node\nconsole.error('worker boom');\nprocess.exit(2);\n");
+		chmodSync(fakeRepiPath, 0o755);
+
+		const result = spawnSync(
+			process.execPath,
+			[
+				SWARM,
+				fakeRoot,
+				"run",
+				"./failing-worker",
+				"--workers",
+				"1",
+				"--max-concurrency",
+				"1",
+				"--cwd",
+				workspace,
+				"--timeout-ms",
+				"5000",
+				"--json",
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+
+		expect(result.status).toBe(1);
+		const report = JSON.parse(result.stdout) as {
+			mergeFailureReason: string;
+			merge: { failedWorkers: Array<{ status: string }> };
+		};
+		expect(report.mergeFailureReason).toContain("workers failed");
+		expect(report.mergeFailureReason).not.toContain("narrative-only");
+		expect(report.merge.failedWorkers[0].status).toBe("fail");
 	});
 
 	it("honors --max-concurrency in llm-run mode instead of forcing workers-wide fanout", () => {
@@ -151,16 +616,165 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
 		const report = JSON.parse(result.stdout) as {
 			ok: boolean;
+			evidenceRoot: string;
 			workers: number;
 			maxConcurrency: number;
-			workersReport: unknown[];
-			plan: { maxConcurrency: number };
+			workersReport: Array<{
+				route: { id: string };
+				proofKit: { proofExit: string[] };
+				commandPalette: { proof: string[] };
+				techniqueHints: { domains: string[]; techniqueIds: string[] };
+			}>;
+			plan: {
+				maxConcurrency: number;
+				workerPackets: Array<{
+					route: { id: string };
+					proofKit: { proofExit: string[] };
+					commandPalette: { proof: string[] };
+					techniqueHints: { domains: string[]; techniqueIds: string[] };
+				}>;
+			};
 		};
 		expect(report.ok).toBe(true);
 		expect(report.workers).toBe(3);
 		expect(report.workersReport).toHaveLength(3);
 		expect(report.maxConcurrency).toBe(1);
 		expect(report.plan.maxConcurrency).toBe(1);
+		expect(report.plan.workerPackets[0].route.id).toBe("reverse-pentest-general");
+		expect(report.plan.workerPackets[0].proofKit.proofExit.length).toBeGreaterThan(0);
+		expect(report.plan.workerPackets[0].commandPalette.proof.length).toBeGreaterThan(0);
+		expect(report.plan.workerPackets[0].techniqueHints.techniqueIds).toContain("reliability-replay-matrix");
+		expect(report.workersReport[0].route.id).toBe("reverse-pentest-general");
+		expect(report.workersReport[0].proofKit.proofExit.length).toBeGreaterThan(0);
+		expect(report.workersReport[0].commandPalette.proof.length).toBeGreaterThan(0);
+		expect(report.workersReport[0].techniqueHints.domains).toContain("exploit-reliability");
+	});
+
+	it("preserves --route all and route placeholders in llm-run mode", () => {
+		const fakeRepiPath = join(fakeRoot, "repi");
+		writeFileSync(
+			fakeRepiPath,
+			`#!/usr/bin/env node\nconst prompt=process.argv.at(-1)||"";\nconsole.log(JSON.stringify({workerId:"fake",prompt}, null, 2));\n`,
+		);
+		chmodSync(fakeRepiPath, 0o755);
+
+		const result = spawnSync(
+			process.execPath,
+			[
+				SWARM,
+				fakeRoot,
+				"llm-run",
+				"full-spectrum audit",
+				"--route",
+				"all",
+				"--max-concurrency",
+				"4",
+				"--timeout-ms",
+				"5000",
+				"--json",
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 15_000,
+			},
+		);
+
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			ok: boolean;
+			evidenceRoot: string;
+			workers: number;
+			maxConcurrency: number;
+			plan: {
+				autoExpandedWorkers: boolean;
+				routeCandidates: Array<{ id: string }>;
+				workerPackets: Array<{ route: { id: string } }>;
+			};
+			workersReport: Array<{ route: { id: string }; stdoutTail: string }>;
+		};
+		const routeIds = [
+			"native-pwn",
+			"web-api",
+			"js-reverse",
+			"mobile",
+			"pcap-dfir",
+			"memory-forensics",
+			"firmware-iot",
+			"cloud-identity",
+			"windows-ad",
+			"malware",
+			"crypto-stego",
+			"agent-boundary",
+		];
+		expect(report.ok).toBe(true);
+		expect(report.workers).toBe(12);
+		expect(report.maxConcurrency).toBe(4);
+		expect(report.plan.autoExpandedWorkers).toBe(true);
+		expect(report.plan.routeCandidates.map((route) => route.id)).toEqual(routeIds);
+		expect(report.plan.workerPackets.map((packet) => packet.route.id)).toEqual(routeIds);
+		expect(report.workersReport.map((worker) => worker.route.id)).toEqual(routeIds);
+		const workerStdout = readFileSync(join(report.evidenceRoot, "worker-1.stdout.txt"), "utf8");
+		expect(workerStdout).toContain("Route: Native / Pwn");
+		expect(workerStdout).toContain("proofKit=");
+		expect(workerStdout).toContain("techniqueHints=");
+	});
+
+	it("wraps custom llm-run prompts with route context even without placeholders", () => {
+		const fakeRepiPath = join(fakeRoot, "repi");
+		writeFileSync(
+			fakeRepiPath,
+			`#!/usr/bin/env node\nconst prompt=process.argv.at(-1)||"";\nconsole.log(JSON.stringify({workerId:"fake",prompt}, null, 2));\n`,
+		);
+		chmodSync(fakeRepiPath, 0o755);
+
+		const result = spawnSync(
+			process.execPath,
+			[
+				SWARM,
+				fakeRoot,
+				"llm-run",
+				"https://example.test/api",
+				"--route",
+				"web-api",
+				"--workers",
+				"1",
+				"--max-concurrency",
+				"1",
+				"--prompt",
+				"Assess this target and return concise evidence.",
+				"--timeout-ms",
+				"5000",
+				"--json",
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 15_000,
+			},
+		);
+
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			evidenceRoot: string;
+			workersReport: Array<{ route: { id: string } }>;
+		};
+		expect(report.workersReport[0].route.id).toBe("web-api");
+		const workerStdout = readFileSync(join(report.evidenceRoot, "worker-1.stdout.txt"), "utf8");
+		expect(workerStdout).toContain("Route: Web / API (web-api)");
+		expect(workerStdout).toContain("Operator prompt");
+		expect(workerStdout).toContain("Assess this target and return concise evidence.");
+		expect(workerStdout).toContain("Route proof kit");
+		expect(workerStdout).toContain("Route command palette");
+		expect(workerStdout).toContain("Route technique hints");
+		expect(workerStdout).toContain("Capability matrix doctrine");
+		expect(workerStdout).toContain("Evidence priority doctrine");
 	});
 
 	it("does not mistake flag values for the swarm target", () => {
@@ -194,6 +808,444 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		});
 		expect(defaultTarget.status, `${defaultTarget.stderr}\n${defaultTarget.stdout}`).toBe(0);
 		expect((JSON.parse(defaultTarget.stdout) as { plan: { target: string } }).plan.target).toBe("local-selfcheck");
+	});
+
+	it("supports command-first direct invocation and routes specialist worker contracts", () => {
+		const result = spawnSync(
+			process.execPath,
+			[SWARM, "plan", "pwn ELF ret2libc heap primitive", "--workers=4", "--max-concurrency=2", "--json"],
+			{
+				cwd: fakeRoot,
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			plan: {
+				root: string;
+				route: { id: string; domain: string; workflow: string[] };
+				proofDoctrine: { claimGate: string };
+				workers: number;
+				maxConcurrency: number;
+				workerPackets: Array<{ role: string; objective: string; evidenceContract: string[]; mergeKeys: string[] }>;
+			};
+		};
+		expect(report.plan.root).toBe(fakeRoot);
+		expect(report.plan.proofDoctrine.claimGate).toContain("promoted claim");
+		expect(report.plan.route).toMatchObject({ id: "native-pwn", domain: "Native / Pwn" });
+		expect(report.plan.route.workflow).toContain("primitive/leak proof");
+		expect(report.plan.workers).toBe(4);
+		expect(report.plan.maxConcurrency).toBe(2);
+		expect(report.plan.workerPackets[0].evidenceContract).toContain("sha256/file/checksec");
+		expect(report.plan.workerPackets[2].objective).toContain("crash/leak/write primitive");
+		expect(report.plan.workerPackets[3].mergeKeys).toContain("flake");
+	});
+
+	it("uses an end-to-end solo contract for one-worker swarm runs unless roles are explicit", () => {
+		const solo = spawnSync(
+			process.execPath,
+			[SWARM, fakeRoot, "plan", "javascript signature reverse", "--workers", "1", "--json"],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+		expect(solo.status, `${solo.stderr}\n${solo.stdout}`).toBe(0);
+		const soloReport = JSON.parse(solo.stdout) as {
+			plan: {
+				workerPackets: Array<{
+					role: string;
+					objective: string;
+					evidenceContract: string[];
+					proofKit: { proofExit: string[]; negativeControls: string[] };
+				}>;
+			};
+		};
+		expect(soloReport.plan.workerPackets[0].role).toBe("solo");
+		expect(soloReport.plan.workerPackets[0].objective).toContain("完整处理");
+		expect(soloReport.plan.workerPackets[0].evidenceContract).toContain("negative control or counter-evidence");
+		expect(soloReport.plan.workerPackets[0].proofKit.proofExit.join("\n")).toContain("byte-for-byte");
+		expect(soloReport.plan.workerPackets[0].proofKit.negativeControls).toContain("missing signature");
+
+		const explicit = spawnSync(
+			process.execPath,
+			[SWARM, fakeRoot, "plan", "javascript signature reverse", "--workers", "1", "--roles", "mapper", "--json"],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+		expect(explicit.status, `${explicit.stderr}\n${explicit.stdout}`).toBe(0);
+		expect(
+			(JSON.parse(explicit.stdout) as { plan: { workerPackets: Array<{ role: string }> } }).plan.workerPackets[0]
+				.role,
+		).toBe("mapper");
+	});
+
+	it("spreads broad multi-domain tasks across matched route profiles", () => {
+		const result = spawnSync(
+			process.execPath,
+			[
+				SWARM,
+				fakeRoot,
+				"plan",
+				"pwn ELF plus JWT web API plus APK mobile plus PCAP traffic",
+				"--workers",
+				"4",
+				"--json",
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			plan: {
+				routeCoverage: { complete: boolean; uncoveredCount: number };
+				routeCandidates: Array<{
+					id: string;
+					proofKit: { passive: string[]; proofExit: string[]; negativeControls: string[] };
+				}>;
+				workerPackets: Array<{
+					route: { id: string; domain: string };
+					evidenceContract: string[];
+					proofKit: { passive: string[]; proofExit: string[]; negativeControls: string[] };
+				}>;
+			};
+		};
+		expect(report.plan.routeCandidates.map((route) => route.id)).toEqual(
+			expect.arrayContaining(["native-pwn", "web-api", "mobile", "pcap-dfir"]),
+		);
+		expect(report.plan.workerPackets.map((packet) => packet.route.id)).toEqual([
+			"native-pwn",
+			"web-api",
+			"mobile",
+			"pcap-dfir",
+		]);
+		expect(report.plan.workerPackets[0].evidenceContract).toContain("sha256/file/checksec");
+		expect(report.plan.workerPackets[0].proofKit.proofExit.join("\n")).toContain("cyclic offset");
+		expect(report.plan.workerPackets[1].route.domain).toBe("Web / API");
+		expect(report.plan.workerPackets[1].proofKit.negativeControls).toContain("anonymous vs authenticated");
+		expect(report.plan.routeCoverage).toMatchObject({ complete: true, uncoveredCount: 0 });
+	});
+
+	it("auto-expands worker count for broad multi-route tasks when --workers is omitted", () => {
+		const result = spawnSync(
+			process.execPath,
+			[SWARM, fakeRoot, "plan", "pwn ELF plus JWT web API plus APK mobile plus PCAP traffic", "--json"],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			plan: {
+				workers: number;
+				autoExpandedWorkers: boolean;
+				routeCandidates: Array<{ id: string }>;
+				workerPackets: Array<{ route: { id: string } }>;
+			};
+		};
+		expect(report.plan.autoExpandedWorkers).toBe(true);
+		expect(report.plan.workers).toBe(report.plan.routeCandidates.length);
+		expect(report.plan.workerPackets.map((packet) => packet.route.id)).toEqual(
+			report.plan.routeCandidates.map((route) => route.id),
+		);
+	});
+
+	it("surfaces uncovered route gaps and repair commands when explicit workers are insufficient", () => {
+		const result = spawnSync(
+			process.execPath,
+			[
+				SWARM,
+				fakeRoot,
+				"run",
+				"pwn ELF plus JWT web API plus APK mobile plus PCAP traffic",
+				"--workers",
+				"2",
+				"--max-concurrency",
+				"1",
+				"--provider",
+				"kimchi",
+				"--model",
+				"kimi-k2.7",
+				"--cwd",
+				workspace,
+				"--timeout-ms",
+				"5000",
+				"--json",
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(1);
+		const report = JSON.parse(result.stdout) as {
+			mergeFailureReason: string;
+			plan: { routeCoverage: { complete: boolean; uncovered: Array<{ id: string }>; uncoveredCount: number } };
+			merge: {
+				routeCoverage: { complete: boolean; uncovered: Array<{ id: string }>; uncoveredCount: number };
+				nextCommands: string[];
+			};
+		};
+		expect(report.plan.routeCoverage.complete).toBe(false);
+		expect(report.mergeFailureReason).toContain("route coverage incomplete");
+		expect(report.plan.routeCoverage.uncovered.map((route) => route.id)).toEqual(["mobile", "pcap-dfir"]);
+		expect(report.merge.routeCoverage.uncoveredCount).toBe(2);
+		expect(report.merge.nextCommands.some((command) => command.includes("--route 'mobile'"))).toBe(true);
+		expect(report.merge.nextCommands.some((command) => command.includes("--route 'pcap-dfir'"))).toBe(true);
+		const repairCommands = report.merge.nextCommands.filter((command) =>
+			command.includes("Cover previously unassigned route"),
+		);
+		expect(repairCommands.length).toBe(2);
+		expect(repairCommands.every((command) => command.includes("--provider 'kimchi'"))).toBe(true);
+		expect(repairCommands.every((command) => command.includes("--model 'kimi-k2.7'"))).toBe(true);
+		expect(repairCommands.every((command) => command.includes(`--cwd '${workspace}'`))).toBe(true);
+	});
+
+	it("turns cross-route worker handoffs into provider-preserving repair commands", () => {
+		const fakeRepiPath = join(fakeRoot, "repi");
+		writeFileSync(
+			fakeRepiPath,
+			`#!/usr/bin/env node\nconsole.log(JSON.stringify({workerId:"worker-1",role:"mapper",claims:[{id:"claim-handoff",statement:"fallback map found a JWT API edge",evidence:["curl http://example.test/api exited 200","negative control: invalid JWT returned HTTP 403"],confidence:0.9,blockers:[]}],handoffs:[{route:"web-api",reason:"JWT endpoint and object id require authz matrix",evidence:"/api/user/42 accepted bearer token",nextCommand:"curl -kisS http://example.test/api/user/42"}],blockers:[],nextCommands:[]}, null, 2));\n`,
+		);
+		chmodSync(fakeRepiPath, 0o755);
+
+		const result = spawnSync(
+			process.execPath,
+			[
+				SWARM,
+				fakeRoot,
+				"run",
+				"./handoff",
+				"--workers",
+				"1",
+				"--max-concurrency",
+				"1",
+				"--provider",
+				"kimchi",
+				"--model",
+				"kimi-k2.7",
+				"--cwd",
+				workspace,
+				"--timeout-ms",
+				"5000",
+				"--json",
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			merge: {
+				routeHandoffs: Array<{ route: { id: string }; reason: string; nextCommand: string }>;
+				nextCommands: string[];
+			};
+		};
+		expect(report.merge.routeHandoffs[0].route.id).toBe("web-api");
+		expect(report.merge.routeHandoffs[0].reason).toContain("authz matrix");
+		expect(report.merge.nextCommands).toContain("curl -kisS http://example.test/api/user/42");
+		const handoffCommand = report.merge.nextCommands.find((command) =>
+			command.includes("Follow cross-route handoff"),
+		);
+		expect(handoffCommand).toContain("--route 'web-api'");
+		expect(handoffCommand).toContain("--provider 'kimchi'");
+		expect(handoffCommand).toContain("--model 'kimi-k2.7'");
+		expect(handoffCommand).toContain(`--cwd '${workspace}'`);
+		expect(handoffCommand).toContain("Use this proof kit");
+	});
+
+	it("supports explicit route forcing for focused repair runs", () => {
+		const result = spawnSync(
+			process.execPath,
+			[SWARM, fakeRoot, "plan", "broad target text", "--route", "mobile,pcap-dfir", "--workers", "2", "--json"],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			plan: {
+				routeCandidates: Array<{ id: string }>;
+				workerPackets: Array<{ route: { id: string } }>;
+				routeCoverage: { complete: boolean };
+			};
+		};
+		expect(report.plan.routeCandidates.map((route) => route.id)).toEqual(["mobile", "pcap-dfir"]);
+		expect(report.plan.workerPackets.map((packet) => packet.route.id)).toEqual(["mobile", "pcap-dfir"]);
+		expect(report.plan.routeCoverage.complete).toBe(true);
+	});
+
+	it("supports --route all as a full-spectrum capability entrypoint", () => {
+		const result = spawnSync(
+			process.execPath,
+			[SWARM, fakeRoot, "plan", "full-spectrum audit", "--route", "all", "--json"],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			plan: {
+				workers: number;
+				autoExpandedWorkers: boolean;
+				routeCandidates: Array<{ id: string }>;
+				workerPackets: Array<{ route: { id: string } }>;
+				routeCoverage: { complete: boolean; uncoveredCount: number };
+			};
+		};
+		expect(report.plan.autoExpandedWorkers).toBe(true);
+		expect(report.plan.routeCandidates).toHaveLength(12);
+		expect(report.plan.workers).toBe(12);
+		expect(report.plan.workerPackets.map((packet) => packet.route.id)).toEqual(
+			report.plan.routeCandidates.map((route) => route.id),
+		);
+		expect(report.plan.routeCoverage).toMatchObject({ complete: true, uncoveredCount: 0 });
+	});
+
+	it("attaches proof kits across the full reverse/pentest route catalog", () => {
+		const result = spawnSync(
+			process.execPath,
+			[
+				SWARM,
+				fakeRoot,
+				"plan",
+				"pwn ELF web API javascript webpack APK PCAP memory dump firmware AWS Active Directory malware crypto prompt injection",
+				"--workers",
+				"12",
+				"--json",
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			plan: {
+				routeCandidates: Array<{
+					id: string;
+					proofKit: { passive: string[]; proofExit: string[]; negativeControls: string[] };
+					commandPalette: { passive: string[]; proof: string[]; negative: string[] };
+					techniqueHints: { domains: string[]; techniqueIds: string[] };
+				}>;
+				workerPackets: Array<{
+					route: { id: string };
+					proofKit: { passive: string[]; proofExit: string[]; negativeControls: string[] };
+					commandPalette: { passive: string[]; proof: string[]; negative: string[] };
+					techniqueHints: { domains: string[]; techniqueIds: string[] };
+				}>;
+			};
+		};
+		const routeIds = report.plan.routeCandidates.map((route) => route.id);
+		expect(routeIds).toEqual(
+			expect.arrayContaining([
+				"native-pwn",
+				"web-api",
+				"js-reverse",
+				"mobile",
+				"pcap-dfir",
+				"memory-forensics",
+				"firmware-iot",
+				"cloud-identity",
+				"windows-ad",
+				"malware",
+				"crypto-stego",
+				"agent-boundary",
+			]),
+		);
+		for (const route of report.plan.routeCandidates) {
+			expect(route.proofKit.passive.length, `${route.id} passive`).toBeGreaterThan(0);
+			expect(route.proofKit.proofExit.length, `${route.id} proofExit`).toBeGreaterThan(0);
+			expect(route.proofKit.negativeControls.length, `${route.id} negativeControls`).toBeGreaterThan(0);
+			expect(route.commandPalette.passive.length, `${route.id} passive commands`).toBeGreaterThan(0);
+			expect(route.commandPalette.proof.length, `${route.id} proof commands`).toBeGreaterThan(0);
+			expect(route.commandPalette.negative.length, `${route.id} negative commands`).toBeGreaterThan(0);
+			expect(route.techniqueHints.domains.length, `${route.id} technique domains`).toBeGreaterThan(0);
+			expect(route.techniqueHints.techniqueIds.length, `${route.id} technique ids`).toBeGreaterThan(0);
+		}
+		for (const packet of report.plan.workerPackets) {
+			expect(packet.commandPalette.passive.length, `${packet.route.id} worker passive commands`).toBeGreaterThan(0);
+			expect(packet.commandPalette.proof.length, `${packet.route.id} worker proof commands`).toBeGreaterThan(0);
+			expect(packet.commandPalette.negative.length, `${packet.route.id} worker negative commands`).toBeGreaterThan(
+				0,
+			);
+			expect(packet.techniqueHints.domains.length, `${packet.route.id} worker technique domains`).toBeGreaterThan(0);
+			expect(packet.techniqueHints.techniqueIds.length, `${packet.route.id} worker technique ids`).toBeGreaterThan(
+				0,
+			);
+		}
+		expect(new Set(report.plan.workerPackets.map((packet) => packet.route.id)).size).toBeGreaterThanOrEqual(10);
+	});
+
+	it("redacts secret-like swarm targets from plan packets and prompts", () => {
+		const jwt = "eyJaaaaaaaaaaa.bbbbbbbbbbbb.cccccccccccc";
+		const result = spawnSync(
+			process.execPath,
+			[SWARM, fakeRoot, "plan", `--target=${jwt}`, "--workers", "1", "--json"],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const serialized = JSON.stringify(JSON.parse(result.stdout));
+		expect(serialized).not.toContain(jwt);
+		expect(serialized).toContain("<redacted:jwt>");
 	});
 
 	it("reports worker profile preparation failures as structured worker failures", () => {

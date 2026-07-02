@@ -9,8 +9,15 @@ const dryRun = process.argv.includes("--dry-run");
 const json = process.argv.includes("--json");
 // opt #273: --cwd <dir> scopes consolidation to a specific project's memory.
 function valueAfterFlag(args, flag) {
-	const index = args.indexOf(flag);
-	return index >= 0 && index + 1 < args.length ? args[index + 1] : undefined;
+	for (let index = 0; index < args.length; index++) {
+		const arg = args[index];
+		if (arg === flag) {
+			const next = args[index + 1];
+			return next && !next.startsWith("--") ? next : undefined;
+		}
+		if (arg.startsWith(`${flag}=`)) return arg.slice(flag.length + 1);
+	}
+	return undefined;
 }
 const cwdScope = valueAfterFlag(process.argv.slice(2), "--cwd");
 const agentDir = process.env.REPI_CODING_AGENT_DIR || process.env.REPI_AGENT_DIR || join(homedir(), ".repi", "agent");

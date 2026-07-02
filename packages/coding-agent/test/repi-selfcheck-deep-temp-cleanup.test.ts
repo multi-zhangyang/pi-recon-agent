@@ -42,6 +42,35 @@ if (parallel) {
 }
 `;
 
+const FAKE_REPI_MEMORY_SECRET_WARN = String.raw`#!/usr/bin/env node
+const args = process.argv.slice(2).join(" ");
+const parallel = args.match(/REPI_PARALLEL_WORKER_(\d+)_OK/);
+if (parallel) {
+	console.log(parallel[0]);
+} else if (args.includes("model list")) {
+	console.log("repi-model-list-report");
+} else if (args.includes("memory doctor")) {
+	console.log(JSON.stringify({
+		kind: "repi-memory-doctor-report",
+		ok: false,
+		diagnostics: [{ level: "fail", id: "memory-secret-scan", message: "local memory needs sanitize" }]
+	}));
+	process.exit(1);
+} else if (args.includes("bugreport")) {
+	console.log("repi-bugreport");
+} else if (args.includes("swarm plan")) {
+	console.log("SwarmPlannerV1");
+} else if (args.includes("REPI_MODEL_OK")) {
+	console.log("REPI_MODEL_OK");
+} else if (args.includes("REPI_TOOL_OK")) {
+	console.log("REPI_TOOL_OK");
+} else if (args.includes("YES or NO")) {
+	console.log("NO");
+} else {
+	console.log("ok");
+}
+`;
+
 describe("repi-selfcheck --deep temporary profile cleanup", () => {
 	let tempRoot: string;
 
@@ -83,5 +112,65 @@ describe("repi-selfcheck --deep temporary profile cleanup", () => {
 		const report = JSON.parse(result.stdout) as { ok: boolean };
 		expect(report.ok).toBe(true);
 		expect(readdirSync(fakeTmp).filter((name) => name.startsWith("repi-selfcheck-"))).toEqual([]);
+	});
+
+	it("downgrades existing memory secret-scan drift to a selfcheck warning unless strict memory is requested", () => {
+		const fakeRepo = join(tempRoot, "repo");
+		const sourceAgentDir = join(tempRoot, "source-agent");
+		mkdirSync(join(fakeRepo, "packages", "coding-agent", "src", "core"), { recursive: true });
+		mkdirSync(sourceAgentDir, { recursive: true });
+		writeFileSync(
+			join(fakeRepo, "packages", "coding-agent", "src", "core", "recon-profile.ts"),
+			RECON_PROFILE_MARKERS,
+		);
+		const fakeRepiPath = join(fakeRepo, "repi");
+		writeFileSync(fakeRepiPath, FAKE_REPI_MEMORY_SECRET_WARN);
+		chmodSync(fakeRepiPath, 0o755);
+
+		const result = spawnSync(
+			process.execPath,
+			[SELFCHECK, fakeRepo, "--provider=kimchi", "--model=kimi-k2.7", "--json", "--timeout-ms=1000"],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: sourceAgentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			ok: boolean;
+			provider: string;
+			model: string;
+			warnings: Array<{ id: string; severity: string; warning: string }>;
+			rows: Array<{ id: string; ok: boolean; severity?: string; warning?: string }>;
+		};
+		expect(report.ok).toBe(true);
+		expect(report.provider).toBe("kimchi");
+		expect(report.model).toBe("kimi-k2.7");
+		expect(report.rows.find((row) => row.id === "memory-doctor")).toMatchObject({
+			ok: true,
+			severity: "warn",
+			warning: "memory-secret-scan",
+		});
+		expect(report.warnings).toHaveLength(1);
+
+		const strict = spawnSync(
+			process.execPath,
+			[SELFCHECK, fakeRepo, "--strict-memory", "--json", "--timeout-ms=1000"],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: sourceAgentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+		expect(strict.status).toBe(1);
+		expect((JSON.parse(strict.stdout) as { ok: boolean }).ok).toBe(false);
 	});
 });

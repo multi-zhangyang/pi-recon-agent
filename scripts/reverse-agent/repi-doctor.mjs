@@ -24,6 +24,11 @@ const fix = args.includes("--fix");
 const agentDir = process.env.REPI_CODING_AGENT_DIR || process.env.REPI_AGENT_DIR || join(homedir(), ".repi", "agent");
 const repiBin = process.env.REPI_BIN_PATH || join(root, "repi");
 const runtimeMemory = join(agentDir, "recon", "memory");
+const probeTimeoutMs = (() => {
+	const raw = process.env.REPI_DOCTOR_PROBE_TIMEOUT_MS;
+	const value = Number(raw);
+	return Number.isFinite(value) && value >= 1000 ? Math.floor(value) : 45_000;
+})();
 const packageBinMode = process.env.REPI_PACKAGE_BIN === "1";
 const installedRepi = process.env.REPI_INSTALLED_BIN_PATH || (existsSync(join(root, "repi")) ? join(root, "repi") : "/usr/local/bin/repi");
 const localScriptsDir = dirname(fileURLToPath(import.meta.url));
@@ -66,6 +71,7 @@ function redactText(value) {
 }
 
 function run(cmd, args, options = {}) {
+	const timeoutMs = options.timeout ?? 20_000;
 	const result = spawnSync(cmd, args, {
 		cwd: root,
 		env: {
@@ -76,16 +82,21 @@ function run(cmd, args, options = {}) {
 			REPI_TELEMETRY: "0",
 		},
 		encoding: "utf8",
-		timeout: options.timeout ?? 20_000,
+		timeout: timeoutMs,
 		maxBuffer: 2 * 1024 * 1024,
 	});
 	const stdout = redactText(result.stdout ?? "");
 	const stderr = redactText(result.stderr ?? "");
+	const errorMessage = result.error ? redactText(String(result.error.message || result.error)) : undefined;
+	const timedOut = Boolean(result.error && String(result.error.message || result.error).includes("ETIMEDOUT"));
 	return {
-		code: result.status ?? 1,
+		code: result.status ?? (result.signal === "SIGTERM" ? 143 : result.signal === "SIGKILL" ? 137 : 1),
 		stdout,
 		stderr,
-		error: result.error ? redactText(String(result.error.message || result.error)) : undefined,
+		error: errorMessage,
+		signal: result.signal ?? undefined,
+		timedOut,
+		timeoutMs,
 	};
 }
 
@@ -321,8 +332,8 @@ if (fix) {
 const settings = readJson(join(agentDir, "settings.json"));
 const memory = settings?.memory ?? {};
 const models = readJson(join(agentDir, "models.json"));
-const help = existsSync(repiBin) ? run(repiBin, ["--offline", "--help"], { timeout: 20_000 }) : { code: 1, stdout: "", stderr: "missing repi" };
-const listModels = existsSync(repiBin) ? run(repiBin, ["--offline", "--list-models"], { timeout: 25_000 }) : { code: 1, stdout: "", stderr: "missing repi" };
+const help = existsSync(repiBin) ? run(repiBin, ["--offline", "--help"], { timeout: probeTimeoutMs }) : { code: 1, stdout: "", stderr: "missing repi", timedOut: false };
+const listModels = existsSync(repiBin) ? run(repiBin, ["--offline", "--list-models"], { timeout: probeTimeoutMs }) : { code: 1, stdout: "", stderr: "missing repi", timedOut: false };
 const helpText = `${help.stdout}\n${help.stderr}`;
 const globalRepi = pathEntry(installedRepi);
 const localRepi = pathEntry(repiBin);
@@ -334,6 +345,7 @@ const guardrailMarkers = [
 	"REPI_PRINT_PROGRESS",
 	"REPI_PRINT_TIMEOUT_MS",
 	"REPI_PRINT_TIMEOUT_GRACE_MS",
+	"REPI_PRINT_TIMEOUT_TOOL_GRACE_MS",
 	"REPI_PRINT_MAX_TURNS",
 	"REPI_PRINT_MAX_TOOL_CALLS",
 	"REPI_STDIN_READ_TIMEOUT_MS",
@@ -402,7 +414,12 @@ const checks = [
 	),
 	check("models:parse", listModels.code === 0, `exit=${listModels.code} stdout=${listModels.stdout.slice(0, 120).replace(/\s+/g, " ")} stderr=${listModels.stderr.slice(0, 120).replace(/\s+/g, " ")}`, "fix ~/.repi/agent/models.json"),
 	check("models:config-present", Boolean(models) || listModels.code === 0, `modelsJson=${Boolean(models)} listModelsExit=${listModels.code}`, "configure ~/.repi/agent/models.json if no provider exists"),
-	check("cli:help", help.code === 0 && /REPI reverse\/pentest/.test(helpText), `exit=${help.code}`, "run npm install && npm run install:repi"),
+	check(
+		"cli:help",
+		help.code === 0 && /REPI reverse\/pentest/.test(helpText),
+		`exit=${help.code} timeoutMs=${help.timeoutMs ?? probeTimeoutMs}${help.signal ? ` signal=${help.signal}` : ""}${help.timedOut ? " timedOut=true" : ""}`,
+		"run npm install && npm run install:repi",
+	),
 	check(
 		"runtime:long-run-guardrails-help",
 		missingHelpGuardrails.length === 0,

@@ -26,6 +26,7 @@ describe("repi doctor redaction", () => {
 				"REPI_PRINT_PROGRESS",
 				"REPI_PRINT_TIMEOUT_MS",
 				"REPI_PRINT_TIMEOUT_GRACE_MS",
+				"REPI_PRINT_TIMEOUT_TOOL_GRACE_MS",
 				"REPI_PRINT_MAX_TURNS",
 				"REPI_PRINT_MAX_TOOL_CALLS",
 				"REPI_STDIN_READ_TIMEOUT_MS",
@@ -38,7 +39,7 @@ describe("repi doctor redaction", () => {
 			`#!/usr/bin/env node
 const args = process.argv.slice(2).join(" ");
 if (args.includes("--help")) {
-  console.log("REPI reverse/pentest --offline REPI_SKIP_VERSION_CHECK REPI_PRINT_PROGRESS REPI_PRINT_TIMEOUT_MS REPI_PRINT_TIMEOUT_GRACE_MS REPI_PRINT_MAX_TURNS REPI_PRINT_MAX_TOOL_CALLS REPI_STDIN_READ_TIMEOUT_MS REPI_BASH_DEFAULT_TIMEOUT_SECONDS");
+  console.log("REPI reverse/pentest --offline REPI_SKIP_VERSION_CHECK REPI_PRINT_PROGRESS REPI_PRINT_TIMEOUT_MS REPI_PRINT_TIMEOUT_GRACE_MS REPI_PRINT_TIMEOUT_TOOL_GRACE_MS REPI_PRINT_MAX_TURNS REPI_PRINT_MAX_TOOL_CALLS REPI_STDIN_READ_TIMEOUT_MS REPI_BASH_DEFAULT_TIMEOUT_SECONDS");
   process.exit(0);
 }
 if (args.includes("--list-models")) {
