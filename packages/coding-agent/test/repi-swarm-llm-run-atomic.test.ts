@@ -106,6 +106,7 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 				workerPackets: Array<{
 					proofKit: { passive: string[]; proofExit: string[]; negativeControls: string[] };
 					commandPalette: { passive: string[]; proof: string[]; negative: string[] };
+					toolProbeCommand: string;
 					techniqueHints: { domains: string[]; techniqueIds: string[] };
 				}>;
 			};
@@ -113,6 +114,7 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 				route: { id: string };
 				proofKit: { proofExit: string[] };
 				commandPalette: { passive: string[]; proof: string[]; negative: string[] };
+				toolProbeCommand: string;
 				techniqueHints: { domains: string[]; techniqueIds: string[] };
 			}>;
 			merge: {
@@ -126,6 +128,7 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 					proofReady: boolean;
 					coverage: { passive: boolean; proofExit: boolean; negativeControls: boolean };
 					route: { id: string };
+					toolProbeCommand: string;
 					techniqueHints: { domains: string[]; techniqueIds: string[] };
 				}>;
 			};
@@ -143,11 +146,13 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		expect(report.plan.workerPackets[0].commandPalette.passive.length).toBeGreaterThan(0);
 		expect(report.plan.workerPackets[0].commandPalette.proof.length).toBeGreaterThan(0);
 		expect(report.plan.workerPackets[0].commandPalette.negative.length).toBeGreaterThan(0);
+		expect(report.plan.workerPackets[0].toolProbeCommand).toContain("command -v");
 		expect(report.plan.workerPackets[0].techniqueHints.domains).toContain("exploit-reliability");
 		expect(report.plan.workerPackets[0].techniqueHints.techniqueIds).toContain("reliability-replay-matrix");
 		expect(report.workersReport[0].route.id).toBe("reverse-pentest-general");
 		expect(report.workersReport[0].proofKit.proofExit.length).toBeGreaterThan(0);
 		expect(report.workersReport[0].commandPalette.proof.length).toBeGreaterThan(0);
+		expect(report.workersReport[0].toolProbeCommand).toContain("tool:");
 		expect(report.workersReport[0].techniqueHints.techniqueIds).toContain("reliability-replay-matrix");
 		expect(report.merge.promotedClaims.length).toBe(1);
 		expect(report.merge.proofReadyPromotedClaims.length).toBe(1);
@@ -157,6 +162,7 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		expect(report.merge.promotedClaims[0].qualitySignals.hasCommand).toBe(true);
 		expect(report.merge.promotedClaims[0].qualitySignals.strongestEvidenceClass).toBe("runtime-behavior");
 		expect(report.merge.proofChecklists[0].route.id).toBe("reverse-pentest-general");
+		expect(report.merge.proofChecklists[0].toolProbeCommand).toContain("command -v");
 		expect(report.merge.proofChecklists[0].techniqueHints.domains).toContain("exploit-reliability");
 		expect(report.merge.proofChecklists[0].coverage).toMatchObject({
 			passive: true,
@@ -488,6 +494,74 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		expect(report.merge.promotedClaims.map((row) => row.claimId)).toEqual(["evidence-item-only"]);
 	});
 
+	it("recognizes multilingual and lane-specific evidence signals across reverse domains", () => {
+		const fakeRepiPath = join(fakeRoot, "repi");
+		writeFileSync(
+			fakeRepiPath,
+			`#!/usr/bin/env node\nconsole.log(JSON.stringify({workerId:"worker-1",role:"solo",claims:[{id:"mobile-cn-proof",statement:"移动端签名重放路径已验证",evidence:["jadx -d /tmp/repi-apk-out app.apk 生成证据文件 sha256:${"9a".repeat(32)}","负控制：错误签名重放被拒绝，未进入授权路径"],confidence:0.9,blockers:[]}],evidenceItems:[{claimId:"mobile-cn-proof",class:"runtime-behavior",locator:"frida -U -f com.example.app -l hook.js",summary:"反证：禁用 hook 后请求失败"}],blockers:[],nextCommands:["jadx -d /tmp/repi-apk-out app.apk"]}, null, 2));\n`,
+		);
+		chmodSync(fakeRepiPath, 0o755);
+
+		const result = spawnSync(
+			process.execPath,
+			[
+				SWARM,
+				fakeRoot,
+				"run",
+				"./app.apk",
+				"--route",
+				"mobile",
+				"--workers",
+				"1",
+				"--max-concurrency",
+				"1",
+				"--cwd",
+				workspace,
+				"--timeout-ms",
+				"5000",
+				"--json",
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			merge: {
+				finalPromotionReady: boolean;
+				routeProofReady: boolean;
+				claimRows: Array<{
+					claimId: string;
+					qualitySignals: {
+						hasCommand: boolean;
+						hasNegativeControl: boolean;
+						strongestEvidenceClass: string;
+					};
+				}>;
+				proofChecklists: Array<{
+					proofReady: boolean;
+					coverage: { passive: boolean; proofExit: boolean; negativeControls: boolean };
+				}>;
+			};
+		};
+		expect(report.merge.finalPromotionReady).toBe(true);
+		expect(report.merge.routeProofReady).toBe(true);
+		expect(report.merge.claimRows[0].qualitySignals).toMatchObject({
+			hasCommand: true,
+			hasNegativeControl: true,
+			strongestEvidenceClass: "runtime-behavior",
+		});
+		expect(report.merge.proofChecklists[0]).toMatchObject({
+			proofReady: true,
+			coverage: { passive: true, proofExit: true, negativeControls: true },
+		});
+	});
+
 	it("applies cross-worker conflicts globally before promotion", () => {
 		const fakeRepiPath = join(fakeRoot, "repi");
 		writeFileSync(
@@ -623,6 +697,7 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 				route: { id: string };
 				proofKit: { proofExit: string[] };
 				commandPalette: { proof: string[] };
+				toolProbeCommand: string;
 				techniqueHints: { domains: string[]; techniqueIds: string[] };
 			}>;
 			plan: {
@@ -631,6 +706,7 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 					route: { id: string };
 					proofKit: { proofExit: string[] };
 					commandPalette: { proof: string[] };
+					toolProbeCommand: string;
 					techniqueHints: { domains: string[]; techniqueIds: string[] };
 				}>;
 			};
@@ -643,10 +719,12 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		expect(report.plan.workerPackets[0].route.id).toBe("reverse-pentest-general");
 		expect(report.plan.workerPackets[0].proofKit.proofExit.length).toBeGreaterThan(0);
 		expect(report.plan.workerPackets[0].commandPalette.proof.length).toBeGreaterThan(0);
+		expect(report.plan.workerPackets[0].toolProbeCommand).toContain("command -v");
 		expect(report.plan.workerPackets[0].techniqueHints.techniqueIds).toContain("reliability-replay-matrix");
 		expect(report.workersReport[0].route.id).toBe("reverse-pentest-general");
 		expect(report.workersReport[0].proofKit.proofExit.length).toBeGreaterThan(0);
 		expect(report.workersReport[0].commandPalette.proof.length).toBeGreaterThan(0);
+		expect(report.workersReport[0].toolProbeCommand).toContain("python3");
 		expect(report.workersReport[0].techniqueHints.domains).toContain("exploit-reliability");
 	});
 
@@ -718,9 +796,14 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		expect(report.plan.workerPackets.map((packet) => packet.route.id)).toEqual(routeIds);
 		expect(report.workersReport.map((worker) => worker.route.id)).toEqual(routeIds);
 		const workerStdout = readFileSync(join(report.evidenceRoot, "worker-1.stdout.txt"), "utf8");
-		expect(workerStdout).toContain("Route: Native / Pwn");
-		expect(workerStdout).toContain("proofKit=");
-		expect(workerStdout).toContain("techniqueHints=");
+		const workerPrompt = (JSON.parse(workerStdout) as { prompt: string }).prompt;
+		expect(workerPrompt).toContain("Route: Native / Pwn");
+		expect(workerPrompt).toContain("proofKit=");
+		expect(workerPrompt).toContain("Route tool probe command");
+		const toolProbeLine = workerPrompt.split("\n").find((line) => line.startsWith("for t in"));
+		expect(toolProbeLine).toContain("command -v");
+		expect(toolProbeLine).not.toContain("'PY'");
+		expect(workerPrompt).toContain("techniqueHints=");
 	});
 
 	it("wraps custom llm-run prompts with route context even without placeholders", () => {
@@ -772,6 +855,7 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		expect(workerStdout).toContain("Assess this target and return concise evidence.");
 		expect(workerStdout).toContain("Route proof kit");
 		expect(workerStdout).toContain("Route command palette");
+		expect(workerStdout).toContain("Route tool probe command");
 		expect(workerStdout).toContain("Route technique hints");
 		expect(workerStdout).toContain("Capability matrix doctrine");
 		expect(workerStdout).toContain("Evidence priority doctrine");
@@ -1061,6 +1145,7 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 				workspace,
 				"--timeout-ms",
 				"5000",
+				"--no-tools",
 				"--json",
 			],
 			{
@@ -1111,6 +1196,7 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		expect(repairCommand).toContain("--provider 'kimchi'");
 		expect(repairCommand).toContain("--model 'kimi-k2.7'");
 		expect(repairCommand).toContain(`--cwd '${workspace}'`);
+		expect(repairCommand).toContain("--no-tools");
 	});
 
 	it("turns cross-route worker handoffs into provider-preserving repair commands", () => {
@@ -1257,12 +1343,14 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 					id: string;
 					proofKit: { passive: string[]; proofExit: string[]; negativeControls: string[] };
 					commandPalette: { passive: string[]; proof: string[]; negative: string[] };
+					toolProbeCommand: string;
 					techniqueHints: { domains: string[]; techniqueIds: string[] };
 				}>;
 				workerPackets: Array<{
 					route: { id: string };
 					proofKit: { passive: string[]; proofExit: string[]; negativeControls: string[] };
 					commandPalette: { passive: string[]; proof: string[]; negative: string[] };
+					toolProbeCommand: string;
 					techniqueHints: { domains: string[]; techniqueIds: string[] };
 				}>;
 			};
@@ -1291,6 +1379,7 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 			expect(route.commandPalette.passive.length, `${route.id} passive commands`).toBeGreaterThan(0);
 			expect(route.commandPalette.proof.length, `${route.id} proof commands`).toBeGreaterThan(0);
 			expect(route.commandPalette.negative.length, `${route.id} negative commands`).toBeGreaterThan(0);
+			expect(route.toolProbeCommand, `${route.id} tool probe`).toContain("command -v");
 			expect(route.techniqueHints.domains.length, `${route.id} technique domains`).toBeGreaterThan(0);
 			expect(route.techniqueHints.techniqueIds.length, `${route.id} technique ids`).toBeGreaterThan(0);
 		}
@@ -1300,6 +1389,7 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 			expect(packet.commandPalette.negative.length, `${packet.route.id} worker negative commands`).toBeGreaterThan(
 				0,
 			);
+			expect(packet.toolProbeCommand, `${packet.route.id} worker tool probe`).toContain("tool:");
 			expect(packet.techniqueHints.domains.length, `${packet.route.id} worker technique domains`).toBeGreaterThan(0);
 			expect(packet.techniqueHints.techniqueIds.length, `${packet.route.id} worker technique ids`).toBeGreaterThan(
 				0,

@@ -587,6 +587,30 @@ function commandPaletteFor(profile) {
 	return routeCommandPalettes[profile?.id] ?? routeCommandPalettes["reverse-pentest-general"];
 }
 
+function commandNamesFromPalette(commandPalette) {
+	const names = new Set();
+	const commands = [
+		...(commandPalette?.passive ?? []),
+		...(commandPalette?.proof ?? []),
+		...(commandPalette?.negative ?? []),
+	];
+	for (const command of commands) {
+		for (const segment of String(command).split(/\n|&&|\|\||;/)) {
+			const match = segment.trim().match(/^(?:[A-Z_][A-Z0-9_]*=\S+\s+)*(?:timeout\s+\S+\s+|sudo\s+|env\s+)*([A-Za-z0-9_.+-]+)/i);
+			const name = match?.[1];
+			if (!name || /^(?:true|false|then|do|done|fi|esac|from|print|comparison|PY)$/i.test(name)) continue;
+			names.add(name);
+		}
+	}
+	return [...names].slice(0, 24);
+}
+
+function toolProbeCommandFor(profile) {
+	const names = commandNamesFromPalette(commandPaletteFor(profile));
+	if (!names.length) return undefined;
+	return `for t in ${names.map(shellQuote).join(" ")}; do command -v "$t" >/dev/null 2>&1 && echo "tool:$t=ok" || echo "tool:$t=missing"; done`;
+}
+
 function techniqueHintsFor(profile) {
 	return routeTechniqueHints[profile?.id] ?? routeTechniqueHints["reverse-pentest-general"];
 }
@@ -896,6 +920,7 @@ function routeCandidateRow(profile) {
 		workflow: profile.workflow,
 		proofKit: proofKitFor(profile),
 		commandPalette: commandPaletteFor(profile),
+		toolProbeCommand: toolProbeCommandFor(profile),
 		techniqueHints: techniqueHintsFor(profile),
 	};
 }
@@ -933,6 +958,7 @@ function buildSwarmPlan(args, options = {}) {
 		const spec = workerSpec(roles[index % roles.length] ?? "specialist", packetProfile, profiles);
 		const proofKit = proofKitFor(packetProfile);
 		const commandPalette = commandPaletteFor(packetProfile);
+		const toolProbeCommand = toolProbeCommandFor(packetProfile);
 		const techniqueHints = techniqueHintsFor(packetProfile);
 		const workerId = index + 1;
 		return {
@@ -951,6 +977,7 @@ function buildSwarmPlan(args, options = {}) {
 			mergeKeys: spec.mergeKeys,
 			proofKit,
 			commandPalette,
+			toolProbeCommand,
 			techniqueHints,
 			limits: { timeoutMs, maxOutputChars: DEFAULT_MAX_OUTPUT_CHARS },
 		};
@@ -979,6 +1006,7 @@ function buildSwarmPlan(args, options = {}) {
 		autoExpandedWorkers: !explicitWorkers && profiles.length > 1,
 		maxConcurrency,
 		timeoutMs,
+		toolsDisabled: args.includes("--no-tools"),
 		workerPackets,
 		operatorGuidance: redact(flagValue(args, "--prompt", "")),
 			proofDoctrine: universalProofDoctrine,
@@ -1023,6 +1051,8 @@ function promptForWorker(plan, packet, promptTemplate, mode) {
 			JSON.stringify(packet.proofKit ?? proofKitFor(packet.route || { id: "reverse-pentest-general" }), null, 2),
 			"Route command palette:",
 			JSON.stringify(packet.commandPalette ?? commandPaletteFor(packet.route || { id: "reverse-pentest-general" }), null, 2),
+			packet.toolProbeCommand ? "Route tool probe command:" : undefined,
+			packet.toolProbeCommand,
 			"Route technique hints:",
 			JSON.stringify(packet.techniqueHints ?? techniqueHintsFor(packet.route || { id: "reverse-pentest-general" }), null, 2),
 			"Capability matrix doctrine:",
@@ -1052,6 +1082,8 @@ function promptForWorker(plan, packet, promptTemplate, mode) {
 		packet.proofKit ? JSON.stringify(packet.proofKit, null, 2) : undefined,
 		packet.commandPalette ? "Route command palette (adapt placeholders like $TARGET/<token>; do not claim a command ran unless you actually ran it):" : undefined,
 		packet.commandPalette ? JSON.stringify(packet.commandPalette, null, 2) : undefined,
+		packet.toolProbeCommand ? "Route tool probe command (run first when tools are enabled; record missing tools and choose fallbacks instead of hallucinating availability):" : undefined,
+		packet.toolProbeCommand,
 		packet.techniqueHints ? "Route technique hints (pull with re_techniques where available; use these as starting hypotheses, not proof):" : undefined,
 		packet.techniqueHints ? JSON.stringify(packet.techniqueHints, null, 2) : undefined,
 		`Evidence contract: ${packet.evidenceContract.join("; ")}`,
@@ -1096,6 +1128,7 @@ function runWorker({ plan, packet, promptTemplate, expectTemplate, tempRoot, mod
 				route: packet.route,
 				proofKit: packet.proofKit,
 				commandPalette: packet.commandPalette,
+				toolProbeCommand: packet.toolProbeCommand,
 				techniqueHints: packet.techniqueHints,
 				workerAgentDir: workerAgentDir ?? "",
 				stdoutSha256: sha256(""),
@@ -1189,6 +1222,7 @@ function runWorker({ plan, packet, promptTemplate, expectTemplate, tempRoot, mod
 				route: packet.route,
 				proofKit: packet.proofKit,
 				commandPalette: packet.commandPalette,
+				toolProbeCommand: packet.toolProbeCommand,
 				techniqueHints: packet.techniqueHints,
 				workerAgentDir,
 				stdoutSha256: sha256(redactedStdout),
@@ -1215,13 +1249,14 @@ function runWorker({ plan, packet, promptTemplate, expectTemplate, tempRoot, mod
 				route: packet.route,
 				proofKit: packet.proofKit,
 				commandPalette: packet.commandPalette,
+				toolProbeCommand: packet.toolProbeCommand,
 				techniqueHints: packet.techniqueHints,
 				workerAgentDir,
 				stdoutSha256: sha256(""),
 				stderrSha256: sha256(redact(String(error.message || error))),
 				stdoutPreview: "",
 				stderrPreview: redact(String(error.message || error)),
-					expect: expectTemplate ? substitute(expectTemplate, packet.workerId, plan.target, packet.role, packet) : undefined,
+				expect: expectTemplate ? substitute(expectTemplate, packet.workerId, plan.target, packet.role, packet) : undefined,
 				expectOk: false,
 				promptSha256: sha256(redact(promptForWorker(plan, packet, promptTemplate, mode))),
 			});
@@ -1304,6 +1339,10 @@ function linesMatching(text, pattern, limit = 12) {
 }
 
 const evidenceRankByClass = new Map(evidencePriorityDoctrine.order.map((row) => [row.class, row.rank]));
+const commandSignalPattern = /\b(?:curl|httpie|python3?|node|npm|go test|pytest|cargo|gdb|lldb|radare2|r2|rabin2|checksec|frida|objection|adb|jadx|apktool|tshark|tcpdump|wireshark|volatility3?|vol|binwalk|unblob|unsquashfs|yara|capa|floss|strings|file|readelf|objdump|xxd|exiftool|zsteg|steghide|john|hashcat|sqlmap|nmap|openssl|sage|z3|ldapsearch|impacket|bloodhound-python|certipy|netexec|nxc|cast|forge|docker|kubectl|helm|terraform|aws|gcloud|az)\b/i;
+const artifactPathSignalPattern = /(?:^|[\s"'[(,])(?:\.{0,2}\/|\/)[A-Za-z0-9._~+@%=:,/\-]+|(?:^|[\s"'[(,])[A-Za-z]:\\[A-Za-z0-9._~+@%=:,\\/\-]+/;
+const diffOrStatusSignalPattern = /\b(?:HTTP\s*[1-5][0-9]{2}|status[:= ]?[1-5][0-9]{2}|diff|before\/after|body[_ -]?hash|registers?|rip|rsp|eip|esp|offset|frame|packet|stream|exit(?:ed)?|exit[:= ]?\d+)\b|(?:状态码|响应差异|前后状态|正文哈希|寄存器|偏移|帧|数据包|流编号|退出码)/i;
+const negativeControlSignalPattern = /\b(?:negative control|tampered|missing|unsigned|stale|counter[- ]?evidence|control failed|rejected|forbidden|unauthorized|invalid token|wrong principal|wrong key|wrong offset|401|403|crash vs no-crash)\b|(?:负控制|阴性对照|反证|反例|篡改|错误(?:签名|密钥|key|token|令牌|主体|principal|偏移)|未授权|禁止|拒绝|被拒绝|失败对照|崩溃对照)/i;
 
 function evidenceClassRank(evidenceClass) {
 	return evidenceRankByClass.get(String(evidenceClass ?? "unknown")) ?? 0;
@@ -1316,13 +1355,13 @@ function classifyEvidenceText(value, explicitClass) {
 		return { class: explicit, rank: evidenceClassRank(explicit), reason: "explicit" };
 	}
 	const patterns = [
-		["runtime-behavior", /\b(?:exits?\s*\d+|exit[:= ]?\d+|gdb|lldb|register|stack|crash|SIG[A-Z]+|runtime|transcript|replay(?:ed)?|accepted|rejected|forbidden|negative control|counter[- ]?evidence|N-run|frida|adb shell|volatility\d?|kubectl auth can-i|aws sts|get-caller-identity)\b/i],
-		["network-traffic", /\b(?:HTTP\s*[1-5][0-9]{2}|status[:= ]?[1-5][0-9]{2}|body hash|request|response|curl|XHR|fetch|WebSocket|PCAP|packet|frame|stream|tshark|tcpflow|SNI|JA3|DNS|TLS)\b/i],
+		["runtime-behavior", /\b(?:exits?\s*\d+|exit[:= ]?\d+|gdb|lldb|register|stack|crash|SIG[A-Z]+|runtime|transcript|replay(?:ed)?|accepted|rejected|forbidden|negative control|counter[- ]?evidence|N-run|frida|adb shell|volatility\d?|kubectl auth can-i|aws sts|get-caller-identity)\b|(?:退出码|运行时|复现|重放|接受|拒绝|被拒绝|负控制|反证|崩溃|寄存器)/i],
+		["network-traffic", /\b(?:HTTP\s*[1-5][0-9]{2}|status[:= ]?[1-5][0-9]{2}|body hash|request|response|curl|XHR|fetch|WebSocket|PCAP|packet|frame|stream|tshark|tcpflow|SNI|JA3|DNS|TLS)\b|(?:状态码|请求|响应|流量|数据包|帧|会话流)/i],
 		["served-assets", /\b(?:served asset|source-?map|sourcemap|chunk|webpack|vite|wasm|WebAssembly|page\.html|openapi|swagger|graphql schema|asset hash)\b/i],
-		["process-config", /\b(?:config|manifest|plist|IAM|RBAC|role|principal|namespace|session|cookie|middleware|route list|loader|libc|checksec|RELRO|PIE|Canary|NX|tool availability)\b/i],
-		["persisted-state", /\b(?:database|registry|storage|before\/after|state change|filesystem|ledger|artifact ledger|dumped file|carved|persisted)\b/i],
-		["artifact", /\b(?:sha256|sha1|md5)[:= ]?[a-f0-9]{16,64}\b|(?:^|[\s"'[(,])(?:\.{0,2}\/|\/)[A-Za-z0-9._~+@%=:,/\-]+|\boffset\b|\bhash\b|\bartifact\b/i],
-		["source", /\b(?:source|grep|strings|imports?|xref|function|symbol|line \d+|code path|static triage|readelf|objdump|rabin2)\b/i],
+		["process-config", /\b(?:config|manifest|plist|IAM|RBAC|role|principal|namespace|session|cookie|middleware|route list|loader|libc|checksec|RELRO|PIE|Canary|NX|tool availability)\b|(?:配置|清单|会话|中间件|路由|权限|命名空间|加载器)/i],
+		["persisted-state", /\b(?:database|registry|storage|before\/after|state change|filesystem|ledger|artifact ledger|dumped file|carved|persisted)\b|(?:数据库|注册表|存储|状态变化|文件系统|账本|转储|持久化)/i],
+		["artifact", /\b(?:sha256|sha1|md5)[:= ]?[a-f0-9]{16,64}\b|(?:^|[\s"'[(,])(?:\.{0,2}\/|\/)[A-Za-z0-9._~+@%=:,/\-]+|\boffset\b|\bhash\b|\bartifact\b|(?:偏移|哈希|证据文件|工件)/i],
+		["source", /\b(?:source|grep|strings|imports?|xref|function|symbol|line \d+|code path|static triage|readelf|objdump|rabin2)\b|(?:源码|字符串|导入|交叉引用|函数|符号|代码路径|静态分析)/i],
 		["comment", /\b(?:README|TODO|comment|docs?|note|hypothesis only|unverified narrative)\b/i],
 	];
 	for (const [evidenceClass, pattern] of patterns) {
@@ -1379,11 +1418,11 @@ function claimQualitySignals(evidence, blockers, evidenceItems = []) {
 	const evidenceItemTexts = evidenceItems.map(evidenceTextFromItem).filter(Boolean);
 	const text = [...evidence, ...evidenceItemTexts].join("\n");
 	const priority = evidencePrioritySummary(evidence, evidenceItems);
-	const hasCommand = /\b(?:curl|python3?|node|npm|go test|pytest|cargo|gdb|lldb|radare2|r2|checksec|frida|adb|tshark|wireshark|sqlmap|nmap|openssl|cast|forge|docker|kubectl|aws|gcloud|az)\b/.test(text);
-	const hasArtifactPath = /(?:^|[\s"'[(,])(?:\.{0,2}\/|\/)[A-Za-z0-9._~+@%=:,/\-]+/.test(text);
+	const hasCommand = commandSignalPattern.test(text);
+	const hasArtifactPath = artifactPathSignalPattern.test(text);
 	const hasHash = /\b(?:sha256|sha1|md5)[:= ]?[a-f0-9]{16,64}\b/i.test(text) || /\b[a-f0-9]{64}\b/i.test(text);
-	const hasDiffOrStatus = /\b(?:HTTP\s*[1-5][0-9]{2}|status[:= ]?[1-5][0-9]{2}|diff|before\/after|body hash|register|offset|frame|packet|stream)\b/i.test(text);
-	const hasNegativeControl = /\b(?:negative control|tampered|missing|unsigned|stale|counter[- ]?evidence|control failed|rejected|forbidden|401|403|crash vs no-crash)\b/i.test(text);
+	const hasDiffOrStatus = diffOrStatusSignalPattern.test(text);
+	const hasNegativeControl = negativeControlSignalPattern.test(text);
 	const score = [hasCommand, hasArtifactPath, hasHash, hasDiffOrStatus, hasNegativeControl].filter(Boolean).length;
 	return {
 		evidenceCount: evidence.length,
@@ -1416,7 +1455,7 @@ function parsedEvidenceBundle(parsed, parsedClaims, stdout, evidenceItems = []) 
 	if (Array.isArray(parsed?.artifacts)) evidence.push(...parsed.artifacts.map(String));
 	if (Array.isArray(parsed?.nextCommands)) evidence.push(...parsed.nextCommands.map(String));
 	if (Array.isArray(parsed?.blockers)) blockers.push(...parsed.blockers.map(String));
-	if (!evidence.length && stdout) evidence.push(...linesMatching(stdout, /sha256|HTTP|status|curl|python|node|gdb|frida|tshark|offset|diff|artifact|evidence|proof/i, 20));
+	if (!evidence.length && stdout) evidence.push(...linesMatching(stdout, /sha256|HTTP|status|curl|python|node|gdb|frida|jadx|apktool|tshark|volatility|binwalk|yara|capa|floss|readelf|objdump|offset|diff|artifact|evidence|proof|状态码|证据|负控制|反证/i, 20));
 	return {
 		evidence: evidence.map(redact).filter(Boolean).slice(0, 80),
 		blockers: blockers.map(redact).filter(Boolean).slice(0, 40),
@@ -1426,6 +1465,7 @@ function parsedEvidenceBundle(parsed, parsedClaims, stdout, evidenceItems = []) 
 function proofChecklistForWorker(worker, parsed, parsedClaims, stdout, evidenceItems = []) {
 	const proofKit = worker.proofKit || proofKitFor(worker.route || { id: "reverse-pentest-general" });
 	const commandPalette = worker.commandPalette || commandPaletteFor(worker.route || { id: "reverse-pentest-general" });
+	const toolProbeCommand = worker.toolProbeCommand || toolProbeCommandFor(worker.route || { id: "reverse-pentest-general" });
 	const techniqueHints = worker.techniqueHints || techniqueHintsFor(worker.route || { id: "reverse-pentest-general" });
 	const bundle = parsedEvidenceBundle(parsed, parsedClaims, stdout, evidenceItems);
 	const quality = claimQualitySignals(bundle.evidence, bundle.blockers, evidenceItems);
@@ -1445,6 +1485,7 @@ function proofChecklistForWorker(worker, parsed, parsedClaims, stdout, evidenceI
 		status: worker.status,
 		proofKit,
 		commandPalette,
+		toolProbeCommand,
 		techniqueHints,
 		coverage,
 		qualitySignals: quality,
@@ -1456,16 +1497,19 @@ function proofChecklistForWorker(worker, parsed, parsedClaims, stdout, evidenceI
 }
 
 function preservedRunFlags(plan) {
-	const flags = [];
-	if (plan?.provider && plan.provider !== "default") flags.push("--provider", plan.provider);
-	if (plan?.model && plan.model !== "default") flags.push("--model", plan.model);
-	if (Number.isFinite(Number(plan?.timeoutMs))) flags.push("--timeout-ms", String(plan.timeoutMs));
-	if (plan?.runRoot) flags.push("--cwd", plan.runRoot);
+	const flagPairs = [];
+	const bareFlags = [];
+	if (plan?.provider && plan.provider !== "default") flagPairs.push(["--provider", plan.provider]);
+	if (plan?.model && plan.model !== "default") flagPairs.push(["--model", plan.model]);
+	if (Number.isFinite(Number(plan?.timeoutMs))) flagPairs.push(["--timeout-ms", String(plan.timeoutMs)]);
+	if (plan?.runRoot) flagPairs.push(["--cwd", plan.runRoot]);
 	const tools = Array.isArray(plan?.workerPackets) ? plan.workerPackets.find((packet) => packet?.tools)?.tools : undefined;
-	if (tools) flags.push("--tools", tools);
-	const out = [];
-	for (let index = 0; index < flags.length; index += 2) out.push(flags[index], shellQuote(flags[index + 1]));
-	return out.join(" ");
+	if (tools) flagPairs.push(["--tools", tools]);
+	else if (plan?.toolsDisabled) bareFlags.push("--no-tools");
+	return [
+		...flagPairs.map(([flag, value]) => `${flag} ${shellQuote(value)}`),
+		...bareFlags,
+	].join(" ");
 }
 
 function swarmRunBaseCommand(plan) {
@@ -1483,9 +1527,10 @@ function proofRepairCommand(plan, checklist) {
 		`Missing: ${checklist.missing.join(", ") || "none"}.`,
 		`Use passive/proofExit/negativeControls from this proof kit: ${JSON.stringify(checklist.proofKit)}`,
 		`Start from this command palette where applicable: ${JSON.stringify(checklist.commandPalette)}`,
+		checklist.toolProbeCommand ? `First probe tool availability with: ${checklist.toolProbeCommand}` : undefined,
 		`Pull or apply these route technique hints where applicable: ${JSON.stringify(checklist.techniqueHints)}`,
 		"Return only JSON claims/evidence/blockers/nextCommands with concrete commands, paths, hashes, diffs/status, and negative controls.",
-	].join(" ");
+	].filter(Boolean).join(" ");
 	return `${swarmRunBaseCommand(plan)} --workers 1${routeFlag} --roles verifier --prompt ${shellQuote(prompt)}`;
 }
 
@@ -1495,9 +1540,10 @@ function routeCoverageRepairCommand(plan, route) {
 		`Cover previously unassigned route ${route.domain || route.id}.`,
 		`Use this proof kit: ${JSON.stringify(route.proofKit || proofKitFor(route))}`,
 		`Start from this command palette where applicable: ${JSON.stringify(route.commandPalette || commandPaletteFor(route))}`,
+		route.toolProbeCommand ? `First probe tool availability with: ${route.toolProbeCommand}` : undefined,
 		`Pull or apply these route technique hints where applicable: ${JSON.stringify(route.techniqueHints || techniqueHintsFor(route))}`,
 		"Produce one promoted-quality claim with passive evidence, proof/replay evidence, and negative control or counter-evidence.",
-	].join(" ");
+	].filter(Boolean).join(" ");
 	return `${swarmRunBaseCommand(plan)} --workers 1 --route ${shellQuote(route.id)} --roles solo --prompt ${shellQuote(prompt)}`;
 }
 
@@ -1511,6 +1557,7 @@ function routeProofRepairCommand(plan, readiness) {
 		readiness.promotedClaimIds.length ? `Existing promoted-but-not-route-ready claims: ${readiness.promotedClaimIds.join(", ")}.` : undefined,
 		`Use this proof kit: ${JSON.stringify(route.proofKit || proofKitFor(route))}`,
 		`Start from this command palette where applicable: ${JSON.stringify(route.commandPalette || commandPaletteFor(route))}`,
+		route.toolProbeCommand ? `First probe tool availability with: ${route.toolProbeCommand}` : undefined,
 		`Pull or apply these route technique hints where applicable: ${JSON.stringify(route.techniqueHints || techniqueHintsFor(route))}`,
 		"Produce one promoted-quality claim with passive evidence, proof/replay evidence, and negative control or counter-evidence for this exact route.",
 	].filter(Boolean).join(" ");
@@ -1539,6 +1586,7 @@ function routeHandoffCommand(plan, handoff) {
 		handoff.evidence ? `Evidence anchor: ${handoff.evidence}.` : undefined,
 		`Use this proof kit: ${JSON.stringify(handoff.route.proofKit || proofKitFor(handoff.route))}`,
 		`Start from this command palette where applicable: ${JSON.stringify(handoff.route.commandPalette || commandPaletteFor(handoff.route))}`,
+		handoff.route.toolProbeCommand ? `First probe tool availability with: ${handoff.route.toolProbeCommand}` : undefined,
 		`Pull or apply these route technique hints where applicable: ${JSON.stringify(handoff.route.techniqueHints || techniqueHintsFor(handoff.route))}`,
 		handoff.nextCommand ? `Seed next command: ${handoff.nextCommand}.` : undefined,
 		"Produce one promoted-quality claim with passive evidence, proof/replay evidence, and negative control or counter-evidence.",
@@ -1621,6 +1669,7 @@ function normalizedRouteRow(route) {
 		workflow: Array.isArray(route.workflow) ? route.workflow : Array.isArray(profile.workflow) ? profile.workflow : [],
 		proofKit: route.proofKit ?? proofKitFor(profile),
 		commandPalette: route.commandPalette ?? commandPaletteFor(profile),
+		toolProbeCommand: route.toolProbeCommand ?? toolProbeCommandFor(profile),
 		techniqueHints: route.techniqueHints ?? techniqueHintsFor(profile),
 	};
 }
@@ -1897,6 +1946,7 @@ function buildRunReport({ plan, rows, tempRoot, mode }) {
 			route: worker.route,
 			proofKit: worker.proofKit,
 			commandPalette: worker.commandPalette,
+			toolProbeCommand: worker.toolProbeCommand,
 			techniqueHints: worker.techniqueHints,
 			stdoutSha256: worker.stdoutSha256,
 			stderrSha256: worker.stderrSha256,
@@ -2078,6 +2128,7 @@ const plan = mode === "llm-run" ? (() => {
 	return {
 		...basePlan,
 		timeoutMs,
+		toolsDisabled: argv.includes("--no-tools"),
 		workerPackets: basePlan.workerPackets.map((packet, index) => ({
 			...packet,
 			workerId: index + 1,
