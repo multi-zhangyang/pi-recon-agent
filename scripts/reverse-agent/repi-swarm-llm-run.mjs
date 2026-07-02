@@ -17,6 +17,42 @@ const swarmsRoot = join(sourceAgentDir, "recon", "evidence", "llm-swarms");
 const DEFAULT_MAX_OUTPUT_CHARS = 64 * 1024;
 const MAX_HARVESTED_ARTIFACT_BYTES = 1024 * 1024;
 const MAX_HARVESTED_ARTIFACTS_PER_WORKER = 24;
+const DEFAULT_SWARM_BUILTIN_TOOLS = ["read", "grep", "find", "ls", "bash", "write", "edit"];
+const DEFAULT_SWARM_UNIVERSAL_RE_TOOLS = [
+	"re_map",
+	"re_route",
+	"re_techniques",
+	"re_lane",
+	"re_mission",
+	"re_tool_index",
+	"re_bootstrap",
+	"re_evidence",
+	"re_domain_proof_exit",
+	"re_decision_core",
+	"re_verifier",
+	"re_replayer",
+	"re_proof_loop",
+	"re_context",
+	"re_operator",
+	"re_compiler",
+	"re_complete",
+];
+
+const routeAgentToolchains = {
+	"native-pwn": ["re_kernel", "re_native_runtime", "re_exploit_chain", "re_exploit_lab", "re_toolchain_domain"],
+	"web-api": ["re_web_authz_state", "re_live_browser", "re_runtime_adapter", "re_runtime_bridge", "re_operation"],
+	"js-reverse": ["re_live_browser", "re_runtime_adapter", "re_runtime_bridge", "re_exploit_lab"],
+	mobile: ["re_mobile_runtime", "re_runtime_adapter", "re_runtime_bridge", "re_toolchain_domain"],
+	"pcap-dfir": ["re_evidence", "re_proof_loop", "re_toolchain_domain", "re_runtime_bridge"],
+	"memory-forensics": ["re_evidence", "re_proof_loop", "re_toolchain_domain"],
+	"firmware-iot": ["re_toolchain_domain", "re_native_runtime", "re_web_authz_state", "re_runtime_bridge"],
+	"cloud-identity": ["re_knowledge_graph", "re_graph", "re_operation", "re_runtime_bridge"],
+	"windows-ad": ["re_knowledge_graph", "re_graph", "re_operation", "re_runtime_bridge"],
+	malware: ["re_toolchain_domain", "re_native_runtime", "re_evidence", "re_runtime_bridge"],
+	"crypto-stego": ["re_proof_loop", "re_exploit_lab", "re_evidence"],
+	"agent-boundary": ["re_runtime_adapter", "re_runtime_bridge", "re_proof_loop", "re_evidence", "re_graph"],
+	"reverse-pentest-general": ["re_campaign", "re_swarm", "re_supervisor", "re_operation", "re_autopilot"],
+};
 
 const roleLibrary = [
 	{
@@ -583,8 +619,153 @@ const routeTechniqueHints = {
 	},
 };
 
+const universalTechniqueRules = [
+	"map before exploit: inventory files/routes/imports/configs/assets/logs and tool availability before claiming a primitive",
+	"bind to live path: identify the runtime/request/process path actually exercised now before expanding sideways",
+	"prove one flow: produce one replayable command/transcript/artifact with hash/status/offset/state diff before adding breadth",
+	"attach controls: every auth/signature/crypto/exploit claim needs a benign/wrong-principal/wrong-key/tampered counter-control",
+	"record repair gates: if proof is missing, emit the exact blocker and next command instead of narrative padding",
+];
+
+const routeDeepTechniquePlaybooks = {
+	"native-pwn": [
+		"Mitigation triage: file/readelf/checksec → NX/PIE/RELRO/canary/libc/loader map; pin architecture and run environment.",
+		"Input contract: enumerate argv/stdin/env/files/sockets; collect empty/short/cyclic/format-string runs and hash transcripts.",
+		"Primitive proof: bind crash/leak/write to register/stack bytes, cyclic offset, core/gdb transcript, and a non-crashing baseline.",
+		"Exploit shaping: ret2plt/ret2libc/SROP/ROP/heap/tcache strategy only after leak/offset control is proven; record gadget/libc assumptions.",
+		"Reliability gate: N-run replay with wrong offset/payload negative controls before promoting payload readiness.",
+	],
+	"web-api": [
+		"Route inventory: crawl links, JS endpoints, OpenAPI/GraphQL, robots/sitemap, and OPTIONS; classify auth/session/state-changing routes.",
+		"Principal matrix: replay anonymous/low/high/wrong-principal with status, body SHA-256, response length, and cookie/header deltas.",
+		"Object authz: mutate numeric/UUID/path/query IDs; require ownership/source object proof plus tampered object negative controls.",
+		"High-impact probes: SSRF/open redirect/CORS/JWT/schema/upload/admin claims stay leads until paired with replay hashes and controls.",
+		"State proof: before/after state or audit/log/object diff is required for destructive/business-impact claims.",
+	],
+	"js-reverse": [
+		"Asset chain: collect served chunks/source maps/WASM with hashes; map fetch/XHR/WS initiators and signature parameters.",
+		"Runtime hooks: capture crypto.subtle/createHmac/md5/sha/canonicalization/timestamp/nonce order before rebuilding signers.",
+		"Canonical rebuild: freeze timestamp/nonce/input sample, rebuild byte-for-byte, and diff browser-captured vs generated fields.",
+		"Control matrix: captured-signed must pass while missing/tampered/stale/wrong-key variants fail with response hashes.",
+		"WASM/native bridge: export/import/table/string scans remain leads until a harness calls the exact transform with known-answer tests.",
+	],
+	mobile: [
+		"Archive map: verify APK/IPA hash, manifest/plist/entitlements, DEX/native libs, network config, exported components, and pinning anchors.",
+		"Static-to-runtime bridge: bind JADX/class/method findings to Frida hooks, adb intents, logcat, or captured network requests.",
+		"Pinning/root/signature bypass: prove hook effect with enabled/disabled comparison and wrong cert/root-state controls.",
+		"Crypto/signing: hook parameters and return values around MessageDigest/Mac/Cipher/SecTrust/NSURLSession before replaying APIs.",
+		"Impact gate: exported component, deep link, or storage claim needs command transcript plus clean-device negative control.",
+	],
+	"pcap-dfir": [
+		"Capture identity: verify capinfos/file/SHA-256/time bounds; rank conversations by bytes, protocol, and anomalies.",
+		"Reassembly: tie credentials/IOCs/exfil to frame numbers, stream IDs, payload hashes, and parser command output.",
+		"Object carving: verify HTTP/files/archive entries by offset/size/SHA-256; avoid strings-only promotion.",
+		"Protocol pivots: DNS tunnel/TLS SNI/JA3/NTLM/Kerberos/basic/bearer/cookie claims need field extraction and false-positive controls.",
+		"Decode chain: every transform step records input/output hashes and a wrong-stream/wrong-key negative control.",
+	],
+	"memory-forensics": [
+		"Image identity: hash/profile/tool availability first; cross-check volatility plugins before trusting one parser.",
+		"Process/network correlation: bind PID, command line, socket/endpoint, module/path, and timestamp offsets within a correlation window.",
+		"Credential context: tie credential bytes to process/module/network/file offsets; downgrade raw strings until context-bound.",
+		"Dump proof: dumped files/modules/process memory need path, size, SHA-256, and extraction command.",
+		"Counter-evidence: alternate profile/plugin disagreement or stale process/socket evidence blocks promotion.",
+	],
+	"firmware-iot": [
+		"Container map: parse magic/binwalk/signature/partition offsets and verify rootfs carve by offset/size/hash.",
+		"Rootfs triage: enumerate init/service/web/cgi/config/credential paths with file hashes and architecture.",
+		"Runtime bridge: emulate/chroot/qemu or service smoke; static creds/endpoints remain leads until runtime reachable.",
+		"Config/NVRAM controls: test wrong/default/missing config values and record service behavior.",
+		"Exploit path: CGI/auth bypass/command injection claims need request replay plus process/file-state evidence.",
+	],
+	"cloud-identity": [
+		"Principal truth: record current identity, token audience/scope/expiry, namespace, workload, and deployment source.",
+		"Trust chain: connect CI OIDC/IaC/IAM/RBAC/container/service account edges to runtime principal and exposed resource.",
+		"Permission oracle: pair allowed action with denied action using kubectl auth can-i, IAM simulation, STS, or cloud audit evidence.",
+		"Metadata/container pivots: IMDS/K8s token/container socket leads need exact request/response hashes and wrong-audience controls.",
+		"Least-privilege delta: promote only resource-specific ARN/name/namespace proof, not broad policy prose.",
+	],
+	"windows-ad": [
+		"Domain map: DC, realm, LDAP base, SMB signing, time skew, SPNs, groups, ACLs, ADCS templates, and trust paths first.",
+		"Credential usability: prove password/hash/ticket with one auth command and bad credential/time/realm negative control.",
+		"Graph proof: BloodHound/LDAP edge chains must resolve owned source → relationship edges → high-value target with file/hash anchors.",
+		"Attack primitives: Kerberoast/ASREP/ADCS/DCSync/RBCD claims require command transcript and privilege boundary evidence.",
+		"Operational gate: do not promote graph-only reachability without auth/session/tool output confirming the edge is usable.",
+	],
+	malware: [
+		"Sample identity: hash/magic/sections/imports/entropy/packer signals before behavior claims.",
+		"Config extraction: bind IOC/config field to offset/function/rule hit and verify decoder output hash.",
+		"Behavior chain: static capability + dynamic/sandbox/emulation/log corroboration before persistence/C2 claims.",
+		"Unpack/deobfuscate: record layer hashes and fail controls for wrong key/offset/decoder branch.",
+		"IOC hygiene: strings-only hits stay observations until offset, context, and negative-control evidence exists.",
+	],
+	"crypto-stego": [
+		"Parameter table: enumerate artifact hash/format/metadata, cipher mode, key/IV/nonce/salt, block sizes, and encodings.",
+		"Transform chain: script every decode/decrypt/decompress/carve step with input/output SHA-256 and assertions.",
+		"Oracle/KAT proof: known-answer/test vector/padding-oracle timing or error behavior is required before cryptanalytic claims.",
+		"Stego structure: verify chunks/trailing data/audio slices/bit planes by exact offsets and false-positive controls.",
+		"Wrong path controls: wrong key/nonce/mode/offset/stream must fail or produce a mismatched hash.",
+	],
+	"agent-boundary": [
+		"Boundary map: enumerate system/developer/user/tool/RAG/memory/MCP resources and untrusted input flows.",
+		"Replay harness: minimal indirect/direct injection payloads must produce request/response/tool-call/memory traces.",
+		"Tool side effects: claims need tool invocation, arguments, authorization context, and side-effect or refusal proof.",
+		"Memory/RAG controls: poisoned vs sanitized retrieval and benign prompt comparisons are required.",
+		"Capability drift: downgrade any agent narrative that lacks transcript, tool trace, or policy-bound decision evidence.",
+	],
+	"reverse-pentest-general": [
+		"Route split: classify target into native/web/js/mobile/pcap/memory/firmware/cloud/AD/malware/crypto/agent routes before deep work.",
+		"One-proof loop: pick the highest-confidence route, build a minimal replay/verifier, run controls, then expand sideways.",
+		"Evidence ledger: every promoted claim carries command/path/hash/status/offset/state diff and a repair command for blockers.",
+		"Cross-route handoff: when evidence belongs elsewhere, emit route id, anchor, and next command instead of forcing a weak claim.",
+		"Merge discipline: final promotion requires route coverage, proof-ready promoted claim, verifier artifact, and negative controls.",
+	],
+};
+
 function commandPaletteFor(profile) {
 	return routeCommandPalettes[profile?.id] ?? routeCommandPalettes["reverse-pentest-general"];
+}
+
+function uniqueList(values) {
+	return [...new Set(values.filter(Boolean).map(String))];
+}
+
+function toolsCsvToList(value) {
+	return uniqueList(String(value ?? "")
+		.split(",")
+		.map((item) => item.trim())
+		.filter(Boolean));
+}
+
+function routeAgentToolsFor(profile) {
+	const id = profile?.id && routeAgentToolchains[profile.id] ? profile.id : "reverse-pentest-general";
+	return routeAgentToolchains[id] ?? routeAgentToolchains["reverse-pentest-general"];
+}
+
+function defaultToolsForProfile(profile) {
+	return uniqueList([...DEFAULT_SWARM_BUILTIN_TOOLS, ...DEFAULT_SWARM_UNIVERSAL_RE_TOOLS, ...routeAgentToolsFor(profile)]).join(",");
+}
+
+function agentToolchainFor(profile, actualTools, toolsMode = "default") {
+	const id = profile?.id && routeTechniqueHints[profile.id] ? profile.id : "reverse-pentest-general";
+	const enabledTools = toolsMode === "disabled" ? [] : toolsCsvToList(actualTools === undefined ? defaultToolsForProfile(profile) : actualTools);
+	const routeTechniqueDomains = routeTechniqueHints[id]?.domains ?? routeTechniqueHints["reverse-pentest-general"].domains;
+	const primaryTechniqueDomain = routeTechniqueDomains[0] ?? "reverse-pentest-general";
+	return {
+		AgentToolchainV1: true,
+		toolsMode,
+		enabledTools,
+		routeTools: routeAgentToolsFor(profile),
+		requiredBeforePromotion: ["route", "techniques", "verifier/replayer", "artifact-or-transcript"],
+		callOrder: [
+			`re_route:${id}`,
+			`re_techniques:${primaryTechniqueDomain}`,
+			"re_lane:command-pack",
+			"bash/write/edit:proof-harness",
+			"re_verifier:proof-exit",
+			"re_replayer:replay",
+		],
+		fallbackPolicy: "missing tool => record gap and use equivalent shell/manual proof; never promote narrative-only",
+	};
 }
 
 function commandNamesFromPalette(commandPalette) {
@@ -612,7 +793,12 @@ function toolProbeCommandFor(profile) {
 }
 
 function techniqueHintsFor(profile) {
-	return routeTechniqueHints[profile?.id] ?? routeTechniqueHints["reverse-pentest-general"];
+	const id = profile?.id && routeTechniqueHints[profile.id] ? profile.id : "reverse-pentest-general";
+	return {
+		...routeTechniqueHints[id],
+		universalRules: universalTechniqueRules,
+		playbook: routeDeepTechniquePlaybooks[id] ?? routeDeepTechniquePlaybooks["reverse-pentest-general"],
+	};
 }
 
 function proofKitFor(profile) {
@@ -622,7 +808,7 @@ function proofKitFor(profile) {
 function usage() {
 	return `Usage:
   repi swarm plan <target> --workers N [--route <id[,id...]|all>] [--roles mapper,reverser,exploiter,verifier,adversary,solo] [--json]
-  repi swarm run <target> --workers N [--provider <id>] [--model <id>] [--tools bash,read,grep,ls] [--json]
+  repi swarm run <target> --workers N [--provider <id>] [--model <id>] [--tools bash,read,grep,ls,re_techniques] [--json]
   repi swarm status [latest|run-id] [--json]
   repi swarm merge [latest|run-id] [--json]
   repi swarm llm-run <target> --workers N [--provider <id>] [--model <id>] [--prompt <text>]
@@ -635,7 +821,7 @@ Plan/run options:
   --model <id>             Model id
   --route <id[,id...]|all> Force one or more route ids, or the full route catalog, instead of keyword routing
   --roles <csv>            Role order. Defaults to solo for one worker, else mapper,reverser,exploiter,verifier,adversary
-  --tools <list>           Enable tools for workers (run default: bash,read,grep,find,ls; llm-run default: --no-tools)
+  --tools <list>           Enable tools for workers (run default: route-aware RE toolchain; llm-run default: --no-tools)
   --no-tools               Disable all worker tools
   --timeout-ms <ms>        Per-worker timeout (default: REPI_SWARM_LLM_TIMEOUT_MS or 210000)
   --prompt <text>          llm-run prompt template, or extra mission guidance for swarm run
@@ -645,7 +831,7 @@ Plan/run options:
 
 Examples:
   repi swarm plan ./target --workers 5
-  repi swarm run ./target --workers 5 --provider openai-compatible --model vendor/model --tools bash,read,grep,ls
+  repi swarm run ./target --workers 5 --provider openai-compatible --model vendor/model --tools bash,read,grep,ls,re_route,re_techniques,re_verifier
   repi swarm status latest
   repi swarm merge latest
   repi swarm llm-run local-selfcheck --workers 3 --provider openai-compatible --model vendor/model \\
@@ -784,6 +970,7 @@ function substitute(template, workerId, target, role = "worker", context = {}) {
 	const proofKit = context.proofKit ?? {};
 	const commandPalette = context.commandPalette ?? {};
 	const techniqueHints = context.techniqueHints ?? {};
+	const agentToolchain = context.agentToolchain ?? {};
 	return String(template ?? "")
 		.replaceAll("{{id}}", String(workerId))
 		.replaceAll("{id}", String(workerId))
@@ -814,7 +1001,10 @@ function substitute(template, workerId, target, role = "worker", context = {}) {
 		.replaceAll("<commandPalette>", JSON.stringify(commandPalette))
 		.replaceAll("{{techniqueHints}}", JSON.stringify(techniqueHints))
 		.replaceAll("{techniqueHints}", JSON.stringify(techniqueHints))
-		.replaceAll("<techniqueHints>", JSON.stringify(techniqueHints));
+		.replaceAll("<techniqueHints>", JSON.stringify(techniqueHints))
+		.replaceAll("{{agentToolchain}}", JSON.stringify(agentToolchain))
+		.replaceAll("{agentToolchain}", JSON.stringify(agentToolchain))
+		.replaceAll("<agentToolchain>", JSON.stringify(agentToolchain));
 }
 
 function readJson(path) {
@@ -922,6 +1112,7 @@ function routeCandidateRow(profile) {
 		commandPalette: commandPaletteFor(profile),
 		toolProbeCommand: toolProbeCommandFor(profile),
 		techniqueHints: techniqueHintsFor(profile),
+		agentToolchain: agentToolchainFor(profile, defaultToolsForProfile(profile), "default"),
 	};
 }
 
@@ -948,7 +1139,8 @@ function buildSwarmPlan(args, options = {}) {
 	const maxConcurrency = parseIntFlag(args, "--max-concurrency", workers, 1, workers);
 	const provider = flagValue(args, "--provider");
 	const model = flagValue(args, "--model");
-	const tools = args.includes("--no-tools") ? undefined : flagValue(args, "--tools", "bash,read,grep,find,ls");
+	const toolsMode = args.includes("--no-tools") ? "disabled" : hasFlag(args, "--tools") ? "explicit" : "default";
+	const explicitTools = hasFlag(args, "--tools") ? flagValue(args, "--tools", "") : undefined;
 	const timeoutMs = parseIntFlag(args, "--timeout-ms", Number(process.env.REPI_SWARM_LLM_TIMEOUT_MS ?? 210000), 5000, 30 * 60 * 1000);
 	const roles = workers === 1 && flagValue(args, "--roles") === undefined ? ["solo"] : parseRoles(args);
 	const runId = options.runId ?? makeRunId(target);
@@ -960,6 +1152,8 @@ function buildSwarmPlan(args, options = {}) {
 		const commandPalette = commandPaletteFor(packetProfile);
 		const toolProbeCommand = toolProbeCommandFor(packetProfile);
 		const techniqueHints = techniqueHintsFor(packetProfile);
+		const tools = toolsMode === "disabled" ? undefined : toolsMode === "explicit" ? explicitTools : defaultToolsForProfile(packetProfile);
+		const agentToolchain = agentToolchainFor(packetProfile, tools, toolsMode);
 		const workerId = index + 1;
 		return {
 			workerId,
@@ -972,6 +1166,8 @@ function buildSwarmPlan(args, options = {}) {
 			},
 			objective: spec.objective,
 			tools,
+			toolsMode,
+			agentToolchain,
 			dependencies: [],
 			evidenceContract: spec.evidenceContract,
 			mergeKeys: spec.mergeKeys,
@@ -1006,7 +1202,8 @@ function buildSwarmPlan(args, options = {}) {
 		autoExpandedWorkers: !explicitWorkers && profiles.length > 1,
 		maxConcurrency,
 		timeoutMs,
-		toolsDisabled: args.includes("--no-tools"),
+		toolsMode,
+		toolsDisabled: toolsMode === "disabled",
 		workerPackets,
 		operatorGuidance: redact(flagValue(args, "--prompt", "")),
 			proofDoctrine: universalProofDoctrine,
@@ -1055,6 +1252,8 @@ function promptForWorker(plan, packet, promptTemplate, mode) {
 			packet.toolProbeCommand,
 			"Route technique hints:",
 			JSON.stringify(packet.techniqueHints ?? techniqueHintsFor(packet.route || { id: "reverse-pentest-general" }), null, 2),
+			"Agent toolchain (LLM-callable tools; distinct from shell commands):",
+			JSON.stringify(packet.agentToolchain ?? agentToolchainFor(packet.route || { id: "reverse-pentest-general" }, packet.tools, packet.toolsMode), null, 2),
 			"Capability matrix doctrine:",
 			JSON.stringify(plan.capabilityMatrixDoctrine ?? capabilityMatrixDoctrine, null, 2),
 			"Evidence priority doctrine:",
@@ -1086,6 +1285,8 @@ function promptForWorker(plan, packet, promptTemplate, mode) {
 		packet.toolProbeCommand,
 		packet.techniqueHints ? "Route technique hints (pull with re_techniques where available; use these as starting hypotheses, not proof):" : undefined,
 		packet.techniqueHints ? JSON.stringify(packet.techniqueHints, null, 2) : undefined,
+		packet.agentToolchain ? "Agent toolchain (LLM-callable tools; use these to load playbooks, build harnesses, replay, and verify; if explicit --tools blocks one, record the fallback):" : undefined,
+		packet.agentToolchain ? JSON.stringify(packet.agentToolchain, null, 2) : undefined,
 		`Evidence contract: ${packet.evidenceContract.join("; ")}`,
 		`Merge keys: ${packet.mergeKeys.join(", ")}`,
 		"Every promoted claim should include at least one command/path/hash/diff/offset/status/control artifact. If the proof is only a hypothesis, lower confidence and put the missing proof in blockers.",
@@ -1126,10 +1327,12 @@ function runWorker({ plan, packet, promptTemplate, expectTemplate, tempRoot, mod
 				provider: plan.provider,
 				model: plan.model,
 				route: packet.route,
+				toolsMode: packet.toolsMode,
 				proofKit: packet.proofKit,
 				commandPalette: packet.commandPalette,
 				toolProbeCommand: packet.toolProbeCommand,
 				techniqueHints: packet.techniqueHints,
+				agentToolchain: packet.agentToolchain,
 				workerAgentDir: workerAgentDir ?? "",
 				stdoutSha256: sha256(""),
 				stderrSha256: sha256(message),
@@ -1220,10 +1423,12 @@ function runWorker({ plan, packet, promptTemplate, expectTemplate, tempRoot, mod
 				provider: plan.provider,
 				model: plan.model,
 				route: packet.route,
+				toolsMode: packet.toolsMode,
 				proofKit: packet.proofKit,
 				commandPalette: packet.commandPalette,
 				toolProbeCommand: packet.toolProbeCommand,
 				techniqueHints: packet.techniqueHints,
+				agentToolchain: packet.agentToolchain,
 				workerAgentDir,
 				stdoutSha256: sha256(redactedStdout),
 				stderrSha256: sha256(redactedStderr),
@@ -1247,10 +1452,12 @@ function runWorker({ plan, packet, promptTemplate, expectTemplate, tempRoot, mod
 				provider: plan.provider,
 				model: plan.model,
 				route: packet.route,
+				toolsMode: packet.toolsMode,
 				proofKit: packet.proofKit,
 				commandPalette: packet.commandPalette,
 				toolProbeCommand: packet.toolProbeCommand,
 				techniqueHints: packet.techniqueHints,
+				agentToolchain: packet.agentToolchain,
 				workerAgentDir,
 				stdoutSha256: sha256(""),
 				stderrSha256: sha256(redact(String(error.message || error))),
@@ -1480,6 +1687,7 @@ function proofChecklistForWorker(worker, parsed, parsedClaims, stdout, evidenceI
 	const commandPalette = worker.commandPalette || commandPaletteFor(worker.route || { id: "reverse-pentest-general" });
 	const toolProbeCommand = worker.toolProbeCommand || toolProbeCommandFor(worker.route || { id: "reverse-pentest-general" });
 	const techniqueHints = worker.techniqueHints || techniqueHintsFor(worker.route || { id: "reverse-pentest-general" });
+	const agentToolchain = worker.agentToolchain || agentToolchainFor(worker.route || { id: "reverse-pentest-general" }, worker.tools, worker.toolsMode);
 	const bundle = parsedEvidenceBundle(parsed, parsedClaims, stdout, evidenceItems);
 	const quality = claimQualitySignals(bundle.evidence, bundle.blockers, evidenceItems);
 	const coverage = {
@@ -1500,6 +1708,7 @@ function proofChecklistForWorker(worker, parsed, parsedClaims, stdout, evidenceI
 		commandPalette,
 		toolProbeCommand,
 		techniqueHints,
+		agentToolchain,
 		coverage,
 		qualitySignals: quality,
 		missing,
@@ -1517,8 +1726,8 @@ function preservedRunFlags(plan) {
 	if (Number.isFinite(Number(plan?.timeoutMs))) flagPairs.push(["--timeout-ms", String(plan.timeoutMs)]);
 	if (plan?.runRoot) flagPairs.push(["--cwd", plan.runRoot]);
 	const tools = Array.isArray(plan?.workerPackets) ? plan.workerPackets.find((packet) => packet?.tools)?.tools : undefined;
-	if (tools) flagPairs.push(["--tools", tools]);
-	else if (plan?.toolsDisabled) bareFlags.push("--no-tools");
+	if (tools && (plan?.toolsMode === "explicit" || !plan?.toolsMode)) flagPairs.push(["--tools", tools]);
+	else if (plan?.toolsDisabled || plan?.toolsMode === "disabled") bareFlags.push("--no-tools");
 	return [
 		...flagPairs.map(([flag, value]) => `${flag} ${shellQuote(value)}`),
 		...bareFlags,
@@ -1542,6 +1751,7 @@ function proofRepairCommand(plan, checklist) {
 		`Start from this command palette where applicable: ${JSON.stringify(checklist.commandPalette)}`,
 		checklist.toolProbeCommand ? `First probe tool availability with: ${checklist.toolProbeCommand}` : undefined,
 		`Pull or apply these route technique hints where applicable: ${JSON.stringify(checklist.techniqueHints)}`,
+		`Use this agent toolchain when tools are enabled: ${JSON.stringify(checklist.agentToolchain)}`,
 		"Return only JSON claims/evidence/blockers/nextCommands with concrete commands, paths, hashes, diffs/status, and negative controls.",
 	].filter(Boolean).join(" ");
 	return `${swarmRunBaseCommand(plan)} --workers 1${routeFlag} --roles verifier --prompt ${shellQuote(prompt)}`;
@@ -1555,6 +1765,7 @@ function routeCoverageRepairCommand(plan, route) {
 		`Start from this command palette where applicable: ${JSON.stringify(route.commandPalette || commandPaletteFor(route))}`,
 		route.toolProbeCommand ? `First probe tool availability with: ${route.toolProbeCommand}` : undefined,
 		`Pull or apply these route technique hints where applicable: ${JSON.stringify(route.techniqueHints || techniqueHintsFor(route))}`,
+		`Use this agent toolchain when tools are enabled: ${JSON.stringify(route.agentToolchain || agentToolchainFor(route, defaultToolsForProfile(route), "default"))}`,
 		"Produce one promoted-quality claim with passive evidence, proof/replay evidence, and negative control or counter-evidence.",
 	].filter(Boolean).join(" ");
 	return `${swarmRunBaseCommand(plan)} --workers 1 --route ${shellQuote(route.id)} --roles solo --prompt ${shellQuote(prompt)}`;
@@ -1572,6 +1783,7 @@ function routeProofRepairCommand(plan, readiness) {
 		`Start from this command palette where applicable: ${JSON.stringify(route.commandPalette || commandPaletteFor(route))}`,
 		route.toolProbeCommand ? `First probe tool availability with: ${route.toolProbeCommand}` : undefined,
 		`Pull or apply these route technique hints where applicable: ${JSON.stringify(route.techniqueHints || techniqueHintsFor(route))}`,
+		`Use this agent toolchain when tools are enabled: ${JSON.stringify(route.agentToolchain || agentToolchainFor(route, defaultToolsForProfile(route), "default"))}`,
 		"Produce one promoted-quality claim with passive evidence, proof/replay evidence, and negative control or counter-evidence for this exact route.",
 	].filter(Boolean).join(" ");
 	return `${swarmRunBaseCommand(plan)} --workers 1 --route ${shellQuote(route.id)} --roles solo --prompt ${shellQuote(prompt)}`;
@@ -1601,6 +1813,7 @@ function routeHandoffCommand(plan, handoff) {
 		`Start from this command palette where applicable: ${JSON.stringify(handoff.route.commandPalette || commandPaletteFor(handoff.route))}`,
 		handoff.route.toolProbeCommand ? `First probe tool availability with: ${handoff.route.toolProbeCommand}` : undefined,
 		`Pull or apply these route technique hints where applicable: ${JSON.stringify(handoff.route.techniqueHints || techniqueHintsFor(handoff.route))}`,
+		`Use this agent toolchain when tools are enabled: ${JSON.stringify(handoff.route.agentToolchain || agentToolchainFor(handoff.route, defaultToolsForProfile(handoff.route), "default"))}`,
 		handoff.nextCommand ? `Seed next command: ${handoff.nextCommand}.` : undefined,
 		"Produce one promoted-quality claim with passive evidence, proof/replay evidence, and negative control or counter-evidence.",
 	].filter(Boolean).join(" ");
@@ -1684,6 +1897,7 @@ function normalizedRouteRow(route) {
 		commandPalette: route.commandPalette ?? commandPaletteFor(profile),
 		toolProbeCommand: route.toolProbeCommand ?? toolProbeCommandFor(profile),
 		techniqueHints: route.techniqueHints ?? techniqueHintsFor(profile),
+		agentToolchain: route.agentToolchain ?? agentToolchainFor(profile, defaultToolsForProfile(profile), "default"),
 	};
 }
 
@@ -2258,6 +2472,7 @@ function buildRunReport({ plan, rows, tempRoot, mode }) {
 		maxConcurrency: plan.maxConcurrency,
 		timeoutMs: plan.timeoutMs,
 		tools: [...new Set(plan.workerPackets.map((packet) => packet.tools ?? "none"))].join(";"),
+		toolsMode: plan.toolsMode ?? "legacy",
 		evidenceRoot,
 		tempRoot,
 		planPath: join(evidenceRoot, "plan.json"),
@@ -2274,10 +2489,12 @@ function buildRunReport({ plan, rows, tempRoot, mode }) {
 			provider: worker.provider,
 			model: worker.model,
 			route: worker.route,
+			toolsMode: worker.toolsMode,
 			proofKit: worker.proofKit,
 			commandPalette: worker.commandPalette,
 			toolProbeCommand: worker.toolProbeCommand,
 			techniqueHints: worker.techniqueHints,
+			agentToolchain: worker.agentToolchain,
 			stdoutSha256: worker.stdoutSha256,
 			stderrSha256: worker.stderrSha256,
 			promptSha256: worker.promptSha256,
@@ -2451,6 +2668,8 @@ const runId = makeRunId(flagValue(argv, "--target") ?? positionalTarget(argv) ??
 const plan = mode === "llm-run" ? (() => {
 	const target = flagValue(argv, "--target") ?? positionalTarget(argv) ?? "local-selfcheck";
 	const timeoutMs = parseIntFlag(argv, "--timeout-ms", Number(process.env.REPI_SWARM_LLM_TIMEOUT_MS ?? 210000), 5000, 30 * 60 * 1000);
+	const llmRunToolsMode = argv.includes("--no-tools") || !hasFlag(argv, "--tools") ? "disabled" : "explicit";
+	const llmRunTools = llmRunToolsMode === "explicit" ? flagValue(argv, "--tools", "") : undefined;
 	const baseArgs = [target, "--timeout-ms", String(timeoutMs)];
 	if (hasFlag(argv, ["--workers", "-w"])) baseArgs.push("--workers", String(parseIntFlag(argv, ["--workers", "-w"], 3, 1, 16)));
 	if (hasFlag(argv, "--max-concurrency")) baseArgs.push("--max-concurrency", String(parseIntFlag(argv, "--max-concurrency", 3, 1, 16)));
@@ -2462,14 +2681,17 @@ const plan = mode === "llm-run" ? (() => {
 	return {
 		...basePlan,
 		timeoutMs,
-		toolsDisabled: argv.includes("--no-tools"),
+		toolsMode: llmRunToolsMode,
+		toolsDisabled: llmRunToolsMode === "disabled",
 		workerPackets: basePlan.workerPackets.map((packet, index) => ({
 			...packet,
 			workerId: index + 1,
 			id: `worker-${index + 1}`,
 			role: "worker",
 			objective: "generic parallel llm worker",
-			tools: argv.includes("--no-tools") ? undefined : flagValue(argv, "--tools"),
+			tools: llmRunTools,
+			toolsMode: llmRunToolsMode,
+			agentToolchain: agentToolchainFor(packet.route || { id: "reverse-pentest-general" }, llmRunTools, llmRunToolsMode),
 			dependencies: [],
 			evidenceContract: ["non-empty stdout"],
 			mergeKeys: ["worker"],

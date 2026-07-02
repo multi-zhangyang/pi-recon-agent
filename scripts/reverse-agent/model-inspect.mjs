@@ -27,6 +27,7 @@ function usage() {
   repi model doctor [--fix] [--json]
   repi model list [--provider <id>] [--model <id>] [--show-urls] [--json]
   repi model add --provider <id> --api <openai-completions|openai-responses|anthropic-messages> --base-url <url> --model <id> [--api-key-stdin] [--set-default] [options]
+  repi model add --preset baseten-kimi-k2.7-code [--api-key-stdin] [--set-default] [options]
   repi model edit --provider <id> [--model <id>] [options]
   repi model remove --provider <id> [--model <id>] [--json]
   repi model login --provider <id> --api-key-stdin
@@ -39,6 +40,7 @@ function usage() {
 model doctor is offline: it parses ~/.repi/agent/models.json, checks provider/model metadata, local auth, default model, context window and cost fields; --fix repairs safe local config issues.
 model list hides provider base URLs by default to avoid leaking private gateway endpoints into screenshots/logs; add --show-urls for local troubleshooting.
 model add writes ~/.repi/agent/models.json and can store a local credential immediately with --api-key-stdin; model login writes/updates ~/.repi/agent/auth.json locally.
+model add --preset baseten-kimi-k2.7-code configures Baseten's OpenAI-compatible endpoint for moonshotai/Kimi-K2.7-Code with a 262144 context window; it never embeds an API key unless supplied through --api-key-stdin.
 For shell-history safety, pass API keys through --api-key-stdin. Plain --api-key is rejected unless REPI_ALLOW_INSECURE_API_KEY_ARG=1.
 model export never exports local API keys; model import preserves/creates env-ref apiKey fields and never writes auth.json.
 `;
@@ -186,6 +188,7 @@ const valueFlags = new Set([
 	"--provider",
 	"--model",
 	"--api",
+	"--preset",
 	"--base-url",
 	"--baseUrl",
 	"--api-key-env",
@@ -645,6 +648,35 @@ function providerEnvName(providerId) {
 		.replace(/^_+|_+$/g, "")}_API_KEY`;
 }
 
+const modelAddPresets = {
+	"baseten-kimi-k2.7-code": {
+		id: "baseten-kimi-k2.7-code",
+		provider: "baseten-kimi",
+		providerName: "Baseten Kimi K2.7 Code",
+		api: "openai-completions",
+		baseUrl: "https://inference.baseten.co/v1",
+		model: "moonshotai/Kimi-K2.7-Code",
+		modelName: "moonshotai/Kimi-K2.7-Code",
+		contextWindow: 262144,
+		maxTokens: 16384,
+		input: "text",
+	},
+};
+
+function normalizePresetId(value) {
+	const text = String(value ?? "").trim();
+	if (!text) return "";
+	const normalized = text.toLowerCase().replace(/_/g, "-");
+	if (normalized === "baseten-kimi-k27-code" || normalized === "kimi-k2.7-code-baseten") return "baseten-kimi-k2.7-code";
+	return normalized;
+}
+
+function modelAddPreset(args) {
+	const id = normalizePresetId(flagValue(args, "--preset"));
+	if (!id) return undefined;
+	return modelAddPresets[id] ? { ...modelAddPresets[id] } : { __error: `unknown model add preset: ${id}; available=${Object.keys(modelAddPresets).join(",")}` };
+}
+
 function inputList(value) {
 	const items = String(value || "text")
 		.split(",")
@@ -686,10 +718,20 @@ function upsertDefaultSetting(providerId, modelId) {
 }
 
 function buildAddReport() {
-	const providerId = flagValue(rawArgs, "--provider") || positional(rawArgs, 0);
-	const modelId = flagValue(rawArgs, "--model");
-	const api = flagValue(rawArgs, "--api", "openai-completions");
-	const baseUrl = flagValue(rawArgs, ["--base-url", "--baseUrl"]);
+	const preset = modelAddPreset(rawArgs);
+	if (preset?.__error) {
+		return {
+			kind: "repi-model-add-report",
+			schemaVersion: 1,
+			generatedAt: new Date().toISOString(),
+			ok: false,
+			error: preset.__error,
+		};
+	}
+	const providerId = flagValue(rawArgs, "--provider") || positional(rawArgs, 0) || preset?.provider;
+	const modelId = flagValue(rawArgs, "--model") || preset?.model;
+	const api = flagValue(rawArgs, "--api", preset?.api ?? "openai-completions");
+	const baseUrl = flagValue(rawArgs, ["--base-url", "--baseUrl"], preset?.baseUrl ?? "");
 	if (!providerId || !modelId || !baseUrl || !api) {
 		return {
 			kind: "repi-model-add-report",
@@ -748,11 +790,11 @@ function buildAddReport() {
 	const previousProvider = modelsConfig.providers[providerId] && typeof modelsConfig.providers[providerId] === "object" ? modelsConfig.providers[providerId] : {};
 	const modelEntry = {
 		id: modelId,
-		name: flagValue(rawArgs, ["--model-name", "--name"], modelId),
-		input: inputList(flagValue(rawArgs, "--input", "text")),
+		name: flagValue(rawArgs, ["--model-name", "--name"], preset?.modelName ?? modelId),
+		input: inputList(flagValue(rawArgs, "--input", preset?.input ?? "text")),
 		cost: costFromFlags(rawArgs),
-		contextWindow: intFlag(rawArgs, ["--context-window", "--context"], 262144, 1024, 1048576),
-		maxTokens: intFlag(rawArgs, ["--max-tokens", "--max-output"], 16384, 64, 131072),
+		contextWindow: intFlag(rawArgs, ["--context-window", "--context"], preset?.contextWindow ?? 262144, 1024, 1048576),
+		maxTokens: intFlag(rawArgs, ["--max-tokens", "--max-output"], preset?.maxTokens ?? 16384, 64, 131072),
 		reasoning: rawArgs.includes("--reasoning") ? boolFlag(rawArgs, "--reasoning", true) : boolFlag(rawArgs, "--reasoning", false),
 	};
 	const oldModels = Array.isArray(previousProvider.models) ? previousProvider.models : [];
@@ -763,7 +805,7 @@ function buildAddReport() {
 			: previousProvider.authHeader;
 	modelsConfig.providers[providerId] = {
 		...previousProvider,
-		name: flagValue(rawArgs, "--provider-name", previousProvider.name ?? providerId),
+		name: flagValue(rawArgs, "--provider-name", previousProvider.name ?? preset?.providerName ?? providerId),
 		baseUrl,
 		api,
 		apiKey: `$${apiKeyEnv}`,
@@ -785,6 +827,7 @@ function buildAddReport() {
 		schemaVersion: 1,
 		generatedAt: new Date().toISOString(),
 		ok: true,
+		preset: preset?.id ?? null,
 		provider: providerId,
 		model: modelId,
 		api,
@@ -1316,6 +1359,7 @@ function printMutationReport(title, report) {
 		return;
 	}
 	console.log(title);
+	if (report.preset) console.log(`preset=${report.preset}`);
 	if (report.provider) console.log(`provider=${report.provider}`);
 	if (report.model) console.log(`model=${report.model}`);
 	if (report.api) console.log(`api=${report.api}`);

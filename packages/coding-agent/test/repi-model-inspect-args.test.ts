@@ -74,4 +74,66 @@ describe("repi model argument parsing", () => {
 			error: "model default requires --provider <id> --model <id>",
 		});
 	});
+
+	it("adds the Baseten Kimi K2.7 Code preset without leaking the key or URL by default", () => {
+		const result = spawnSync(
+			process.execPath,
+			[
+				MODEL_INSPECT,
+				workspace,
+				"add",
+				"--preset",
+				"baseten-kimi-k2.7-code",
+				"--api-key-stdin",
+				"--set-default",
+				"--json",
+			],
+			{
+				encoding: "utf8",
+				env: { ...process.env, REPI_CODING_AGENT_DIR: agentDir },
+				input: "baseten-test-key\n",
+				timeout: 10_000,
+			},
+		);
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			ok: boolean;
+			preset: string;
+			provider: string;
+			model: string;
+			baseUrl: string;
+			authWritten: boolean;
+		};
+		expect(report).toMatchObject({
+			ok: true,
+			preset: "baseten-kimi-k2.7-code",
+			provider: "baseten-kimi",
+			model: "moonshotai/Kimi-K2.7-Code",
+			authWritten: true,
+		});
+		expect(report.baseUrl).toMatch(/^<redacted:url:/);
+		expect(report.baseUrl).not.toContain("baseten");
+		const models = JSON.parse(readFileSync(join(agentDir, "models.json"), "utf8")) as {
+			providers: Record<
+				string,
+				{ baseUrl: string; api: string; apiKey: string; models: Array<{ id: string; contextWindow: number }> }
+			>;
+		};
+		expect(models.providers["baseten-kimi"]).toMatchObject({
+			baseUrl: "https://inference.baseten.co/v1",
+			api: "openai-completions",
+			apiKey: "$REPI_BASETEN_KIMI_API_KEY",
+		});
+		expect(models.providers["baseten-kimi"].models[0]).toMatchObject({
+			id: "moonshotai/Kimi-K2.7-Code",
+			contextWindow: 262144,
+		});
+		expect(JSON.parse(readFileSync(join(agentDir, "auth.json"), "utf8"))).toMatchObject({
+			"baseten-kimi": { type: "api_key", key: "baseten-test-key" },
+		});
+		expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8"))).toMatchObject({
+			defaultProvider: "baseten-kimi",
+			defaultModel: "moonshotai/Kimi-K2.7-Code",
+		});
+	});
 });

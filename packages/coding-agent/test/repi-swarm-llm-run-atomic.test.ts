@@ -108,7 +108,19 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 					proofKit: { passive: string[]; proofExit: string[]; negativeControls: string[] };
 					commandPalette: { passive: string[]; proof: string[]; negative: string[] };
 					toolProbeCommand: string;
-					techniqueHints: { domains: string[]; techniqueIds: string[] };
+					techniqueHints: {
+						domains: string[];
+						techniqueIds: string[];
+						universalRules: string[];
+						playbook: string[];
+					};
+					agentToolchain: {
+						AgentToolchainV1: boolean;
+						toolsMode: string;
+						enabledTools: string[];
+						routeTools: string[];
+						callOrder: string[];
+					};
 				}>;
 			};
 			workersReport: Array<{
@@ -116,7 +128,14 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 				proofKit: { proofExit: string[] };
 				commandPalette: { passive: string[]; proof: string[]; negative: string[] };
 				toolProbeCommand: string;
-				techniqueHints: { domains: string[]; techniqueIds: string[] };
+				techniqueHints: { domains: string[]; techniqueIds: string[]; universalRules: string[]; playbook: string[] };
+				agentToolchain: {
+					AgentToolchainV1: boolean;
+					toolsMode: string;
+					enabledTools: string[];
+					routeTools: string[];
+					callOrder: string[];
+				};
 			}>;
 			merge: {
 				evidencePriorityDoctrine: { EvidencePriorityDoctrineV1: boolean };
@@ -130,7 +149,17 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 					coverage: { passive: boolean; proofExit: boolean; negativeControls: boolean };
 					route: { id: string };
 					toolProbeCommand: string;
-					techniqueHints: { domains: string[]; techniqueIds: string[] };
+					techniqueHints: {
+						domains: string[];
+						techniqueIds: string[];
+						universalRules: string[];
+						playbook: string[];
+					};
+					agentToolchain: {
+						AgentToolchainV1: boolean;
+						enabledTools: string[];
+						routeTools: string[];
+					};
 				}>;
 				mergeVerification: {
 					proofReady: boolean;
@@ -162,11 +191,20 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		expect(report.plan.workerPackets[0].toolProbeCommand).toContain("command -v");
 		expect(report.plan.workerPackets[0].techniqueHints.domains).toContain("exploit-reliability");
 		expect(report.plan.workerPackets[0].techniqueHints.techniqueIds).toContain("reliability-replay-matrix");
+		expect(report.plan.workerPackets[0].techniqueHints.universalRules.join("\n")).toContain("map before exploit");
+		expect(report.plan.workerPackets[0].techniqueHints.playbook.join("\n")).toContain("One-proof loop");
+		expect(report.plan.workerPackets[0].agentToolchain.AgentToolchainV1).toBe(true);
+		expect(report.plan.workerPackets[0].agentToolchain.toolsMode).toBe("default");
+		expect(report.plan.workerPackets[0].agentToolchain.enabledTools).toEqual(
+			expect.arrayContaining(["bash", "write", "edit", "re_route", "re_techniques", "re_verifier", "re_replayer"]),
+		);
+		expect(report.plan.workerPackets[0].agentToolchain.callOrder.join("\n")).toContain("re_techniques");
 		expect(report.workersReport[0].route.id).toBe("reverse-pentest-general");
 		expect(report.workersReport[0].proofKit.proofExit.length).toBeGreaterThan(0);
 		expect(report.workersReport[0].commandPalette.proof.length).toBeGreaterThan(0);
 		expect(report.workersReport[0].toolProbeCommand).toContain("tool:");
 		expect(report.workersReport[0].techniqueHints.techniqueIds).toContain("reliability-replay-matrix");
+		expect(report.workersReport[0].agentToolchain.enabledTools).toContain("re_techniques");
 		expect(report.merge.promotedClaims.length).toBe(1);
 		expect(report.merge.proofReadyPromotedClaims.length).toBe(1);
 		expect(report.merge.proofPromotionReady).toBe(true);
@@ -177,6 +215,8 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		expect(report.merge.proofChecklists[0].route.id).toBe("reverse-pentest-general");
 		expect(report.merge.proofChecklists[0].toolProbeCommand).toContain("command -v");
 		expect(report.merge.proofChecklists[0].techniqueHints.domains).toContain("exploit-reliability");
+		expect(report.merge.proofChecklists[0].techniqueHints.playbook.join("\n")).toContain("Merge discipline");
+		expect(report.merge.proofChecklists[0].agentToolchain.enabledTools).toContain("re_verifier");
 		expect(report.merge.proofChecklists[0].coverage).toMatchObject({
 			passive: true,
 			proofExit: true,
@@ -1497,6 +1537,7 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 					commandPalette: { passive: string[]; proof: string[]; negative: string[] };
 					toolProbeCommand: string;
 					techniqueHints: { domains: string[]; techniqueIds: string[] };
+					agentToolchain: { enabledTools: string[]; routeTools: string[] };
 				}>;
 				workerPackets: Array<{
 					route: { id: string };
@@ -1504,6 +1545,7 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 					commandPalette: { passive: string[]; proof: string[]; negative: string[] };
 					toolProbeCommand: string;
 					techniqueHints: { domains: string[]; techniqueIds: string[] };
+					agentToolchain: { enabledTools: string[]; routeTools: string[] };
 				}>;
 			};
 		};
@@ -1534,6 +1576,10 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 			expect(route.toolProbeCommand, `${route.id} tool probe`).toContain("command -v");
 			expect(route.techniqueHints.domains.length, `${route.id} technique domains`).toBeGreaterThan(0);
 			expect(route.techniqueHints.techniqueIds.length, `${route.id} technique ids`).toBeGreaterThan(0);
+			expect(route.agentToolchain.enabledTools, `${route.id} enabled agent tools`).toEqual(
+				expect.arrayContaining(["re_route", "re_techniques", "re_verifier"]),
+			);
+			expect(route.agentToolchain.routeTools.length, `${route.id} route agent tools`).toBeGreaterThan(0);
 		}
 		for (const packet of report.plan.workerPackets) {
 			expect(packet.commandPalette.passive.length, `${packet.route.id} worker passive commands`).toBeGreaterThan(0);
@@ -1546,6 +1592,10 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 			expect(packet.techniqueHints.techniqueIds.length, `${packet.route.id} worker technique ids`).toBeGreaterThan(
 				0,
 			);
+			expect(packet.agentToolchain.enabledTools, `${packet.route.id} worker enabled agent tools`).toContain(
+				"re_techniques",
+			);
+			expect(packet.agentToolchain.routeTools.length, `${packet.route.id} worker route tools`).toBeGreaterThan(0);
 		}
 		expect(new Set(report.plan.workerPackets.map((packet) => packet.route.id)).size).toBeGreaterThanOrEqual(10);
 	});
