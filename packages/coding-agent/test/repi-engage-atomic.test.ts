@@ -2488,23 +2488,34 @@ jobs:
 		expect(report.commands.some((row) => row.id.startsWith("crypto-stego-"))).toBe(true);
 		expect(report.commands.map((row) => row.id)).toContain("crypto-stego-media-quicklook");
 		expect(report.commands.map((row) => row.id)).toContain("crypto-stego-solver-artifact");
+		expect(report.commands.map((row) => row.id)).toContain("crypto-stego-verifier-artifact");
+		expect(report.commands.map((row) => row.id)).toContain("crypto-stego-verification");
 		expect(report.commands.map((row) => row.id)).toContain("crypto-stego-transform-claims");
 		expect(report.summary.anchors).toContain("crypto/stego anchors");
 		expect(report.summary.anchors).toContain("PNG/stego structure anchors");
+		expect(report.summary.anchors).toContain("crypto/stego verifier anchors");
 		expect(report.summary.anchors).toContain("crypto/stego transform claim anchors");
 		expect(report.nextQueue.some((command) => command.includes("crypto/stego"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("crypto-stego-media-quicklook.json"))).toBe(true);
+		expect(report.nextQueue.some((command) => command.includes("crypto-stego-verification.json"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("crypto-stego-transform-claims.json"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("claimLedger"))).toBe(true);
+		expect(report.nextQueue.some((command) => command.includes("crypto-stego-verifier.py"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("crypto-stego-solver.py"))).toBe(true);
 		const mediaPath = join(report.artifactDir, "crypto-stego-media-quicklook.json");
+		const verificationPath = join(report.artifactDir, "crypto-stego-verification.json");
 		const transformClaimsPath = join(report.artifactDir, "crypto-stego-transform-claims.json");
+		const verifierPath = join(report.artifactDir, "crypto-stego-verifier.py");
 		const solverPath = join(report.artifactDir, "crypto-stego-solver.py");
 		expect(existsSync(mediaPath)).toBe(true);
+		expect(existsSync(verificationPath)).toBe(true);
 		expect(existsSync(transformClaimsPath)).toBe(true);
+		expect(existsSync(verifierPath)).toBe(true);
 		expect(existsSync(solverPath)).toBe(true);
 		expect(statSync(mediaPath).mode & 0o777).toBe(0o600);
+		expect(statSync(verificationPath).mode & 0o777).toBe(0o600);
 		expect(statSync(transformClaimsPath).mode & 0o777).toBe(0o600);
+		expect(statSync(verifierPath).mode & 0o777).toBe(0o700);
 		expect(statSync(solverPath).mode & 0o777).toBe(0o700);
 		const media = JSON.parse(readFileSync(mediaPath, "utf8")) as {
 			ihdr: { width: number; height: number; colorType: number };
@@ -2536,9 +2547,35 @@ jobs:
 				"embedded-zip-archive-parsed",
 			]),
 		);
+		const verification = JSON.parse(readFileSync(verificationPath, "utf8")) as {
+			proofReady: boolean;
+			transformProofReady: boolean;
+			stats: { structuresVerified: number; negativeControlsPassed: number };
+			claimLedger: Array<{ claimType: string; verdict: string }>;
+			composedPaths: Array<{ claimType: string; verdict: string }>;
+		};
+		expect(JSON.stringify(verification)).not.toContain(secret);
+		expect(verification.proofReady).toBe(true);
+		expect(verification.transformProofReady).toBe(true);
+		expect(verification.stats.structuresVerified).toBeGreaterThanOrEqual(1);
+		expect(verification.stats.negativeControlsPassed).toBeGreaterThanOrEqual(1);
+		expect(verification.claimLedger).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ claimType: "crypto-file-hash-verification-proof", verdict: "promoted" }),
+				expect.objectContaining({ claimType: "crypto-media-quicklook-determinism-proof", verdict: "promoted" }),
+				expect.objectContaining({ claimType: "crypto-structure-offset-verification-proof", verdict: "promoted" }),
+				expect.objectContaining({ claimType: "crypto-hidden-channel-negative-control-proof", verdict: "promoted" }),
+			]),
+		);
+		expect(
+			verification.composedPaths.some(
+				(claim) => claim.claimType === "crypto-stego-verification-proof-path" && claim.verdict === "promoted",
+			),
+		).toBe(true);
 		const transformClaims = JSON.parse(readFileSync(transformClaimsPath, "utf8")) as {
 			proofReady: boolean;
 			transformProofReady: boolean;
+			verificationStats: { negativeControlsPassed: number } | null;
 			claimLedger: Array<{ claimType: string; verdict: string }>;
 			composedPaths: Array<{ claimType: string; verdict: string }>;
 			promotionReport: { promotedClaims: Array<{ claimType: string }> };
@@ -2557,8 +2594,19 @@ jobs:
 			),
 		).toBe(true);
 		expect(
+			transformClaims.claimLedger.some(
+				(claim) => claim.claimType === "crypto-structure-offset-verification-proof" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(transformClaims.verificationStats?.negativeControlsPassed).toBeGreaterThanOrEqual(1);
+		expect(
 			transformClaims.composedPaths.some(
 				(claim) => claim.claimType === "crypto-transform-proof-path" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			transformClaims.composedPaths.some(
+				(claim) => claim.claimType === "crypto-stego-verification-proof-path" && claim.verdict === "promoted",
 			),
 		).toBe(true);
 		expect(
@@ -2575,6 +2623,12 @@ jobs:
 		expect(solver.stdout).toContain('"label": "signal-string"');
 		expect(solver.stdout).toContain('"label": "transform-chain"');
 		expect(solver.stdout).toContain('"chain": ["base64"]');
+		const verifier = spawnSync("python3", [verifierPath, "--self-test"], {
+			encoding: "utf8",
+			timeout: 15_000,
+		});
+		expect(verifier.status, `${verifier.stderr}\n${verifier.stdout}`).toBe(0);
+		expect(verifier.stdout).toContain("repi-crypto-stego-verifier-self-test");
 		expect(collectTmp(agentDir)).toEqual([]);
 	});
 
@@ -2607,20 +2661,30 @@ jobs:
 		expect(report.target.lane).toBe("crypto-stego");
 		expect(report.commands.map((row) => row.id)).toContain("crypto-stego-media-quicklook");
 		expect(report.commands.map((row) => row.id)).toContain("crypto-stego-solver-artifact");
+		expect(report.commands.map((row) => row.id)).toContain("crypto-stego-verifier-artifact");
+		expect(report.commands.map((row) => row.id)).toContain("crypto-stego-verification");
 		expect(report.commands.map((row) => row.id)).toContain("crypto-stego-transform-claims");
 		expect(report.summary.anchors).toContain("crypto/stego anchors");
 		expect(report.summary.anchors).toContain("WAV/stego structure anchors");
+		expect(report.summary.anchors).toContain("crypto/stego verifier anchors");
 		expect(report.summary.anchors).toContain("crypto/stego transform claim anchors");
 		expect(report.nextQueue.some((command) => command.includes("crypto-stego-media-quicklook.json"))).toBe(true);
+		expect(report.nextQueue.some((command) => command.includes("crypto-stego-verification.json"))).toBe(true);
 		expect(report.nextQueue.some((command) => command.includes("crypto-stego-transform-claims.json"))).toBe(true);
 		const mediaPath = join(report.artifactDir, "crypto-stego-media-quicklook.json");
+		const verificationPath = join(report.artifactDir, "crypto-stego-verification.json");
 		const transformClaimsPath = join(report.artifactDir, "crypto-stego-transform-claims.json");
+		const verifierPath = join(report.artifactDir, "crypto-stego-verifier.py");
 		const solverPath = join(report.artifactDir, "crypto-stego-solver.py");
 		expect(existsSync(mediaPath)).toBe(true);
+		expect(existsSync(verificationPath)).toBe(true);
 		expect(existsSync(transformClaimsPath)).toBe(true);
+		expect(existsSync(verifierPath)).toBe(true);
 		expect(existsSync(solverPath)).toBe(true);
 		expect(statSync(mediaPath).mode & 0o777).toBe(0o600);
+		expect(statSync(verificationPath).mode & 0o777).toBe(0o600);
 		expect(statSync(transformClaimsPath).mode & 0o777).toBe(0o600);
+		expect(statSync(verifierPath).mode & 0o777).toBe(0o700);
 		expect(statSync(solverPath).mode & 0o777).toBe(0o700);
 		const media = JSON.parse(readFileSync(mediaPath, "utf8")) as {
 			format: string;
@@ -2655,9 +2719,32 @@ jobs:
 				"embedded-zip-archive-parsed",
 			]),
 		);
+		const verification = JSON.parse(readFileSync(verificationPath, "utf8")) as {
+			proofReady: boolean;
+			transformProofReady: boolean;
+			stats: { structuresVerified: number; negativeControlsPassed: number };
+			claimLedger: Array<{ claimType: string; verdict: string }>;
+			composedPaths: Array<{ claimType: string; verdict: string }>;
+		};
+		expect(JSON.stringify(verification)).not.toContain(secret);
+		expect(verification.proofReady).toBe(true);
+		expect(verification.transformProofReady).toBe(true);
+		expect(verification.stats.structuresVerified).toBeGreaterThanOrEqual(1);
+		expect(verification.stats.negativeControlsPassed).toBeGreaterThanOrEqual(1);
+		expect(
+			verification.claimLedger.some(
+				(claim) => claim.claimType === "crypto-structure-offset-verification-proof" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			verification.composedPaths.some(
+				(claim) => claim.claimType === "crypto-stego-verification-proof-path" && claim.verdict === "promoted",
+			),
+		).toBe(true);
 		const transformClaims = JSON.parse(readFileSync(transformClaimsPath, "utf8")) as {
 			proofReady: boolean;
 			transformProofReady: boolean;
+			verificationStats: { negativeControlsPassed: number } | null;
 			claimLedger: Array<{ claimType: string; verdict: string }>;
 			composedPaths: Array<{ claimType: string; verdict: string }>;
 		};
@@ -2675,8 +2762,20 @@ jobs:
 			),
 		).toBe(true);
 		expect(
+			transformClaims.claimLedger.some(
+				(claim) =>
+					claim.claimType === "crypto-hidden-channel-negative-control-proof" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(transformClaims.verificationStats?.negativeControlsPassed).toBeGreaterThanOrEqual(1);
+		expect(
 			transformClaims.composedPaths.some(
 				(claim) => claim.claimType === "crypto-transform-proof-path" && claim.verdict === "promoted",
+			),
+		).toBe(true);
+		expect(
+			transformClaims.composedPaths.some(
+				(claim) => claim.claimType === "crypto-stego-verification-proof-path" && claim.verdict === "promoted",
 			),
 		).toBe(true);
 		const solver = spawnSync("python3", [solverPath, stegoTarget], {
@@ -2685,6 +2784,12 @@ jobs:
 		});
 		expect(solver.status, `${solver.stderr}\n${solver.stdout}`).toBe(0);
 		expect(solver.stdout).toContain('"label": "signal-string"');
+		const verifier = spawnSync("python3", [verifierPath, "--self-test"], {
+			encoding: "utf8",
+			timeout: 15_000,
+		});
+		expect(verifier.status, `${verifier.stderr}\n${verifier.stdout}`).toBe(0);
+		expect(verifier.stdout).toContain("repi-crypto-stego-verifier-self-test");
 		expect(collectTmp(agentDir)).toEqual([]);
 	});
 

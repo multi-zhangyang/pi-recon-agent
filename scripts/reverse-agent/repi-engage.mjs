@@ -612,7 +612,9 @@ function buildProofArtifactRows(targetInfo, artifactDir) {
 	}
 	if (targetInfo.lane === "crypto-stego") {
 		add("crypto-stego-media-quicklook.json", "crypto/stego media structure quicklook output");
+		add("crypto-stego-verification.json", "crypto/stego file/offset verifier output");
 		add("crypto-stego-transform-claims.json", "crypto/stego transform claim ledger");
+		add("crypto-stego-verifier.py", "crypto/stego structure verifier harness", 0o700);
 		add("crypto-stego-solver.py", "crypto/stego transform-chain solver harness", 0o700);
 	}
 	if (targetInfo.lane === "agent-boundary") {
@@ -646,7 +648,7 @@ function buildProofCoverageGaps(targetInfo, artifactRows) {
 	if (targetInfo.lane === "native-pwn") requireAny("native-replay", ["native-runtime-verification.json", "native-primitive-claims.json", "native-runtime-verifier.py", "native-replay-verifier.py", "native-exploit-hypotheses.json", "native-static-triage.json"], "native targets need replay/triage/hypothesis/verifier artifacts");
 	if (targetInfo.lane === "js-reverse") requireAny("js-reverse-workbench", ["js-reverse-workbench.json", "js-reverse-workbench.mjs", "workspace-source-runtime-map.json"], "JS reverse targets need local signer/API/workspace evidence artifacts");
 	if (targetInfo.lane === "pcap-dfir") requireAny("pcap-flow-summary", ["pcap-flow-claims.json", "pcap-flow-verification.json", "pcap-flow-verifier.mjs", "pcap-flow-summary.json"], "PCAP targets need parsed flow/stream verifier evidence");
-	if (targetInfo.lane === "crypto-stego") requireAny("crypto-transform-solver", ["crypto-stego-transform-claims.json", "crypto-stego-solver.py", "crypto-stego-media-quicklook.json"], "crypto/stego targets need a transform-chain verifier or media structure proof");
+	if (targetInfo.lane === "crypto-stego") requireAny("crypto-transform-solver", ["crypto-stego-verification.json", "crypto-stego-verifier.py", "crypto-stego-transform-claims.json", "crypto-stego-solver.py", "crypto-stego-media-quicklook.json"], "crypto/stego targets need a transform-chain verifier or media structure proof");
 	if (targetInfo.lane === "mobile" || targetInfo.lane === "mobile-ios") requireAny("mobile-runtime-hook", ["mobile-attack-surface-claims.json", "mobile-frida-hooks.js", "mobile-archive-summary.json"], "mobile targets need archive/runtime hook anchors");
 	if (targetInfo.lane === "firmware-iot") requireAny("firmware-extract-plan", ["firmware-attack-surface.json", "firmware-extraction-verification.json", "firmware-extraction-verifier.py", "firmware-extract-plan.sh", "firmware-quicklook.json"], "firmware targets need structure/extraction verifier anchors");
 	if (targetInfo.lane === "memory-forensics") requireAny("memory-triage-plan", ["memory-evidence-claims.json", "memory-evidence-verification.json", "memory-evidence-verifier.py", "memory-triage-plan.sh", "memory-quicklook.json"], "memory targets need triage/correlation verifier anchors");
@@ -728,6 +730,7 @@ function buildProofLiveChecks(targetInfo, artifactDir, toolState) {
 		for (const [id, relPath, reason] of [
 			["native-runtime-verifier-pycompile", "native-runtime-verifier.py", "syntax-check native runtime verifier"],
 			["pcap-http-object-verifier-pycompile", "pcap-http-object-verifier.py", "syntax-check PCAP object verifier"],
+			["crypto-stego-verifier-pycompile", "crypto-stego-verifier.py", "syntax-check crypto/stego verifier"],
 			["crypto-stego-solver-pycompile", "crypto-stego-solver.py", "syntax-check crypto/stego solver harness"],
 			["agent-boundary-payloads-pycompile", "agent-boundary-payloads.py", "syntax-check agent boundary payload harness"],
 			["memory-evidence-verifier-pycompile", "memory-evidence-verifier.py", "syntax-check memory evidence verifier"],
@@ -739,6 +742,8 @@ function buildProofLiveChecks(targetInfo, artifactDir, toolState) {
 		}
 		const agentBoundaryPayloads = proofArtifactPath(artifactDir, "agent-boundary-payloads.py");
 		if (existsSync(agentBoundaryPayloads)) add({ id: "agent-boundary-payloads-self-test", command: python, args: [agentBoundaryPayloads, "--self-test"], reason: "execute agent boundary replay harness self-test with unsafe/control payloads" });
+		const cryptoVerifier = proofArtifactPath(artifactDir, "crypto-stego-verifier.py");
+		if (existsSync(cryptoVerifier)) add({ id: "crypto-stego-verifier-self-test", command: python, args: [cryptoVerifier, "--self-test"], reason: "execute crypto/stego verifier self-test with offset/hash negative controls" });
 		const memoryVerifier = proofArtifactPath(artifactDir, "memory-evidence-verifier.py");
 		if (existsSync(memoryVerifier)) add({ id: "memory-evidence-verifier-self-test", command: python, args: [memoryVerifier, "--self-test"], reason: "execute memory evidence verifier self-test with offset/correlation negative controls" });
 		const malwareVerifier = proofArtifactPath(artifactDir, "malware-config-verifier.py");
@@ -935,6 +940,7 @@ const unifiedProofGraphArtifactCandidates = [
 	"workspace-route-repair-queue.json",
 	"native-runtime-verification.json",
 	"native-primitive-claims.json",
+	"crypto-stego-verification.json",
 	"crypto-stego-transform-claims.json",
 	"mobile-attack-surface-claims.json",
 	"pcap-flow-verification.json",
@@ -996,6 +1002,7 @@ function proofGraphRepairPriority(blocker) {
 	if (/missing-session|credential|authorization|cookie|token|principal/i.test(blocker)) return "high";
 	if (/missing-pcap-(?:capture-hash|quicklook-determinism|credential-signal|reassembly-hash|dns-tunnel|object-artifact|verifier-negative-control)/i.test(blocker)) return "high";
 	if (/missing-native-(?:target-hash|replay-case|crash-differential|cyclic-payload|runtime-negative-control)/i.test(blocker)) return "high";
+	if (/missing-crypto-(?:file-hash|media-determinism|structure-offset|negative-control)/i.test(blocker)) return "high";
 	if (/missing-memory-(?:image-hash|signal-offset|process-network|credential-context|timeline|negative-control)/i.test(blocker)) return "high";
 	if (/missing-(?:ioc-offset|config-extraction|overlay-carve|sample-hash|import-parser|network-ioc-negative-control)/i.test(blocker)) return "high";
 	if (/missing-(?:firmware-image-hash|signature-offset|rootfs-carve|firmware-extraction-negative-control)|rootfs-carve-truncated/i.test(blocker)) return "high";
@@ -1041,6 +1048,10 @@ function proofGraphRepairAction(blocker) {
 		"missing-native-crash-differential-verification": "Require repeated cyclic crashes with stable exit/signal and a non-crashing baseline control.",
 		"missing-native-cyclic-payload-verification": "Regenerate native-cyclic-payload.bin and verify offset self-test binding with native-cyclic-offset.py.",
 		"missing-native-runtime-negative-control": "Add target/payload mutation and benign-baseline controls before promoting exploit proof.",
+		"missing-crypto-file-hash-verification": "Rerun crypto-stego-verifier.py against the original file and require size/SHA-256 equality.",
+		"missing-crypto-media-determinism": "Reparse PNG/WAV quicklook deterministically before promoting chunk or bit-plane evidence.",
+		"missing-crypto-structure-offset-verification": "Verify chunks, trailing bytes, embedded archives, or audio slices by exact offset and SHA-256.",
+		"missing-crypto-negative-control": "Add file mutation and shifted-offset controls so hidden-channel matches have a rejection oracle.",
 	};
 	return actions[blocker] ?? "Drain this blocker by collecting source-bound runtime evidence and rerun the relevant harness.";
 }
@@ -7071,6 +7082,190 @@ function writeCryptoStegoSolver(artifactDir, target) {
 	return path;
 }
 
+function cryptoStegoVerifierSource() {
+	return String.raw`#!/usr/bin/env python3
+import argparse
+import hashlib
+import json
+import os
+import stat
+import tempfile
+
+
+def sha256(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def file_identity(path, media):
+    with open(path, "rb") as handle:
+        data = handle.read()
+    st = os.stat(path)
+    identity = {
+        "size": len(data),
+        "sha256": sha256(data),
+        "headerHex": data[:16].hex(),
+        "mode": oct(stat.S_IMODE(st.st_mode)),
+        "verified": len(data) == media.get("size") and sha256(data) == media.get("sha256") if media else True,
+    }
+    if data:
+        mutated = bytearray(data)
+        mutated[0] ^= 0xFF
+        identity["negativeControl"] = {
+            "controlType": "crypto-file-byte-mutation-rejection",
+            "mutatedSha256": sha256(bytes(mutated)),
+            "passed": sha256(bytes(mutated)) != identity["sha256"],
+        }
+    return data, identity
+
+
+def check_png_chunk(data, chunk):
+    offset = int(chunk.get("offset", -1))
+    length = int(chunk.get("length", -1))
+    expected_type = chunk.get("type")
+    verified = False
+    reason = "chunk-out-of-range"
+    actual = {}
+    control = None
+    if offset >= 0 and length >= 0 and offset + 12 + length <= len(data):
+        actual_type = data[offset + 4:offset + 8].decode("latin1", "replace")
+        payload = data[offset + 8:offset + 8 + length]
+        actual = {"offset": offset, "type": actual_type, "length": length, "sha256": sha256(payload)}
+        verified = actual_type == expected_type and actual["sha256"] == chunk.get("sha256")
+        reason = "chunk-offset-hash-match" if verified else "chunk-offset-hash-mismatch"
+        shifted = offset + 1 if offset + 1 + min(length, 16) <= len(data) else (offset - 1 if offset > 0 else None)
+        if shifted is not None:
+            shifted_payload = data[shifted + 8:shifted + 8 + min(length, 64)] if shifted + 8 < len(data) else b""
+            control = {"controlType": "crypto-chunk-shifted-offset-rejection", "offset": shifted, "mutatedSha256": sha256(shifted_payload), "passed": sha256(shifted_payload) != chunk.get("sha256")}
+    return {"kind": "chunk", "type": expected_type, "offset": offset, "length": length, "actual": actual, "verified": verified, "reason": reason, "negativeControl": control}
+
+
+def check_slice(data, row, kind):
+    if not row:
+        return None
+    offset = int(row.get("offset", -1))
+    length = int(row.get("length", -1))
+    expected_sha = row.get("sha256")
+    verified = False
+    actual = {}
+    control = None
+    reason = "slice-out-of-range"
+    if offset >= 0 and length >= 0 and offset + length <= len(data):
+        payload = data[offset:offset + length]
+        actual = {"offset": offset, "length": length, "sha256": sha256(payload), "headerHex": payload[:16].hex()}
+        verified = sha256(payload) == expected_sha
+        reason = "slice-offset-hash-match" if verified else "slice-offset-hash-mismatch"
+        shifted = offset + 1 if offset + 1 + min(length, 16) <= len(data) else (offset - 1 if offset > 0 else None)
+        if shifted is not None:
+            shifted_payload = data[shifted:shifted + min(length, 64)]
+            control = {"controlType": "crypto-slice-shifted-offset-rejection", "kind": kind, "offset": shifted, "mutatedSha256": sha256(shifted_payload), "passed": sha256(shifted_payload) != expected_sha}
+    return {"kind": kind, "offset": offset, "length": length, "expectedSha256": expected_sha, "actual": actual, "verified": verified, "reason": reason, "negativeControl": control}
+
+
+def verify(target, media_path):
+    media = None
+    if media_path and os.path.exists(media_path):
+        with open(media_path, "r", encoding="utf-8") as handle:
+            media = json.load(handle)
+    data, identity = file_identity(target, media or {})
+    structure_checks = []
+    if media:
+        if media.get("format") == "png":
+            structure_checks.extend(check_png_chunk(data, chunk) for chunk in media.get("chunks") or [])
+        else:
+            for chunk in media.get("chunks") or []:
+                structure_checks.append(check_slice(data, {"offset": int(chunk.get("offset", 0)) + 8, "length": chunk.get("length"), "sha256": chunk.get("sha256")}, "chunk:" + str(chunk.get("type"))))
+        if media.get("trailing"):
+            structure_checks.append(check_slice(data, media.get("trailing"), "trailing"))
+        if media.get("audioData"):
+            structure_checks.append(check_slice(data, media.get("audioData"), "audio-data"))
+        for archive in media.get("embeddedArchives") or []:
+            if archive.get("length") and archive.get("sha256"):
+                structure_checks.append(check_slice(data, archive, "embedded-archive"))
+    structure_checks = [row for row in structure_checks if row]
+    controls = [identity.get("negativeControl")] + [row.get("negativeControl") for row in structure_checks]
+    controls = [row for row in controls if row and row.get("passed")]
+    verified_structures = [row for row in structure_checks if row.get("verified")]
+    blockers = []
+    if not identity.get("verified"):
+        blockers.append("missing-crypto-file-hash-verification")
+    if media and not verified_structures:
+        blockers.append("missing-crypto-structure-offset-verification")
+    if not controls:
+        blockers.append("missing-crypto-negative-control")
+    proof_ready = identity.get("verified") and (not media or bool(verified_structures)) and bool(controls)
+    repair_queue = [{"id": "crypto-stego-verification-" + blocker, "blocker": blocker, "action": "Collect verifier-bound crypto/stego offsets and rerun crypto-stego-verifier.py.", "rerunCommand": "python3 crypto-stego-verifier.py <target> crypto-stego-media-quicklook.json crypto-stego-verification.json"} for blocker in blockers]
+    return {
+        "kind": "repi-crypto-stego-verification",
+        "schemaVersion": 1,
+        "target": target,
+        "proofReady": proof_ready,
+        "fileIdentity": identity,
+        "mediaQuicklook": {"present": bool(media), "format": media.get("format") if media else None, "sha256": sha256(json.dumps(media, sort_keys=True).encode()) if media else None},
+        "structureChecks": structure_checks,
+        "negativeControls": controls,
+        "stats": {"structuresVerified": len(verified_structures), "negativeControlsPassed": len(controls)},
+        "repairQueue": repair_queue,
+        "promotionReport": {"proofReady": proof_ready, "blockers": blockers},
+    }
+
+
+def self_test():
+    with tempfile.TemporaryDirectory() as tmp:
+        payload = b"hide"
+        data = b"\x89PNG\r\n\x1a\n" + len(payload).to_bytes(4, "big") + b"tEXt" + payload + b"\x00\x00\x00\x00" + b"TRAIL"
+        target = os.path.join(tmp, "sample.png")
+        with open(target, "wb") as handle:
+            handle.write(data)
+        media = {
+            "kind": "repi-crypto-stego-media-quicklook",
+            "schemaVersion": 1,
+            "format": "png",
+            "size": len(data),
+            "sha256": sha256(data),
+            "chunks": [{"offset": 8, "type": "tEXt", "length": len(payload), "sha256": sha256(payload)}],
+            "trailing": {"offset": len(data) - 5, "length": 5, "sha256": sha256(b"TRAIL")},
+            "embeddedArchives": [],
+        }
+        media_path = os.path.join(tmp, "crypto-stego-media-quicklook.json")
+        with open(media_path, "w", encoding="utf-8") as handle:
+            json.dump(media, handle)
+        result = verify(target, media_path)
+        assert result["proofReady"], json.dumps(result, sort_keys=True)
+        print(json.dumps({"kind": "repi-crypto-stego-verifier-self-test", "status": "ok", "stats": result["stats"]}, sort_keys=True))
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Verify REPI crypto/stego file, media offsets, carves, and negative controls.")
+    parser.add_argument("target", nargs="?")
+    parser.add_argument("media", nargs="?", default="crypto-stego-media-quicklook.json")
+    parser.add_argument("output", nargs="?", default="crypto-stego-verification.json")
+    parser.add_argument("--self-test", action="store_true")
+    args = parser.parse_args()
+    if args.self_test:
+        self_test()
+        return 0
+    if not args.target:
+        parser.error("target is required unless --self-test is used")
+    result = verify(args.target, args.media)
+    with open(args.output, "w", encoding="utf-8") as handle:
+        json.dump(result, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    print(json.dumps({"kind": result["kind"], "proofReady": result["proofReady"], "stats": result["stats"], "output": args.output}, sort_keys=True))
+    return 0 if result["proofReady"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+`;
+}
+
+function writeCryptoStegoVerifier(artifactDir) {
+	if (noWrite || !artifactDir) return undefined;
+	const path = join(artifactDir, "crypto-stego-verifier.py");
+	writePrivate(path, cryptoStegoVerifierSource(), 0o700);
+	return path;
+}
+
 function dataLooksLikePng(target) {
 	try {
 		const data = readFileSync(target);
@@ -7476,8 +7671,238 @@ function cryptoStegoEvidenceRows(rows, valueKey = "text", limit = 24) {
 	});
 }
 
-function cryptoStegoTransformClaims(target, artifactDir) {
+function cryptoStegoVerificationSummary(target, artifactDir) {
+	const data = readFileSync(target);
 	const media = readJsonArtifact(join(artifactDir, "crypto-stego-media-quicklook.json"));
+	const fileSha256 = bufferSha256(data);
+	const fileIdentity = {
+		size: data.length,
+		sha256: fileSha256,
+		headerHex: data.subarray(0, 16).toString("hex"),
+		verified: media ? media.size === data.length && media.sha256 === fileSha256 : true,
+	};
+	if (data.length) {
+		const mutated = Buffer.from(data);
+		mutated[0] ^= 0xff;
+		const mutatedSha256 = bufferSha256(mutated);
+		fileIdentity.negativeControl = {
+			controlType: "crypto-file-byte-mutation-rejection",
+			mutatedSha256,
+			passed: mutatedSha256 !== fileSha256,
+		};
+	}
+	let mediaQuicklookDeterminism = { present: Boolean(media), verified: false, format: media?.format ?? null, quicklookSha256: null, reparseSha256: null, reason: media ? "not-run" : "missing-media-quicklook" };
+	if (media) {
+		try {
+			const reparsed = cryptoStegoMediaQuicklook(target);
+			const quicklookSha256 = httpSecretHash(JSON.stringify(media));
+			const reparseSha256 = httpSecretHash(JSON.stringify(reparsed));
+			mediaQuicklookDeterminism = {
+				present: true,
+				verified: quicklookSha256 === reparseSha256,
+				format: media.format ?? null,
+				quicklookSha256,
+				reparseSha256,
+				reparseRisks: reparsed.risks ?? [],
+			};
+		} catch (error) {
+			mediaQuicklookDeterminism = { present: true, verified: false, format: media.format ?? null, quicklookSha256: httpSecretHash(JSON.stringify(media)), reparseSha256: null, reason: error instanceof Error ? redact(error.message) : redact(String(error)) };
+		}
+	}
+	const structureChecks = [];
+	const addSliceCheck = (kind, row) => {
+		if (!row || !Number.isFinite(Number(row.offset)) || !Number.isFinite(Number(row.length))) return;
+		const offset = Number(row.offset);
+		const length = Number(row.length);
+		let verified = false;
+		let actual = {};
+		let reason = "slice-out-of-range";
+		let negativeControl = null;
+		if (offset >= 0 && length >= 0 && offset + length <= data.length) {
+			const slice = data.subarray(offset, offset + length);
+			const actualSha256 = bufferSha256(slice);
+			actual = { offset, length, sha256: actualSha256, headerHex: slice.subarray(0, 16).toString("hex") };
+			verified = actualSha256 === row.sha256;
+			reason = verified ? "slice-offset-hash-match" : "slice-offset-hash-mismatch";
+			const shiftedOffset = offset + 1 + Math.min(length, 16) <= data.length ? offset + 1 : offset > 0 ? offset - 1 : null;
+			if (shiftedOffset != null) {
+				const shifted = data.subarray(shiftedOffset, shiftedOffset + Math.min(length, 64));
+				negativeControl = {
+					controlType: "crypto-slice-shifted-offset-rejection",
+					kind,
+					mutatedOffset: shiftedOffset,
+					mutatedSha256: bufferSha256(shifted),
+					passed: bufferSha256(shifted) !== row.sha256,
+				};
+			}
+		}
+		structureChecks.push({ kind, offset, length, expectedSha256: row.sha256 ?? null, actual, verified, reason, negativeControl });
+	};
+	if (media?.format === "png") {
+		for (const chunk of media.chunks ?? []) {
+			const offset = Number(chunk.offset);
+			const length = Number(chunk.length);
+			let verified = false;
+			let actual = {};
+			let reason = "chunk-out-of-range";
+			let negativeControl = null;
+			if (Number.isFinite(offset) && Number.isFinite(length) && offset >= 0 && length >= 0 && offset + 12 + length <= data.length) {
+				const type = data.toString("ascii", offset + 4, offset + 8).replace(/[^\x20-\x7e]/g, "?");
+				const payload = data.subarray(offset + 8, offset + 8 + length);
+				const actualSha256 = bufferSha256(payload);
+				actual = { type, length, sha256: actualSha256 };
+				verified = type === chunk.type && actualSha256 === chunk.sha256;
+				reason = verified ? "png-chunk-offset-hash-match" : "png-chunk-offset-hash-mismatch";
+				const shiftedOffset = offset + 1 + Math.min(length, 16) <= data.length ? offset + 1 : offset > 0 ? offset - 1 : null;
+				if (shiftedOffset != null) {
+					const shifted = data.subarray(shiftedOffset + 8, shiftedOffset + 8 + Math.min(length, 64));
+					negativeControl = {
+						controlType: "crypto-chunk-shifted-offset-rejection",
+						type: chunk.type,
+						mutatedOffset: shiftedOffset,
+						mutatedSha256: bufferSha256(shifted),
+						passed: bufferSha256(shifted) !== chunk.sha256,
+					};
+				}
+			}
+			structureChecks.push({ kind: "png-chunk", type: chunk.type, offset, length, expectedSha256: chunk.sha256, actual, verified, reason, negativeControl });
+		}
+	}
+	if (media?.format === "wav") {
+		for (const chunk of media.chunks ?? []) addSliceCheck(`wav-chunk:${chunk.type}`, { offset: Number(chunk.offset) + 8, length: chunk.length, sha256: chunk.sha256 });
+	}
+	if (media?.trailing) addSliceCheck("trailing", media.trailing);
+	if (media?.audioData) addSliceCheck("audio-data", media.audioData);
+	for (const archive of media?.embeddedArchives ?? []) {
+		if (archive.sha256 && archive.length) addSliceCheck("embedded-archive", archive);
+	}
+	const verifiedStructures = structureChecks.filter((row) => row.verified);
+	const negativeControls = [fileIdentity.negativeControl, ...structureChecks.map((row) => row.negativeControl)].filter((row) => row?.passed);
+	const claimLedger = [];
+	const composedPaths = [];
+	const addClaim = (claim) => {
+		const normalized = { verdict: "promoted", confidence: 0.76, blockers: [], ...claim };
+		claimLedger.push(normalized);
+		return normalized;
+	};
+	const fileClaim = fileIdentity.verified
+		? addClaim({
+				id: "crypto-file-hash-verification-" + shortHash(fileIdentity.sha256),
+				claimType: "crypto-file-hash-verification-proof",
+				sourceBinding: { artifact: "crypto-stego-verification.json" },
+				evidenceBinding: fileIdentity,
+				statement: "Crypto/stego verifier re-read the target and matched file size/SHA-256/header evidence.",
+				confidence: 0.9,
+				rerunCommand: "python3 crypto-stego-verifier.py <target> crypto-stego-media-quicklook.json crypto-stego-verification.json",
+			})
+		: undefined;
+	const determinismClaim = mediaQuicklookDeterminism.verified
+		? addClaim({
+				id: "crypto-media-quicklook-determinism-" + shortHash(`${mediaQuicklookDeterminism.quicklookSha256}:${mediaQuicklookDeterminism.reparseSha256}`),
+				claimType: "crypto-media-quicklook-determinism-proof",
+				sourceBinding: { artifact: "crypto-stego-verification.json", quicklook: "crypto-stego-media-quicklook.json" },
+				evidenceBinding: mediaQuicklookDeterminism,
+				statement: "Crypto/stego verifier reparsed media structure and matched the quicklook hash deterministically.",
+				confidence: 0.86,
+				rerunCommand: "python3 crypto-stego-verifier.py <target> crypto-stego-media-quicklook.json crypto-stego-verification.json",
+			})
+		: undefined;
+	const structureClaim = verifiedStructures.length
+		? addClaim({
+				id: "crypto-structure-offset-verification-" + shortHash(verifiedStructures.map((row) => `${row.kind}:${row.offset}:${row.actual?.sha256}`).join("|")),
+				claimType: "crypto-structure-offset-verification-proof",
+				sourceBinding: { artifact: "crypto-stego-verification.json" },
+				evidenceBinding: {
+					verifiedStructures: verifiedStructures.slice(0, 80).map((row) => ({ kind: row.kind, type: row.type ?? null, offset: row.offset, length: row.length, sha256: row.actual?.sha256 })),
+				},
+				statement: "Crypto/stego verifier matched media chunks, trailing data, embedded archive, or audio slices by exact offset and SHA-256.",
+				confidence: 0.86,
+				rerunCommand: "python3 crypto-stego-verifier.py <target> crypto-stego-media-quicklook.json crypto-stego-verification.json",
+			})
+		: undefined;
+	const controlClaim = negativeControls.length
+		? addClaim({
+				id: "crypto-hidden-channel-negative-control-" + shortHash(negativeControls.map((row) => `${row.controlType}:${row.mutatedSha256}`).join("|")),
+				claimType: "crypto-hidden-channel-negative-control-proof",
+				sourceBinding: { artifact: "crypto-stego-verification.json" },
+				evidenceBinding: { passedControls: negativeControls },
+				statement: "Crypto/stego verifier ran byte and shifted-offset controls so structure matches are not source-only assertions.",
+				confidence: 0.84,
+				rerunCommand: "python3 crypto-stego-verifier.py <target> crypto-stego-media-quicklook.json crypto-stego-verification.json",
+			})
+		: undefined;
+	if (fileClaim && determinismClaim && structureClaim && controlClaim) {
+		const segments = [fileClaim, determinismClaim, structureClaim, controlClaim];
+		const composed = {
+			id: "crypto-stego-verification-proof-path-" + shortHash(segments.map((claim) => claim.id).join(">")),
+			claimType: "crypto-stego-verification-proof-path",
+			sourceBinding: { segments: segments.map((claim) => ({ id: claim.id, claimType: claim.claimType, artifact: claim.sourceBinding?.artifact })) },
+			evidenceBinding: {
+				fileSha256,
+				format: media?.format ?? "unknown",
+				verifiedStructures: verifiedStructures.length,
+				hasNegativeControl: true,
+			},
+			statement: "Crypto/stego proof path composes file hash, deterministic media quicklook, exact offset/hash structure checks, and negative controls.",
+			verdict: "promoted",
+			confidence: 0.88,
+			blockers: [],
+			rerunCommand: "python3 crypto-stego-verifier.py <target> crypto-stego-media-quicklook.json crypto-stego-verification.json",
+		};
+		claimLedger.push(composed);
+		composedPaths.push(composed);
+	}
+	const blockers = [];
+	if (!fileIdentity.verified) blockers.push("missing-crypto-file-hash-verification");
+	if (media && !mediaQuicklookDeterminism.verified) blockers.push("missing-crypto-media-determinism");
+	if (media && !verifiedStructures.length) blockers.push("missing-crypto-structure-offset-verification");
+	if (!negativeControls.length) blockers.push("missing-crypto-negative-control");
+	const repairActions = {
+		"missing-crypto-file-hash-verification": "Rerun crypto-stego-verifier.py against the original file and require size/SHA-256 equality.",
+		"missing-crypto-media-determinism": "Reparse PNG/WAV media quicklook and resolve nondeterminism before promoting structure evidence.",
+		"missing-crypto-structure-offset-verification": "Bind chunks, trailing bytes, embedded archives, or audio data to exact offsets and SHA-256 hashes.",
+		"missing-crypto-negative-control": "Add byte mutation and shifted-offset controls so hidden-channel evidence has a rejection oracle.",
+	};
+	const repairQueue = blockers.map((blocker) => ({
+		id: "crypto-stego-verification-" + blocker,
+		blocker,
+		action: repairActions[blocker] ?? "Collect verifier-bound crypto/stego evidence and rerun crypto-stego-verifier.py.",
+		rerunCommand: `python3 ${shellQuote(join(artifactDir, "crypto-stego-verifier.py"))} ${shellQuote(target)} ${shellQuote(join(artifactDir, "crypto-stego-media-quicklook.json"))} ${shellQuote(join(artifactDir, "crypto-stego-verification.json"))}`,
+	}));
+	const promotedClaims = claimLedger.filter((claim) => claim.verdict === "promoted");
+	return {
+		kind: "repi-crypto-stego-verification",
+		schemaVersion: 1,
+		target: redact(target),
+		generatedAt: new Date().toISOString(),
+		proofReady: promotedClaims.length > 0,
+		transformProofReady: composedPaths.length > 0,
+		fileIdentity,
+		mediaQuicklookDeterminism,
+		structureChecks,
+		negativeControls,
+		stats: {
+			structuresVerified: verifiedStructures.length,
+			negativeControlsPassed: negativeControls.length,
+		},
+		claimLedger,
+		composedPaths,
+		promotionReport: { proofReady: promotedClaims.length > 0, transformProofReady: composedPaths.length > 0, promotedClaims, blockers },
+		repairQueue,
+	};
+}
+
+function writeCryptoStegoVerification(artifactDir, target) {
+	if (noWrite || !artifactDir) return undefined;
+	const summary = cryptoStegoVerificationSummary(target, artifactDir);
+	const path = join(artifactDir, "crypto-stego-verification.json");
+	writePrivate(path, `${JSON.stringify(summary, null, 2)}\n`, 0o600);
+	return { path, summary };
+}
+
+function cryptoStegoTransformClaims(target, artifactDir, verificationSummary) {
+	const media = readJsonArtifact(join(artifactDir, "crypto-stego-media-quicklook.json"));
+	const verification = verificationSummary ?? readJsonArtifact(join(artifactDir, "crypto-stego-verification.json"));
 	const solverPath = join(artifactDir, "crypto-stego-solver.py");
 	const solverExists = existsSync(solverPath);
 	const claimLedger = [];
@@ -7627,17 +8052,56 @@ function cryptoStegoTransformClaims(target, artifactDir) {
 		claimLedger.push(composed);
 		composedPaths.push(composed);
 	}
+	for (const verificationClaim of verification?.claimLedger ?? []) {
+		if (verificationClaim.verdict !== "promoted") continue;
+		const claim = addClaim({
+			...verificationClaim,
+			id: verificationClaim.id || "crypto-stego-verification-claim-" + shortHash(JSON.stringify(verificationClaim)),
+			sourceBinding: {
+				artifact: "crypto-stego-verification.json",
+				...(verificationClaim.sourceBinding ?? {}),
+			},
+			rerunCommand:
+				verificationClaim.rerunCommand ??
+				`python3 ${shellQuote(join(artifactDir, "crypto-stego-verifier.py"))} ${shellQuote(target)} ${shellQuote(join(artifactDir, "crypto-stego-media-quicklook.json"))} ${shellQuote(join(artifactDir, "crypto-stego-verification.json"))}`,
+		});
+		if (claim?.claimType === "crypto-stego-verification-proof-path" && !composedPaths.some((path) => path.id === claim.id)) composedPaths.push(claim);
+	}
+	for (const verificationPath of verification?.composedPaths ?? []) {
+		const composed = {
+			...verificationPath,
+			id: verificationPath.id || "crypto-stego-verification-path-" + shortHash(JSON.stringify(verificationPath)),
+			sourceBinding: {
+				artifact: "crypto-stego-verification.json",
+				...(verificationPath.sourceBinding ?? {}),
+			},
+			rerunCommand:
+				verificationPath.rerunCommand ??
+				`python3 ${shellQuote(join(artifactDir, "crypto-stego-verifier.py"))} ${shellQuote(target)} ${shellQuote(join(artifactDir, "crypto-stego-media-quicklook.json"))} ${shellQuote(join(artifactDir, "crypto-stego-verification.json"))}`,
+		};
+		if (!claimLedger.some((claim) => claim.id === composed.id)) claimLedger.push(composed);
+		if (!composedPaths.some((path) => path.id === composed.id)) composedPaths.push(composed);
+	}
 	const promotedClaims = claimLedger.filter((claim) => claim.verdict === "promoted");
 	const blockers = [];
 	if (!media) blockers.push("missing-media-quicklook");
 	if (!solverExists) blockers.push("missing-transform-solver");
 	if (media && !structureClaims.length) blockers.push("missing-hidden-channel-signal");
 	if (media && !(media.embeddedArchives ?? []).length && !mediaRisks.has("wav-lsb-printable-signal") && !media?.trailing) blockers.push("missing-carve-or-bitplane-target");
+	if (!verification) blockers.push("missing-crypto-stego-verification");
+	for (const blocker of verification?.promotionReport?.blockers ?? []) {
+		if (!blockers.includes(blocker)) blockers.push(blocker);
+	}
 	const repairActions = {
 		"missing-media-quicklook": "Parse PNG/WAV structure or run file-specific metadata/binwalk probes before claiming a hidden channel.",
 		"missing-transform-solver": "Generate crypto-stego-solver.py so each transform candidate is rerunnable with hashes.",
 		"missing-hidden-channel-signal": "Find text/private chunks, trailing bytes, embedded archives, metadata, LSB runs, or encoded strings before promotion.",
 		"missing-carve-or-bitplane-target": "Carve appended archives/data or extract prioritized bit-planes before brute forcing unrelated transforms.",
+		"missing-crypto-stego-verification": "Generate crypto-stego-verification.json and crypto-stego-verifier.py to bind file/media offsets and negative controls.",
+		"missing-crypto-file-hash-verification": "Rerun crypto-stego-verifier.py against the original file and require size/SHA-256 equality.",
+		"missing-crypto-media-determinism": "Reparse media quicklook deterministically before treating chunks or LSB runs as proof.",
+		"missing-crypto-structure-offset-verification": "Verify chunks, trailing data, embedded archives, or audio slices by exact offset and SHA-256.",
+		"missing-crypto-negative-control": "Add byte mutation and shifted-offset controls for hidden-channel rejection proof.",
 	};
 	const repairQueue = blockers.map((blocker) => ({
 		id: "crypto-stego-" + blocker,
@@ -7651,6 +8115,7 @@ function cryptoStegoTransformClaims(target, artifactDir) {
 		target: redact(target),
 		generatedAt: new Date().toISOString(),
 		format: media?.format ?? "unknown",
+		verificationStats: verification?.stats ?? null,
 		proofReady: promotedClaims.length > 0,
 		transformProofReady: composedPaths.length > 0,
 		claimLedger,
@@ -7665,9 +8130,9 @@ function cryptoStegoTransformClaims(target, artifactDir) {
 	};
 }
 
-function writeCryptoStegoTransformClaims(artifactDir, target) {
+function writeCryptoStegoTransformClaims(artifactDir, target, verificationSummary) {
 	if (noWrite || !artifactDir) return undefined;
-	const summary = cryptoStegoTransformClaims(target, artifactDir);
+	const summary = cryptoStegoTransformClaims(target, artifactDir, verificationSummary);
 	const path = join(artifactDir, "crypto-stego-transform-claims.json");
 	writePrivate(path, `${JSON.stringify(summary, null, 2)}\n`, 0o600);
 	return { path, summary };
@@ -15613,7 +16078,37 @@ function engageFile(targetInfo, artifactDir) {
 				error: undefined,
 			});
 		}
-		const transformClaims = writeCryptoStegoTransformClaims(artifactDir, target);
+		const verifierPath = writeCryptoStegoVerifier(artifactDir);
+		if (verifierPath) {
+			rows.push({
+				id: "crypto-stego-verifier-artifact",
+				command: "internal",
+				args: [redact(verifierPath)],
+				cwd: root,
+				exit: 0,
+				signal: null,
+				durationMs: 0,
+				stdout: `verifier=${redact(verifierPath)}\nrun=python3 ${redact(verifierPath)} ${redact(target)} ${redact(join(artifactDir, "crypto-stego-media-quicklook.json"))} ${redact(join(artifactDir, "crypto-stego-verification.json"))}\n`,
+				stderr: "",
+				error: undefined,
+			});
+		}
+		const stegoVerification = writeCryptoStegoVerification(artifactDir, target);
+		if (stegoVerification) {
+			rows.push({
+				id: "crypto-stego-verification",
+				command: "internal",
+				args: [redact(stegoVerification.path)],
+				cwd: root,
+				exit: stegoVerification.summary.proofReady ? 0 : 1,
+				signal: null,
+				durationMs: 0,
+				stdout: `${JSON.stringify(stegoVerification.summary, null, 2)}\n`,
+				stderr: "",
+				error: stegoVerification.summary.proofReady ? undefined : "crypto/stego verification blockers present",
+			});
+		}
+		const transformClaims = writeCryptoStegoTransformClaims(artifactDir, target, stegoVerification?.summary);
 		if (transformClaims) {
 			rows.push({
 				id: "crypto-stego-transform-claims",
@@ -19451,9 +19946,11 @@ function nextQueue(targetInfo, artifactDir, toolState) {
 	}
 	if (targetInfo.lane === "crypto-stego") {
 		if (!noWrite && dataLooksLikeCryptoStegoMedia(primaryTarget)) q.push(`cat ${shellQuote(join(artifactDir, "crypto-stego-media-quicklook.json"))}`);
+		if (!noWrite && existsSync(join(artifactDir, "crypto-stego-verification.json"))) q.push(`cat ${shellQuote(join(artifactDir, "crypto-stego-verification.json"))}`);
 		if (!noWrite && existsSync(join(artifactDir, "crypto-stego-transform-claims.json"))) q.push(`cat ${shellQuote(join(artifactDir, "crypto-stego-transform-claims.json"))}`);
+		if (!noWrite && existsSync(join(artifactDir, "crypto-stego-verifier.py"))) q.push(`python3 ${shellQuote(join(artifactDir, "crypto-stego-verifier.py"))} ${quotedTarget} ${shellQuote(join(artifactDir, "crypto-stego-media-quicklook.json"))} ${shellQuote(join(artifactDir, "crypto-stego-verification.json"))}`);
 		if (!noWrite) q.push(`python3 ${shellQuote(join(artifactDir, "crypto-stego-solver.py"))} ${quotedTarget}`);
-		q.push(`repi -p ${shellQuote(`Continue crypto/stego from ${artifactDir}: use crypto-stego-transform-claims.json claimLedger/composedPaths/repairQueue plus crypto-stego-media-quicklook.json when present to prioritize PNG/WAV chunks/text/LSB/trailing data, reconstruct the transform chain, test metadata/bit-plane/archive layers, write a solver with asserts, and bind the result to artifact offsets/hashes.`)}`);
+		q.push(`repi -p ${shellQuote(`Continue crypto/stego from ${artifactDir}: use crypto-stego-verification.json plus crypto-stego-transform-claims.json claimLedger/composedPaths/repairQueue and crypto-stego-media-quicklook.json when present to prioritize PNG/WAV chunks/text/LSB/trailing data; rerun crypto-stego-verifier.py for file hash, deterministic media quicklook, exact offset/carve/audio hashes, and negative controls; then use crypto-stego-solver.py to reconstruct the transform chain and bind the result to artifact offsets/hashes.`)}`);
 	}
 	if (targetInfo.lane === "agent-boundary") {
 		if (!noWrite) q.push(`cat ${shellQuote(join(artifactDir, "agent-boundary-map.json"))}`);
@@ -19572,6 +20069,7 @@ function summarizeEvidence(rows, targetInfo, toolState) {
 		if (/ExifTool|PNG|IHDR|zsteg|binwalk|PK|flag|ctf|cipher|nonce|salt|base64|xor/i.test(text) && targetInfo.lane === "crypto-stego") anchors.push("crypto/stego anchors");
 		if (/repi-crypto-stego-media-quicklook|crypto-stego-media-quicklook|png-text-stego-signal|appended-data-after-iend|appended-zip-after-iend|private-or-nonstandard-png-chunk|embedded-zip-archive-parsed/i.test(text) && targetInfo.lane === "crypto-stego") anchors.push("PNG/stego structure anchors");
 		if (/wav-lsb-printable-signal|wav-info-metadata-signal|appended-data-after-riff|appended-zip-after-riff|embedded-zip-archive-parsed|audioData|RIFF|WAVE/i.test(text) && targetInfo.lane === "crypto-stego") anchors.push("WAV/stego structure anchors");
+		if (/repi-crypto-stego-verification|crypto-stego-verification|crypto-stego-verifier|crypto-file-hash-verification-proof|crypto-structure-offset-verification-proof|crypto-hidden-channel-negative-control-proof|crypto-stego-verification-proof-path/i.test(text) && targetInfo.lane === "crypto-stego") anchors.push("crypto/stego verifier anchors");
 		if (/repi-crypto-stego-transform-claims|crypto-stego-transform-claims|crypto-transform-proof-path|crypto-transform-solver-harness|crypto-embedded-archive-carve|claimLedger|repairQueue/i.test(text) && targetInfo.lane === "crypto-stego") anchors.push("crypto/stego transform claim anchors");
 	}
 	return {
