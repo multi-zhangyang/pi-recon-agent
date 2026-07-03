@@ -57,6 +57,40 @@ if [ -n "${REPI_ALLOW_BROWSER_COOKIES:-}" ] && [ -z "${PI_ALLOW_BROWSER_COOKIES:
 fi
 export REPI_REPO_ROOT="$ROOT"
 
+validate_repi_env_model_config() {
+  local has_model_config=0
+  if [ -n "${REPI_BASE_URL:-}${REPI_MODEL_BASE_URL:-}${REPI_MODEL:-}${REPI_MODEL_ID:-}${REPI_MODEL_API:-}${REPI_API:-}" ]; then
+    has_model_config=1
+  fi
+  [ "$has_model_config" -eq 1 ] || return 0
+
+  local model="${REPI_MODEL:-${REPI_MODEL_ID:-}}"
+  local base_url="${REPI_BASE_URL:-${REPI_MODEL_BASE_URL:-}}"
+  if [ -n "$model" ] && [ -n "$base_url" ]; then
+    return 0
+  fi
+
+  echo "REPI env model config is incomplete; refusing to fall back to a saved/default model." >&2
+  if [ -z "$model" ]; then
+    echo "  missing: REPI_MODEL" >&2
+  fi
+  if [ -z "$base_url" ]; then
+    echo "  missing: REPI_BASE_URL" >&2
+  fi
+  cat >&2 <<'MSG'
+
+Use a complete, quoted block, for example:
+  export REPI_AUTH_TOKEN="sk-xxxxx"
+  export REPI_BASE_URL="https://api.example.com/v1"
+  export REPI_PROVIDER="morph"        # optional display/provider id
+  export REPI_MODEL="morph-glm52-744b"
+  export REPI_MODEL_API="openai-compatible"
+
+If your prompt is currently just `>`, press Ctrl+C first: bash is waiting for an unmatched quote.
+MSG
+  exit 2
+}
+
 case "${1:-}" in
   install|setup)
     if [ "${1:-}" = "install" ] && [ "$#" -ge 2 ]; then
@@ -270,4 +304,5 @@ MSG
     ;;
 esac
 
+validate_repi_env_model_config
 exec "$ROOT/node_modules/.bin/tsx" --tsconfig "$ROOT/tsconfig.json" "$ROOT/packages/coding-agent/src/cli.ts" "$@"
