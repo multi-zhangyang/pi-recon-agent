@@ -10,6 +10,7 @@ import type { ImageContent } from "@pi-recon/repi-ai";
 import type { SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
+import type { ToolInfo } from "../../core/extensions/types.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
 import type { RpcCommand, RpcResponse, RpcSessionState, RpcSlashCommand } from "./rpc-types.ts";
 
@@ -515,6 +516,14 @@ export class RpcClient {
 	async getCommands(): Promise<RpcSlashCommand[]> {
 		const response = await this.send({ type: "get_commands" });
 		return this.getData<{ commands: RpcSlashCommand[] }>(response).commands;
+	}
+
+	/**
+	 * Get all registered tools plus the currently active tool names.
+	 */
+	async getTools(): Promise<{ tools: ToolInfo[]; activeToolNames: string[] }> {
+		const response = await this.send({ type: "get_tools" });
+		return this.getData<{ tools: ToolInfo[]; activeToolNames: string[] }>(response);
 	}
 
 	// =========================================================================

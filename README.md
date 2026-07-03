@@ -1,64 +1,75 @@
 # REPI
 
-**Reverse / Pentest execution agent.** 把目标交给 `repi`,它会在真实终端里 mapping、规划、执行、验证、沉淀证据,而不是只给一段分析文本。
+**把逆向、渗透和取证任务交给一个会真实执行的 harness agent。**
+REPI 会在本机终端里 mapping → 规划 → 执行 → 复现 → 修复 → 证据沉淀；输出不是“看起来对”的分析，而是命令、artifact、handoff、反证和可重放路径。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/multi-zhangyang/pi-recon-agent/main/install.sh | bash
 ```
 
 ```bash
+# Claude Code 风格：export 即切模型；REPI 不预置庞大的默认 provider catalog
 export REPI_AUTH_TOKEN="sk-xxxxx"
 export REPI_BASE_URL="https://api.example.com/v1"
-export REPI_PROVIDER="my-provider"              # optional; footer/provider id, default: repi-env
+export REPI_PROVIDER="my-provider"              # optional；footer/provider id，默认 repi-env
 export REPI_MODEL="provider/model-id"
-export REPI_MODEL_API="openai-compatible"   # openai-compatible | openai-responses | anthropic
+export REPI_MODEL_API="openai-compatible"       # openai-compatible | openai-responses | anthropic
 export REPI_CONTEXT_WINDOW=262144
 export REPI_AUTO_COMPACT_WINDOW=262144
 export REPI_MAX_TOKENS=16384
 
 repi model status
-repi -p "先对当前目标做被动 mapping,找入口、状态机和可验证路径"
+repi -p "先对当前目标做被动 mapping，找入口、状态机和可验证路径"
 ```
 
-REPI 的默认目标很直接:
+## 为什么用 REPI
 
-- **逆向 / pwn / 固件 / 流量 / 取证 / Web/API 渗透**:围绕真实 artifact 和可复现验证推进。
-- **专家子代理**:explorer、planner、operator、verifier、reverser 按任务 lane 分工执行。
-- **证据优先**:命令、输出、PoC、复现矩阵、handoff 文件和失败原因都落盘可追踪,`re_graph build` 会把命令→事实→artifact→假设/反证串成任务树。
-- **闭环证明**:`re_proof_loop` 会把 verifier/compiler/replayer/autofix 缺口分类成 quick path,优先补最短可验证链路。
-- **模型环境变量优先**:像 Claude Code 一样 export 即用,但同时支持 OpenAI-compatible、OpenAI Responses、Anthropic Messages。
-- **独立运行面**:`repi` 命令 + `~/.repi/agent`;不覆盖上游 `pi`,不写 `~/.pi`。
+| 目标 | REPI 的默认行为 |
+|---|---|
+| Reverse / Pwn / Firmware / PCAP / DFIR | 自动识别 ELF/MZ/Mach-O、PCAP/PCAPNG、APK/IPA、firmware/rootfs，调 GDB/r2/tshark/Frida/binwalk/pwntools 等真实工具链。 |
+| Web/API / JS signing / Cloud / Identity | 先做路由、状态机和证据采样，再让 operator/verifier/replayer 闭环，不用“凭感觉猜”。 |
+| 长任务 | `/goal --tokens 100k <目标>` 进入持续执行模式；footer 显示 `🎯 active/paused/budget/complete`，只有完成并验证后才能 `goal_complete`。 |
+| 复杂任务 | explorer / planner / reverser / operator / verifier 子代理分工；handoff 强制写文件，reasoning 模型丢 final text 也不丢证据。 |
+| 上线可靠性 | `repi doctor`、release tarball smoke、env fail-fast、extension smoke、fresh profile 检查都在仓库里可复跑。 |
 
-> 版本:`0.1.2` · 仓库:`https://github.com/multi-zhangyang/pi-recon-agent` · fork 自 `earendil-works/pi`
+REPI 独立于 upstream `pi`：命令是 `repi`，运行目录是 `~/.repi/agent`，不会覆盖 `pi` 或 `~/.pi`。模型默认走 `REPI_*` 环境变量；如需恢复 upstream 大型内置 provider catalog，显式设置 `REPI_LOAD_BUILTIN_MODELS=1`。
 
-## 快速安装
+> 版本：`0.1.2` · 仓库：`https://github.com/multi-zhangyang/pi-recon-agent` · fork 自 `earendil-works/pi`
 
-**前置**:`node >= 22.19`、`git`。缺 `node` 推荐用 [nvm](https://github.com/nvm-sh/nvm):`nvm install 22`。
+## 五分钟上线
 
-一键安装:
+**前置**：`node >= 22.19`、`git`。缺 `node` 推荐用 [nvm](https://github.com/nvm-sh/nvm)：`nvm install 22`。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/multi-zhangyang/pi-recon-agent/main/install.sh | bash
+
+export REPI_AUTH_TOKEN="sk-xxxxx"
+export REPI_BASE_URL="https://api.example.com/v1"
+export REPI_MODEL="provider/model-id"
+export REPI_MODEL_API="openai-compatible"
+export REPI_CONTEXT_WINDOW=262144
+export REPI_AUTO_COMPACT_WINDOW=262144
+
+repi doctor
+repi model status
+repi -p "对当前目录做 REPI mapping，并给出下一步可验证计划"
 ```
 
-装完后直接用:
-
-```bash
-repi                 # 启动交互式会话
-repi -p "分析 /tmp/vuln 的溢出"   # 一次性任务
-repi doctor          # 检查安装/配置/权限
-repi --offline --help
-```
-
-第一次用前先配模型。最短路径就是 `REPI_*` 环境变量;持久化多 provider 再用 `repi model add/login`。详见[模型配置](#模型配置)。
-
-安装脚本会优先把 launcher 装到 PATH 里的 `/usr/local/bin` / `/usr/local/sbin`(需要时通过 sudo 写入),所以大多数机器当前终端立即可用。没有可写/可 sudo 的 PATH 目录时才回退到 `~/.local/bin`,并自动创建/更新 `.bashrc` / `.profile` 或 `.zshrc` / `.profile`:
+安装脚本会优先把 launcher 装进已有 PATH 目录(`/usr/local/bin` / `/usr/local/sbin`，需要时用 sudo)。如果只能回退到 `~/.local/bin`，脚本会自动更新 `.bashrc` / `.profile` 或 `.zshrc` / `.profile`；当前终端按安装输出执行一次：
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-回退到 `~/.local/bin` 时,新终端自动生效;当前终端按安装输出执行一次 export 或 `exec $SHELL -l` 即可。
+常用检查：
+
+```bash
+repi                 # 交互式会话
+repi -p "分析 /tmp/vuln 的溢出"   # 一次性任务
+repi doctor          # 安装/配置/权限/goal/env/扩展契约
+repi smoke --json    # 本地快速 smoke
+npm run smoke:extensions -- --json  # 从 npm 真实安装 pi-web-access + @narumitw/pi-goal 并验证 RPC/tool/goal 冲突抑制
+```
 
 ## 安装方式
 
@@ -363,10 +374,12 @@ REPI 已内置 goal mode,无需再装 `@narumitw/pi-goal`:
 
 ```bash
 repi install npm:pi-web-access
+repi install npm:@narumitw/pi-goal  # 可装；运行时仍以内置 REPI goal mode 为准
 repi list
+npm run smoke:extensions -- --json # 仓库内真实 npm 安装 + RPC/tool/skill/goal 冲突验证
 ```
 
-`pi-web-access` 会提供 `web_search`、`fetch_content`、`get_search_content` 以及搜索/curator 命令。若历史 profile 已安装 `@narumitw/pi-goal`,REPI 会以内置 goal mode 为准,避免 `/goal`/`goal_complete` 重名。REPI loader 已兼容 upstream pi 扩展常见导入:
+`pi-web-access` 会提供 `web_search`、`fetch_content`、`get_search_content`、`/websearch`、`/curator`、`/search` 和 `skill:librarian`。若历史 profile 已安装 `@narumitw/pi-goal`,REPI 会以内置 goal mode 为准,避免 `/goal`/`goal_complete` 重名；loader 通过轻量 extension SDK alias 加载 `defineTool`/types,不会把完整 coding-agent entrypoint 拉进扩展导入链。REPI loader 已兼容 upstream pi 扩展常见导入:
 
 ```text
 @earendil-works/pi-coding-agent

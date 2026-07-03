@@ -83,7 +83,8 @@
 		"health:repi": "node scripts/reverse-agent/repi-health.mjs .",
 		"mission:repi": "node scripts/reverse-agent/repi-mission.mjs . status",
 		"engage:repi": "node scripts/reverse-agent/repi-engage.mjs . . --json",
-		"smoke:release": "node scripts/reverse-agent/repi-release-tarball-smoke.mjs"
+		"smoke:release": "node scripts/reverse-agent/repi-release-tarball-smoke.mjs",
+		"smoke:extensions": "node scripts/reverse-agent/repi-extension-compat-smoke.mjs"
 	},
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "0.0.26",

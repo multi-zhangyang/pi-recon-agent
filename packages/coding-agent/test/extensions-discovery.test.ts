@@ -514,6 +514,41 @@ describe("extensions discovery", () => {
 		expect(result.extensions[0].shortcuts.has("ctrl+u")).toBe(true);
 	});
 
+	it("loads pi-goal style upstream imports without pulling the full coding-agent entrypoint", async () => {
+		const explicitPath = path.join(tempDir, "upstream-pi-goal-style.ts");
+		fs.writeFileSync(
+			explicitPath,
+			`
+				import { defineTool } from "@earendil-works/pi-coding-agent";
+				import { isContextOverflow } from "@earendil-works/pi-ai";
+				import { Type } from "typebox";
+
+				const tool = defineTool({
+					name: "upstream_goal_complete_probe",
+					label: "Goal Complete Probe",
+					description: "verifies @narumitw/pi-goal style imports load in repi",
+					parameters: Type.Object({}),
+					execute: async () => ({
+						content: [{ type: "text", text: isContextOverflow ? "ok" : "missing" }],
+					}),
+				});
+
+				export default function(pi) {
+					pi.registerTool(tool);
+					pi.registerCommand("goal", { description: "goal probe", handler: async () => {} });
+				}
+			`,
+		);
+
+		const { loadExtensions } = await import("../src/core/extensions/loader.ts");
+		const result = await loadExtensions([explicitPath], tempDir);
+
+		expect(result.errors).toEqual([]);
+		expect(result.extensions).toHaveLength(1);
+		expect(result.extensions[0].tools.has("upstream_goal_complete_probe")).toBe(true);
+		expect(result.extensions[0].commands.has("goal")).toBe(true);
+	});
+
 	it("loadExtensions with no paths loads nothing", async () => {
 		// Create discoverable extensions (would be found by discoverAndLoadExtensions)
 		fs.writeFileSync(path.join(extensionsDir, "discovered.ts"), extensionCode);

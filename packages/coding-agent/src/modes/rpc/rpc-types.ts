@@ -10,6 +10,7 @@ import type { ImageContent, Model } from "@pi-recon/repi-ai";
 import type { SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
+import type { ToolInfo } from "../../core/extensions/types.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 
 // ============================================================================
@@ -66,7 +67,10 @@ export type RpcCommand =
 	| { id?: string; type: "get_messages" }
 
 	// Commands (available for invocation via prompt)
-	| { id?: string; type: "get_commands" };
+	| { id?: string; type: "get_commands" }
+
+	// Tools (LLM-callable tool registry)
+	| { id?: string; type: "get_tools" };
 
 // ============================================================================
 // RPC Slash Command (for get_commands response)
@@ -200,6 +204,15 @@ export type RpcResponse =
 			command: "get_commands";
 			success: true;
 			data: { commands: RpcSlashCommand[] };
+	  }
+
+	// Tools
+	| {
+			id?: string;
+			type: "response";
+			command: "get_tools";
+			success: true;
+			data: { tools: ToolInfo[]; activeToolNames: string[] };
 	  }
 
 	// Error response (any command can fail)

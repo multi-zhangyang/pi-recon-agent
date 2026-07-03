@@ -79,6 +79,7 @@ const requiredFiles = [
 	"packages/coding-agent/src/core/repi/toolchain.ts",
 	"scripts/reverse-agent/repi-smoke.mjs",
 	"scripts/reverse-agent/repi-release-tarball-smoke.mjs",
+	"scripts/reverse-agent/repi-extension-compat-smoke.mjs",
 	"scripts/reverse-agent/memory-inspect.mjs",
 ];
 
@@ -113,6 +114,23 @@ rows.push(
 			existsSync(join(root, "scripts/reverse-agent/repi-release-tarball-smoke.mjs")),
 		`smoke:release=${packageJson.scripts?.["smoke:release"] ?? "<missing>"}`,
 		"Keep a release tarball smoke that installs packed npm artifacts and validates repi + /goal + REPI_* env.",
+	),
+);
+rows.push(
+	check(
+		"validation:extension-compat-smoke-script",
+		packageJson.scripts?.["smoke:extensions"] === "node scripts/reverse-agent/repi-extension-compat-smoke.mjs" &&
+			existsSync(join(root, "scripts/reverse-agent/repi-extension-compat-smoke.mjs")) &&
+			includesAll(read("scripts/reverse-agent/repi-extension-compat-smoke.mjs"), [
+				"npm:pi-web-access",
+				"npm:@narumitw/pi-goal",
+				"get_tools",
+				"web_search",
+				"goal_complete",
+				"skill:librarian",
+			]),
+		`smoke:extensions=${packageJson.scripts?.["smoke:extensions"] ?? "<missing>"}`,
+		"Keep a real npm extension smoke that validates pi-web-access tools and @narumitw/pi-goal conflict suppression.",
 	),
 );
 
@@ -1059,6 +1077,7 @@ rows.push(
 );
 
 const goalMode = read("packages/coding-agent/src/core/repi/goal.ts");
+const extensionLoader = read("packages/coding-agent/src/core/extensions/loader.ts");
 rows.push(
 	check(
 		"goal:built-in-mode-contract",
@@ -1073,6 +1092,23 @@ rows.push(
 			includesAll(reconProfile, ["./repi/goal.ts", "installRepiGoalMode(pi)", "isExternalGoalModeExtension"]),
 		"/goal command, goal_complete tool, footer status, continuation, and legacy conflict suppression are built in",
 		"Keep REPI goal mode built into the inline profile and suppress external @narumitw/pi-goal conflicts.",
+	),
+);
+rows.push(
+	check(
+		"extensions:upstream-pi-compat-contract",
+		includesAll(extensionLoader, [
+			"_bundledPiCodingAgentExtensionSdk",
+			"tryNative: false",
+			"@earendil-works/pi-coding-agent",
+			"@earendil-works/pi-ai",
+			"@earendil-works/pi-ai/compat",
+			"@earendil-works/pi-tui",
+		]) &&
+			includesAll(read("packages/coding-agent/src/modes/rpc/rpc-types.ts"), ["get_tools", "activeToolNames"]) &&
+			includesAll(read("packages/coding-agent/src/modes/rpc/rpc-mode.ts"), ["case \"get_tools\"", "session.getAllTools()"]),
+		"loader maps upstream pi imports through lightweight SDK aliases; RPC exposes tool registry for proof",
+		"Keep pi-web-access and @narumitw/pi-goal installable without loading the full coding-agent entrypoint through extension imports.",
 	),
 );
 

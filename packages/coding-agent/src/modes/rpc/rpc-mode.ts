@@ -698,6 +698,13 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				return success(id, "get_commands", { commands });
 			}
 
+			case "get_tools": {
+				return success(id, "get_tools", {
+					tools: session.getAllTools(),
+					activeToolNames: session.getActiveToolNames(),
+				});
+			}
+
 			default: {
 				const unknownCommand = command as { type: string };
 				return error(undefined, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);

@@ -21,9 +21,6 @@ import * as _bundledTypebox from "typebox";
 import * as _bundledTypeboxCompile from "typebox/compile";
 import * as _bundledTypeboxValue from "typebox/value";
 import { CONFIG_DIR_NAME, getAgentDir, isBunBinary } from "../../config.ts";
-// NOTE: This import works because loader.ts exports are NOT re-exported from index.ts,
-// avoiding a circular dependency. Extensions can import from @pi-recon/repi-coding-agent.
-import * as _bundledPiCodingAgent from "../../index.ts";
 import { resolvePath } from "../../utils/paths.ts";
 import { createEventBus, type EventBus } from "../event-bus.ts";
 import type { ExecOptions } from "../exec.ts";
@@ -40,6 +37,7 @@ import type {
 	RegisteredCommand,
 	ToolDefinition,
 } from "./types.ts";
+import * as _bundledPiCodingAgentExtensionSdk from "./types.ts";
 
 /** Modules available to extensions via virtualModules (for compiled Bun binary) */
 const VIRTUAL_MODULES: Record<string, unknown> = {
@@ -55,21 +53,21 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@pi-recon/repi-ai": _bundledPiAi,
 	"@pi-recon/repi-ai/compat": _bundledPiAi,
 	"@pi-recon/repi-ai/oauth": _bundledPiAiOauth,
-	"@pi-recon/repi-coding-agent": _bundledPiCodingAgent,
+	"@pi-recon/repi-coding-agent": _bundledPiCodingAgentExtensionSdk,
 	"@mariozechner/repi-agent-core": _bundledPiAgentCore,
 	"@mariozechner/repi-agent-core/node": _bundledPiAgentCoreNode,
 	"@mariozechner/repi-tui": _bundledPiTui,
 	"@mariozechner/repi-ai": _bundledPiAi,
 	"@mariozechner/repi-ai/compat": _bundledPiAi,
 	"@mariozechner/repi-ai/oauth": _bundledPiAiOauth,
-	"@mariozechner/repi-coding-agent": _bundledPiCodingAgent,
+	"@mariozechner/repi-coding-agent": _bundledPiCodingAgentExtensionSdk,
 	"@earendil-works/pi-agent-core": _bundledPiAgentCore,
 	"@earendil-works/pi-agent-core/node": _bundledPiAgentCoreNode,
 	"@earendil-works/pi-tui": _bundledPiTui,
 	"@earendil-works/pi-ai": _bundledPiAi,
 	"@earendil-works/pi-ai/compat": _bundledPiAi,
 	"@earendil-works/pi-ai/oauth": _bundledPiAiOauth,
-	"@earendil-works/pi-coding-agent": _bundledPiCodingAgent,
+	"@earendil-works/pi-coding-agent": _bundledPiCodingAgentExtensionSdk,
 };
 
 const require = createRequire(import.meta.url);
@@ -85,8 +83,8 @@ function getAliases(): Record<string, string> {
 
 	const __dirname = path.dirname(fileURLToPath(import.meta.url));
 	const runningFromSource = __dirname.split(path.sep).includes("src");
-	const packageIndexJs = path.resolve(__dirname, "../..", "index.js");
-	const packageIndexTs = path.resolve(__dirname, "../..", "index.ts");
+	const extensionSdkJs = path.resolve(__dirname, "types.js");
+	const extensionSdkTs = path.resolve(__dirname, "types.ts");
 
 	const typeboxEntry = require.resolve("typebox");
 	const typeboxCompileEntry = require.resolve("typebox/compile");
@@ -111,12 +109,12 @@ function getAliases(): Record<string, string> {
 	};
 
 	const piCodingAgentEntry = runningFromSource
-		? fs.existsSync(packageIndexTs)
-			? packageIndexTs
-			: packageIndexJs
-		: fs.existsSync(packageIndexJs)
-			? packageIndexJs
-			: packageIndexTs;
+		? fs.existsSync(extensionSdkTs)
+			? extensionSdkTs
+			: extensionSdkJs
+		: fs.existsSync(extensionSdkJs)
+			? extensionSdkJs
+			: extensionSdkTs;
 	const piAgentCoreEntry = resolveWorkspaceOrImport(
 		"agent/src/index.ts",
 		"agent/dist/index.js",
@@ -385,10 +383,14 @@ function createExtensionAPI(
 async function loadExtensionModule(extensionPath: string) {
 	const jiti = createJiti(import.meta.url, {
 		moduleCache: false,
-		// In Bun binary: use virtualModules for bundled packages (no filesystem resolution)
-		// Also disable tryNative so jiti handles ALL imports (not just the entry point)
-		// In Node.js/dev: use aliases to resolve to node_modules paths
-		...(isBunBinary ? { virtualModules: VIRTUAL_MODULES, tryNative: false } : { alias: getAliases() }),
+		// Force jiti to resolve extension imports so upstream pi aliases are honored
+		// for transitive imports too. Native TS loaders otherwise try resolving
+		// @earendil-works/* directly from the extension package first, which hangs
+		// or fails for packages such as @narumitw/pi-goal.
+		tryNative: false,
+		// In Bun binary: use virtualModules for bundled packages (no filesystem resolution).
+		// In Node.js/dev: use aliases to resolve to workspace/dist entries.
+		...(isBunBinary ? { virtualModules: VIRTUAL_MODULES } : { alias: getAliases() }),
 	});
 
 	const module = await jiti.import(extensionPath, { default: true });

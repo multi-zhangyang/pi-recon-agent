@@ -18,23 +18,32 @@ Release focused on install reliability, env-first model selection, and upstream 
 - **Proof-loop gap classifier**: `re_proof_loop` now labels missing artifacts, contradictions, replay failures, dependency gaps, target/state problems, weak evidence, and timeout/flake signals, then emits a short quick path for verifier → compiler → replayer → autofix closure.
 - **Model status check**: `repi model status` reports the effective `REPI_*` env provider/model/API/context/token settings offline, redacts base URLs, and warns about missing auth or shell-quote mistakes.
 - **Upstream pi package compatibility**: loader aliases for `@earendil-works/pi-*` imports and `@earendil-works/pi-ai/compat` let REPI install/use packages such as `pi-web-access` while keeping state in `~/.repi/agent`; an older external `@narumitw/pi-goal` is suppressed in favor of the built-in mode.
+- **RPC tool introspection**: headless/RPC clients can call `get_tools` to inspect registered tool metadata and active tool names, which makes extension smoke checks prove actual tool registration rather than only slash-command presence.
+- **Extension compatibility smoke**: `npm run smoke:extensions -- --json` performs a real npm install of `pi-web-access` and `@narumitw/pi-goal`, then verifies `web_search`/`fetch_content`/`get_search_content`, `skill:librarian`, and built-in `/goal` conflict suppression through RPC.
 
 ### Changed
 
 - REPI defaults to `REPI_LOAD_BUILTIN_MODELS=0`, so the runtime surface is environment providers, explicit `models.json` providers, and dynamic extension providers rather than the large upstream built-in catalog.
 - Swarm/subagent runtime manifests now carry explicit timeout, cancellation, and retry-attempt metadata into child-session and worker-pool validation.
 - Documentation now leads with env-only model configuration and verified upstream pi extension installation examples.
+- `re_proof_loop run` reuses target-scoped verifier/compiler/operator artifacts and refreshes the gap model only when execution changed it, cutting the slow proof-loop flow test from roughly 35s to roughly 13s while keeping verifier → compiler → replayer → autofix closure semantics.
+- Runtime adapter target sniffing now reads bounded file headers instead of whole artifacts and recognizes ELF/MZ/Mach-O, PCAP/PCAPNG, APK/IPA ZIP markers, firmware/rootfs magic, and rootfs directory markers without loading large PCAP/firmware blobs into memory.
+- Extension loader aliases now map upstream coding-agent imports to the lightweight extension SDK surface and force jiti resolution for extension imports, avoiding hangs when packages import `defineTool` from `@earendil-works/pi-coding-agent`.
 
 ### Fixed
 
 - **Installer PATH reliability**: source installs now prefer a PATH-visible launcher directory, use sudo for `/usr/local/bin` when available, and create/update shell startup files when falling back to `~/.local/bin`, preventing post-install `repi: command not found` in new shells.
 - Hardened runtime reliability/evidence flows from real-run self-checks, including route/memory noise reduction and realistic smoke/doctor probe budgets.
 - `repi doctor` now checks goal mode, goal-extension conflict suppression, and the env-only model contract.
+- Incomplete `REPI_*` env model configs now fail before falling back to saved/default models, with a concrete quoted export block and unmatched-quote hint.
+- Installing `@narumitw/pi-goal` no longer hangs extension loading; REPI loads the package, suppresses the external `/goal`/`goal_complete`, and keeps the built-in goal footer/tool contract active.
 
 ### Tests
 
 - Added installer regression coverage for `~/.local/bin/repi` symlink creation, idempotent PATH rc updates, and no-op rc behavior when the launcher directory is already on PATH.
 - Added `/goal` unit coverage for print/RPC/no-UI behavior plus a release tarball smoke that builds, packs, installs the four `.tgz` artifacts, and verifies `repi`, fresh envless models, `REPI_*` env models, and RPC `/goal`.
+- Added pure runtime-adapter contract tests for file magic detection, rootfs-over-PCAP path priority, command materialization, and parser signal extraction.
+- Added upstream extension alias coverage for pi-goal-style `defineTool` + `@earendil-works/pi-ai` imports and a real npm extension smoke for `pi-web-access` plus `@narumitw/pi-goal`.
 
 ## [0.1.1] - 2026-06-28
 
