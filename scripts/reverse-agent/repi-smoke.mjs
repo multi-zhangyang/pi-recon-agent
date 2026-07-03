@@ -18,7 +18,11 @@ function script(name) {
 const repiPath = existsSync(join(root, "repi")) ? join(root, "repi") : "repi";
 const steps = [
 	{ id: "product-contract", cmd: "node", args: [script("repi-product-contract.mjs"), root, "--json"] },
-	{ id: "doctor", cmd: "node", args: [script("repi-doctor.mjs"), root] },
+	// `repi doctor` intentionally performs two cold launcher probes (`--help` and
+	// `--list-models`). On release/operator machines with a populated model profile
+	// those probes can take ~15-20s each; keep smoke fast but do not make the
+	// aggregate doctor step race its own internal 45s probe budget.
+	{ id: "doctor", cmd: "node", args: [script("repi-doctor.mjs"), root], timeout: 90_000 },
 	{ id: "memory-status", cmd: "node", args: [script("memory-inspect.mjs"), root, "status", "--json"] },
 	{ id: "model-doctor", cmd: "node", args: [script("model-inspect.mjs"), root, "doctor", "--json"] },
 	{ id: "launcher-help", cmd: repiPath, args: ["--offline", "--help"] },
