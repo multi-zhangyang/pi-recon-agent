@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { bootstrapRepiCli } from "../src/cli/repi-bootstrap.ts";
+import { bootstrapRepiCli, missingRepiEnvModelConfig } from "../src/cli/repi-bootstrap.ts";
 
 const ENV_KEYS = [
 	"REPI_CODING_AGENT_DIR",
@@ -19,6 +19,12 @@ const ENV_KEYS = [
 	"PI_TELEMETRY",
 	"REPI_IMPORT_PI_PROFILE",
 	"REPI_IMPORT_PI_AUTH",
+	"REPI_BASE_URL",
+	"REPI_MODEL_BASE_URL",
+	"REPI_MODEL",
+	"REPI_MODEL_ID",
+	"REPI_MODEL_API",
+	"REPI_API",
 ] as const;
 
 describe("bootstrapRepiCli", () => {
@@ -81,5 +87,18 @@ describe("bootstrapRepiCli", () => {
 			"--recon",
 			"--offline",
 		]);
+	});
+
+	test("detects incomplete REPI env-only model config before falling back to saved models", () => {
+		expect(missingRepiEnvModelConfig({ REPI_MODEL: "vendor/model" })).toEqual(["REPI_BASE_URL"]);
+		expect(missingRepiEnvModelConfig({ REPI_BASE_URL: "https://gateway.example/v1" })).toEqual(["REPI_MODEL"]);
+		expect(
+			missingRepiEnvModelConfig({
+				REPI_BASE_URL: "https://gateway.example/v1",
+				REPI_MODEL: "vendor/model",
+				REPI_MODEL_API: "openai-compatible",
+			}),
+		).toEqual([]);
+		expect(missingRepiEnvModelConfig({})).toEqual([]);
 	});
 });

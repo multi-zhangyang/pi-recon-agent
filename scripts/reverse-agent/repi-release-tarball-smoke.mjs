@@ -44,12 +44,14 @@ function run(id, command, args, options = {}) {
 	const missing = (options.expectOutput ?? []).filter((needle) => !combined.includes(needle));
 	const forbidden = (options.rejectOutput ?? []).filter((needle) => combined.includes(needle));
 	const processExit = result.status ?? 1;
-	const exit = processExit === 0 && missing.length === 0 && forbidden.length === 0 ? 0 : processExit || 1;
+	const expectedExit = options.expectExit ?? 0;
+	const exit = processExit === expectedExit && missing.length === 0 && forbidden.length === 0 ? 0 : processExit || 1;
 	const row = {
 		id,
 		cmd: [command, ...args].join(" "),
 		exit,
 		processExit,
+		expectedExit,
 		missing,
 		forbidden,
 		ms: Date.now() - startedAt,
@@ -118,7 +120,9 @@ try {
 	};
 	rows.push(run("package-bin:help", repiBin, ["--offline", "--help"], { cwd: installDir, expectOutput: ["REPI reverse/pentest", "REPI_AUTH_TOKEN", "REPI_LOAD_BUILTIN_MODELS"] }));
 	rows.push(run("package-bin:fresh-list-models", repiBin, ["--offline", "--list-models"], { cwd: installDir, env: { REPI_CODING_AGENT_DIR: freshAgentDir, REPI_LOAD_BUILTIN_MODELS: "0" }, expectOutput: ["No models available"], rejectOutput: ["kimchi", "aigateway"] }));
+	rows.push(run("package-bin:env-incomplete-guard", repiBin, ["--offline", "--list-models"], { cwd: installDir, env: { REPI_CODING_AGENT_DIR: join(outDir, "bad-env-agent"), REPI_LOAD_BUILTIN_MODELS: "0", REPI_MODEL: "release-smoke-env-model", REPI_MODEL_API: "openai-compatible" }, expectExit: 2, expectOutput: ["REPI env model config is incomplete", "missing: REPI_BASE_URL"], rejectOutput: ["kimchi", "aigateway"] }));
 	rows.push(run("package-bin:env-model", repiBin, ["--offline", "--list-models"], { cwd: installDir, env: { ...envModel, REPI_CODING_AGENT_DIR: envAgentDir }, expectOutput: ["repi-env", "release-smoke-env-model", "262.1K"], rejectOutput: ["kimchi", "aigateway"] }));
+	rows.push(run("package-bin:doctor-env-model", repiBin, ["doctor", "--json"], { cwd: installDir, env: { ...envModel, REPI_CODING_AGENT_DIR: join(outDir, "doctor-agent") }, timeout: 120_000, expectOutput: ['"ok": true', '"goal:built-in-mode"', '"goal:footer-status-contract"', '"models:env-only-contract"'] }));
 	rows.push(run("package-bin:rpc-goal", repiBin, ["--offline", "--mode", "rpc", "--no-session"], { cwd: installDir, env: { ...envModel, REPI_CODING_AGENT_DIR: rpcAgentDir }, input: `${JSON.stringify({ id: "commands", type: "get_commands" })}\n`, expectOutput: ['"name":"goal"'] }));
 	ok = rows.every((row) => row.exit === 0);
 } catch (error) {

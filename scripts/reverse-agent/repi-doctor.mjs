@@ -41,6 +41,18 @@ function readJson(path) {
 	}
 }
 
+function readFirstExistingText(candidates) {
+	for (const rel of candidates) {
+		try {
+			const path = join(root, rel);
+			if (existsSync(path)) return readFileSync(path, "utf8");
+		} catch {
+			// Try the next source/dist candidate.
+		}
+	}
+	return "";
+}
+
 function lineCount(path) {
 	try {
 		return readFileSync(path, "utf8").split(/\r?\n/).filter((line) => line.trim()).length;
@@ -338,22 +350,25 @@ const helpText = `${help.stdout}\n${help.stderr}`;
 const globalRepi = pathEntry(installedRepi);
 const localRepi = pathEntry(repiBin);
 const globalRepiOk = packageBinMode || (globalRepi.exists && globalRepi.resolved === localRepi.resolved);
-const launcherSource = existsSync(join(root, "repi")) ? readFileSync(join(root, "repi"), "utf8") : "";
-const bootstrapSource = existsSync(join(root, "packages/coding-agent/src/cli/repi-bootstrap.ts"))
-	? readFileSync(join(root, "packages/coding-agent/src/cli/repi-bootstrap.ts"), "utf8")
-	: "";
-const goalSource = existsSync(join(root, "packages/coding-agent/src/core/repi/goal.ts"))
-	? readFileSync(join(root, "packages/coding-agent/src/core/repi/goal.ts"), "utf8")
-	: "";
-const reconProfileSource = existsSync(join(root, "packages/coding-agent/src/core/recon-profile.ts"))
-	? readFileSync(join(root, "packages/coding-agent/src/core/recon-profile.ts"), "utf8")
-	: "";
-const modelRegistrySource = existsSync(join(root, "packages/coding-agent/src/core/model-registry.ts"))
-	? readFileSync(join(root, "packages/coding-agent/src/core/model-registry.ts"), "utf8")
-	: "";
-const modelInspectSource = existsSync(join(root, "scripts/reverse-agent/model-inspect.mjs"))
-	? readFileSync(join(root, "scripts/reverse-agent/model-inspect.mjs"), "utf8")
-	: "";
+const launcherSource = readFirstExistingText(["repi", "dist/cli.js", "dist/cli/repi-bootstrap.js"]);
+const bootstrapSource = readFirstExistingText([
+	"packages/coding-agent/src/cli/repi-bootstrap.ts",
+	"dist/cli/repi-bootstrap.js",
+]);
+const argsSource = readFirstExistingText(["packages/coding-agent/src/cli/args.ts", "dist/cli/args.js"]);
+const goalSource = readFirstExistingText(["packages/coding-agent/src/core/repi/goal.ts", "dist/core/repi/goal.js"]);
+const reconProfileSource = readFirstExistingText([
+	"packages/coding-agent/src/core/recon-profile.ts",
+	"dist/core/recon-profile.js",
+]);
+const modelRegistrySource = readFirstExistingText([
+	"packages/coding-agent/src/core/model-registry.ts",
+	"dist/core/model-registry.js",
+]);
+const modelInspectSource = readFirstExistingText([
+	"scripts/reverse-agent/model-inspect.mjs",
+	"dist/reverse-agent/model-inspect.mjs",
+]);
 
 const guardrailMarkers = [
 	"REPI_PRINT_PROGRESS",
@@ -373,14 +388,24 @@ const goalModeBuiltInOk =
 	goalSource.includes("REPI_GOAL_STATE_ENTRY_TYPE") &&
 	goalSource.includes("formatGoalFooterStatus") &&
 	reconProfileSource.includes("installRepiGoalMode(pi)");
+const goalFooterStatusOk =
+	goalSource.includes("formatGoalFooterStatus") &&
+	goalSource.includes("formatGoalStatus") &&
+	goalSource.includes('ctx.ui.setStatus(STATUS_KEY, formatGoalFooterStatus(goal))') &&
+	goalSource.includes('"🎯 complete"') &&
+	goalSource.includes("The footer shows");
 const goalConflictSuppressionOk =
 	reconProfileSource.includes("hasGoalModeSignature") &&
 	reconProfileSource.includes("isExternalGoalModeExtension") &&
 	reconProfileSource.includes("suppressLegacyReconConflicts");
+const envModelSource = [launcherSource, bootstrapSource, argsSource].join("\n");
+const envModelGuardOk =
+	launcherSource.includes("validate_repi_env_model_config") ||
+	bootstrapSource.includes("missingRepiEnvModelConfig");
 const envModelContractOk =
-	launcherSource.includes("validate_repi_env_model_config") &&
-	launcherSource.includes("REPI_LOAD_BUILTIN_MODELS") &&
-	launcherSource.includes("REPI_MODEL_API=openai-compatible") &&
+	envModelGuardOk &&
+	envModelSource.includes("REPI_LOAD_BUILTIN_MODELS") &&
+	envModelSource.includes("REPI_MODEL_API") &&
 	bootstrapSource.includes("REPI_LOAD_BUILTIN_MODELS") &&
 	bootstrapSource.includes('process.env.REPI_LOAD_BUILTIN_MODELS || "0"') &&
 	modelRegistrySource.includes("repiEnvProviderConfig") &&
@@ -474,6 +499,12 @@ const checks = [
 		"update REPI so /goal and goal_complete are built into the inline profile",
 	),
 	check(
+		"goal:footer-status-contract",
+		goalFooterStatusOk,
+		`formatFooter=${goalSource.includes("formatGoalFooterStatus")} setStatus=${goalSource.includes("ctx.ui.setStatus")} completeStatus=${goalSource.includes("🎯 complete")}`,
+		"keep /goal footer status visible for active, paused, budget-limited, and complete states",
+	),
+	check(
 		"goal:extension-conflict-suppression",
 		goalConflictSuppressionOk,
 		`hasGoalSignature=${reconProfileSource.includes("hasGoalModeSignature")} externalGoalSuppression=${reconProfileSource.includes("isExternalGoalModeExtension")}`,
@@ -482,7 +513,7 @@ const checks = [
 	check(
 		"models:env-only-contract",
 		envModelContractOk,
-		`launcherEnvGuard=${launcherSource.includes("validate_repi_env_model_config")} bootstrapBuiltinDefault0=${bootstrapSource.includes('process.env.REPI_LOAD_BUILTIN_MODELS || "0"')} registryEnv=${modelRegistrySource.includes("repiEnvProviderConfig")} modelStatus=${modelInspectSource.includes("buildStatusReport")}`,
+		`envGuard=${envModelGuardOk} envSourceBuiltin=${envModelSource.includes("REPI_LOAD_BUILTIN_MODELS")} bootstrapBuiltinDefault0=${bootstrapSource.includes('process.env.REPI_LOAD_BUILTIN_MODELS || "0"')} registryEnv=${modelRegistrySource.includes("repiEnvProviderConfig")} modelStatus=${modelInspectSource.includes("buildStatusReport")}`,
 		"keep Claude-Code-style REPI_* env model config as the default path and built-in provider catalog disabled",
 	),
 	check("network:update-suppressed", /--offline/.test(helpText) && /REPI_SKIP_VERSION_CHECK/.test(helpText), "offline/version-check controls available"),

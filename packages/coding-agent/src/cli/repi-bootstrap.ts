@@ -34,6 +34,14 @@ const CLEAN_ROOM_FLAGS = [
 	"--no-approve",
 	"--no-context-files",
 ];
+const REPI_ENV_MODEL_CONFIG_KEYS = [
+	"REPI_BASE_URL",
+	"REPI_MODEL_BASE_URL",
+	"REPI_MODEL",
+	"REPI_MODEL_ID",
+	"REPI_MODEL_API",
+	"REPI_API",
+] as const;
 
 function hasFlag(args: readonly string[], flag: string): boolean {
 	return args.some((arg) => arg === flag || arg.startsWith(`${flag}=`));
@@ -106,6 +114,34 @@ function stripRepiWrapperFlags(args: readonly string[]): {
 	return { args: normalized, projectContext, projectResources, cleanRoom };
 }
 
+export function missingRepiEnvModelConfig(
+	env: Partial<Record<(typeof REPI_ENV_MODEL_CONFIG_KEYS)[number], string | undefined>> = process.env,
+): string[] {
+	const hasEnvModelConfig = REPI_ENV_MODEL_CONFIG_KEYS.some((key) => Boolean(env[key]));
+	if (!hasEnvModelConfig) return [];
+	const missing: string[] = [];
+	if (!env.REPI_MODEL && !env.REPI_MODEL_ID) missing.push("REPI_MODEL");
+	if (!env.REPI_BASE_URL && !env.REPI_MODEL_BASE_URL) missing.push("REPI_BASE_URL");
+	return missing;
+}
+
+function validateRepiEnvModelConfig(): void {
+	const missing = missingRepiEnvModelConfig();
+	if (missing.length === 0) return;
+	console.error("REPI env model config is incomplete; refusing to fall back to a saved/default model.");
+	for (const key of missing) console.error(`  missing: ${key}`);
+	console.error(`
+Use a complete, quoted block, for example:
+  export REPI_AUTH_TOKEN="sk-xxxxx"
+  export REPI_BASE_URL="https://api.example.com/v1"
+  export REPI_PROVIDER="morph"        # optional display/provider id
+  export REPI_MODEL="morph-glm52-744b"
+  export REPI_MODEL_API="openai-compatible"
+
+If your prompt is currently just \`>\`, press Ctrl+C first: bash is waiting for an unmatched quote.`);
+	process.exit(2);
+}
+
 export function bootstrapRepiCli(args: readonly string[]): string[] {
 	process.env.REPI_CODING_AGENT_APP_NAME = process.env.REPI_CODING_AGENT_APP_NAME || "repi";
 	process.env.REPI_CODING_AGENT_CONFIG_DIR = process.env.REPI_CODING_AGENT_CONFIG_DIR || ".repi";
@@ -146,6 +182,8 @@ export function bootstrapRepiCli(args: readonly string[]): string[] {
 	if (command && PACKAGE_COMMANDS.has(command)) {
 		return stripped.args;
 	}
+
+	validateRepiEnvModelConfig();
 
 	const prefix: string[] = [];
 	if (!hasFlag(stripped.args, "--recon") && !hasFlag(stripped.args, "--reverse-pentest")) {
