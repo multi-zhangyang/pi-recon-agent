@@ -25,6 +25,8 @@ Release focused on install reliability, env-first model selection, and upstream 
 
 - REPI defaults to `REPI_LOAD_BUILTIN_MODELS=0`, so the runtime surface is environment providers, explicit `models.json` providers, and dynamic extension providers rather than the large upstream built-in catalog.
 - Swarm/subagent runtime manifests now carry explicit timeout, cancellation, and retry-attempt metadata into child-session and worker-pool validation.
+- Swarm/subagent timeout handling now terminates the worker process group, records `timeoutMs`/`maxTurns`/`cancelledAt`, and recovers partial stdout/stderr into merge output when a model fails to write `handoff.md`.
+- Runtime-adapter execution JSON artifacts now enter the evidence graph as adapter, command, artifact, and parser-verification nodes instead of staying as disconnected files.
 - Documentation now leads with env-only model configuration and verified upstream pi extension installation examples.
 - `re_proof_loop run` reuses target-scoped verifier/compiler/operator artifacts and refreshes the gap model only when execution changed it, cutting the slow proof-loop flow test from roughly 35s to roughly 13s while keeping verifier → compiler → replayer → autofix closure semantics.
 - Runtime adapter target sniffing now reads bounded file headers instead of whole artifacts and recognizes ELF/MZ/Mach-O, PCAP/PCAPNG, APK/IPA ZIP markers, firmware/rootfs magic, and rootfs directory markers without loading large PCAP/firmware blobs into memory.
@@ -41,7 +43,7 @@ Release focused on install reliability, env-first model selection, and upstream 
 ### Tests
 
 - Added installer regression coverage for `~/.local/bin/repi` symlink creation, idempotent PATH rc updates, and no-op rc behavior when the launcher directory is already on PATH.
-- Added `/goal` unit coverage for print/RPC/no-UI behavior plus a release tarball smoke that builds, packs, installs the four `.tgz` artifacts, and verifies `repi`, fresh envless models, `REPI_*` env models, and RPC `/goal`.
+- Added `/goal` unit coverage for print/RPC/no-UI behavior plus a JSON-clean release tarball smoke that builds, packs, installs the four `.tgz` artifacts, and verifies PATH-resolved `repi`, fresh envless models, redacted `repi model status` for `REPI_*`, and RPC `/goal` + `goal_complete` tool introspection.
 - Added pure runtime-adapter contract tests for file magic detection, rootfs-over-PCAP path priority, command materialization, and parser signal extraction.
 - Added upstream extension alias coverage for pi-goal-style `defineTool` + `@earendil-works/pi-ai` imports and a real npm extension smoke for `pi-web-access` plus `@narumitw/pi-goal`.
 

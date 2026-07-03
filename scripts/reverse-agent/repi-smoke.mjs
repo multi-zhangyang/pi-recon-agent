@@ -72,12 +72,12 @@ const steps = [
 		rejectOutput: ["kimchi", "aigateway"],
 	},
 	{
-		id: "rpc-goal-command",
+		id: "rpc-goal-command-and-tool",
 		cmd: repiPath,
 		args: ["--offline", "--mode", "rpc", "--no-session"],
 		env: { ...envModelProbe, REPI_CODING_AGENT_DIR: rpcGoalAgentDir },
-		input: `${JSON.stringify({ id: "commands", type: "get_commands" })}\n`,
-		expectOutput: ['"name":"goal"'],
+		input: `${JSON.stringify({ id: "commands", type: "get_commands" })}\n${JSON.stringify({ id: "tools", type: "get_tools" })}\n`,
+		expectOutput: ['"name":"goal"', '"name":"goal_complete"', '"activeToolNames"'],
 	},
 ];
 if (full) steps.push({ id: "full-check", cmd: "npm", args: ["run", "check"], timeout: 180_000 });

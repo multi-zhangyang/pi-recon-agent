@@ -61,9 +61,17 @@ export interface AgentThreadRunManifest {
 	manifestPath: string;
 	mergePath?: string;
 	handoffPath?: string;
+	handoffPresent?: boolean;
+	handoffRecovered?: boolean;
+	handoffBytes?: number;
+	handoffSha256?: string;
 	provider?: string;
 	model?: string;
 	tools: string[];
+	timeoutMs?: number;
+	maxTurns?: number;
+	cancelSignal?: "SIGTERM";
+	cancelledAt?: string;
 	mcpServers?: string[];
 	mcpTools?: string[];
 	mcpInherited?: boolean;
@@ -141,6 +149,43 @@ async function sha256(text: string): Promise<string> {
 
 function nowIso(): string {
 	return new Date().toISOString();
+}
+
+function killWorkerProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
+	const pid = child.pid;
+	if (!pid) return;
+	if (process.platform !== "win32") {
+		try {
+			// Workers are spawned detached on POSIX, so -pid addresses the whole
+			// process group (shell + grandchildren). Killing only the shell leaves
+			// commands such as `sleep` holding stdout/stderr pipes open, so the
+			// parent never sees "close" and awaitRun hangs until the grandchild exits.
+			process.kill(-pid, signal);
+			return;
+		} catch {
+			// Fall through to the direct child kill for races / non-detached fallbacks.
+		}
+	}
+	try {
+		child.kill(signal);
+	} catch {
+		// best-effort
+	}
+}
+
+async function handoffManifestPatch(handoffPath: string): Promise<Partial<AgentThreadRunManifest>> {
+	try {
+		const stat = statSync(handoffPath);
+		const text = readText(handoffPath, 16000);
+		return {
+			handoffPresent: true,
+			handoffRecovered: false,
+			handoffBytes: stat.size,
+			handoffSha256: await sha256(text),
+		};
+	} catch {
+		return { handoffPresent: false, handoffBytes: 0 };
+	}
 }
 
 function safeIdPart(text: string): string {
@@ -529,11 +574,7 @@ export class AgentThreadManager {
 	private disposeChildren(reason: string): void {
 		for (const [runId, child] of this.children) {
 			if (child.exitCode === null) {
-				try {
-					child.kill("SIGKILL");
-				} catch {
-					// ignore
-				}
+				killWorkerProcessTree(child, "SIGKILL");
 				try {
 					this.updateManifest(runId, { status: "stopped", endedAt: nowIso(), error: `killed:${reason}` });
 				} catch {
@@ -709,6 +750,7 @@ export class AgentThreadManager {
 		const envModel = envSubagentModelOverride();
 		const childProvider = options.provider ?? envModel.provider;
 		const childModel = options.model ?? envModel.model;
+		const timeoutMs = Math.max(1000, options.timeoutMs ?? 10 * 60 * 1000);
 		const args = [
 			"--approve",
 			...(childProvider ? ["--provider", childProvider] : []),
@@ -734,12 +776,17 @@ export class AgentThreadManager {
 			runRoot,
 			agentDir: workerAgentDir,
 			handoffPath: join(runRoot, "handoff.md"),
+			handoffPresent: false,
+			handoffRecovered: false,
 			stdoutPath,
 			stderrPath,
 			manifestPath,
 			provider: childProvider,
 			model: childModel,
 			tools: toolNames,
+			timeoutMs,
+			maxTurns: spec.maxTurns,
+			cancelSignal: "SIGTERM",
 			mcpServers: mcpInheritance.serverIds,
 			mcpTools: mcpInheritance.allowedTools,
 			mcpInherited: mcpInheritance.inherited,
@@ -749,7 +796,6 @@ export class AgentThreadManager {
 		writeFileSync(stderrPath, "", { encoding: "utf8", mode: 0o600 });
 		writeJson(manifestPath, manifest);
 
-		const timeoutMs = Math.max(1000, options.timeoutMs ?? 10 * 60 * 1000);
 		// The child boots in print mode (--no-session -p) whose default 210s
 		// self-timeout would fire before this manager's spawn timer for any
 		// delegation budget > 210s, silently capping re_subagent/reason/challenge
@@ -758,6 +804,7 @@ export class AgentThreadManager {
 		const childPrintTimeoutMs = timeoutMs + 60_000;
 		const child = spawn(this.repiBinPath, args, {
 			cwd,
+			detached: process.platform !== "win32",
 			env: {
 				...process.env,
 				REPI_CODING_AGENT_DIR: workerAgentDir,
@@ -770,6 +817,7 @@ export class AgentThreadManager {
 				REPI_TELEMETRY: "0",
 				PI_TELEMETRY: "0",
 				REPI_PRINT_TIMEOUT_MS: String(childPrintTimeoutMs),
+				REPI_PRINT_MAX_TURNS: String(spec.maxTurns),
 				// File-based handoff — the child writes its findings to this path
 				// via a tool call (write/bash) so the parent can recover the work
 				// even when the reasoning model drops the final text block.
@@ -805,10 +853,15 @@ export class AgentThreadManager {
 		let stdoutDiskBytes = 0;
 		let stderrDiskBytes = 0;
 		const timer = setTimeout(() => {
-			this.updateManifest(runId, { status: "timeout", error: `timeout_ms=${timeoutMs}` });
-			child.kill("SIGTERM");
+			this.updateManifest(runId, {
+				status: "timeout",
+				error: `timeout_ms=${timeoutMs}`,
+				cancelledAt: nowIso(),
+				signal: "SIGTERM",
+			});
+			killWorkerProcessTree(child, "SIGTERM");
 			setTimeout(() => {
-				if (child.exitCode === null) child.kill("SIGKILL");
+				if (child.exitCode === null) killWorkerProcessTree(child, "SIGKILL");
 			}, 2000).unref();
 		}, timeoutMs);
 		// Track the outer timer so dispose() can clear it, and unref it so a
@@ -920,6 +973,7 @@ export class AgentThreadManager {
 						signal,
 						stdoutSha256: await sha256(readText(stdoutPath, 2 * 1024 * 1024)),
 						stderrSha256: await sha256(readText(stderrPath, 512 * 1024)),
+						...(await handoffManifestPatch(join(runRoot, "handoff.md"))),
 					});
 				}
 			} catch {
@@ -935,6 +989,7 @@ export class AgentThreadManager {
 							endedAt: nowIso(),
 							exitCode: code,
 							signal,
+							...(await handoffManifestPatch(join(runRoot, "handoff.md"))),
 						});
 					} catch {
 						// updateManifest is already internally guarded; belt-and-suspenders.
@@ -969,7 +1024,7 @@ export class AgentThreadManager {
 		if (!run) return undefined;
 		const child = this.children.get(run.runId);
 		if (child && child.exitCode === null) {
-			child.kill("SIGTERM");
+			killWorkerProcessTree(child, "SIGTERM");
 			this.updateManifest(run.runId, { status: "stopped", endedAt: nowIso() });
 		}
 		return this.getRun(run.runId);
@@ -1010,6 +1065,22 @@ export class AgentThreadManager {
 		const stderrTail = redact(readText(manifest.stderrPath, 4000));
 		const handoffPath = manifest.handoffPath ?? join(manifest.runRoot, "handoff.md");
 		const handoffText = existsSync(handoffPath) ? redact(readText(handoffPath, 16000)) : "";
+		const recoveredHandoff =
+			!handoffText && (stdoutTail || stderrTail)
+				? [
+						"Outcome: worker ended without writing handoff.md; parent recovered partial output.",
+						`Status: ${manifest.status}`,
+						`Exit: ${manifest.exitCode ?? "n/a"} signal=${manifest.signal ?? "n/a"}`,
+						`Budget: timeoutMs=${manifest.timeoutMs ?? "unknown"} maxTurns=${manifest.maxTurns ?? "unknown"}`,
+						`Key Evidence: stdout/stderr tail captured in ${manifest.stdoutPath} and ${manifest.stderrPath}`,
+						"Verification: recovered output is incomplete until a verifier/operator reruns or confirms the cited commands.",
+						"Next Step: retry with a smaller task or dispatch verifier/operator against the recovered evidence.",
+						...(stdoutTail ? ["", "Recovered stdout tail:", stdoutTail] : []),
+						...(stderrTail ? ["", "Recovered stderr tail:", stderrTail] : []),
+					].join("\n")
+				: "";
+		const workerHandoff = handoffText || recoveredHandoff;
+		const handoffRecovered = Boolean(recoveredHandoff);
 		const mergePath = join(manifest.runRoot, "merge.md");
 		const text = [
 			"# REPI AgentThread Merge",
@@ -1021,12 +1092,16 @@ export class AgentThreadManager {
 			`task: ${manifest.task}`,
 			`stdout_sha256: ${manifest.stdoutSha256 ?? "pending"}`,
 			`stderr_sha256: ${manifest.stderrSha256 ?? "pending"}`,
+			`timeout_ms: ${manifest.timeoutMs ?? "unknown"}`,
+			`max_turns: ${manifest.maxTurns ?? "unknown"}`,
 			`handoff_path: ${handoffPath}`,
+			`handoff_present: ${handoffText ? "true" : "false"}`,
+			`handoff_recovered: ${handoffRecovered ? "true" : "false"}`,
 			"",
-			handoffText ? ["## Worker handoff", "```text", handoffText, "```"].join("\n") : "",
+			workerHandoff ? ["## Worker handoff", "```text", workerHandoff, "```"].join("\n") : "",
 			"## Distilled output tail",
 			"```text",
-			stdoutTail || (handoffText ? "(empty — see Worker handoff above)" : "(empty)"),
+			stdoutTail || (workerHandoff ? "(empty — see Worker handoff above)" : "(empty)"),
 			"```",
 			stderrTail ? ["", "## Stderr tail", "```text", stderrTail, "```"].join("\n") : "",
 			"",
@@ -1042,7 +1117,11 @@ export class AgentThreadManager {
 		// doesn't truncate merge.md and lose the main-thread merge contract +
 		// distilled output tail. Same crash-torn-write class as opts #38/#41/#42/#43.
 		atomicWriteFileSync(mergePath, text);
-		this.updateManifest(manifest.runId, { mergePath });
+		this.updateManifest(manifest.runId, {
+			mergePath,
+			handoffPresent: Boolean(handoffText),
+			handoffRecovered,
+		});
 		return { manifest: this.getRun(manifest.runId) ?? manifest, text };
 	}
 

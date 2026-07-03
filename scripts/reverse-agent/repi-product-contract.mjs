@@ -68,6 +68,7 @@ const requiredFiles = [
 	"packages/coding-agent/src/core/repi/memory-ux.ts",
 	"packages/coding-agent/src/core/repi/memory-vector.ts",
 	"packages/coding-agent/src/core/repi/profile.ts",
+	"packages/coding-agent/src/core/repi/proof-loop.ts",
 	"packages/coding-agent/src/core/repi/routes.ts",
 	"packages/coding-agent/src/core/repi/mission.ts",
 	"packages/coding-agent/src/core/repi/memory-scope.ts",
@@ -111,7 +112,18 @@ rows.push(
 	check(
 		"validation:release-tarball-smoke-script",
 		packageJson.scripts?.["smoke:release"] === "node scripts/reverse-agent/repi-release-tarball-smoke.mjs" &&
-			existsSync(join(root, "scripts/reverse-agent/repi-release-tarball-smoke.mjs")),
+			existsSync(join(root, "scripts/reverse-agent/repi-release-tarball-smoke.mjs")) &&
+			includesAll(read("scripts/reverse-agent/repi-release-tarball-smoke.mjs"), [
+				"package-bin:path-command",
+				"package-bin:fresh-list-models",
+				"package-bin:env-incomplete-guard",
+				"package-bin:model-status-env",
+				"REPI_* environment",
+				"package-bin:rpc-goal",
+				"get_tools",
+				"goal_complete",
+				"capture === false && !json",
+			]),
 		`smoke:release=${packageJson.scripts?.["smoke:release"] ?? "<missing>"}`,
 		"Keep a release tarball smoke that installs packed npm artifacts and validates repi + /goal + REPI_* env.",
 	),
@@ -135,6 +147,9 @@ rows.push(
 );
 
 const launcher = read("repi");
+const cliSource = read("packages/coding-agent/src/cli.ts");
+const productCommandsSource = read("packages/coding-agent/src/cli/repi-product-commands.ts");
+const modelInspectSource = read("scripts/reverse-agent/model-inspect.mjs");
 rows.push(
 	check(
 		"launcher:independent-repi-entrypoint",
@@ -149,6 +164,21 @@ rows.push(
 			!/\bPI_CODING_AGENT_CONFIG_DIR\b/.test(launcher),
 		"entrypoint=repi env=REPI_*",
 		"Keep the launcher as the independent REPI product entrypoint. Do not reintroduce Pi app/config identity exports.",
+	),
+);
+rows.push(
+	check(
+		"launcher:fast-metadata-env-contract",
+		includesAll(cliSource, [
+			"TOP_LEVEL_VALUE_FLAGS",
+			"isFastMetadataOnlyRequest",
+			"runFastMetadataCommand",
+			"listModels",
+		]) &&
+			includesAll(productCommandsSource, ['case "model"', "model-inspect.mjs"]) &&
+			includesAll(modelInspectSource, ["model status", "REPI_* environment"]),
+		"cli has a pure metadata fast path for --help/--version/--list-models while preserving env model UX",
+		"Keep launcher metadata commands fast and safe to run before the full REPI profile is loaded.",
 	),
 );
 
@@ -1139,13 +1169,17 @@ rows.push(
 		includesAll(graphSource, ["AttackGraphTaskTreeNode", "taskTree", "counter_evidence", "hypothesis"]) &&
 			includesAll(reconProfile, [
 				"parseEvidenceLedgerTaskRecords",
+				"recentRuntimeAdapterExecutionArtifacts",
+				"runtime-adapter-json",
+				"tool:runtime-adapter",
 				"evidenceRecordHasCounterSignal",
 				"evidenceRecordHasHypothesisSignal",
 				"command",
 				"produces",
 				"refutes",
+				"verifies",
 			]),
-		"attack graph includes taskTree nodes linking commands, artifacts, hypotheses, verification, and counter-evidence",
+		"attack graph includes taskTree nodes linking commands, runtime adapter artifacts, hypotheses, verification, and counter-evidence",
 		"Keep re_graph build as a traceable task tree, not just a flat mission/lane summary.",
 	),
 );
@@ -1153,16 +1187,26 @@ rows.push(
 rows.push(
 	check(
 		"proof-loop:gap-classifier-contract",
-		includesAll(reconProfile, [
-			"ProofLoopGapClass",
-			"proofLoopGapClassifier",
-			"proofLoopQuickPath",
-			"executeProofLoopQuickPathCommand",
-			"quick_path_execution",
-			"gap_classifier",
-			"quick_path",
-		]),
-		"proof loop classifies gaps and executes a quick verifier/compiler/replayer/autofix path",
+		includesAll(read("packages/coding-agent/src/core/repi/proof-loop.ts"), [
+			"RepiProofLoopGapClass",
+			"classifyRepiProofLoopGap",
+			"repiProofLoopQuickPathFromItems",
+			"appendProofSpine",
+			"re_verifier matrix",
+			"re_compiler draft",
+			"re_replayer run",
+			"re_autofix plan",
+		]) &&
+			includesAll(reconProfile, [
+				"./repi/proof-loop.ts",
+				"proofLoopGapClassifier",
+				"proofLoopQuickPath",
+				"executeProofLoopQuickPathCommand",
+				"quick_path_execution",
+				"gap_classifier",
+				"quick_path",
+			]),
+		"proof loop classifies gaps in a split pure module and executes a quick verifier/compiler/replayer/autofix path",
 		"Keep re_proof_loop focused on fast executable gap classification and bounded proof repair, not only static queue dumps.",
 	),
 );
@@ -1181,8 +1225,18 @@ rows.push(
 			"timedOut",
 			"cancelledAt",
 			"WorkerRuntimePoolV1",
-		]),
-		"swarm workers carry explicit timeout/cancel metadata into manifests and pool bridge validation",
+		]) &&
+			includesAll(read("packages/coding-agent/src/core/agent-thread-manager.ts"), [
+				"killWorkerProcessTree",
+				"detached: process.platform",
+				"REPI_PRINT_MAX_TURNS",
+				"handoffRecovered",
+				"handoff_recovered",
+				"timeoutMs",
+				"maxTurns",
+				"cancelledAt",
+			]),
+		"swarm/subagent workers carry explicit timeout/cancel/max-turn metadata, process-tree kill, and recoverable handoff merge evidence",
 		"Keep subagent scheduling bounded, cancellable, and retry-budget visible across handoff manifests.",
 	),
 );
@@ -1271,7 +1325,10 @@ rows.push(
 			"launcher-list-models",
 			"fresh-install-envless-models",
 			"env-model-provider",
-			"rpc-goal-command",
+			"rpc-goal-command-and-tool",
+			"get_tools",
+			"goal_complete",
+			"activeToolNames",
 		]),
 		"smoke covers product contract, doctor, memory, model parse, launcher help/list, fresh env-only models, and RPC /goal",
 		"Keep smoke focused on fast user-facing REPI usability checks.",

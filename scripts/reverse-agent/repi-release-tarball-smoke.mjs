@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 
 const root = resolve(process.argv[2] && !process.argv[2].startsWith("--") ? process.argv[2] : process.cwd());
 const skipBuild = process.argv.includes("--skip-build");
@@ -14,6 +14,7 @@ const packages = [
 	{ directory: "packages/agent", name: "@pi-recon/repi-agent-core" },
 	{ directory: "packages/coding-agent", name: "@pi-recon/repi-coding-agent" },
 ];
+const rootPackageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const generatedModelFiles = ["packages/ai/src/models.generated.ts", "packages/ai/src/image-models.generated.ts"];
 const generatedModelSnapshots = generatedModelFiles
 	.map((file) => {
@@ -36,7 +37,7 @@ function run(id, command, args, options = {}) {
 		encoding: "utf8",
 		timeout: options.timeout ?? 120_000,
 		maxBuffer: 8 * 1024 * 1024,
-		stdio: options.capture === false ? "inherit" : ["pipe", "pipe", "pipe"],
+		stdio: options.capture === false && !json ? "inherit" : ["pipe", "pipe", "pipe"],
 	});
 	const stdout = result.stdout ?? "";
 	const stderr = result.stderr ?? "";
@@ -119,9 +120,11 @@ try {
 		REPI_LOAD_BUILTIN_MODELS: "0",
 	};
 	rows.push(run("package-bin:help", repiBin, ["--offline", "--help"], { cwd: installDir, expectOutput: ["REPI reverse/pentest", "REPI_AUTH_TOKEN", "REPI_LOAD_BUILTIN_MODELS"] }));
+	rows.push(run("package-bin:path-command", "repi", ["--version"], { cwd: installDir, env: { PATH: `${dirname(repiBin)}:${process.env.PATH ?? ""}` }, expectOutput: [rootPackageJson.version] }));
 	rows.push(run("package-bin:fresh-list-models", repiBin, ["--offline", "--list-models"], { cwd: installDir, env: { REPI_CODING_AGENT_DIR: freshAgentDir, REPI_LOAD_BUILTIN_MODELS: "0" }, expectOutput: ["No models available"], rejectOutput: ["kimchi", "aigateway"] }));
 	rows.push(run("package-bin:env-incomplete-guard", repiBin, ["--offline", "--list-models"], { cwd: installDir, env: { REPI_CODING_AGENT_DIR: join(outDir, "bad-env-agent"), REPI_LOAD_BUILTIN_MODELS: "0", REPI_MODEL: "release-smoke-env-model", REPI_MODEL_API: "openai-compatible" }, expectExit: 2, expectOutput: ["REPI env model config is incomplete", "missing: REPI_BASE_URL"], rejectOutput: ["kimchi", "aigateway"] }));
 	rows.push(run("package-bin:env-model", repiBin, ["--offline", "--list-models"], { cwd: installDir, env: { ...envModel, REPI_CODING_AGENT_DIR: envAgentDir }, expectOutput: ["repi-env", "release-smoke-env-model", "262.1K"], rejectOutput: ["kimchi", "aigateway"] }));
+	rows.push(run("package-bin:model-status-env", repiBin, ["model", "status", "--json"], { cwd: installDir, env: { ...envModel, REPI_CODING_AGENT_DIR: join(outDir, "model-status-agent") }, expectOutput: ['"source": "REPI_* environment"', '"provider": "repi-env"', '"model": "release-smoke-env-model"'], rejectOutput: ["https://release-smoke.invalid"] }));
 	rows.push(run("package-bin:doctor-env-model", repiBin, ["doctor", "--json"], { cwd: installDir, env: { ...envModel, REPI_CODING_AGENT_DIR: join(outDir, "doctor-agent") }, timeout: 120_000, expectOutput: ['"ok": true', '"goal:built-in-mode"', '"goal:footer-status-contract"', '"models:env-only-contract"'] }));
 	rows.push(
 		run("package-bin:rpc-goal", repiBin, ["--offline", "--mode", "rpc", "--no-session"], {

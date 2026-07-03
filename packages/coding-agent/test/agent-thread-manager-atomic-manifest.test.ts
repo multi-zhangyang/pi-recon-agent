@@ -122,6 +122,52 @@ describe("AgentThreadManager manifest atomicity", () => {
 		expect(parsed.runId).toBe(manifest.runId);
 	});
 
+	it("records worker budgets and recovers partial stdout/stderr into merge when timeout loses handoff", async () => {
+		tempRoot = mkdtempSync(join(tmpdir(), "repi-agent-thread-timeout-recover-"));
+		const workspace = join(tempRoot, "workspace");
+		mkdirSync(workspace);
+		const fakeRepi = join(tempRoot, "fake-repi.sh");
+		writeFileSync(
+			fakeRepi,
+			[
+				"#!/usr/bin/env bash",
+				"printf 'partial stdout before timeout max_turns=%s\\n' \"$REPI_PRINT_MAX_TURNS\"",
+				"printf 'partial stderr before timeout\\n' >&2",
+				"sleep 30",
+			].join("\n"),
+			"utf8",
+		);
+		chmodSync(fakeRepi, 0o700);
+
+		const manager = createAgentThreadManager({
+			cwd: workspace,
+			agentDir: join(tempRoot, "agent"),
+			repiBinPath: fakeRepi,
+		});
+		const manifest = await manager.spawnThread({
+			specName: "verifier",
+			task: "verify timeout recovery",
+			timeoutMs: 1000,
+		});
+		const final = await manager.awaitRun(manifest.runId);
+		expect(final.status).toBe("timeout");
+		expect(final.timeoutMs).toBe(1000);
+		expect(final.maxTurns).toBeGreaterThan(0);
+		expect(final.cancelSignal).toBe("SIGTERM");
+		expect(final.cancelledAt).toBeDefined();
+		expect(final.handoffPresent).toBe(false);
+
+		const merge = manager.mergeRun(manifest.runId);
+		expect(merge?.text).toContain("handoff_present: false");
+		expect(merge?.text).toContain("handoff_recovered: true");
+		expect(merge?.text).toContain("Outcome: worker ended without writing handoff.md");
+		expect(merge?.text).toContain("partial stdout before timeout max_turns=");
+		expect(merge?.text).toContain("partial stderr before timeout");
+		const mergedManifest = manager.getRun(manifest.runId);
+		expect(mergedManifest?.handoffRecovered).toBe(true);
+		expect(mergedManifest?.mergePath).toBeDefined();
+	});
+
 	it("close handler resolves the run (does not reject/hang) when getRun throws mid-finalize", async () => {
 		// The child "close" handler is an async EventEmitter callback: the emitter
 		// drops its returned promise, so a rejection becomes an unhandledRejection

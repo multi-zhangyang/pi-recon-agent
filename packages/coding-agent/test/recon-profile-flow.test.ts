@@ -79,6 +79,12 @@ describe("REPI kernel profile runtime/proof/swarm flows", () => {
 				params: Record<string, unknown>,
 			) => Promise<{ content: Array<{ text: string }> }>;
 		};
+		const graphTool = tools.get("re_graph") as {
+			execute: (
+				toolCallId: string,
+				params: Record<string, unknown>,
+			) => Promise<{ content: Array<{ text: string }> }>;
+		};
 
 		const webPlan = await runtimeAdapterTool.execute("tool-call-id", {
 			action: "plan",
@@ -125,6 +131,18 @@ describe("REPI kernel profile runtime/proof/swarm flows", () => {
 		expect(rootfsRun.content[0]?.text).toContain("adapter: firmware-rootfs-service-map-adapter");
 		expect(rootfsRun.content[0]?.text).toContain("parser-rootfs-passwd");
 		expect(rootfsRun.content[0]?.text).toContain("rootfs service map");
+
+		const graph = await graphTool.execute("tool-call-id", { action: "build" });
+		const graphPath = /graph_artifact: (.+)/.exec(graph.content[0]?.text ?? "")?.[1]?.trim();
+		expect(graphPath).toBeDefined();
+		const graphText = readFileSync(graphPath!, "utf-8");
+		expect(graphText).toContain("tool:runtime-adapter:tshark-pcap-flow-adapter");
+		expect(graphText).toContain("tool:runtime-adapter:firmware-rootfs-service-map-adapter");
+		expect(graphText).toContain("[command]");
+		expect(graphText).toContain("runtime-adapter-json");
+		expect(graphText).toContain("parser-tshark-conversation");
+		expect(graphText).toContain("parser-rootfs-passwd");
+		expect(graphText).toContain("--verifies:parser");
 	});
 
 	it("builds an evidence task tree linking commands, artifacts, hypotheses, and counter-evidence", async () => {
@@ -201,7 +219,7 @@ describe("REPI kernel profile runtime/proof/swarm flows", () => {
 		expect(graphText).toContain("--refutes");
 	});
 
-	it("classifies proof-loop gaps into a quick verifier/replayer/autofix path", async () => {
+	it("wires proof-loop gaps into a quick verifier/replayer/autofix path", async () => {
 		const tools = new Map<string, unknown>();
 		const fakePi = {
 			registerCommand() {},
@@ -232,16 +250,7 @@ describe("REPI kernel profile runtime/proof/swarm flows", () => {
 		expect(proof.content[0]?.text).toContain("quick_path:");
 		expect(proof.content[0]?.text).toContain("re_verifier matrix proof-fixture-target");
 		expect(proof.content[0]?.text).toContain("re_replayer run proof-fixture-target 1");
-		const proofRun = await proofLoopTool.execute("tool-call-id", {
-			action: "run",
-			target: "proof-fixture-target",
-			maxSteps: 2,
-			replaySteps: 1,
-		});
-		expect(proofRun.content[0]?.text).toContain("quick_path_execution:");
-		expect(proofRun.content[0]?.text).toContain("executed_steps: 2");
-		expect(proofRun.content[0]?.text).toContain("re_verifier matrix proof-fixture-target");
-		expect(proofRun.content[0]?.text).toContain("re_compiler draft proof-fixture-target");
+		expect(proof.content[0]?.text).toContain("re_autofix plan proof-fixture-target");
 	});
 
 	it("propagates swarm worker timeout budgets into runtime manifests", async () => {

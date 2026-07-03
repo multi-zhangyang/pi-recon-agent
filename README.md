@@ -529,6 +529,8 @@ git push origin v<version>
 # 本地发版前建议先跑: npm run smoke:release -- --json
 ```
 
+`smoke:release` 会在仓库外打包并安装 4 个 `.tgz`，然后验证安装后的 `repi` 能从 PATH 解析、fresh profile 不加载旧 provider、`REPI_*` 环境模型成为真实 effective model、`repi model status` 不泄露 base URL、RPC 下 `/goal` 和 `goal_complete` 都已注册。
+
 ---
 
 ## 目录

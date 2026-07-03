@@ -45,6 +45,15 @@ import {
 import { jsonlRecords, jsonlScan, warmJsonlParsedCache } from "./repi/jsonl.ts";
 import { installRepiGoalMode } from "./repi/goal.ts";
 import {
+	formatRepiProofLoopGapClassifier as formatProofLoopGapClassifier,
+	repiProofLoopCommandTarget as proofLoopCommandTarget,
+	repiProofLoopQuickPathFromItems as proofLoopQuickPathFromItems,
+	repiProofLoopSpecialistQueueFromItems as proofLoopSpecialistQueueFromItems,
+	repiProofLoopWorkerForText as proofLoopWorkerForText,
+	type RepiProofLoopGapItem as ProofLoopGapItem,
+	type RepiProofLoopGapSource as ProofLoopGapSource,
+} from "./repi/proof-loop.ts";
+import {
 	caseMemorySnapshotFromEvent,
 	isCaseMemory,
 	latestCaseMemoryBySignature,
@@ -2942,35 +2951,6 @@ type ProofLoopStep = {
 };
 
 type ProofLoopVerdict = "ready" | "partial" | "needs_repair" | "blocked";
-
-type ProofLoopGapSource =
-	| "compact_resume"
-	| "failure_signature"
-	| "operator_feedback"
-	| "verifier"
-	| "compiler"
-	| "replayer"
-	| "autofix"
-	| "checkpoint"
-	| "artifact";
-
-type ProofLoopGapItem = {
-	source: ProofLoopGapSource;
-	text: string;
-	worker: DelegateWorker;
-	sourceArtifacts: string[];
-};
-
-type ProofLoopGapClass =
-	| "missing_artifact"
-	| "contradiction"
-	| "replay_failure"
-	| "tool_or_dependency"
-	| "target_or_state"
-	| "weak_evidence"
-	| "timeout_or_flake"
-	| "compact_resume"
-	| "unknown";
 
 type ProofLoopArtifact = {
 	timestamp: string;
@@ -14204,11 +14184,72 @@ async function dispatchLaneSpecialist(options: {
 	return { text: mergeText, decision, spec, note: `specialist_dispatch: spec=${spec} status=${merge?.manifest.status ?? "unknown"}` };
 }
 
+type RuntimeAdapterExecutionGraphArtifact = RuntimeAdapterExecutionArtifactV1 & {
+	stdoutHead?: string;
+	stderrHead?: string;
+};
+
+function isRuntimeAdapterExecutionGraphArtifact(row: unknown): row is RuntimeAdapterExecutionGraphArtifact {
+	if (typeof row !== "object" || row === null) return false;
+	const record = row as Record<string, unknown>;
+	return (
+		record.kind === "RuntimeAdapterExecutionArtifactV1" &&
+		record.schemaVersion === 1 &&
+		typeof record.adapterId === "string" &&
+		typeof record.domainId === "string" &&
+		typeof record.bridgeId === "string" &&
+		typeof record.startedAt === "string" &&
+		typeof record.finishedAt === "string" &&
+		typeof record.command === "string" &&
+		typeof record.stdoutSha256 === "string" &&
+		typeof record.stderrSha256 === "string" &&
+		Array.isArray(record.parserSignals) &&
+		Array.isArray(record.artifactKinds) &&
+		Array.isArray(record.ingestTargets) &&
+		Array.isArray(record.proofExitSignals)
+	);
+}
+
+function recentRuntimeAdapterExecutionArtifacts(
+	limit = 8,
+): Array<{ path: string; artifact: RuntimeAdapterExecutionGraphArtifact }> {
+	const root = join(evidenceToolchainDir(), "runtime-adapters");
+	try {
+		return readdirSync(root, { withFileTypes: true })
+			.filter((entry) => entry.isDirectory())
+			.flatMap((entry) => {
+				const dir = join(root, entry.name);
+				return readdirSync(dir, { withFileTypes: true })
+					.filter((file) => file.isFile() && file.name.endsWith(".json"))
+					.map((file) => {
+						const path = join(dir, file.name);
+						let mtimeMs = 0;
+						try {
+							mtimeMs = statSync(path).mtimeMs;
+						} catch {
+							mtimeMs = 0;
+						}
+						return { path, mtimeMs };
+					});
+			})
+			.sort((left, right) => right.mtimeMs - left.mtimeMs || right.path.localeCompare(left.path))
+			.slice(0, limit)
+			.map(({ path }) => {
+				const artifact = readJsonObjectFile<unknown>(path);
+				return isRuntimeAdapterExecutionGraphArtifact(artifact) ? { path, artifact } : undefined;
+			})
+			.filter((item): item is { path: string; artifact: RuntimeAdapterExecutionGraphArtifact } => Boolean(item));
+	} catch {
+		return [];
+	}
+}
+
 function buildAttackGraph(): AttackGraphArtifact {
 	ensureReconStorage();
 	const timestamp = new Date().toISOString();
 	const mission = readCurrentMission();
 	const map = latestPassiveMapContext();
+	const runtimeAdapterArtifacts = recentRuntimeAdapterExecutionArtifacts();
 	const nodes = new Map<string, AttackGraphNode>();
 	const edges: AttackGraphEdge[] = [];
 	const taskTree: AttackGraphTaskTreeNode[] = [];
@@ -14341,6 +14382,93 @@ function buildAttackGraph(): AttackGraphArtifact {
 		});
 		if (nodes.has(laneId)) addEdge({ from: laneId, to: runId, kind: "evidences", label: "lane-run" });
 		if (verdict === "weak") gaps.push(`weak evidence run: ${path}`);
+	}
+
+	for (const { path, artifact } of runtimeAdapterArtifacts) {
+		sourceArtifacts.push(path);
+		const artifactBase = artifactBasename(path);
+		const adapterId = `tool:runtime-adapter:${slug(artifact.adapterId)}`;
+		const artifactId = `artifact:runtime-adapter:${slug(artifact.adapterId)}:${slug(artifactBase)}`;
+		const commandId = `command:runtime-adapter:${slug(artifact.adapterId)}:${slug(artifactBase)}`;
+		const parserMatchCount = artifact.parserSignals.reduce((sum, signal) => sum + signal.matches.length, 0);
+		addNode({
+			id: adapterId,
+			kind: "tool",
+			label: artifact.adapterId,
+			status: `${artifact.selectedRunner}/${artifact.domainId}`,
+			note: `runtime-adapter bridge=${artifact.bridgeId} target=${artifact.target ?? "<none>"}`,
+		});
+		addTask({
+			id: adapterId,
+			parentId: mission ? `mission:${mission.id}` : undefined,
+			kind: "tool",
+			label: artifact.adapterId,
+			status: `${artifact.selectedRunner}/${artifact.domainId}`,
+			note: `runtime-adapter target=${artifact.target ?? "<none>"}`,
+		});
+		addNode({
+			id: artifactId,
+			kind: "artifact",
+			label: artifactBase,
+			status: `exit=${artifact.exitCode ?? "null"} parser_matches=${parserMatchCount}`,
+			path,
+			note: `stdout_sha256=${artifact.stdoutSha256} stderr_sha256=${artifact.stderrSha256}`,
+		});
+		addTask({
+			id: artifactId,
+			parentId: adapterId,
+			kind: "artifact",
+			label: artifactBase,
+			status: `exit=${artifact.exitCode ?? "null"} parser_matches=${parserMatchCount}`,
+			path,
+			evidence: [
+				`artifact_kinds=${artifact.artifactKinds.join(",")}`,
+				`proof_exit=${artifact.proofExitSignals.join(" | ")}`,
+				`stdout_sha256=${artifact.stdoutSha256}`,
+				`stderr_sha256=${artifact.stderrSha256}`,
+			],
+		});
+		addNode({
+			id: commandId,
+			kind: "command",
+			label: truncateMiddle(artifact.command, 160),
+			status: artifact.killed ? "killed" : `exit=${artifact.exitCode ?? "null"}`,
+			note: `runner=${artifact.selectedRunner}`,
+		});
+		addTask({
+			id: commandId,
+			parentId: artifactId,
+			kind: "command",
+			label: truncateMiddle(artifact.command, 180),
+			status: artifact.killed ? "killed" : `exit=${artifact.exitCode ?? "null"}`,
+			command: artifact.command,
+		});
+		addEdge({ from: adapterId, to: commandId, kind: "requires", label: artifact.selectedRunner });
+		addEdge({ from: commandId, to: artifactId, kind: "produces", label: "runtime-adapter-json" });
+		if (mission) addEdge({ from: `mission:${mission.id}`, to: adapterId, kind: "requires", label: "runtime-adapter" });
+		for (const [index, signal] of artifact.parserSignals.entries()) {
+			const signalId = `verify:runtime-adapter:${slug(artifact.adapterId)}:${slug(artifactBase)}:${index + 1}:${slug(signal.ruleId)}`;
+			addNode({
+				id: signalId,
+				kind: "verification",
+				label: `${signal.ruleId} => ${signal.proofExitSignal}`,
+				status: signal.matches.length ? `matches=${signal.matches.length}` : "no-match",
+				note: signal.matches.slice(0, 4).join(" | ") || "parser signal did not match runner output",
+			});
+			addTask({
+				id: signalId,
+				parentId: artifactId,
+				kind: "verification",
+				label: `${signal.ruleId} => ${signal.proofExitSignal}`,
+				status: signal.matches.length ? `matches=${signal.matches.length}` : "no-match",
+				evidence: signal.matches.slice(0, 6),
+			});
+			addEdge({ from: signalId, to: artifactId, kind: "verifies", label: "parser" });
+		}
+		if (artifact.killed || (artifact.exitCode !== null && artifact.exitCode !== 0)) {
+			gaps.push(`runtime adapter failed: ${artifact.adapterId} exit=${artifact.exitCode ?? "null"} killed=${artifact.killed}`);
+		}
+		if (parserMatchCount === 0) gaps.push(`runtime adapter parser no-match: ${artifact.adapterId}`);
 	}
 
 	for (const node of evidenceLedgerGraphNodes()) {
@@ -14498,7 +14626,7 @@ function buildAttackGraph(): AttackGraphArtifact {
 		timestamp,
 		missionId: mission?.id,
 		route: mission?.route.domain,
-		target: map?.target,
+		target: map?.target ?? runtimeAdapterArtifacts.find((item) => item.artifact.target)?.artifact.target,
 		nodes: [...nodes.values()],
 		edges,
 		taskTree: taskTree.slice(0, 160),
@@ -25046,33 +25174,6 @@ function parseAutofixArtifact(path: string): AutofixArtifact | undefined {
 	}
 }
 
-function proofLoopWorkerForText(text: string, mission?: MissionState): DelegateWorker {
-	const haystack = `${mission?.route.domain ?? ""}\n${mission?.task ?? ""}\n${text}`;
-	if (
-		/web-authz|web|api|http|xhr|fetch|websocket|graphql|jwt|cookie|session|idor|bola|authz|csrf|cors/i.test(haystack)
-	)
-		return "web-authz";
-	if (/mobile|android|ios|apk|ipa|frida|objection|smali|jni|objc|swift|emulator/i.test(haystack))
-		return "mobile-runtime";
-	if (/cloud|container|docker|k8s|kubernetes|metadata|serviceaccount|iam|rbac|privilege/i.test(haystack))
-		return "cloud";
-	if (/credential|principal|kerberos|ldap|ntlm|ticket|hash|identity|active directory|bloodhound/i.test(haystack))
-		return "identity";
-	if (/firmware|pcap|dfir|forensic|rootfs|tshark|binwalk|extract|filesystem|emulate|timeline|decode/i.test(haystack))
-		return "firmware-dfir";
-	if (/agentsec|agent|prompt|tool-boundary|memory|injection|delegation|mcp|rag|sub-agent/i.test(haystack))
-		return "agentsec";
-	if (/malware|ioc|yara|capa|floss|static-config|behavior|c2/i.test(haystack)) return "malware";
-	if (/pwn|exploit|primitive|mitigation|rop|heap|overflow|shellcode|pwntools|crash|leak|gadget/i.test(haystack))
-		return "pwn-exploit";
-	if (
-		/native|elf|pe|macho|binary|gdb|lldb|checksec|r2|radare|ghidra|ida|symbol|breakpoint|loader|libc/i.test(haystack)
-	)
-		return "native-runtime";
-	if (/report|complete|writeup|compiler|final/i.test(haystack)) return "reporting";
-	return "general";
-}
-
 function proofLoopGapItems(target?: string): ProofLoopGapItem[] {
 	const mission = readCurrentMission();
 	const targetRef = target ?? mission?.task;
@@ -25209,92 +25310,12 @@ function proofLoopGapItems(target?: string): ProofLoopGapItem[] {
 	}));
 }
 
-function classifyProofLoopGap(item: ProofLoopGapItem): {
-	klass: ProofLoopGapClass;
-	priority: number;
-	action: string;
-} {
-	const text = `${item.source} ${item.text}`;
-	if (/compact resume|resume command|proof loop has not been entered/i.test(text)) {
-		return { klass: "compact_resume", priority: 1, action: "re_context resume -> re_operator plan -> re_proof_loop run" };
-	}
-	if (/contradiction|counter[_ -]?evidence|refute|conflict/i.test(text)) {
-		return { klass: "contradiction", priority: 1, action: "re_supervisor repair -> re_verifier matrix" };
-	}
-	if (/command not found|not recognized|No such file|cannot stat|cannot access|ModuleNotFoundError|ImportError|Cannot find module|ERR_MODULE_NOT_FOUND|permission denied|EACCES|ENOENT|missing tool|dependency|bootstrap/i.test(text)) {
-		return { klass: "tool_or_dependency", priority: 1, action: "re_bootstrap plan -> re_operator dispatch" };
-	}
-	if (/timeout|timed out|flake|unstable/i.test(text)) {
-		return { klass: "timeout_or_flake", priority: 1, action: "re_autofix plan/apply with bounded timeout -> re_replayer run" };
-	}
-	if (/nonzero|exit=|failed:|blocked:|replay.*failed|stderr=/i.test(text)) {
-		return { klass: "replay_failure", priority: 2, action: "re_autofix plan/apply -> re_replayer run" };
-	}
-	if (/target mismatch|unresolved target|target placeholder|state|session|cookie|auth|nonce|csrf|token|login|credential/i.test(text)) {
-		return { klass: "target_or_state", priority: 2, action: "re_map -> re_live_browser/re_web_authz_state or re_lane plan" };
-	}
-	if (/artifact missing|missing: run|no replay execution|verifier artifact missing|compiler artifact missing|replayer artifact missing/i.test(text)) {
-		return { klass: "missing_artifact", priority: 2, action: "re_verifier matrix -> re_compiler draft -> re_replayer run" };
-	}
-	if (/weak|missing=|weak=|insufficient|low confidence|quality/i.test(text)) {
-		return { klass: "weak_evidence", priority: 3, action: "re_operator dispatch -> re_verifier matrix" };
-	}
-	return { klass: "unknown", priority: 4, action: "re_delegate plan -> re_swarm run -> re_supervisor review" };
-}
-
-function formatProofLoopGapClassifier(items: ProofLoopGapItem[]): string[] {
-	return items
-		.map((item, index) => {
-			const classified = classifyProofLoopGap(item);
-			return `priority=${classified.priority} class=${classified.klass} worker=${item.worker} source=${item.source} gap=${index + 1} action="${classified.action}" evidence=${item.sourceArtifacts.slice(0, 3).join(" | ") || "none"} :: ${item.text}`;
-		})
-		.sort((left, right) => {
-			const leftPriority = Number(/priority=(\d+)/.exec(left)?.[1] ?? "9");
-			const rightPriority = Number(/priority=(\d+)/.exec(right)?.[1] ?? "9");
-			return leftPriority - rightPriority || left.localeCompare(right);
-		})
-		.slice(0, 24);
-}
-
 function proofLoopGapClassifier(target?: string): string[] {
 	return formatProofLoopGapClassifier(proofLoopGapItems(target));
 }
 
-function proofLoopQuickPathFromItems(items: ProofLoopGapItem[], target?: string): string[] {
-	const targetRef = target?.trim() || "<target>";
-	const classes = new Set(items.map((item) => classifyProofLoopGap(item).klass));
-	const commands: string[] = [];
-	if (classes.has("compact_resume")) {
-		commands.push("re_context resume", `re_operator plan ${targetRef}`);
-	}
-	if (classes.has("tool_or_dependency")) commands.push("re_bootstrap plan", `re_operator dispatch ${targetRef} 1`);
-	if (classes.has("target_or_state")) {
-		commands.push(`re_map ${targetRef}`, `re_live_browser plan ${targetRef}`, `re_web_authz_state plan ${targetRef}`);
-	}
-	if (classes.has("missing_artifact") || classes.has("weak_evidence") || classes.size === 0) {
-		commands.push(`re_verifier matrix ${targetRef}`, `re_compiler draft ${targetRef}`, `re_replayer run ${targetRef} 1`);
-	}
-	if (classes.has("replay_failure") || classes.has("timeout_or_flake")) {
-		commands.push(`re_autofix plan ${targetRef}`, `re_autofix apply ${targetRef}`, `re_replayer run ${targetRef} 1`);
-	}
-	if (classes.has("contradiction")) commands.push(`re_supervisor repair ${targetRef}`, `re_verifier matrix ${targetRef}`);
-	if (classes.has("unknown")) commands.push(`re_delegate plan ${targetRef}`, `re_swarm run ${targetRef} 2 1`, "re_swarm merge");
-	commands.push(`re_proof_loop run ${targetRef} 4 2`);
-	return Array.from(new Set(commands)).slice(0, 14);
-}
-
 function proofLoopQuickPath(target?: string): string[] {
 	return proofLoopQuickPathFromItems(proofLoopGapItems(target), target);
-}
-
-function proofLoopSpecialistQueueFromItems(items: ProofLoopGapItem[], target?: string): string[] {
-	const suffix = proofLoopCommandTarget(target);
-	return items
-		.map(
-			(item, index) =>
-				`proof-gap:${index + 1}:${item.worker} source=${item.source} evidence=${item.sourceArtifacts.slice(0, 3).join(" | ") || "none"} :: ${item.text} -> re_delegate plan${suffix}`,
-		)
-		.slice(0, 24);
 }
 
 function proofLoopSpecialistQueue(target?: string): string[] {
@@ -25341,10 +25362,6 @@ function proofLoopSwarmBridgeFromItems(items: ProofLoopGapItem[], target?: strin
 
 function proofLoopSwarmBridge(target?: string): string[] {
 	return proofLoopSwarmBridgeFromItems(proofLoopGapItems(target), target);
-}
-
-function proofLoopCommandTarget(target?: string): string {
-	return target?.trim() ? ` ${target.trim()}` : "";
 }
 
 function buildProofLoopSteps(target?: string): ProofLoopStep[] {
