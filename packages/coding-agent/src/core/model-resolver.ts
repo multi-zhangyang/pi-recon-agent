@@ -475,6 +475,24 @@ export interface InitialModelResult {
 	fallbackMessage: string | undefined;
 }
 
+function firstEnvValue(names: string[]): string | undefined {
+	for (const name of names) {
+		const value = process.env[name]?.trim();
+		if (value) return value;
+	}
+	return undefined;
+}
+
+function repiEnvPreferredModel(): { provider: string; modelId: string } | undefined {
+	const modelId = firstEnvValue(["REPI_MODEL", "REPI_MODEL_ID"]);
+	const baseUrl = firstEnvValue(["REPI_BASE_URL", "REPI_MODEL_BASE_URL"]);
+	if (!modelId || !baseUrl) return undefined;
+	return {
+		provider: firstEnvValue(["REPI_PROVIDER", "REPI_MODEL_PROVIDER", "REPI_PROVIDER_ID"]) ?? "repi-env",
+		modelId,
+	};
+}
+
 /**
  * Find the initial model to use based on priority:
  * 1. CLI args (provider + model)
@@ -548,6 +566,20 @@ export async function findInitialModel(options: {
 	const availableModels = await modelRegistry.getAvailable();
 
 	if (availableModels.length > 0) {
+		const envPreferred = repiEnvPreferredModel();
+		if (envPreferred) {
+			const match = availableModels.find(
+				(m) => m.provider === envPreferred.provider && m.id === envPreferred.modelId,
+			);
+			if (match) {
+				return {
+					model: match,
+					thinkingLevel: defaultThinkingLevel ?? DEFAULT_THINKING_LEVEL,
+					fallbackMessage: undefined,
+				};
+			}
+		}
+
 		// Try to find a default model from known providers
 		for (const provider of Object.keys(defaultModelPerProvider) as KnownProvider[]) {
 			const defaultId = defaultModelPerProvider[provider];

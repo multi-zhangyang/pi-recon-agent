@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -15,6 +15,28 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void
 		await sleep(50);
 	}
 	throw new Error("timeout waiting for predicate");
+}
+
+async function withRepiSubagentEnv<T>(values: Record<string, string>, fn: () => Promise<T>): Promise<T> {
+	const names = [
+		"REPI_SUBAGENT_MODEL",
+		"REPI_SUBAGENT_PROVIDER",
+		"REPI_PROVIDER",
+		"REPI_MODEL_PROVIDER",
+		"REPI_PROVIDER_ID",
+	];
+	const originals = new Map(names.map((name) => [name, process.env[name]]));
+	for (const name of names) delete process.env[name];
+	for (const [name, value] of Object.entries(values)) process.env[name] = value;
+	try {
+		return await fn();
+	} finally {
+		for (const name of names) {
+			const original = originals.get(name);
+			if (original === undefined) delete process.env[name];
+			else process.env[name] = original;
+		}
+	}
 }
 
 describe("AgentThreadManager", () => {
@@ -70,6 +92,43 @@ describe("AgentThreadManager", () => {
 		expect(merged?.text).not.toContain("synthetic-redaction-value");
 		expect(merged?.text).toContain("<redacted>");
 		expect(manager.formatRuns()).toContain(manifest.runId);
+	});
+
+	it("passes REPI_SUBAGENT_MODEL as the default child provider/model override", async () => {
+		await withRepiSubagentEnv(
+			{
+				REPI_PROVIDER: "repi-env",
+				REPI_SUBAGENT_MODEL: "worker-model",
+			},
+			async () => {
+				tempRoot = mkdtempSync(join(tmpdir(), "repi-agent-thread-"));
+				const workspace = join(tempRoot, "workspace");
+				mkdirSync(workspace);
+				const fakeRepi = join(tempRoot, "fake-repi.sh");
+				writeFileSync(fakeRepi, "#!/usr/bin/env bash\nprintf 'args=%s\\n' \"$*\"\n", "utf8");
+				chmodSync(fakeRepi, 0o700);
+
+				const manager = createAgentThreadManager({
+					cwd: workspace,
+					agentDir: join(tempRoot, "agent"),
+					repiBinPath: fakeRepi,
+				});
+				const manifest = await manager.spawnThread({
+					specName: "verifier",
+					task: "verify env model",
+					timeoutMs: 5000,
+				});
+				expect(manifest.provider).toBe("repi-env");
+				expect(manifest.model).toBe("worker-model");
+
+				await waitFor(() => manager.getRun(manifest.runId)?.status === "complete");
+				const completed = manager.getRun(manifest.runId);
+				expect(completed?.provider).toBe("repi-env");
+				expect(completed?.model).toBe("worker-model");
+				const stdout = readFileSync(completed!.stdoutPath, "utf8");
+				expect(stdout).toContain("--provider repi-env --model worker-model");
+			},
+		);
 	});
 
 	it("blocks project MCP config when inheritance is disabled", async () => {

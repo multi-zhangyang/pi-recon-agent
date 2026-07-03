@@ -6,6 +6,26 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const MODEL_INSPECT = fileURLToPath(new URL("../../../scripts/reverse-agent/model-inspect.mjs", import.meta.url));
+const REPI_MODEL_ENV_NAMES = [
+	"REPI_AUTH_TOKEN",
+	"REPI_API_KEY",
+	"REPI_MODEL_API_KEY",
+	"REPI_BASE_URL",
+	"REPI_MODEL_BASE_URL",
+	"REPI_MODEL",
+	"REPI_MODEL_ID",
+	"REPI_MODEL_API",
+	"REPI_API",
+	"REPI_PROVIDER",
+	"REPI_MODEL_PROVIDER",
+	"REPI_PROVIDER_ID",
+	"REPI_CONTEXT_WINDOW",
+	"REPI_MODEL_CONTEXT_WINDOW",
+	"REPI_MAX_TOKENS",
+	"REPI_MODEL_MAX_TOKENS",
+	"REPI_MAX_OUTPUT_TOKENS",
+	"REPI_SUBAGENT_MODEL",
+];
 
 describe("repi model argument parsing", () => {
 	let tempRoot: string;
@@ -41,10 +61,12 @@ describe("repi model argument parsing", () => {
 		rmSync(tempRoot, { recursive: true, force: true });
 	});
 
-	function run(args: string[]) {
+	function run(args: string[], env: Record<string, string> = {}) {
+		const cleanEnv = { ...process.env };
+		for (const name of REPI_MODEL_ENV_NAMES) delete cleanEnv[name];
 		const result = spawnSync(process.execPath, [MODEL_INSPECT, workspace, ...args, "--json"], {
 			encoding: "utf8",
-			env: { ...process.env, REPI_CODING_AGENT_DIR: agentDir },
+			env: { ...cleanEnv, REPI_CODING_AGENT_DIR: agentDir, ...env },
 			timeout: 10_000,
 		});
 		return { result, json: JSON.parse(result.stdout) as Record<string, unknown> };
@@ -75,7 +97,45 @@ describe("repi model argument parsing", () => {
 		});
 	});
 
+	it("lists an environment-only model provider without leaking the base URL by default", () => {
+		const { result, json } = run(["list"], {
+			REPI_AUTH_TOKEN: "env-only-key",
+			REPI_BASE_URL: "https://env-gateway.example.invalid/v1",
+			REPI_MODEL: "env-main-model",
+			REPI_MODEL_API: "anthropic",
+			REPI_CONTEXT_WINDOW: "262144",
+			REPI_SUBAGENT_MODEL: "env-worker-model",
+		});
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		expect(json).toMatchObject({
+			ok: true,
+			baseUrlHidden: true,
+		});
+		const rows = json.rows as Array<Record<string, unknown>>;
+		expect(rows).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					provider: "repi-env",
+					model: "env-main-model",
+					api: "anthropic-messages",
+					contextWindow: 262144,
+					auth: "$REPI_AUTH_TOKEN:set",
+				}),
+				expect.objectContaining({
+					provider: "repi-env",
+					model: "env-worker-model",
+					api: "anthropic-messages",
+				}),
+			]),
+		);
+		const envRow = rows.find((row) => row.provider === "repi-env" && row.model === "env-main-model");
+		expect(envRow?.baseUrl).toMatch(/^<redacted:url:/);
+		expect(envRow?.baseUrl).not.toContain("env-gateway");
+	});
+
 	it("adds the Baseten Kimi K2.7 Code preset without leaking the key or URL by default", () => {
+		const cleanEnv = { ...process.env };
+		for (const name of REPI_MODEL_ENV_NAMES) delete cleanEnv[name];
 		const result = spawnSync(
 			process.execPath,
 			[
@@ -90,7 +150,7 @@ describe("repi model argument parsing", () => {
 			],
 			{
 				encoding: "utf8",
-				env: { ...process.env, REPI_CODING_AGENT_DIR: agentDir },
+				env: { ...cleanEnv, REPI_CODING_AGENT_DIR: agentDir },
 				input: "baseten-test-key\n",
 				timeout: 10_000,
 			},

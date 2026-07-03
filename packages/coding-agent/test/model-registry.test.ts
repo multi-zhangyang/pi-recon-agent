@@ -92,6 +92,97 @@ describe("ModelRegistry", () => {
 		messages: [],
 	};
 
+	async function withRepiModelEnv<T>(values: Record<string, string>, fn: () => T | Promise<T>): Promise<T> {
+		const names = [
+			"REPI_AUTH_TOKEN",
+			"REPI_API_KEY",
+			"REPI_MODEL_API_KEY",
+			"REPI_BASE_URL",
+			"REPI_MODEL_BASE_URL",
+			"REPI_MODEL",
+			"REPI_MODEL_ID",
+			"REPI_MODEL_API",
+			"REPI_API",
+			"REPI_PROVIDER",
+			"REPI_MODEL_PROVIDER",
+			"REPI_PROVIDER_ID",
+			"REPI_CONTEXT_WINDOW",
+			"REPI_MODEL_CONTEXT_WINDOW",
+			"REPI_MAX_TOKENS",
+			"REPI_MODEL_MAX_TOKENS",
+			"REPI_MAX_OUTPUT_TOKENS",
+			"REPI_MODEL_INPUT",
+			"REPI_INPUT",
+			"REPI_MODEL_REASONING",
+			"REPI_REASONING",
+			"REPI_SUBAGENT_MODEL",
+		];
+		const originals = new Map(names.map((name) => [name, process.env[name]]));
+		for (const name of names) delete process.env[name];
+		for (const [name, value] of Object.entries(values)) process.env[name] = value;
+		try {
+			return await fn();
+		} finally {
+			for (const name of names) {
+				const original = originals.get(name);
+				if (original === undefined) delete process.env[name];
+				else process.env[name] = original;
+			}
+		}
+	}
+
+	describe("REPI environment model provider", () => {
+		test("registers an env-only OpenAI-compatible model with configured auth", async () => {
+			await withRepiModelEnv(
+				{
+					REPI_AUTH_TOKEN: "env-runtime-key",
+					REPI_BASE_URL: "https://gateway.example.invalid/v1",
+					REPI_MODEL: "moonshotai/Kimi-K2.7-Code",
+					REPI_MODEL_API: "openai-compatible",
+					REPI_CONTEXT_WINDOW: "262144",
+					REPI_MAX_TOKENS: "32768",
+					REPI_SUBAGENT_MODEL: "moonshotai/Kimi-K2.7-Code-Worker",
+				},
+				async () => {
+					const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+					const model = registry.find("repi-env", "moonshotai/Kimi-K2.7-Code");
+					expect(model).toMatchObject({
+						provider: "repi-env",
+						api: "openai-completions",
+						baseUrl: "https://gateway.example.invalid/v1",
+						contextWindow: 262144,
+						maxTokens: 32768,
+					});
+					expect(registry.find("repi-env", "moonshotai/Kimi-K2.7-Code-Worker")).toBeDefined();
+					expect(registry.getAvailable().some((m) => m.provider === "repi-env" && m.id === model?.id)).toBe(true);
+
+					const auth = await registry.getApiKeyAndHeaders(model!);
+					expect(auth).toEqual({ ok: true, apiKey: "env-runtime-key", headers: undefined });
+				},
+			);
+		});
+
+		test.each([
+			["response", "openai-responses"],
+			["openai-responses", "openai-responses"],
+			["anthropic", "anthropic-messages"],
+			["anthropic-messages", "anthropic-messages"],
+		] as const)("normalizes REPI_MODEL_API=%s", async (alias, api) => {
+			await withRepiModelEnv(
+				{
+					REPI_AUTH_TOKEN: "env-runtime-key",
+					REPI_BASE_URL: "https://gateway.example.invalid/v1",
+					REPI_MODEL: `env-model-${alias}`,
+					REPI_MODEL_API: alias,
+				},
+				() => {
+					const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+					expect(registry.find("repi-env", `env-model-${alias}`)?.api).toBe(api);
+				},
+			);
+		});
+	});
+
 	describe("baseUrl override (no custom models)", () => {
 		test("overriding baseUrl keeps all built-in models", () => {
 			writeRawModelsJson({

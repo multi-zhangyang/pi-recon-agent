@@ -7,6 +7,30 @@ import {
 	resolveCliModel,
 } from "../src/core/model-resolver.ts";
 
+async function withRepiEnv<T>(values: Record<string, string>, fn: () => T | Promise<T>): Promise<T> {
+	const names = [
+		"REPI_MODEL",
+		"REPI_MODEL_ID",
+		"REPI_BASE_URL",
+		"REPI_MODEL_BASE_URL",
+		"REPI_PROVIDER",
+		"REPI_MODEL_PROVIDER",
+		"REPI_PROVIDER_ID",
+	];
+	const originals = new Map(names.map((name) => [name, process.env[name]]));
+	for (const name of names) delete process.env[name];
+	for (const [name, value] of Object.entries(values)) process.env[name] = value;
+	try {
+		return await fn();
+	} finally {
+		for (const name of names) {
+			const original = originals.get(name);
+			if (original === undefined) delete process.env[name];
+			else process.env[name] = original;
+		}
+	}
+}
+
 // Mock models for testing
 const mockModels: Model<"anthropic-messages">[] = [
 	{
@@ -433,5 +457,52 @@ describe("default model selection", () => {
 
 		expect(result.model?.provider).toBe("vercel-ai-gateway");
 		expect(result.model?.id).toBe("anthropic/claude-opus-4-6");
+	});
+
+	test("findInitialModel prefers a fully configured REPI environment model", async () => {
+		const envModel: Model<"openai-completions"> = {
+			id: "moonshotai/Kimi-K2.7-Code",
+			name: "Kimi K2.7 Code",
+			api: "openai-completions",
+			provider: "repi-env",
+			baseUrl: "https://inference.example.invalid/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 262144,
+			maxTokens: 16384,
+		};
+		const fallbackDefault: Model<"anthropic-messages"> = {
+			id: "anthropic/claude-opus-4-6",
+			name: "Claude Opus 4.6",
+			api: "anthropic-messages",
+			provider: "vercel-ai-gateway",
+			baseUrl: "https://ai-gateway.vercel.sh",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 5, output: 15, cacheRead: 0.5, cacheWrite: 5 },
+			contextWindow: 200000,
+			maxTokens: 8192,
+		};
+		const registry = {
+			getAvailable: async () => [fallbackDefault, envModel],
+		} as unknown as Parameters<typeof findInitialModel>[0]["modelRegistry"];
+
+		await withRepiEnv(
+			{
+				REPI_BASE_URL: "https://inference.example.invalid/v1",
+				REPI_MODEL: "moonshotai/Kimi-K2.7-Code",
+			},
+			async () => {
+				const result = await findInitialModel({
+					scopedModels: [],
+					isContinuing: false,
+					modelRegistry: registry,
+				});
+
+				expect(result.model?.provider).toBe("repi-env");
+				expect(result.model?.id).toBe("moonshotai/Kimi-K2.7-Code");
+			},
+		);
 	});
 });

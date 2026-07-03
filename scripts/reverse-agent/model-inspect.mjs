@@ -41,6 +41,14 @@ model doctor is offline: it parses ~/.repi/agent/models.json, checks provider/mo
 model list hides provider base URLs by default to avoid leaking private gateway endpoints into screenshots/logs; add --show-urls for local troubleshooting.
 model add writes ~/.repi/agent/models.json and can store a local credential immediately with --api-key-stdin; model login writes/updates ~/.repi/agent/auth.json locally.
 model add --preset baseten-kimi-k2.7-code configures Baseten's OpenAI-compatible endpoint for moonshotai/Kimi-K2.7-Code with a 262144 context window; it never embeds an API key unless supplied through --api-key-stdin.
+Environment-only model setup requires no files and supports multiple API wire formats:
+  export REPI_AUTH_TOKEN=sk-...
+  export REPI_BASE_URL=https://gateway.example/v1
+  export REPI_MODEL=vendor/model
+  export REPI_MODEL_API=openai-compatible   # aliases: openai-completions, openai-responses, anthropic
+  export REPI_CONTEXT_WINDOW=262144
+  export REPI_SUBAGENT_MODEL=vendor/subagent-model
+  repi --approve -p "..."
 For shell-history safety, pass API keys through --api-key-stdin. Plain --api-key is rejected unless REPI_ALLOW_INSECURE_API_KEY_ARG=1.
 model export never exports local API keys; model import preserves/creates env-ref apiKey fields and never writes auth.json.
 `;
@@ -312,11 +320,14 @@ function costOf(model, provider) {
 }
 
 function loadProviders() {
-	if (!existsSync(modelsPath)) return { providers: {}, parseError: null, missing: true };
+	const envProvider = envOnlyProviderConfig();
+	const withEnvProvider = (providers) =>
+		envProvider ? { ...(providers && typeof providers === "object" ? providers : {}), [envProvider.providerId]: envProvider.provider } : providers;
+	if (!existsSync(modelsPath)) return { providers: withEnvProvider({}), parseError: null, missing: true };
 	const parsed = readJson(modelsPath);
 	if (parsed?.__error) return { providers: {}, parseError: parsed.__error, missing: false };
 	const providers = parsed?.providers && typeof parsed.providers === "object" && !Array.isArray(parsed.providers) ? parsed.providers : {};
-	return { providers, parseError: null, missing: false };
+	return { providers: withEnvProvider(providers), parseError: null, missing: false };
 }
 
 function listModelsProbe() {
@@ -646,6 +657,78 @@ function providerEnvName(providerId) {
 		.toUpperCase()
 		.replace(/[^A-Z0-9]+/g, "_")
 		.replace(/^_+|_+$/g, "")}_API_KEY`;
+}
+
+function firstEnv(names) {
+	for (const name of names) {
+		const value = process.env[name]?.trim();
+		if (value) return value;
+	}
+	return undefined;
+}
+
+function normalizeModelApi(value) {
+	const normalized = String(value || "openai-completions").trim().toLowerCase().replace(/_/g, "-");
+	if (["openai-compatible", "openai-chat", "chat", "chat-completions", "openai-completions"].includes(normalized)) {
+		return "openai-completions";
+	}
+	if (["response", "responses", "openai-response", "openai-responses"].includes(normalized)) return "openai-responses";
+	if (["anthropic", "claude", "anthropic-compatible", "anthropic-messages"].includes(normalized)) {
+		return "anthropic-messages";
+	}
+	return allowedApis.has(normalized) ? normalized : "openai-completions";
+}
+
+function envInt(names, fallback, min, max) {
+	const value = firstEnv(names);
+	const parsed = value ? Number.parseInt(value, 10) : fallback;
+	if (!Number.isFinite(parsed)) return fallback;
+	return Math.max(min, Math.min(max, parsed));
+}
+
+function envBool(names, fallback = false) {
+	const value = firstEnv(names);
+	if (!value) return fallback;
+	if (/^(?:1|true|yes|y|on)$/i.test(value)) return true;
+	if (/^(?:0|false|no|n|off)$/i.test(value)) return false;
+	return fallback;
+}
+
+function envOnlyProviderConfig() {
+	const baseUrl = firstEnv(["REPI_BASE_URL", "REPI_MODEL_BASE_URL"]);
+	const model = firstEnv(["REPI_MODEL", "REPI_MODEL_ID"]);
+	if (!baseUrl || !model) return undefined;
+	const providerId = firstEnv(["REPI_PROVIDER", "REPI_MODEL_PROVIDER", "REPI_PROVIDER_ID"]) || "repi-env";
+	const apiKeyEnv = firstEnv(["REPI_AUTH_TOKEN"])
+		? "REPI_AUTH_TOKEN"
+		: firstEnv(["REPI_API_KEY"])
+			? "REPI_API_KEY"
+			: firstEnv(["REPI_MODEL_API_KEY"])
+				? "REPI_MODEL_API_KEY"
+				: "REPI_AUTH_TOKEN";
+	const models = [model, firstEnv(["REPI_SUBAGENT_MODEL"])]
+		.filter(Boolean)
+		.filter((value, index, values) => values.indexOf(value) === index)
+		.map((id) => ({
+			id,
+			name: id === model ? firstEnv(["REPI_MODEL_NAME"]) || id : firstEnv(["REPI_SUBAGENT_MODEL_NAME"]) || id,
+			input: inputList(firstEnv(["REPI_MODEL_INPUT", "REPI_INPUT"]) || "text"),
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: envInt(["REPI_CONTEXT_WINDOW", "REPI_MODEL_CONTEXT_WINDOW"], 262144, 1024, 1048576),
+			maxTokens: envInt(["REPI_MAX_TOKENS", "REPI_MODEL_MAX_TOKENS", "REPI_MAX_OUTPUT_TOKENS"], 16384, 64, 131072),
+			reasoning: envBool(["REPI_MODEL_REASONING", "REPI_REASONING"], false),
+		}));
+	return {
+		providerId,
+		provider: {
+			name: firstEnv(["REPI_PROVIDER_NAME", "REPI_MODEL_PROVIDER_NAME"]) || "REPI environment model",
+			api: normalizeModelApi(firstEnv(["REPI_MODEL_API", "REPI_API"])),
+			baseUrl,
+			apiKey: `$${apiKeyEnv}`,
+			models,
+			__source: "environment",
+		},
+	};
 }
 
 const modelAddPresets = {

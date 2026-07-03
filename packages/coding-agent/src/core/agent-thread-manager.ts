@@ -92,6 +92,25 @@ export interface AgentThreadManagerOptions {
 	repiBinPath?: string;
 }
 
+function firstEnvValue(names: string[]): string | undefined {
+	for (const name of names) {
+		const value = process.env[name]?.trim();
+		if (value) return value;
+	}
+	return undefined;
+}
+
+function envSubagentModelOverride(): { provider?: string; model?: string } {
+	const model = firstEnvValue(["REPI_SUBAGENT_MODEL"]);
+	if (!model) return {};
+	return {
+		provider:
+			firstEnvValue(["REPI_SUBAGENT_PROVIDER", "REPI_PROVIDER", "REPI_MODEL_PROVIDER", "REPI_PROVIDER_ID"]) ??
+			"repi-env",
+		model,
+	};
+}
+
 interface WorkerMcpInheritance {
 	inherited: boolean;
 	serverIds: string[];
@@ -687,10 +706,13 @@ export class AgentThreadManager {
 		const prompt = this.buildWorkerPrompt(spec, options.task, options.additionalPrompt, mcpInheritance);
 		const promptSha256 = await sha256(prompt);
 		const toolNames = [...new Set([...spec.tools, ...mcpInheritance.runtimeToolNames])];
+		const envModel = envSubagentModelOverride();
+		const childProvider = options.provider ?? envModel.provider;
+		const childModel = options.model ?? envModel.model;
 		const args = [
 			"--approve",
-			...(options.provider ? ["--provider", options.provider] : []),
-			...(options.model ? ["--model", options.model] : []),
+			...(childProvider ? ["--provider", childProvider] : []),
+			...(childModel ? ["--model", childModel] : []),
 			"--thinking",
 			spec.thinkingLevel,
 			"--no-session",
@@ -715,8 +737,8 @@ export class AgentThreadManager {
 			stdoutPath,
 			stderrPath,
 			manifestPath,
-			provider: options.provider,
-			model: options.model,
+			provider: childProvider,
+			model: childModel,
 			tools: toolNames,
 			mcpServers: mcpInheritance.serverIds,
 			mcpTools: mcpInheritance.allowedTools,

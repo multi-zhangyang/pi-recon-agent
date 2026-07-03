@@ -237,6 +237,104 @@ interface ProviderRequestConfig {
 	authHeader?: boolean;
 }
 
+const envModelApis = new Set<Api>(["openai-completions", "openai-responses", "anthropic-messages"]);
+
+function normalizeEnvModelApi(value: string | undefined): Api {
+	const normalized = String(value ?? "openai-completions")
+		.trim()
+		.toLowerCase()
+		.replace(/_/g, "-");
+	if (["openai-compatible", "openai-chat", "chat", "chat-completions", "openai-completions"].includes(normalized)) {
+		return "openai-completions";
+	}
+	if (["response", "responses", "openai-response", "openai-responses"].includes(normalized)) {
+		return "openai-responses";
+	}
+	if (["anthropic", "claude", "anthropic-compatible", "anthropic-messages"].includes(normalized)) {
+		return "anthropic-messages";
+	}
+	return envModelApis.has(normalized as Api) ? (normalized as Api) : "openai-completions";
+}
+
+function firstEnvValue(names: string[]): string | undefined {
+	for (const name of names) {
+		const value = process.env[name]?.trim();
+		if (value) return value;
+	}
+	return undefined;
+}
+
+function envInt(names: string[], fallback: number, min: number, max: number): number {
+	const value = firstEnvValue(names);
+	const parsed = value ? Number.parseInt(value, 10) : fallback;
+	if (!Number.isFinite(parsed)) return fallback;
+	return Math.max(min, Math.min(max, parsed));
+}
+
+function envBool(names: string[], fallback = false): boolean {
+	const value = firstEnvValue(names);
+	if (!value) return fallback;
+	if (/^(?:1|true|yes|y|on)$/i.test(value)) return true;
+	if (/^(?:0|false|no|n|off)$/i.test(value)) return false;
+	return fallback;
+}
+
+function envInputList(value: string | undefined): ("text" | "image")[] {
+	const items = (value || "text")
+		.split(",")
+		.map((item) => item.trim())
+		.filter((item): item is "text" | "image" => item === "text" || item === "image");
+	return items.length ? items : ["text"];
+}
+
+function envProviderId(): string {
+	return firstEnvValue(["REPI_PROVIDER", "REPI_MODEL_PROVIDER", "REPI_PROVIDER_ID"]) ?? "repi-env";
+}
+
+function repiEnvProviderConfig(): { providerName: string; config: ProviderConfigInput } | undefined {
+	const baseUrl = firstEnvValue(["REPI_BASE_URL", "REPI_MODEL_BASE_URL"]);
+	const primaryModel = firstEnvValue(["REPI_MODEL", "REPI_MODEL_ID"]);
+	if (!baseUrl || !primaryModel) return undefined;
+
+	const api = normalizeEnvModelApi(firstEnvValue(["REPI_MODEL_API", "REPI_API"]));
+	const apiKeyEnv = firstEnvValue(["REPI_AUTH_TOKEN"])
+		? "REPI_AUTH_TOKEN"
+		: firstEnvValue(["REPI_API_KEY"])
+			? "REPI_API_KEY"
+			: firstEnvValue(["REPI_MODEL_API_KEY"])
+				? "REPI_MODEL_API_KEY"
+				: "REPI_AUTH_TOKEN";
+	const modelIds = [primaryModel, firstEnvValue(["REPI_SUBAGENT_MODEL"])].filter(
+		(value, index, values): value is string => Boolean(value) && values.indexOf(value) === index,
+	);
+	const input = envInputList(firstEnvValue(["REPI_MODEL_INPUT", "REPI_INPUT"]));
+	const contextWindow = envInt(["REPI_CONTEXT_WINDOW", "REPI_MODEL_CONTEXT_WINDOW"], 262144, 1024, 1048576);
+	const maxTokens = envInt(["REPI_MAX_TOKENS", "REPI_MODEL_MAX_TOKENS", "REPI_MAX_OUTPUT_TOKENS"], 16384, 64, 131072);
+	const reasoning = envBool(["REPI_MODEL_REASONING", "REPI_REASONING"], false);
+	const providerName = envProviderId();
+	return {
+		providerName,
+		config: {
+			name: firstEnvValue(["REPI_PROVIDER_NAME", "REPI_MODEL_PROVIDER_NAME"]) ?? "REPI environment model",
+			baseUrl,
+			apiKey: `$${apiKeyEnv}`,
+			api,
+			models: modelIds.map((id) => ({
+				id,
+				name:
+					id === primaryModel
+						? (firstEnvValue(["REPI_MODEL_NAME"]) ?? id)
+						: (firstEnvValue(["REPI_SUBAGENT_MODEL_NAME"]) ?? id),
+				reasoning,
+				input,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow,
+				maxTokens,
+			})),
+		},
+	};
+}
+
 function migrateLegacyRegisterProviderConfigValue(providerName: string, field: string, value: string): string {
 	if (!isLegacyEnvVarNameConfigValue(value)) return value;
 	warnDeprecation(
@@ -501,6 +599,16 @@ export class ModelRegistry {
 		}
 
 		this.models = combined;
+		const envProvider = repiEnvProviderConfig();
+		if (envProvider) {
+			try {
+				this.applyProviderConfig(envProvider.providerName, envProvider.config);
+			} catch (error) {
+				this.loadError = `REPI environment model provider failed to apply: ${
+					error instanceof Error ? error.message : String(error)
+				}`;
+			}
+		}
 	}
 
 	/** Load built-in models and apply provider/model overrides */
