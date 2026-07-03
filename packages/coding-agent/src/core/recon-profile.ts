@@ -17779,11 +17779,21 @@ function swarmWorkerTimeoutMs(worker: SwarmWorkerRuntime, execution: "simulated"
 	return 240000;
 }
 
+function swarmWorkerRetryLimit(execution: "simulated" | "real"): number {
+	return envBoundedInteger(
+		execution === "real" ? "REPI_SWARM_REAL_RETRY_LIMIT" : "REPI_SWARM_RETRY_LIMIT",
+		execution === "real" ? 0 : 1,
+		0,
+		3,
+	);
+}
+
 async function executeSwarmWorkerSubagent(
 	worker: SwarmWorkerRuntime,
 	swarm: SwarmArtifact,
 	cwd: string,
 	timeoutMs: number,
+	attempt = 1,
 ): Promise<SwarmWorkerExecution[]> {
 	const spec = swarmWorkerSpec(worker.worker);
 	const task = [
@@ -17820,7 +17830,7 @@ async function executeSwarmWorkerSubagent(
 				"parallel_mode=real_subagent",
 				"isolation=process-agent-home",
 				`spec=${spec}`,
-				`timeout_ms=${timeoutMs} timed_out=${timedOut}`,
+				`timeout_ms=${timeoutMs} timed_out=${timedOut} retry_attempt=${attempt}`,
 				`run_id=${final.runId}`,
 				mergeText,
 			].join("\n"),
@@ -17838,7 +17848,7 @@ async function executeSwarmWorkerSubagent(
 			timeoutMs,
 			timedOut,
 			cancelledAt: timedOut ? new Date(endedMs).toISOString() : undefined,
-			retryAttempt: 1,
+			retryAttempt: attempt,
 			sourceArtifacts: Array.from(
 				new Set([final.runRoot, final.manifestPath, final.mergePath].filter((item): item is string => Boolean(item))),
 			),
@@ -17855,7 +17865,7 @@ async function executeSwarmWorkerSubagent(
 				worker: worker.worker,
 				command: `re_subagent spec=${spec} (blocked)`,
 				status: "blocked",
-				output: `parallel_mode=real_subagent\nisolation=process-agent-home\ntimeout_ms=${timeoutMs} timed_out=${timedOut}\nblocked: ${truncateMiddle(message, 400)}`,
+				output: `parallel_mode=real_subagent\nisolation=process-agent-home\ntimeout_ms=${timeoutMs} timed_out=${timedOut} retry_attempt=${attempt}\nblocked: ${truncateMiddle(message, 400)}`,
 				stdout: "",
 				stderr: message,
 				stdoutSha256: swarmExecutionDigest(""),
@@ -17870,7 +17880,7 @@ async function executeSwarmWorkerSubagent(
 				timeoutMs,
 				timedOut,
 				cancelledAt: timedOut ? new Date(endedMs).toISOString() : undefined,
-				retryAttempt: 1,
+				retryAttempt: attempt,
 				sourceArtifacts: worker.sourceArtifacts,
 			},
 		];
@@ -17883,6 +17893,7 @@ async function executeSwarmWorkerCommand(
 	rawCommand: string,
 	target?: string,
 	timeoutMs = 60000,
+	attempt = 1,
 ): Promise<SwarmWorkerExecution> {
 	const command = sanitizeSwarmCommand(rawCommand);
 	const startedMs = Date.now();
@@ -17905,7 +17916,7 @@ async function executeSwarmWorkerCommand(
 			timeoutMs: execution.timeoutMs ?? timeoutMs,
 			timedOut: execution.timedOut ?? false,
 			cancelledAt: execution.cancelledAt,
-			retryAttempt: execution.retryAttempt ?? 1,
+			retryAttempt: execution.retryAttempt ?? attempt,
 		};
 	};
 	const blocked = (output: string): SwarmWorkerExecution =>
@@ -17923,7 +17934,7 @@ async function executeSwarmWorkerCommand(
 			signal: null,
 			timeoutMs,
 			timedOut: false,
-			retryAttempt: 1,
+			retryAttempt: attempt,
 			sourceArtifacts: worker.sourceArtifacts,
 		});
 	if (!command) return blocked("empty swarm worker command");
@@ -17948,14 +17959,14 @@ async function executeSwarmWorkerCommand(
 			output: [
 				"parallel_mode=simulated_sequential",
 				"isolation=shared-process-internal-dispatch",
-				`timeout_ms=${timeoutMs} timed_out=false`,
+				`timeout_ms=${timeoutMs} timed_out=false retry_attempt=${attempt}`,
 				"note=internal REPI command executed through in-process operator dispatcher; shell workers still capture child pid",
 				result.output,
 			].join("\n"),
 			stdout: [
 				"parallel_mode=simulated_sequential",
 				"isolation=shared-process-internal-dispatch",
-				`timeout_ms=${timeoutMs} timed_out=false`,
+				`timeout_ms=${timeoutMs} timed_out=false retry_attempt=${attempt}`,
 				result.output,
 			].join("\n"),
 			stderr: "",
@@ -17965,7 +17976,7 @@ async function executeSwarmWorkerCommand(
 			signal: null,
 			timeoutMs,
 			timedOut: false,
-			retryAttempt: 1,
+			retryAttempt: attempt,
 			sourceArtifacts: worker.sourceArtifacts,
 		});
 	}
@@ -17981,7 +17992,7 @@ async function executeSwarmWorkerCommand(
 	const endedAt = new Date().toISOString();
 	const output = [
 		`exit=${result.code}${result.killed ? " killed=true" : ""}`,
-		`timeout_ms=${timeoutMs} timed_out=${timedOut}${timedOut ? ` cancelled_at=${endedAt}` : ""}`,
+		`timeout_ms=${timeoutMs} timed_out=${timedOut}${timedOut ? ` cancelled_at=${endedAt}` : ""} retry_attempt=${attempt}`,
 		`pid=${marker.pid ?? "unknown"} parent_pid=${marker.parentPid ?? "unknown"}`,
 		`stdout_sha256=${swarmExecutionDigest(stdout)}`,
 		`stderr_sha256=${swarmExecutionDigest(stderr)}`,
@@ -18005,7 +18016,7 @@ async function executeSwarmWorkerCommand(
 		timeoutMs,
 		timedOut,
 		cancelledAt: timedOut ? endedAt : undefined,
-		retryAttempt: 1,
+		retryAttempt: attempt,
 		sourceArtifacts: worker.sourceArtifacts,
 	});
 }
@@ -18076,6 +18087,7 @@ function deriveSwarmAuditFields(
 		const executions = swarm.executions.filter((execution) => execution.workerId === worker.id);
 		const done = executions.filter((execution) => execution.status === "done").length;
 		const blocked = executions.filter((execution) => execution.status === "blocked").length;
+		const retries = executions.filter((execution) => (execution.retryAttempt ?? 1) > 1).length;
 		const text = swarmWorkerEvidenceText(swarm, worker);
 		const hashes = new Set(text.match(/\b(?:stdout_sha256|stderr_sha256|sha256|hash)=[0-9a-f]{8,64}\b/gi) ?? []);
 		const artifacts = new Set(
@@ -18102,6 +18114,7 @@ function deriveSwarmAuditFields(
 				`commands=${executions.length}/${worker.commands.length}`,
 				`passed=${done}`,
 				`blocked=${blocked}`,
+				`retries=${retries}`,
 				`contract=${coveredContracts.length}/${worker.evidenceContract.length}`,
 				`hashes=${hashes.size}`,
 				`artifacts=${artifacts.size}`,
@@ -19004,6 +19017,7 @@ async function runSwarm(
 	const maxCommands = Math.max(1, Math.min(5, Math.floor(options.maxCommands ?? 1)));
 	const execution = options.execution ?? autoModeDefaults().swarmExecution;
 	const realMode = execution === "real" && Boolean(options.cwd) && !envBoolean("REPI_AGENT_THREAD");
+	const retryLimit = swarmWorkerRetryLimit(realMode ? "real" : "simulated");
 	const selected = new Set(
 		swarm.workers
 			.filter((worker) => worker.status === "ready")
@@ -19016,16 +19030,52 @@ async function runSwarm(
 				const executions: SwarmWorkerExecution[] = [];
 				const timeoutMs = swarmWorkerTimeoutMs(worker, realMode ? "real" : "simulated");
 				if (realMode) {
-					executions.push(...(await executeSwarmWorkerSubagent(worker, swarm, options.cwd as string, timeoutMs)));
+					executions.push(...(await executeSwarmWorkerSubagent(worker, swarm, options.cwd as string, timeoutMs, 1)));
 				} else {
 					for (const command of worker.commands.slice(0, maxCommands))
-						executions.push(await executeSwarmWorkerCommand(pi, worker, command, swarm.target, timeoutMs));
+						executions.push(await executeSwarmWorkerCommand(pi, worker, command, swarm.target, timeoutMs, 1));
+				}
+				for (let retry = 1; retry <= retryLimit && executions.some((item) => item.status === "blocked"); retry++) {
+					const attempt = retry + 1;
+					const retryCommand = worker.commands[maxCommands + retry - 1] ?? worker.commands[0];
+					if (!retryCommand) break;
+					if (realMode) {
+						const retryExecutions = await executeSwarmWorkerSubagent(
+							worker,
+							swarm,
+							options.cwd as string,
+							timeoutMs,
+							attempt,
+						);
+						for (const retryExecution of retryExecutions) {
+							retryExecution.output = [
+								`retry_execution: worker=${worker.id} attempt=${attempt}/${retryLimit + 1} previous_blocked=true`,
+								retryExecution.output,
+							].join("\n");
+						}
+						executions.push(...retryExecutions);
+					} else {
+						const retryExecution = await executeSwarmWorkerCommand(
+							pi,
+							worker,
+							retryCommand,
+							swarm.target,
+							timeoutMs,
+							attempt,
+						);
+						retryExecution.output = [
+							`retry_execution: worker=${worker.id} attempt=${attempt}/${retryLimit + 1} previous_blocked=true`,
+							retryExecution.output,
+						].join("\n");
+						executions.push(retryExecution);
+					}
+					if (executions.at(-1)?.status === "done") break;
 				}
 				const manifest = writeSwarmSubagentRuntimeManifest({
 					swarm,
 					worker,
 					executions,
-					attempt: 1,
+					attempt: Math.max(1, ...executions.map((item) => item.retryAttempt ?? 1)),
 					maxCommands,
 					timeoutMs,
 				});
@@ -19170,7 +19220,7 @@ function formatSwarm(swarm: SwarmArtifact, path?: string): string {
 					.slice(0, 12)
 					.map(
 						(manifest) =>
-							`- worker=${manifest.workerId} role=${manifest.roleId} status=${manifest.status} timeoutMs=${manifest.resourceLimits.timeoutMs} pid=${manifest.pid ?? "null"} sessionDir=${manifest.sessionDir} runtimeManifestFile=${manifest.runtimeManifestFile} stdoutSha256=${manifest.stdoutSha256.slice(0, 16)} stderrSha256=${manifest.stderrSha256.slice(0, 16)} toolCallDigest=${manifest.toolCallDigest.slice(0, 16)}`,
+							`- worker=${manifest.workerId} role=${manifest.roleId} status=${manifest.status} attempt=${manifest.attempt}/${manifest.retryBudget.maxAttempts} retryRemaining=${manifest.retryBudget.remaining} timeoutMs=${manifest.resourceLimits.timeoutMs} pid=${manifest.pid ?? "null"} sessionDir=${manifest.sessionDir} runtimeManifestFile=${manifest.runtimeManifestFile} stdoutSha256=${manifest.stdoutSha256.slice(0, 16)} stderrSha256=${manifest.stderrSha256.slice(0, 16)} toolCallDigest=${manifest.toolCallDigest.slice(0, 16)}`,
 					)
 			: ["- none"]),
 		"worker_child_session_runtime:",
@@ -25847,20 +25897,97 @@ async function executeProofLoopBridgeStep(
 	};
 }
 
+function proofLoopPhaseForCommand(command: string): ProofLoopPhase | undefined {
+	if (/^re[-_]verifier\b/i.test(command)) return "verifier";
+	if (/^re[-_]compiler\b/i.test(command)) return "compiler";
+	if (/^re[-_]replayer\b/i.test(command)) return "replayer";
+	if (/^re[-_]autofix\b/i.test(command)) return "autofix";
+	if (/^re[-_]knowledge(?:[-_]graph)?\b/i.test(command)) return "knowledge";
+	if (/^re[-_]complete\b/i.test(command)) return "completion";
+	if (/^re[-_]context\s+resume\b/i.test(command)) return "compact-resume";
+	if (/^re[-_](?:delegate|swarm|supervisor)\b/i.test(command)) return "operator-feedback";
+	return undefined;
+}
+
+function markProofLoopStepForCommand(
+	proof: ProofLoopArtifact,
+	command: string,
+	result: OperationExecution,
+): void {
+	const normalized = command.trim().replace(/\s+/g, " ");
+	const phase = proofLoopPhaseForCommand(command);
+	const step =
+		proof.steps.find(
+			(candidate) => candidate.status === "ready" && candidate.command.trim().replace(/\s+/g, " ") === normalized,
+		) ?? (phase ? proof.steps.find((candidate) => candidate.status === "ready" && candidate.phase === phase) : undefined);
+	if (!step) return;
+	step.status = result.status === "blocked" ? "blocked" : "done";
+	step.reason =
+		result.status === "blocked"
+			? result.output
+			: step.reason
+				? `${step.reason}; quick_path_executed`
+				: "quick_path_executed";
+}
+
+async function executeProofLoopQuickPathCommand(
+	pi: ExtensionAPI,
+	proof: ProofLoopArtifact,
+	command: string,
+	index: number,
+): Promise<OperationExecution> {
+	const result = await executeOperatorStep(
+		pi,
+		{
+			id: `proof:quick:${index + 1}:${slug(command).slice(0, 32)}`,
+			command,
+			status: "ready",
+			priority: 0,
+			sourceArtifacts: proof.sourceArtifacts,
+		},
+		proof.target,
+	);
+	return {
+		...result,
+		output: [
+			`quick_path_execution: index=${index + 1} phase=${proofLoopPhaseForCommand(command) ?? "operator"} command=${command}`,
+			result.output,
+		].join("\n"),
+	};
+}
+
 async function runProofLoop(
 	pi: ExtensionAPI,
 	options: { target?: string; maxSteps?: number; replaySteps?: number } = {},
 ): Promise<string> {
 	let proof = buildProofLoop({ ...options, mode: "run" });
 	let remaining = proof.maxSteps;
+	const executedCommands = new Set<string>();
 	const runStep = async (step: ProofLoopStep, replaySteps = proof.replaySteps) => {
 		if (remaining <= 0) return;
 		const result = await executeProofLoopStep(pi, step, proof.target, replaySteps);
 		proof.executed.push(result);
+		executedCommands.add(result.command.trim().replace(/\s+/g, " "));
 		step.status = result.status === "blocked" ? "blocked" : "done";
 		step.reason = result.status === "blocked" ? result.output : step.reason;
 		remaining -= 1;
 		proof = refreshProofLoop(proof);
+	};
+	const runQuickPath = async () => {
+		const quickCommands = proof.quickPath.filter((command) => !/^re[-_]proof[-_]loop\s+run\b/i.test(command));
+		let touched = false;
+		for (const [index, command] of quickCommands.entries()) {
+			if (remaining <= 0) break;
+			const normalized = command.trim().replace(/\s+/g, " ");
+			if (!normalized || executedCommands.has(normalized)) continue;
+			const result = await executeProofLoopQuickPathCommand(pi, proof, command, index);
+			proof.executed.push(result);
+			executedCommands.add(normalized);
+			markProofLoopStepForCommand(proof, command, result);
+			remaining -= 1;
+			touched = true;
+		}
+		if (touched) proof = refreshProofLoop(proof);
 	};
 	const stepById = (id: string) => proof.steps.find((step) => step.id === id && step.status === "ready");
 	for (const step of proof.steps.filter((item) => item.phase === "compact-resume" && item.status === "ready")) {
@@ -25873,6 +26000,7 @@ async function runProofLoop(
 		const path = writeProofLoopArtifact(proof);
 		return formatProofLoop(proof, path);
 	}
+	await runQuickPath();
 	for (const id of ["proof:1:verifier", "proof:2:compiler", "proof:3:replayer"]) {
 		const step = stepById(id);
 		if (step) await runStep(step, proof.replaySteps);

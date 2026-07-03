@@ -1118,11 +1118,13 @@ rows.push(
 			"ProofLoopGapClass",
 			"proofLoopGapClassifier",
 			"proofLoopQuickPath",
+			"executeProofLoopQuickPathCommand",
+			"quick_path_execution",
 			"gap_classifier",
 			"quick_path",
 		]),
-		"proof loop classifies gaps and emits a quick verifier/compiler/replayer/autofix path",
-		"Keep re_proof_loop focused on fast gap classification and bounded proof repair, not only static queue dumps.",
+		"proof loop classifies gaps and executes a quick verifier/compiler/replayer/autofix path",
+		"Keep re_proof_loop focused on fast executable gap classification and bounded proof repair, not only static queue dumps.",
 	),
 );
 
@@ -1132,6 +1134,10 @@ rows.push(
 		includesAll(reconProfile, [
 			"swarmWorkerTimeoutMs",
 			"REPI_SWARM_SUBAGENT_TIMEOUT_MS",
+			"swarmWorkerRetryLimit",
+			"REPI_SWARM_RETRY_LIMIT",
+			"retry_execution",
+			"retryAttempt",
 			"timeoutMs",
 			"timedOut",
 			"cancelledAt",
