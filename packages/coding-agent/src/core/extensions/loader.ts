@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as _bundledPiAgentCore from "@pi-recon/repi-agent-core";
+import * as _bundledPiAgentCoreNode from "@pi-recon/repi-agent-core/node";
 import * as _bundledPiAi from "@pi-recon/repi-ai";
 import * as _bundledPiAiOauth from "@pi-recon/repi-ai/oauth";
 import type { KeyId } from "@pi-recon/repi-tui";
@@ -49,15 +50,26 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@sinclair/typebox/compile": _bundledTypeboxCompile,
 	"@sinclair/typebox/value": _bundledTypeboxValue,
 	"@pi-recon/repi-agent-core": _bundledPiAgentCore,
+	"@pi-recon/repi-agent-core/node": _bundledPiAgentCoreNode,
 	"@pi-recon/repi-tui": _bundledPiTui,
 	"@pi-recon/repi-ai": _bundledPiAi,
+	"@pi-recon/repi-ai/compat": _bundledPiAi,
 	"@pi-recon/repi-ai/oauth": _bundledPiAiOauth,
 	"@pi-recon/repi-coding-agent": _bundledPiCodingAgent,
 	"@mariozechner/repi-agent-core": _bundledPiAgentCore,
+	"@mariozechner/repi-agent-core/node": _bundledPiAgentCoreNode,
 	"@mariozechner/repi-tui": _bundledPiTui,
 	"@mariozechner/repi-ai": _bundledPiAi,
+	"@mariozechner/repi-ai/compat": _bundledPiAi,
 	"@mariozechner/repi-ai/oauth": _bundledPiAiOauth,
 	"@mariozechner/repi-coding-agent": _bundledPiCodingAgent,
+	"@earendil-works/pi-agent-core": _bundledPiAgentCore,
+	"@earendil-works/pi-agent-core/node": _bundledPiAgentCoreNode,
+	"@earendil-works/pi-tui": _bundledPiTui,
+	"@earendil-works/pi-ai": _bundledPiAi,
+	"@earendil-works/pi-ai/compat": _bundledPiAi,
+	"@earendil-works/pi-ai/oauth": _bundledPiAiOauth,
+	"@earendil-works/pi-coding-agent": _bundledPiCodingAgent,
 };
 
 const require = createRequire(import.meta.url);
@@ -72,38 +84,80 @@ function getAliases(): Record<string, string> {
 	if (_aliases) return _aliases;
 
 	const __dirname = path.dirname(fileURLToPath(import.meta.url));
-	const packageIndex = path.resolve(__dirname, "../..", "index.js");
+	const runningFromSource = __dirname.split(path.sep).includes("src");
+	const packageIndexJs = path.resolve(__dirname, "../..", "index.js");
+	const packageIndexTs = path.resolve(__dirname, "../..", "index.ts");
 
 	const typeboxEntry = require.resolve("typebox");
 	const typeboxCompileEntry = require.resolve("typebox/compile");
 	const typeboxValueEntry = require.resolve("typebox/value");
 
 	const packagesRoot = path.resolve(__dirname, "../../../../");
-	const resolveWorkspaceOrImport = (workspaceRelativePath: string, specifier: string): string => {
-		const workspacePath = path.join(packagesRoot, workspaceRelativePath);
-		if (fs.existsSync(workspacePath)) {
-			return workspacePath;
+	const resolveWorkspaceOrImport = (
+		sourceWorkspaceRelativePath: string,
+		distWorkspaceRelativePath: string,
+		specifier: string,
+	): string => {
+		const candidates = runningFromSource
+			? [sourceWorkspaceRelativePath, distWorkspaceRelativePath]
+			: [distWorkspaceRelativePath, sourceWorkspaceRelativePath];
+		for (const workspaceRelativePath of candidates) {
+			const workspacePath = path.join(packagesRoot, workspaceRelativePath);
+			if (fs.existsSync(workspacePath)) {
+				return workspacePath;
+			}
 		}
 		return fileURLToPath(import.meta.resolve(specifier));
 	};
 
-	const piCodingAgentEntry = packageIndex;
-	const piAgentCoreEntry = resolveWorkspaceOrImport("agent/dist/index.js", "@pi-recon/repi-agent-core");
-	const piTuiEntry = resolveWorkspaceOrImport("tui/dist/index.js", "@pi-recon/repi-tui");
-	const piAiEntry = resolveWorkspaceOrImport("ai/dist/index.js", "@pi-recon/repi-ai");
-	const piAiOauthEntry = resolveWorkspaceOrImport("ai/dist/oauth.js", "@pi-recon/repi-ai/oauth");
+	const piCodingAgentEntry = runningFromSource
+		? fs.existsSync(packageIndexTs)
+			? packageIndexTs
+			: packageIndexJs
+		: fs.existsSync(packageIndexJs)
+			? packageIndexJs
+			: packageIndexTs;
+	const piAgentCoreEntry = resolveWorkspaceOrImport(
+		"agent/src/index.ts",
+		"agent/dist/index.js",
+		"@pi-recon/repi-agent-core",
+	);
+	const piAgentCoreNodeEntry = resolveWorkspaceOrImport(
+		"agent/src/node.ts",
+		"agent/dist/node.js",
+		"@pi-recon/repi-agent-core/node",
+	);
+	const piTuiEntry = resolveWorkspaceOrImport("tui/src/index.ts", "tui/dist/index.js", "@pi-recon/repi-tui");
+	const piAiEntry = resolveWorkspaceOrImport("ai/src/index.ts", "ai/dist/index.js", "@pi-recon/repi-ai");
+	const piAiCompatEntry = resolveWorkspaceOrImport(
+		"ai/src/compat.ts",
+		"ai/dist/compat.js",
+		"@pi-recon/repi-ai/compat",
+	);
+	const piAiOauthEntry = resolveWorkspaceOrImport("ai/src/oauth.ts", "ai/dist/oauth.js", "@pi-recon/repi-ai/oauth");
 
 	_aliases = {
 		"@pi-recon/repi-coding-agent": piCodingAgentEntry,
 		"@pi-recon/repi-agent-core": piAgentCoreEntry,
+		"@pi-recon/repi-agent-core/node": piAgentCoreNodeEntry,
 		"@pi-recon/repi-tui": piTuiEntry,
 		"@pi-recon/repi-ai": piAiEntry,
+		"@pi-recon/repi-ai/compat": piAiCompatEntry,
 		"@pi-recon/repi-ai/oauth": piAiOauthEntry,
 		"@mariozechner/repi-coding-agent": piCodingAgentEntry,
 		"@mariozechner/repi-agent-core": piAgentCoreEntry,
+		"@mariozechner/repi-agent-core/node": piAgentCoreNodeEntry,
 		"@mariozechner/repi-tui": piTuiEntry,
 		"@mariozechner/repi-ai": piAiEntry,
+		"@mariozechner/repi-ai/compat": piAiCompatEntry,
 		"@mariozechner/repi-ai/oauth": piAiOauthEntry,
+		"@earendil-works/pi-coding-agent": piCodingAgentEntry,
+		"@earendil-works/pi-agent-core": piAgentCoreEntry,
+		"@earendil-works/pi-agent-core/node": piAgentCoreNodeEntry,
+		"@earendil-works/pi-tui": piTuiEntry,
+		"@earendil-works/pi-ai": piAiEntry,
+		"@earendil-works/pi-ai/compat": piAiCompatEntry,
+		"@earendil-works/pi-ai/oauth": piAiOauthEntry,
 		typebox: typeboxEntry,
 		"typebox/compile": typeboxCompileEntry,
 		"typebox/value": typeboxValueEntry,

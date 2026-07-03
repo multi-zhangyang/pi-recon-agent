@@ -1934,7 +1934,11 @@ export class InteractiveMode {
 	 */
 	private setExtensionWidget(
 		key: string,
-		content: string[] | ((tui: TUI, thm: Theme) => Component & { dispose?(): void }) | undefined,
+		content:
+			| string[]
+			| (Component & { dispose?(): void })
+			| ((tui: TUI, thm: Theme) => Component & { dispose?(): void })
+			| undefined,
 		options?: ExtensionWidgetOptions,
 	): void {
 		const placement = options?.placement ?? "aboveEditor";
@@ -1964,9 +1968,11 @@ export class InteractiveMode {
 				container.addChild(new Text(theme.fg("muted", "... (widget truncated)"), 1, 0));
 			}
 			component = container;
-		} else {
+		} else if (typeof content === "function") {
 			// Factory function - create component
 			component = content(this.ui, theme);
+		} else {
+			component = content;
 		}
 
 		const targetMap = placement === "belowEditor" ? this.extensionWidgetsBelow : this.extensionWidgetsAbove;

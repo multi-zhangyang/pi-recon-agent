@@ -163,6 +163,11 @@ export interface ExtensionUIContext {
 	setWidget(key: string, content: string[] | undefined, options?: ExtensionWidgetOptions): void;
 	setWidget(
 		key: string,
+		content: (Component & { dispose?(): void }) | undefined,
+		options?: ExtensionWidgetOptions,
+	): void;
+	setWidget(
+		key: string,
 		content: ((tui: TUI, theme: Theme) => Component & { dispose?(): void }) | undefined,
 		options?: ExtensionWidgetOptions,
 	): void;

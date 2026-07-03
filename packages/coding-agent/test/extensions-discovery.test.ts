@@ -474,6 +474,46 @@ describe("extensions discovery", () => {
 		expect(result.extensions[0].tools.has("discovered")).toBe(false);
 	});
 
+	it("loads upstream pi extension imports through compatibility aliases", async () => {
+		const explicitPath = path.join(tempDir, "upstream-pi-extension.ts");
+		fs.writeFileSync(
+			explicitPath,
+			`
+				import { defineTool } from "@earendil-works/pi-coding-agent";
+				import { StringEnum } from "@earendil-works/pi-ai/compat";
+				import { Box, Text, truncateToWidth } from "@earendil-works/pi-tui";
+				import { Type } from "typebox";
+
+				const widget = new Box();
+				widget.addChild(new Text(truncateToWidth("upstream-compatible", 8, ""), 0, 0));
+
+				const tool = defineTool({
+					name: "upstream_alias_probe",
+					label: "Upstream Alias Probe",
+					description: "verifies upstream pi package aliases load in repi",
+					parameters: Type.Object({ mode: StringEnum(["ok"] as const) }),
+					execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+				});
+
+				export default function(pi) {
+					pi.registerTool(tool);
+					pi.registerShortcut("ctrl+u", {
+						description: "Set alias probe widget",
+						handler: (ctx) => ctx.ui.setWidget("alias-probe", widget),
+					});
+				}
+			`,
+		);
+
+		const { loadExtensions } = await import("../src/core/extensions/loader.ts");
+		const result = await loadExtensions([explicitPath], tempDir);
+
+		expect(result.errors).toEqual([]);
+		expect(result.extensions).toHaveLength(1);
+		expect(result.extensions[0].tools.has("upstream_alias_probe")).toBe(true);
+		expect(result.extensions[0].shortcuts.has("ctrl+u")).toBe(true);
+	});
+
 	it("loadExtensions with no paths loads nothing", async () => {
 		// Create discoverable extensions (would be found by discoverAndLoadExtensions)
 		fs.writeFileSync(path.join(extensionsDir, "discovered.ts"), extensionCode);

@@ -129,9 +129,18 @@ export function bootstrapRepiCli(args: readonly string[]): string[] {
 		process.env.PI_SKIP_PACKAGE_UPDATE_CHECK || process.env.REPI_SKIP_PACKAGE_UPDATE_CHECK;
 	process.env.PI_TELEMETRY = process.env.PI_TELEMETRY || process.env.REPI_TELEMETRY;
 	process.env.PI_OFFLINE = process.env.PI_OFFLINE || process.env.REPI_OFFLINE;
+	if (process.env.REPI_ALLOW_BROWSER_COOKIES && !process.env.PI_ALLOW_BROWSER_COOKIES) {
+		process.env.PI_ALLOW_BROWSER_COOKIES = process.env.REPI_ALLOW_BROWSER_COOKIES;
+	}
 
 	const stripped = stripRepiWrapperFlags(args);
-	initializeRepiProfile();
+	const profile = initializeRepiProfile();
+	process.env.REPI_CODING_AGENT_DIR = process.env.REPI_CODING_AGENT_DIR || profile.agentDir;
+	process.env.REPI_CODING_AGENT_SESSION_DIR =
+		process.env.REPI_CODING_AGENT_SESSION_DIR || `${profile.agentDir}/sessions`;
+	process.env.PI_CODING_AGENT_DIR = process.env.PI_CODING_AGENT_DIR || process.env.REPI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_SESSION_DIR =
+		process.env.PI_CODING_AGENT_SESSION_DIR || process.env.REPI_CODING_AGENT_SESSION_DIR;
 
 	const command = firstPositional(stripped.args);
 	if (command && PACKAGE_COMMANDS.has(command)) {

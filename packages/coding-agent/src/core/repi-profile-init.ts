@@ -58,6 +58,10 @@ export function initializeRepiProfile(options: { repoRoot?: string; verbose?: bo
 	const legacyPiAgentDir = process.env.PI_AGENT_IMPORT_DIR || join(homedir(), ".pi", "agent");
 	const importLegacyPiProfile =
 		truthyEnv(process.env.REPI_IMPORT_PI_PROFILE) || truthyEnv(process.env.REPI_IMPORT_PI_AUTH);
+	process.env.REPI_CODING_AGENT_DIR ||= agentDir;
+	process.env.REPI_CODING_AGENT_SESSION_DIR ||= join(agentDir, "sessions");
+	process.env.PI_CODING_AGENT_DIR ||= agentDir;
+	process.env.PI_CODING_AGENT_SESSION_DIR ||= process.env.REPI_CODING_AGENT_SESSION_DIR;
 
 	mkdir(agentDir);
 	mkdir(join(agentDir, "sessions"));

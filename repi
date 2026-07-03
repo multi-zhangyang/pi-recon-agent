@@ -47,6 +47,14 @@ export PI_SKIP_VERSION_CHECK="${PI_SKIP_VERSION_CHECK:-$REPI_SKIP_VERSION_CHECK}
 export PI_SKIP_PACKAGE_UPDATE_CHECK="${PI_SKIP_PACKAGE_UPDATE_CHECK:-$REPI_SKIP_PACKAGE_UPDATE_CHECK}"
 export PI_TELEMETRY="${PI_TELEMETRY:-$REPI_TELEMETRY}"
 export PI_OFFLINE="${PI_OFFLINE:-$REPI_OFFLINE}"
+# Compatibility for upstream pi extensions. Keep legacy PI_* paths pointed at
+# REPI's isolated profile so packages such as @narumitw/pi-goal and
+# pi-web-access do not fall back to ~/.pi when loaded by repi.
+export PI_CODING_AGENT_DIR="${PI_CODING_AGENT_DIR:-$REPI_CODING_AGENT_DIR}"
+export PI_CODING_AGENT_SESSION_DIR="${PI_CODING_AGENT_SESSION_DIR:-$REPI_CODING_AGENT_SESSION_DIR}"
+if [ -n "${REPI_ALLOW_BROWSER_COOKIES:-}" ] && [ -z "${PI_ALLOW_BROWSER_COOKIES:-}" ]; then
+  export PI_ALLOW_BROWSER_COOKIES="$REPI_ALLOW_BROWSER_COOKIES"
+fi
 export REPI_REPO_ROOT="$ROOT"
 
 case "${1:-}" in
