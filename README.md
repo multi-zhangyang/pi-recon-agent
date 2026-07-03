@@ -1,16 +1,38 @@
-# REPI Reverse/Pentest Agent
+# REPI
 
-REPI 是独立的逆向渗透命令行智能体,主题是 reverse / pentest **execution**:逆向工程、漏洞利用与验证、Web/API 渗透、pwn、移动、固件、流量/取证、恶意样本分析,以及可复现证据整理。它提供独立的 `repi` 命令、独立运行目录、可配置模型、多工具调用、MCP 接入、上下文压缩、任务记忆、**专家子代理委派**和工程化诊断能力。
+**Reverse / Pentest execution agent.** 把目标交给 `repi`,它会在真实终端里 mapping、规划、执行、验证、沉淀证据,而不是只给一段分析文本。
 
-REPI 与原版 `pi` agent 划开边界:它不是 `pi` 的 profile,也不是通用 coding agent。项目复用成熟的工具调用、插件、MCP 和 subagent 机制,不回到纯自研 agent 控制平面的臃肿。安装 REPI 不会覆盖本机已有的 `pi` 命令,运行数据默认写入 `~/.repi/agent`。
+```bash
+curl -fsSL https://raw.githubusercontent.com/multi-zhangyang/pi-recon-agent/main/install.sh | bash
+```
 
-> 版本:`0.1.2` · 仓库:`https://github.com/multi-zhangyang/pi-recon-agent`(fork 自 `earendil-works/pi`)
+```bash
+export REPI_AUTH_TOKEN="sk-xxxxx"
+export REPI_BASE_URL="https://api.example.com/v1"
+export REPI_MODEL="provider/model-id"
+export REPI_MODEL_API="openai-compatible"   # openai-compatible | openai-responses | anthropic
+export REPI_CONTEXT_WINDOW=262144
+export REPI_AUTO_COMPACT_WINDOW=262144
+export REPI_MAX_TOKENS=16384
+
+repi -p "先对当前目标做被动 mapping,找入口、状态机和可验证路径"
+```
+
+REPI 的默认目标很直接:
+
+- **逆向 / pwn / 固件 / 流量 / 取证 / Web/API 渗透**:围绕真实 artifact 和可复现验证推进。
+- **专家子代理**:explorer、planner、operator、verifier、reverser 按任务 lane 分工执行。
+- **证据优先**:命令、输出、PoC、复现矩阵、handoff 文件和失败原因都落盘可追踪。
+- **模型环境变量优先**:像 Claude Code 一样 export 即用,但同时支持 OpenAI-compatible、OpenAI Responses、Anthropic Messages。
+- **独立运行面**:`repi` 命令 + `~/.repi/agent`;不覆盖上游 `pi`,不写 `~/.pi`。
+
+> 版本:`0.1.2` · 仓库:`https://github.com/multi-zhangyang/pi-recon-agent` · fork 自 `earendil-works/pi`
 
 ## 快速安装
 
 **前置**:`node >= 22.19`、`git`。缺 `node` 推荐用 [nvm](https://github.com/nvm-sh/nvm):`nvm install 22`。
 
-一键安装(克隆仓库 + 装依赖 + 装 launcher + 初始化运行目录):
+一键安装:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/multi-zhangyang/pi-recon-agent/main/install.sh | bash
@@ -19,21 +41,21 @@ curl -fsSL https://raw.githubusercontent.com/multi-zhangyang/pi-recon-agent/main
 装完后直接用:
 
 ```bash
-repi                 # 启动交互式会话(最常用)
-repi -p "分析 /tmp/vuln 的溢出"   # 或一次性任务
+repi                 # 启动交互式会话
+repi -p "分析 /tmp/vuln 的溢出"   # 一次性任务
 repi doctor          # 检查安装/配置/权限
 repi --offline --help
 ```
 
-> 第一次用前需要先配模型(否则 `repi` 启动后无法调用 LLM):见下方[模型配置](#模型配置)。`repi doctor` 会提示缺失项。
+第一次用前先配模型。最短路径就是 `REPI_*` 环境变量;持久化多 provider 再用 `repi model add/login`。详见[模型配置](#模型配置)。
 
-安装脚本会优先把 launcher 装到**已在 `$PATH` 上的目录**(`/usr/local/bin` / `/usr/local/sbin`;需要时会通过 sudo 写入),所以大多数机器装完在**当前终端**立即可用。仅当没有可写/可 sudo 的 PATH 目录时才回退到 `~/.local/bin`,并自动创建/更新 `~/.bashrc` + `~/.profile`(zsh 则 `~/.zshrc` + `~/.profile`)加入:
+安装脚本会优先把 launcher 装到 PATH 里的 `/usr/local/bin` / `/usr/local/sbin`(需要时通过 sudo 写入),所以大多数机器当前终端立即可用。没有可写/可 sudo 的 PATH 目录时才回退到 `~/.local/bin`,并自动创建/更新 `.bashrc` / `.profile` 或 `.zshrc` / `.profile`:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-回退到 `~/.local/bin` 时,新终端会自动生效;当前终端按安装输出执行一次 `export PATH="$HOME/.local/bin:$PATH"` 或 `exec $SHELL -l` 即可。
+回退到 `~/.local/bin` 时,新终端自动生效;当前终端按安装输出执行一次 export 或 `exec $SHELL -l` 即可。
 
 ## 安装方式
 
