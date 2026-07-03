@@ -825,6 +825,14 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 					techniqueProofMissing: string[];
 				}>;
 				nextCommands: string[];
+				repairQueue: Array<{
+					kind: string;
+					priority: number;
+					claimId?: string;
+					routeId?: string;
+					missing: string[];
+					command: string;
+				}>;
 			};
 		};
 		expect(report.merge.finalPromotionReady).toBe(false);
@@ -851,6 +859,16 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		expect(repairCommand).toContain("--route 'native-pwn'");
 		expect(repairCommand).toContain("pwn-ret2libc");
 		expect(repairCommand).toContain("libc-leak");
+		expect(report.merge.repairQueue[0]).toMatchObject({
+			kind: "named-technique-proof",
+			priority: 95,
+			claimId: "ret2libc-weak",
+			routeId: "native-pwn",
+		});
+		expect(report.merge.repairQueue[0].missing).toEqual(
+			expect.arrayContaining(["pwn-ret2libc:libc-leak", "pwn-ret2libc:libc-base"]),
+		);
+		expect(report.merge.repairQueue[0].command).toContain("Close named-technique proof-exit gap");
 		expect(report.mergeFailureReason).toContain("route proof incomplete");
 	});
 
@@ -1698,7 +1716,16 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 					proofKit: { passive: string[]; proofExit: string[]; negativeControls: string[] };
 					commandPalette: { passive: string[]; proof: string[]; negative: string[] };
 					toolProbeCommand: string;
-					techniqueHints: { domains: string[]; techniqueIds: string[] };
+					techniqueHints: {
+						domains: string[];
+						techniqueIds: string[];
+						proofContracts: Array<{
+							id: string;
+							requiredGates: string[];
+							negativeGates: string[];
+							source: string;
+						}>;
+					};
 					agentToolchain: { enabledTools: string[]; routeTools: string[] };
 				}>;
 				workerPackets: Array<{
@@ -1706,7 +1733,16 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 					proofKit: { passive: string[]; proofExit: string[]; negativeControls: string[] };
 					commandPalette: { passive: string[]; proof: string[]; negative: string[] };
 					toolProbeCommand: string;
-					techniqueHints: { domains: string[]; techniqueIds: string[] };
+					techniqueHints: {
+						domains: string[];
+						techniqueIds: string[];
+						proofContracts: Array<{
+							id: string;
+							requiredGates: string[];
+							negativeGates: string[];
+							source: string;
+						}>;
+					};
 					agentToolchain: { enabledTools: string[]; routeTools: string[] };
 				}>;
 			};
@@ -1738,6 +1774,15 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 			expect(route.toolProbeCommand, `${route.id} tool probe`).toContain("command -v");
 			expect(route.techniqueHints.domains.length, `${route.id} technique domains`).toBeGreaterThan(0);
 			expect(route.techniqueHints.techniqueIds.length, `${route.id} technique ids`).toBeGreaterThan(0);
+			expect(
+				route.techniqueHints.proofContracts.map((contract) => contract.id),
+				`${route.id} proof contract ids`,
+			).toEqual(route.techniqueHints.techniqueIds);
+			for (const contract of route.techniqueHints.proofContracts) {
+				expect(contract.source, `${route.id} ${contract.id} local contract`).toBe("swarm-local-contract");
+				expect(contract.requiredGates.length, `${route.id} ${contract.id} required gates`).toBeGreaterThan(0);
+				expect(contract.negativeGates.length, `${route.id} ${contract.id} negative gates`).toBeGreaterThan(0);
+			}
 			expect(route.agentToolchain.enabledTools, `${route.id} enabled agent tools`).toEqual(
 				expect.arrayContaining(["re_route", "re_techniques", "re_verifier"]),
 			);
@@ -1754,6 +1799,19 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 			expect(packet.techniqueHints.techniqueIds.length, `${packet.route.id} worker technique ids`).toBeGreaterThan(
 				0,
 			);
+			expect(
+				packet.techniqueHints.proofContracts.map((contract) => contract.id),
+				`${packet.route.id} worker proof contract ids`,
+			).toEqual(packet.techniqueHints.techniqueIds);
+			expect(
+				packet.techniqueHints.proofContracts.every(
+					(contract) =>
+						contract.source === "swarm-local-contract" &&
+						contract.requiredGates.length > 0 &&
+						contract.negativeGates.length > 0,
+				),
+				`${packet.route.id} worker local proof contracts`,
+			).toBe(true);
 			expect(packet.agentToolchain.enabledTools, `${packet.route.id} worker enabled agent tools`).toContain(
 				"re_techniques",
 			);

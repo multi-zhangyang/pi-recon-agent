@@ -567,11 +567,31 @@ const routeCommandPalettes = {
 const routeTechniqueHints = {
 	"native-pwn": {
 		domains: ["pwn", "native-reverse", "exploit-reliability"],
-		techniqueIds: ["pwn-ret2libc", "pwn-format-string", "pwn-tcache-poisoning", "rev-anti-debug-bypass", "reliability-replay-matrix"],
+		techniqueIds: [
+			"pwn-ret2libc",
+			"pwn-format-string",
+			"pwn-tcache-poisoning",
+			"pwn-house-of-botcake",
+			"pwn-srop",
+			"pwn-ret2dlresolve",
+			"rev-anti-debug-bypass",
+			"rev-deobfuscate-ollvm",
+			"reliability-replay-matrix",
+		],
 	},
 	"web-api": {
 		domains: ["web-api", "web-scan"],
-		techniqueIds: ["web-idor-bola", "web-ssrf-metadata", "web-jwt-confusion", "web-ssti", "web-request-smuggling", "webscan-content-discovery"],
+		techniqueIds: [
+			"web-idor-bola",
+			"web-ssrf-metadata",
+			"web-jwt-confusion",
+			"web-ssti",
+			"web-request-smuggling",
+			"web-prototype-pollution",
+			"web-deserialization-gadget",
+			"webscan-content-discovery",
+			"webscan-vhost-stack",
+		],
 	},
 	"js-reverse": {
 		domains: ["js-reverse", "web-api"],
@@ -583,7 +603,7 @@ const routeTechniqueHints = {
 	},
 	"pcap-dfir": {
 		domains: ["dfir-pcap", "identity-ad", "crypto-stego"],
-		techniqueIds: ["dfir-ntlm-kerberos-extract", "dfir-exfil-detect", "crypto-hash-length-extension"],
+		techniqueIds: ["dfir-ntlm-kerberos-extract", "dfir-credential-pcap", "dfir-exfil-detect", "crypto-hash-length-extension"],
 	},
 	"memory-forensics": {
 		domains: ["memory-forensics", "malware", "identity-ad"],
@@ -591,7 +611,7 @@ const routeTechniqueHints = {
 	},
 	"firmware-iot": {
 		domains: ["firmware-iot", "web-api", "native-reverse"],
-		techniqueIds: ["fw-rootfs-extract", "fw-emulation-qemu", "fw-secure-boot-bypass", "web-ssrf-metadata"],
+		techniqueIds: ["fw-rootfs-extract", "fw-emulation-qemu", "fw-uart-uboot", "fw-secure-boot-bypass", "web-ssrf-metadata"],
 	},
 	"cloud-identity": {
 		domains: ["cloud-container", "web-api", "agent-llm"],
@@ -599,11 +619,11 @@ const routeTechniqueHints = {
 	},
 	"windows-ad": {
 		domains: ["identity-ad", "dfir-pcap", "memory-forensics"],
-		techniqueIds: ["ad-kerberoasting", "ad-cs-esc", "ad-dcsync", "dfir-ntlm-kerberos-extract"],
+		techniqueIds: ["ad-kerberoasting", "ad-asrep-roasting", "ad-cs-esc", "ad-dcsync", "dfir-ntlm-kerberos-extract"],
 	},
 	malware: {
 		domains: ["malware", "native-reverse", "memory-forensics"],
-		techniqueIds: ["malware-config-decode", "malware-persistence-mech", "malware-shellcode-emulate", "rev-vm-unpack"],
+		techniqueIds: ["malware-config-decode", "malware-unpack-sandbox", "malware-persistence-mech", "malware-shellcode-emulate", "rev-vm-unpack"],
 	},
 	"crypto-stego": {
 		domains: ["crypto-stego", "dfir-pcap"],
@@ -611,7 +631,7 @@ const routeTechniqueHints = {
 	},
 	"agent-boundary": {
 		domains: ["agent-llm", "cloud-container", "web-api"],
-		techniqueIds: ["agent-rag-poisoning", "agent-memory-exfil", "agent-indirect-injection", "web-idor-bola"],
+		techniqueIds: ["agent-rag-poisoning", "agent-memory-exfil", "agent-indirect-injection", "agent-tool-misuse", "web-idor-bola"],
 	},
 	"reverse-pentest-general": {
 		domains: ["pwn", "web-api", "js-reverse", "mobile", "dfir-pcap", "cloud-container", "agent-llm", "exploit-reliability"],
@@ -649,6 +669,33 @@ const techniqueProofContracts = {
 		],
 		negativeControls: [{ gate: "heap-control", any: ["wrong fd", "wrong heap", "wrong key", "negative control", "负控制"] }],
 	},
+	"pwn-house-of-botcake": {
+		proofExit: "prove the unsorted/tcache overlap, poison the overlapped tcache entry into a forged target allocation, and show wrong free-order or safe-linking controls fail.",
+		requiredSignals: [
+			{ gate: "heap-version", any: ["glibc", "tcache", "unsorted", "heap"] },
+			{ gate: "overlap-proof", any: ["overlap", "house of botcake", "double-free", "vis_heap_chunks"] },
+			{ gate: "target-allocation", any: ["forged fd", "allocation returns", "arbitrary write", "safe-linking"] },
+		],
+		negativeControls: [{ gate: "botcake-control", any: ["wrong free order", "wrong count", "wrong heap", "negative control"] }],
+	},
+	"pwn-srop": {
+		proofExit: "prove control reaches a sigreturn frame, verify the syscall/register frame state, execute the intended syscall path, and show wrong-frame/selector controls fail.",
+		requiredSignals: [
+			{ gate: "syscall-gadget", any: ["syscall", "sigreturn", "srop", "rax=15"] },
+			{ gate: "frame-state", any: ["sigreturnframe", "register", "rip", "rdi", "frame"] },
+			{ gate: "syscall-effect", any: ["execve", "/bin/sh", "shell", "id output", "cat flag"] },
+		],
+		negativeControls: [{ gate: "srop-control", any: ["wrong frame", "wrong selector", "wrong rax", "negative control"] }],
+	},
+	"pwn-ret2dlresolve": {
+		proofExit: "prove a fake relocation/symbol/string table is resolved by the dynamic linker, execute the resolved call, and show wrong-symbol/reloc controls fail.",
+		requiredSignals: [
+			{ gate: "dynamic-linker", any: ["ret2dlresolve", "plt0", "dynamic linker", "reloc", "symtab"] },
+			{ gate: "fake-structures", any: ["fake reloc", "fake symbol", "strtab", "rel.plt", "resolver"] },
+			{ gate: "resolved-call", any: ["system", "/bin/sh", "shell", "resolved", "id output"] },
+		],
+		negativeControls: [{ gate: "dlresolve-control", any: ["wrong symbol", "wrong reloc", "alignment", "negative control"] }],
+	},
 	"web-idor-bola": {
 		proofExit: "prove account/principal A can access account/principal B's object with status/body/state diff, and show anonymous/wrong-principal controls fail.",
 		requiredSignals: [
@@ -674,6 +721,24 @@ const techniqueProofContracts = {
 			{ gate: "credential-or-identity", any: ["sts get-caller-identity", "accesskeyid", "token", "service account", "identity"] },
 		],
 		negativeControls: [{ gate: "ssrf-control", any: ["blocked", "wrong host", "denied", "negative control", "负控制"] }],
+	},
+	"web-prototype-pollution": {
+		proofExit: "prove attacker-controlled keys pollute a prototype, trigger a reachable application gadget, and show clean-object/frozen/tampered controls fail.",
+		requiredSignals: [
+			{ gate: "pollution-sink", any: ["prototype pollution", "__proto__", "constructor.prototype", "merge", "lodash"] },
+			{ gate: "polluted-property", any: ["polluted", "property", "prototype", "object"] },
+			{ gate: "gadget-effect", any: ["gadget", "rce", "xss", "auth bypass", "state diff", "http 200"] },
+		],
+		negativeControls: [{ gate: "prototype-control", any: ["clean object", "frozen", "sanitized", "tampered", "negative control"] }],
+	},
+	"web-deserialization-gadget": {
+		proofExit: "prove an untrusted deserialization sink reaches a gadget chain with runtime effect, and show benign/signed/wrong-class controls fail.",
+		requiredSignals: [
+			{ gate: "deserialize-sink", any: ["deserialize", "unserialize", "pickle", "ysoserial", "objectinputstream"] },
+			{ gate: "gadget-chain", any: ["gadget", "chain", "payload", "class", "method"] },
+			{ gate: "runtime-effect", any: ["rce", "id output", "file written", "http 200", "callback"] },
+		],
+		negativeControls: [{ gate: "deser-control", any: ["benign object", "wrong class", "invalid signature", "negative control"] }],
 	},
 	"js-signature-rebuild": {
 		proofExit: "capture runtime signer inputs/outputs, rebuild the field byte-for-byte for a frozen sample, replay successfully, and show missing/tampered/stale controls fail.",
@@ -707,6 +772,347 @@ const techniqueProofContracts = {
 			{ gate: "boundary-trace", any: ["tool-call", "memory", "rag", "trace", "decision"] },
 		],
 		negativeControls: [{ gate: "agent-control", any: ["benign", "sanitized", "tool disabled", "negative control"] }],
+	},
+	"rev-anti-debug-bypass": {
+		proofExit: "locate the anti-debug check, bypass it with a patch or hook, prove the target runs under instrumentation, and show unpatched/hook-disabled controls still fail.",
+		requiredSignals: [
+			{ gate: "anti-debug-anchor", any: ["anti-debug", "ptrace", "isdebuggerpresent", "sysctl", "frida-detect", "debugger check"] },
+			{ gate: "bypass-effect", any: ["bypass", "patched", "hooked", "debugger attached", "continues", "no exit"] },
+			{ gate: "runtime-proof", any: ["gdb", "lldb", "frida", "runtime", "transcript", "exited 0"] },
+		],
+		negativeControls: [{ gate: "anti-debug-control", any: ["hook disabled", "unpatched", "wrong patch", "still exits", "negative control"] }],
+	},
+	"rev-deobfuscate-ollvm": {
+		proofExit: "identify OLLVM-style flattening/opaque predicates, recover a simpler control flow or patch, prove semantic equivalence on samples, and show wrong-patch controls diverge.",
+		requiredSignals: [
+			{ gate: "ollvm-pattern", any: ["ollvm", "control-flow flattening", "opaque predicate", "dispatcher", "flattened"] },
+			{ gate: "deobfuscation", any: ["deobfuscate", "unflatten", "patch", "cfg", "basic block"] },
+			{ gate: "semantic-check", any: ["same output", "sample", "trace", "equivalent", "assert"] },
+		],
+		negativeControls: [{ gate: "ollvm-control", any: ["wrong patch", "wrong input", "diverge", "negative control"] }],
+	},
+	"web-ssti": {
+		proofExit: "prove a live template injection sink with rendered expression or command output, then show escaped/literal/wrong-template controls fail.",
+		requiredSignals: [
+			{ gate: "template-sink", any: ["ssti", "{{", "${", "<%", "template"] },
+			{ gate: "rendered-execution", any: ["7*7", "49", "id output", "rce", "rendered"] },
+			{ gate: "http-replay", any: ["curl", "http 200", "status", "response", "body hash"] },
+		],
+		negativeControls: [{ gate: "ssti-control", any: ["escaped", "blocked", "literal", "wrong payload", "negative control"] }],
+	},
+	"web-request-smuggling": {
+		proofExit: "prove CL.TE/TE.CL parser desync with paired requests, differential front/back-end behavior, and a normalized or wrong-length control.",
+		requiredSignals: [
+			{ gate: "desync-craft", any: ["cl.te", "te.cl", "content-length", "transfer-encoding", "smuggling"] },
+			{ gate: "parser-differential", any: ["front-end", "back-end", "queue", "desync", "timeout", "poisoned"] },
+			{ gate: "paired-replay", any: ["two requests", "paired replay", "http 200", "status diff", "body hash"] },
+		],
+		negativeControls: [{ gate: "smuggle-control", any: ["normalized", "single parser", "wrong length", "negative control"] }],
+	},
+	"webscan-content-discovery": {
+		proofExit: "prove a discovered path is live with status/body/hash evidence and compare it to a random-path or 404 baseline control.",
+		requiredSignals: [
+			{ gate: "discovery-run", any: ["ffuf", "feroxbuster", "dirsearch", "gobuster", "content discovery", "wordlist"] },
+			{ gate: "live-path", any: ["http 200", "status", "body hash", "content-length", "found path"] },
+		],
+		negativeControls: [{ gate: "discovery-control", any: ["404", "random path", "baseline", "negative control"] }],
+	},
+	"webscan-vhost-stack": {
+		proofExit: "prove a virtual-host or stack-specific surface via Host/SNI differential responses, and show random-host/default-vhost controls collapse.",
+		requiredSignals: [
+			{ gate: "vhost-scan", any: ["vhost", "virtual host", "host header", "sni", "ffuf"] },
+			{ gate: "differential-response", any: ["status", "body hash", "content-length", "title", "http 200"] },
+			{ gate: "stack-fingerprint", any: ["server", "tech stack", "framework", "header", "asset"] },
+		],
+		negativeControls: [{ gate: "vhost-control", any: ["random host", "default vhost", "baseline", "negative control"] }],
+	},
+	"js-wasm-reverse": {
+		proofExit: "extract and decompile the served WASM, map imports/exports to the runtime call, rebuild the target transform, and show wrong-input controls diverge.",
+		requiredSignals: [
+			{ gate: "wasm-artifact", any: ["wasm", "webassembly", ".wasm", "served asset"] },
+			{ gate: "decompile-map", any: ["wasm2wat", "wasm-decompile", "exports", "imports", "function"] },
+			{ gate: "runtime-rebuild", any: ["hook", "rebuild", "result", "byte-for-byte", "matches"] },
+		],
+		negativeControls: [{ gate: "wasm-control", any: ["wrong input", "tampered", "mismatch", "negative control"] }],
+	},
+	"web-graphql-introspection": {
+		proofExit: "prove the GraphQL schema/operation is reachable, replay a concrete query or mutation, and show disabled/wrong-field/unauthorized controls fail.",
+		requiredSignals: [
+			{ gate: "introspection", any: ["graphql", "__schema", "introspection", "__typename"] },
+			{ gate: "schema-edge", any: ["type", "mutation", "query", "field"] },
+			{ gate: "operation-replay", any: ["replay", "http 200", "response", "curl"] },
+		],
+		negativeControls: [{ gate: "graphql-control", any: ["disabled", "wrong field", "unauthorized", "negative control"] }],
+	},
+	"mobile-root-bypass": {
+		proofExit: "identify the root/jailbreak detection path, hook or patch it, prove the app continues the protected flow, and show hook-disabled controls detect root.",
+		requiredSignals: [
+			{ gate: "root-check", any: ["root check", "jailbreak", "su", "magisk", "isdevicerooted"] },
+			{ gate: "bypass-hook", any: ["frida", "hook", "patch", "bypass"] },
+			{ gate: "protected-flow", any: ["app continues", "request succeeds", "runtime", "http 200"] },
+		],
+		negativeControls: [{ gate: "root-control", any: ["hook disabled", "unpatched", "root detected", "negative control"] }],
+	},
+	"mobile-crypto-hook": {
+		proofExit: "hook the mobile crypto/signing API, capture inputs/outputs, rebuild or decrypt one sample, and show wrong-key/tampered controls fail.",
+		requiredSignals: [
+			{ gate: "crypto-api", any: ["keystore", "keychain", "cipher", "mac", "crypto"] },
+			{ gate: "runtime-capture", any: ["frida", "hook", "args", "return", "captured"] },
+			{ gate: "rebuild-or-decrypt", any: ["rebuild", "decrypt", "signature", "byte-for-byte", "matches"] },
+		],
+		negativeControls: [{ gate: "mobile-crypto-control", any: ["wrong key", "hook disabled", "tampered", "negative control"] }],
+	},
+	"dfir-ntlm-kerberos-extract": {
+		proofExit: "bind NTLM/Kerberos credential material to a packet/frame/stream, export a verifier-accepted hash/ticket, and show wrong-mode/checksum controls fail.",
+		requiredSignals: [
+			{ gate: "credential-material", any: ["ntlm", "kerberos", "as-rep", "tgs", "hash", "ticket"] },
+			{ gate: "packet-binding", any: ["frame", "packet", "stream", "pcap", "tshark"] },
+			{ gate: "verifier-tool", any: ["john", "hashcat", "krb5tgs", "principal", "checksum"] },
+		],
+		negativeControls: [{ gate: "kerb-control", any: ["wrong hash mode", "checksum fail", "wrong realm", "negative control"] }],
+	},
+	"dfir-credential-pcap": {
+		proofExit: "extract credential material from a PCAP with packet/stream provenance, validate the credential format or replay boundary, and show wrong-stream/checksum controls fail.",
+		requiredSignals: [
+			{ gate: "credential-protocol", any: ["credential", "password", "basic auth", "ntlm", "kerberos", "ftp", "smtp"] },
+			{ gate: "stream-provenance", any: ["pcap", "frame", "packet", "stream", "tshark"] },
+			{ gate: "format-validation", any: ["hash", "ticket", "decoded", "base64", "principal"] },
+		],
+		negativeControls: [{ gate: "pcap-credential-control", any: ["wrong stream", "checksum fail", "truncated", "negative control"] }],
+	},
+	"dfir-exfil-detect": {
+		proofExit: "prove exfiltration by binding bytes/objects to flows and timeline, export hashes or stream IDs, and compare with benign/wrong-stream controls.",
+		requiredSignals: [
+			{ gate: "exfil-flow", any: ["exfil", "upload", "dns tunnel", "http post", "bytes"] },
+			{ gate: "flow-binding", any: ["frame", "stream", "host", "timeline", "pcap"] },
+			{ gate: "object-proof", any: ["size", "hash", "sha256", "extracted object", "artifact"] },
+		],
+		negativeControls: [{ gate: "exfil-control", any: ["benign baseline", "wrong stream", "control", "negative control"] }],
+	},
+	"crypto-hash-length-extension": {
+		proofExit: "prove a secret-prefix MAC accepts a length-extension forgery with glue padding and show wrong-length/tampered MAC controls fail.",
+		requiredSignals: [
+			{ gate: "mac-family", any: ["length extension", "sha1", "md5", "secret-prefix", "mac"] },
+			{ gate: "glue-padding", any: ["hashpumpy", "padding", "glue padding", "append"] },
+			{ gate: "accepted-forgery", any: ["forged mac", "accepted", "http 200", "valid"] },
+		],
+		negativeControls: [{ gate: "length-extension-control", any: ["wrong length", "tampered", "invalid mac", "negative control"] }],
+	},
+	"mem-volatility-creds": {
+		proofExit: "extract credentials from a memory image with profile/layer evidence, bind them to process/offset context, and show wrong-profile/offset controls fail.",
+		requiredSignals: [
+			{ gate: "memory-tool", any: ["volatility", "memdump", "windows.pslist", "linux.psaux", "profile"] },
+			{ gate: "credential-artifact", any: ["hashdump", "lsadump", "cmdline", "env", "credential"] },
+			{ gate: "offset-binding", any: ["offset", "pid", "process", "dump"] },
+		],
+		negativeControls: [{ gate: "memory-control", any: ["wrong profile", "wrong offset", "false positive", "negative control"] }],
+	},
+	"mem-process-hunt": {
+		proofExit: "identify suspicious process/VAD/network evidence in memory, dump or hash the artifact, and show benign/wrong-PID controls do not match.",
+		requiredSignals: [
+			{ gate: "process-enum", any: ["process", "pslist", "pstree", "malfind", "netscan"] },
+			{ gate: "suspicious-anchor", any: ["pid", "ppid", "cmdline", "vad", "yara"] },
+			{ gate: "artifact-binding", any: ["timeline", "dump", "hash", "sha256"] },
+		],
+		negativeControls: [{ gate: "process-control", any: ["benign process", "wrong pid", "negative control"] }],
+	},
+	"malware-persistence-mech": {
+		proofExit: "bind a persistence mechanism to runtime or artifact evidence, record the launched payload path/hash, and show clean/disabled controls do not persist.",
+		requiredSignals: [
+			{ gate: "persistence-key", any: ["run key", "service", "scheduled task", "launchagent", "cron", "persistence"] },
+			{ gate: "autorun-location", any: ["registry", "plist", "systemd", "autorun", "startup"] },
+			{ gate: "payload-binding", any: ["path", "hash", "ioc", "timeline", "sha256"] },
+		],
+		negativeControls: [{ gate: "persistence-control", any: ["clean baseline", "disabled", "not launched", "negative control"] }],
+	},
+	"fw-rootfs-extract": {
+		proofExit: "extract the firmware filesystem with tool/version evidence, bind recovered files to hashes, and show corrupt/wrong-format controls fail.",
+		requiredSignals: [
+			{ gate: "extract-tool", any: ["binwalk", "unblob", "unsquashfs", "rootfs", "squashfs"] },
+			{ gate: "filesystem-proof", any: ["/etc/passwd", "init", "busybox", "filesystem", "rootfs"] },
+			{ gate: "artifact-hash", any: ["sha256", "file", "extracted", "hash"] },
+		],
+		negativeControls: [{ gate: "firmware-extract-control", any: ["failed extract", "wrong endian", "corrupt", "negative control"] }],
+	},
+	"fw-emulation-qemu": {
+		proofExit: "boot or chroot the firmware service under emulation, prove a live interaction, and show wrong-arch/no-service controls fail.",
+		requiredSignals: [
+			{ gate: "emulation", any: ["qemu", "chroot", "emulation", "firmadyne", "qiling"] },
+			{ gate: "service-live", any: ["service", "http", "boot", "init", "network"] },
+			{ gate: "runtime-interaction", any: ["curl", "status", "shell", "runtime", "http 200"] },
+		],
+		negativeControls: [{ gate: "emulation-control", any: ["wrong arch", "no network", "service down", "negative control"] }],
+	},
+	"fw-uart-uboot": {
+		proofExit: "prove UART/bootloader access with pinout/baud evidence, interrupt or authenticate to a shell/env path, and show wrong-baud/locked-console controls fail.",
+		requiredSignals: [
+			{ gate: "uart-interface", any: ["uart", "serial", "baud", "pinout", "logic analyzer"] },
+			{ gate: "bootloader-access", any: ["u-boot", "bootloader", "interrupt", "printenv", "console"] },
+			{ gate: "interactive-proof", any: ["shell", "env", "bootargs", "id output", "transcript"] },
+		],
+		negativeControls: [{ gate: "uart-control", any: ["wrong baud", "locked console", "no echo", "negative control"] }],
+	},
+	"fw-secure-boot-bypass": {
+		proofExit: "prove a signed/verified boot boundary can be bypassed or downgraded with serial/boot evidence, and show tampered/wrong-key controls reject.",
+		requiredSignals: [
+			{ gate: "verified-boot", any: ["u-boot", "secure boot", "signature", "rsa", "verified boot"] },
+			{ gate: "bypass-path", any: ["bypass", "patch", "rollback", "key", "downgrade"] },
+			{ gate: "boot-proof", any: ["boots", "accepted image", "serial log", "runtime"] },
+		],
+		negativeControls: [{ gate: "secure-boot-control", any: ["tampered image rejected", "wrong key", "signature fail", "negative control"] }],
+	},
+	"cloud-imds-to-role": {
+		proofExit: "retrieve metadata credentials, prove their role/identity with a cloud STS/API call, and show blocked/wrong-hop controls fail.",
+		requiredSignals: [
+			{ gate: "imds-fetch", any: ["169.254.169.254", "imds", "metadata"] },
+			{ gate: "role-credentials", any: ["role", "credentials", "accesskeyid", "token"] },
+			{ gate: "identity-proof", any: ["sts get-caller-identity", "caller identity", "arn"] },
+		],
+		negativeControls: [{ gate: "imds-control", any: ["imds blocked", "wrong hop", "no token", "negative control"] }],
+	},
+	"cloud-k8s-rbac": {
+		proofExit: "prove Kubernetes RBAC reachability with token/namespace binding, can-i/API replay, and denied wrong-namespace or no-token controls.",
+		requiredSignals: [
+			{ gate: "k8s-token", any: ["kubernetes", "serviceaccount", "rbac", "token"] },
+			{ gate: "permission-replay", any: ["kubectl auth can-i", "rolebinding", "clusterrole", "allowed"] },
+			{ gate: "resource-proof", any: ["namespace", "list secrets", "pods", "http 200"] },
+		],
+		negativeControls: [{ gate: "k8s-control", any: ["denied", "wrong namespace", "no token", "negative control"] }],
+	},
+	"cloud-container-escape": {
+		proofExit: "prove a container-to-host boundary break with mount/socket/capability evidence, host-level proof, and unprivileged/read-only controls.",
+		requiredSignals: [
+			{ gate: "container-context", any: ["container", "docker", "kubernetes", "cgroup", "mount"] },
+			{ gate: "escape-primitive", any: ["host path", "privileged", "socket", "cap_sys_admin", "/var/run/docker.sock"] },
+			{ gate: "host-proof", any: ["host proof", "nsenter", "hostname", "id output", "host filesystem"] },
+		],
+		negativeControls: [{ gate: "container-control", any: ["unprivileged", "read-only", "wrong mount", "negative control"] }],
+	},
+	"ad-kerberoasting": {
+		proofExit: "request roastable TGS material for an SPN, verify/crack or validate the hash format, and show wrong-realm/hash-mode controls fail.",
+		requiredSignals: [
+			{ gate: "spn-enum", any: ["spn", "kerberoast", "tgs", "impacket", "getuserspns"] },
+			{ gate: "hash-material", any: ["hashcat", "john", "$krb5tgs", "hash"] },
+			{ gate: "account-binding", any: ["cracked", "service account", "ticket", "principal"] },
+		],
+		negativeControls: [{ gate: "kerberoast-control", any: ["wrong realm", "wrong hash mode", "preauth fail", "negative control"] }],
+	},
+	"ad-asrep-roasting": {
+		proofExit: "prove a principal lacks Kerberos pre-auth, export a valid AS-REP roast hash, validate/crack it, and show preauth-enabled/wrong-realm controls fail.",
+		requiredSignals: [
+			{ gate: "no-preauth", any: ["asrep", "as-rep", "preauth not required", "getnpusers", "no preauth"] },
+			{ gate: "hash-material", any: ["$krb5asrep", "hashcat", "john", "hash"] },
+			{ gate: "principal-binding", any: ["principal", "user", "realm", "cracked"] },
+		],
+		negativeControls: [{ gate: "asrep-control", any: ["preauth enabled", "wrong realm", "wrong hash mode", "negative control"] }],
+	},
+	"ad-cs-esc": {
+		proofExit: "prove a concrete AD CS ESC path from template conditions to certificate authentication, with denied/wrong-EKU controls.",
+		requiredSignals: [
+			{ gate: "adcs-path", any: ["ad cs", "certipy", "certificate template", "esc"] },
+			{ gate: "template-condition", any: ["enrollee supplies subject", "client auth", "template", "eku"] },
+			{ gate: "cert-auth", any: ["pfx", "cert", "authenticate", "ldap", "nt hash"] },
+		],
+		negativeControls: [{ gate: "adcs-control", any: ["disabled template", "wrong eku", "denied", "negative control"] }],
+	},
+	"ad-dcsync": {
+		proofExit: "prove DCSync replication rights and retrieve directory secret material, with no-rights/wrong-principal controls denied.",
+		requiredSignals: [
+			{ gate: "dcsync-call", any: ["dcsync", "drsuapi", "secretsdump", "replication"] },
+			{ gate: "replication-rights", any: ["replicating directory changes", "getchanges", "ntds"] },
+			{ gate: "secret-material", any: ["hash", "krbtgt", "administrator", "ntlm"] },
+		],
+		negativeControls: [{ gate: "dcsync-control", any: ["no rights", "access denied", "wrong principal", "negative control"] }],
+	},
+	"malware-config-decode": {
+		proofExit: "decode malware configuration with key/algorithm evidence, bind IOCs to the sample hash, and show wrong-key/checksum controls fail.",
+		requiredSignals: [
+			{ gate: "config-anchor", any: ["config", "c2", "mutex", "campaign", "floss", "capa"] },
+			{ gate: "decode-chain", any: ["decode", "xor", "rc4", "base64", "decrypt"] },
+			{ gate: "ioc-binding", any: ["extracted", "ioc", "sha256", "sample hash"] },
+		],
+		negativeControls: [{ gate: "config-control", any: ["wrong key", "bad checksum", "benign sample", "negative control"] }],
+	},
+	"malware-unpack-sandbox": {
+		proofExit: "unpack or sandbox a protected sample to a dumped payload/OEP with behavior or IOC proof, and show packed-baseline/wrong-sample controls differ.",
+		requiredSignals: [
+			{ gate: "packing-signal", any: ["packed", "packer", "sandbox", "unpack", "entropy"] },
+			{ gate: "dump-or-oep", any: ["dump", "oep", "memory dump", "unmapped", "payload"] },
+			{ gate: "behavior-proof", any: ["ioc", "network", "file written", "registry", "sha256"] },
+		],
+		negativeControls: [{ gate: "malware-unpack-control", any: ["packed baseline", "wrong sample", "no behavior", "negative control"] }],
+	},
+	"malware-shellcode-emulate": {
+		proofExit: "emulate shellcode from a pinned entry/architecture, record API/syscall or memory effects, and show wrong-arch/bad-entry controls diverge.",
+		requiredSignals: [
+			{ gate: "shellcode-input", any: ["shellcode", "unicorn", "speakeasy", "scdbg", "emulate"] },
+			{ gate: "runtime-effects", any: ["api call", "syscall", "memory map", "trace"] },
+			{ gate: "payload-output", any: ["decoded payload", "network", "ioc", "artifact"] },
+		],
+		negativeControls: [{ gate: "shellcode-control", any: ["wrong arch", "bad entry", "no api", "negative control"] }],
+	},
+	"rev-vm-unpack": {
+		proofExit: "unpack or devirtualize a protected sample to an OEP/dump with recovered imports/strings, and show packed/wrong-OEP controls differ.",
+		requiredSignals: [
+			{ gate: "packer-family", any: ["packer", "vmprotect", "themida", "upx", "virtualized", "unpack"] },
+			{ gate: "unpack-anchor", any: ["oep", "dump", "deobfuscate", "trace"] },
+			{ gate: "recovered-program", any: ["imports", "strings", "payload", "rebuilt"] },
+		],
+		negativeControls: [{ gate: "unpack-control", any: ["packed baseline", "wrong oep", "dump won't run", "negative control"] }],
+	},
+	"crypto-cbc-bitflip": {
+		proofExit: "prove CBC malleability by deriving a byte/block flip, replaying an accepted forged plaintext, and showing wrong-block/padding controls fail.",
+		requiredSignals: [
+			{ gate: "cbc-context", any: ["cbc", "bitflip", "iv", "block"] },
+			{ gate: "flip-derivation", any: ["flip", "xor", "admin=true", "plaintext diff"] },
+			{ gate: "accepted-forgery", any: ["accepted", "forged", "http 200", "valid"] },
+		],
+		negativeControls: [{ gate: "cbc-control", any: ["wrong block", "bad padding", "tampered", "negative control"] }],
+	},
+	"crypto-rsa-attacks": {
+		proofExit: "prove the RSA weakness parameters, recover plaintext or key material, and show wrong-factor/exponent/padding controls fail.",
+		requiredSignals: [
+			{ gate: "rsa-params", any: ["rsa", "modulus", "e=", " n=", "ciphertext"] },
+			{ gate: "attack-path", any: ["wiener", "common modulus", "broadcast", "factor", "small e"] },
+			{ gate: "recovery", any: ["plaintext", "private key", "decrypt", "flag"] },
+		],
+		negativeControls: [{ gate: "rsa-control", any: ["wrong factor", "wrong exponent", "padding fail", "negative control"] }],
+	},
+	"crypto-ecdsa-nonce-reuse": {
+		proofExit: "prove ECDSA nonce reuse from signatures, recover k/private-key material, verify a signature, and show different-r/wrong-curve controls fail.",
+		requiredSignals: [
+			{ gate: "ecdsa-sigs", any: ["ecdsa", "nonce", "r=", "s=", "curve"] },
+			{ gate: "reuse-proof", any: ["same r", "reused nonce", "k recovery"] },
+			{ gate: "key-verification", any: ["private key", "sign", "verify", "valid signature"] },
+		],
+		negativeControls: [{ gate: "ecdsa-control", any: ["different r", "wrong curve", "invalid signature", "negative control"] }],
+	},
+	"agent-rag-poisoning": {
+		proofExit: "prove poisoned retrieval changes the agent decision with source-bound RAG traces, and show clean-corpus/sanitized/doc-removed controls fail.",
+		requiredSignals: [
+			{ gate: "poison-source", any: ["rag", "retrieval", "poison", "document", "embedding"] },
+			{ gate: "retrieval-trace", any: ["retrieved", "source id", "context", "rank"] },
+			{ gate: "decision-effect", any: ["answer changed", "tool-call", "decision", "trace"] },
+		],
+		negativeControls: [{ gate: "rag-control", any: ["clean corpus", "sanitized", "doc removed", "negative control"] }],
+	},
+	"agent-memory-exfil": {
+		proofExit: "prove a memory boundary leak with read/retrieval/tool-call trace evidence and show redaction/permission/tool-disabled controls block it.",
+		requiredSignals: [
+			{ gate: "memory-target", any: ["memory", "exfil", "secret", "conversation", "stored"] },
+			{ gate: "boundary-trace", any: ["tool-call", "trace", "read memory", "retrieval"] },
+			{ gate: "leak-proof", any: ["leaked", "output", "boundary", "transcript"] },
+		],
+		negativeControls: [{ gate: "memory-control", any: ["permission denied", "redacted", "tool disabled", "negative control"] }],
+	},
+	"agent-tool-misuse": {
+		proofExit: "prove an agent can be induced into an unintended tool call or argument boundary crossing with trace evidence, and show policy/tool-disabled/sanitized controls block it.",
+		requiredSignals: [
+			{ gate: "tool-boundary", any: ["tool-call", "function call", "argument", "boundary", "capability"] },
+			{ gate: "misuse-trigger", any: ["misuse", "unexpected", "unsafe", "payload", "untrusted"] },
+			{ gate: "trace-proof", any: ["trace", "decision", "transcript", "called tool"] },
+		],
+		negativeControls: [{ gate: "tool-misuse-control", any: ["policy blocked", "tool disabled", "sanitized", "negative control"] }],
 	},
 	"reliability-replay-matrix": {
 		proofExit: "run the same proof multiple times with pinned environment plus at least one wrong-input/control replay.",
@@ -2023,7 +2429,7 @@ function proofRepairCommand(plan, checklist) {
 		`Use passive/proofExit/negativeControls from this proof kit: ${JSON.stringify(checklist.proofKit)}`,
 		`Start from this command palette where applicable: ${JSON.stringify(checklist.commandPalette)}`,
 		checklist.toolProbeCommand ? `First probe tool availability with: ${checklist.toolProbeCommand}` : undefined,
-		`Pull or apply these route technique hints where applicable: ${JSON.stringify(checklist.techniqueHints)}`,
+		`Pull or apply these route technique hints where applicable: ${JSON.stringify(compactTechniqueHintsForPrompt(checklist.techniqueHints))}`,
 		`Use this agent toolchain when tools are enabled: ${JSON.stringify(checklist.agentToolchain)}`,
 		"Return only JSON claims/evidence/blockers/nextCommands with concrete commands, paths, hashes, diffs/status, and negative controls.",
 	].filter(Boolean).join(" ");
@@ -2037,7 +2443,7 @@ function routeCoverageRepairCommand(plan, route) {
 		`Use this proof kit: ${JSON.stringify(route.proofKit || proofKitFor(route))}`,
 		`Start from this command palette where applicable: ${JSON.stringify(route.commandPalette || commandPaletteFor(route))}`,
 		route.toolProbeCommand ? `First probe tool availability with: ${route.toolProbeCommand}` : undefined,
-		`Pull or apply these route technique hints where applicable: ${JSON.stringify(route.techniqueHints || techniqueHintsFor(route))}`,
+		`Pull or apply these route technique hints where applicable: ${JSON.stringify(compactTechniqueHintsForPrompt(route.techniqueHints || techniqueHintsFor(route)))}`,
 		`Use this agent toolchain when tools are enabled: ${JSON.stringify(route.agentToolchain || agentToolchainFor(route, defaultToolsForProfile(route), "default"))}`,
 		"Produce one promoted-quality claim with passive evidence, proof/replay evidence, and negative control or counter-evidence.",
 	].filter(Boolean).join(" ");
@@ -2055,7 +2461,7 @@ function routeProofRepairCommand(plan, readiness) {
 		`Use this proof kit: ${JSON.stringify(route.proofKit || proofKitFor(route))}`,
 		`Start from this command palette where applicable: ${JSON.stringify(route.commandPalette || commandPaletteFor(route))}`,
 		route.toolProbeCommand ? `First probe tool availability with: ${route.toolProbeCommand}` : undefined,
-		`Pull or apply these route technique hints where applicable: ${JSON.stringify(route.techniqueHints || techniqueHintsFor(route))}`,
+		`Pull or apply these route technique hints where applicable: ${JSON.stringify(compactTechniqueHintsForPrompt(route.techniqueHints || techniqueHintsFor(route)))}`,
 		`Use this agent toolchain when tools are enabled: ${JSON.stringify(route.agentToolchain || agentToolchainFor(route, defaultToolsForProfile(route), "default"))}`,
 		"Produce one promoted-quality claim with passive evidence, proof/replay evidence, and negative control or counter-evidence for this exact route.",
 	].filter(Boolean).join(" ");
@@ -2099,12 +2505,38 @@ function routeHandoffCommand(plan, handoff) {
 		`Use this proof kit: ${JSON.stringify(handoff.route.proofKit || proofKitFor(handoff.route))}`,
 		`Start from this command palette where applicable: ${JSON.stringify(handoff.route.commandPalette || commandPaletteFor(handoff.route))}`,
 		handoff.route.toolProbeCommand ? `First probe tool availability with: ${handoff.route.toolProbeCommand}` : undefined,
-		`Pull or apply these route technique hints where applicable: ${JSON.stringify(handoff.route.techniqueHints || techniqueHintsFor(handoff.route))}`,
+		`Pull or apply these route technique hints where applicable: ${JSON.stringify(compactTechniqueHintsForPrompt(handoff.route.techniqueHints || techniqueHintsFor(handoff.route)))}`,
 		`Use this agent toolchain when tools are enabled: ${JSON.stringify(handoff.route.agentToolchain || agentToolchainFor(handoff.route, defaultToolsForProfile(handoff.route), "default"))}`,
 		handoff.nextCommand ? `Seed next command: ${handoff.nextCommand}.` : undefined,
 		"Produce one promoted-quality claim with passive evidence, proof/replay evidence, and negative control or counter-evidence.",
 	].filter(Boolean).join(" ");
 	return `${swarmRunBaseCommand(plan)} --workers 1 --route ${shellQuote(handoff.route.id)} --roles solo --prompt ${shellQuote(prompt)}`;
+}
+
+function repairQueueRow(row) {
+	if (!row?.command) return undefined;
+	const idSeed = [
+		row.kind ?? "repair",
+		row.claimId,
+		row.workerId,
+		row.routeId,
+		row.handoffId,
+		row.command,
+	]
+		.filter(Boolean)
+		.join("|");
+	return {
+		id: row.id ?? `repair-${sha256(idSeed).slice(0, 16)}`,
+		kind: row.kind ?? "repair",
+		priority: Number.isFinite(Number(row.priority)) ? Number(row.priority) : 50,
+		workerId: row.workerId,
+		claimId: row.claimId,
+		routeId: row.routeId,
+		handoffId: row.handoffId,
+		missing: Array.isArray(row.missing) ? row.missing.map(String).slice(0, 16) : [],
+		reason: row.reason ? redact(String(row.reason)).slice(0, 600) : undefined,
+		command: redact(String(row.command)).slice(0, 6000),
+	};
 }
 
 function normalizeEvidenceItem(worker, row, index, claimId) {
@@ -2570,6 +3002,15 @@ function buildMergeReport(evidenceRoot) {
 	const conflictRows = [];
 	const evidenceItemRows = [];
 	const nextCommands = new Set();
+	const repairQueue = [];
+	const addRepair = (row) => {
+		const repair = repairQueueRow(row);
+		if (!repair) return;
+		nextCommands.add(repair.command);
+		if (!repairQueue.some((existing) => existing.id === repair.id || existing.command === repair.command)) {
+			repairQueue.push(repair);
+		}
+	};
 	for (const worker of workersReport) {
 		const stdoutPath = join(evidenceRoot, `worker-${worker.workerId}.stdout.txt`);
 		const stdout = existsSync(stdoutPath) ? readFileSync(stdoutPath, "utf8") : worker.stdoutTail ?? "";
@@ -2659,9 +3100,27 @@ function buildMergeReport(evidenceRoot) {
 		}
 		for (const conflict of workerConflicts) {
 			conflictRows.push(conflict);
-			if (conflict.nextCommand) nextCommands.add(conflict.nextCommand);
+			if (conflict.nextCommand) {
+				addRepair({
+					kind: "conflict-recheck",
+					priority: 75,
+					workerId: conflict.workerId,
+					claimId: conflict.claimId,
+					routeId: conflict.route?.id,
+					reason: conflict.reason,
+					command: conflict.nextCommand,
+				});
+			}
 		}
-		for (const command of Array.isArray(parsed?.nextCommands) ? parsed.nextCommands : []) nextCommands.add(redact(String(command)));
+		for (const command of Array.isArray(parsed?.nextCommands) ? parsed.nextCommands : []) {
+			addRepair({
+				kind: "worker-suggested",
+				priority: 45,
+				workerId: worker.workerId,
+				routeId: worker.route?.id,
+				command: redact(String(command)),
+			});
+		}
 		for (const blocker of Array.isArray(parsed?.blockers) ? parsed.blockers : []) blockerRows.push({ workerId: worker.workerId, role: worker.role, blocker: redact(String(blocker)) });
 		if (!parsedClaims.length) {
 			observations.push({
@@ -2681,23 +3140,73 @@ function buildMergeReport(evidenceRoot) {
 	}
 	for (const claim of claimRows.filter((row) => row.techniqueProofReady === false)) {
 		const command = techniqueProofRepairCommand(plan, claim);
-		if (command) nextCommands.add(command);
+		if (command) {
+			addRepair({
+				kind: "named-technique-proof",
+				priority: 95,
+				workerId: claim.workerId,
+				claimId: claim.claimId,
+				routeId: claim.route?.id,
+				missing: claim.techniqueProofMissing,
+				reason: "named technique claim lacks contract-specific proofExit evidence or negative controls",
+				command,
+			});
+		}
 	}
 	for (const checklist of proofChecklists) {
 		const command = proofRepairCommand(plan, checklist);
-		if (command) nextCommands.add(command);
+		if (command) {
+			addRepair({
+				kind: "worker-proof-checklist",
+				priority: 85,
+				workerId: checklist.workerId,
+				routeId: checklist.route?.id,
+				missing: checklist.missing,
+				reason: "worker did not satisfy passive/proofExit/negativeControls checklist",
+				command,
+			});
+		}
 	}
 	const routeCoverage = plan?.routeCoverage || (Array.isArray(plan?.routeCandidates) && Array.isArray(plan?.workerPackets)
 		? routeCoverageForPackets(plan.routeCandidates, plan.workerPackets)
 		: undefined);
 	for (const route of Array.isArray(routeCoverage?.uncovered) ? routeCoverage.uncovered : []) {
 		const command = routeCoverageRepairCommand(plan, route);
-		if (command) nextCommands.add(command);
+		if (command) {
+			addRepair({
+				kind: "route-coverage",
+				priority: 80,
+				routeId: route.id,
+				missing: ["assigned worker"],
+				reason: "route candidate was not assigned to any worker",
+				command,
+			});
+		}
 	}
 	for (const handoff of routeHandoffs) {
-		if (handoff.nextCommand) nextCommands.add(handoff.nextCommand);
+		if (handoff.nextCommand) {
+			addRepair({
+				kind: "handoff-seed",
+				priority: 60,
+				workerId: handoff.workerId,
+				routeId: handoff.route?.id,
+				handoffId: handoff.handoffId,
+				reason: handoff.reason,
+				command: handoff.nextCommand,
+			});
+		}
 		const command = routeHandoffCommand(plan, handoff);
-		if (command) nextCommands.add(command);
+		if (command) {
+			addRepair({
+				kind: "route-handoff",
+				priority: 78,
+				workerId: handoff.workerId,
+				routeId: handoff.route?.id,
+				handoffId: handoff.handoffId,
+				reason: handoff.reason,
+				command,
+			});
+		}
 	}
 	const promotedClaims = claimRows.filter((claim) => claim.status === "promoted");
 	const techniqueProofChecks = claimRows.flatMap((claim) =>
@@ -2712,13 +3221,25 @@ function buildMergeReport(evidenceRoot) {
 	const routeReadinessRows = buildRouteReadinessRows(plan, workersReport, proofChecklists, promotedClaims, proofReadyPromotedClaims, routeCoverage);
 	for (const readiness of routeReadinessRows.filter((row) => !row.proofReady && row.assignedWorkerIds.length > 0)) {
 		const command = routeProofRepairCommand(plan, readiness);
-		if (command) nextCommands.add(command);
+		if (command) {
+			addRepair({
+				kind: "route-proof",
+				priority: 90,
+				routeId: readiness.routeId,
+				missing: readiness.missing,
+				reason: "route lacks a proof-ready promoted claim",
+				command,
+			});
+		}
 	}
 	const missingProofRoutes = routeReadinessRows.filter((row) => !row.proofReady).map((row) => row.route);
 	const proofReadyRouteIds = routeReadinessRows.filter((row) => row.proofReady).map((row) => row.routeId);
 	const routeProofReady = routeReadinessRows.length > 0 && missingProofRoutes.length === 0;
 	const routeCoverageReady = routeCoverage?.complete !== false;
 	const allWorkersPassed = workersReport.length > 0 && workersReport.every((worker) => worker.status === "pass");
+	const prioritizedRepairQueue = repairQueue
+		.sort((left, right) => right.priority - left.priority || String(left.id).localeCompare(String(right.id)))
+		.slice(0, 24);
 	const mergeReport = {
 		kind: "repi-swarm-merge-report",
 		schemaVersion: 1,
@@ -2749,6 +3270,7 @@ function buildMergeReport(evidenceRoot) {
 		routeProofReady,
 		routeCoverage,
 		routeCoverageReady,
+		repairQueue: prioritizedRepairQueue,
 		evidencePriorityDoctrine: plan?.evidencePriorityDoctrine ?? evidencePriorityDoctrine,
 		capabilityMatrixDoctrine: plan?.capabilityMatrixDoctrine ?? capabilityMatrixDoctrine,
 		nextCommands: [...nextCommands].slice(0, 24),
