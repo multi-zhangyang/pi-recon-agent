@@ -619,6 +619,105 @@ const routeTechniqueHints = {
 	},
 };
 
+const techniqueProofContracts = {
+	"pwn-ret2libc": {
+		proofExit:
+			"leak a libc symbol, compute the matching libc base, call system('/bin/sh') or an equivalent shell/flag path, and show a wrong-libc/wrong-offset/alignment control.",
+		requiredSignals: [
+			{ gate: "libc-leak", any: ["leak", "leaked", "puts@got", "got leak", "libc symbol", "泄漏"] },
+			{ gate: "libc-base", any: ["libc base", "base =", "computed base", "matching libc", "libc-database"] },
+			{ gate: "code-exec", any: ["system", "/bin/sh", "shell", "cat flag", "id output", "interactive"] },
+		],
+		negativeControls: [
+			{ gate: "ret2libc-control", any: ["wrong libc", "wrong offset", "alignment", "movaps", "negative control", "负控制", "反证"] },
+		],
+	},
+	"pwn-format-string": {
+		proofExit: "prove printf-family format-string control, compute the stack offset, land an arbitrary %n/%hn write, and show a wrong-offset/control-flow negative.",
+		requiredSignals: [
+			{ gate: "format-control", any: ["%p", "%n", "printf", "format string", "格式化字符串"] },
+			{ gate: "offset", any: ["offset", "stack offset", "argument offset", "偏移"] },
+			{ gate: "write", any: ["arbitrary write", "target changed", "%hn", "%hhn", "got overwrite"] },
+		],
+		negativeControls: [{ gate: "fmt-control", any: ["wrong offset", "negative control", "no overwrite", "负控制"] }],
+	},
+	"pwn-tcache-poisoning": {
+		proofExit: "prove UAF/double-free into tcache, recover safe-linking state when needed, return an allocation at the forged target, and verify a wrong fd/heap-base control fails.",
+		requiredSignals: [
+			{ gate: "heap-primitive", any: ["uaf", "double-free", "tcache", "heap"] },
+			{ gate: "target-allocation", any: ["forged fd", "allocation returns", "safe-linking", "heap base", "arbitrary write"] },
+		],
+		negativeControls: [{ gate: "heap-control", any: ["wrong fd", "wrong heap", "wrong key", "negative control", "负控制"] }],
+	},
+	"web-idor-bola": {
+		proofExit: "prove account/principal A can access account/principal B's object with status/body/state diff, and show anonymous/wrong-principal controls fail.",
+		requiredSignals: [
+			{ gate: "two-principal", any: ["account a", "principal a", "user a", "token a", "用户a"] },
+			{ gate: "victim-object", any: ["account b", "principal b", "user b", "victim", "owner", "object ownership", "用户b"] },
+			{ gate: "response-diff", any: ["http 200", "body hash", "status", "before/after", "state diff"] },
+		],
+		negativeControls: [{ gate: "authz-control", any: ["wrong principal", "anonymous", "invalid token", "http 403", "401", "负控制"] }],
+	},
+	"web-jwt-confusion": {
+		proofExit: "forge an accepted JWT using the confusion path, replay a protected endpoint, and show tampered/wrong-key/original-baseline controls.",
+		requiredSignals: [
+			{ gate: "jwks-or-key", any: ["jwks", "public key", "pem", "rs256", "hs256"] },
+			{ gate: "forged-token", any: ["forged token", "alg", "jwt accepted", "bearer"] },
+			{ gate: "protected-replay", any: ["protected endpoint", "http 200", "privileged", "admin"] },
+		],
+		negativeControls: [{ gate: "jwt-control", any: ["tampered token", "wrong key", "invalid token", "http 403", "negative control"] }],
+	},
+	"web-ssrf-metadata": {
+		proofExit: "prove the server fetches cloud metadata via the SSRF sink and verify returned credentials/identity with a denied or wrong-target control.",
+		requiredSignals: [
+			{ gate: "metadata-fetch", any: ["169.254.169.254", "metadata", "imds", "metadata-flavor", "x-aws-ec2"] },
+			{ gate: "credential-or-identity", any: ["sts get-caller-identity", "accesskeyid", "token", "service account", "identity"] },
+		],
+		negativeControls: [{ gate: "ssrf-control", any: ["blocked", "wrong host", "denied", "negative control", "负控制"] }],
+	},
+	"js-signature-rebuild": {
+		proofExit: "capture runtime signer inputs/outputs, rebuild the field byte-for-byte for a frozen sample, replay successfully, and show missing/tampered/stale controls fail.",
+		requiredSignals: [
+			{ gate: "runtime-capture", any: ["hook", "crypto", "signer", "captured", "initiator"] },
+			{ gate: "byte-match", any: ["byte-for-byte", "field diff", "generated field", "matches captured"] },
+			{ gate: "signed-replay", any: ["signed replay", "server acceptance", "http 200", "accepted"] },
+		],
+		negativeControls: [{ gate: "sign-control", any: ["missing signature", "tampered signature", "stale timestamp", "wrong key", "负控制"] }],
+	},
+	"mobile-ssl-pinning-bypass": {
+		proofExit: "show pinned traffic is decrypted through MITM with the hook enabled and fails or remains opaque with the hook disabled/wrong cert.",
+		requiredSignals: [
+			{ gate: "hook", any: ["frida", "certificatepinner", "trustmanager", "ssl_verify", "hook"] },
+			{ gate: "traffic", any: ["mitm", "burp", "mitmproxy", "request", "response"] },
+		],
+		negativeControls: [{ gate: "pin-control", any: ["hook disabled", "wrong cert", "pin", "negative control"] }],
+	},
+	"crypto-padding-oracle": {
+		proofExit: "demonstrate distinguishable padding oracle behavior, decrypt/forge with assertions, and show wrong padding/mode controls fail.",
+		requiredSignals: [
+			{ gate: "oracle", any: ["padding oracle", "padding accepted", "padding rejected", "pkcs"] },
+			{ gate: "decrypt-or-forge", any: ["recovered plaintext", "forged ciphertext", "decrypt", "assert"] },
+		],
+		negativeControls: [{ gate: "oracle-control", any: ["wrong padding", "wrong mode", "tampered", "negative control"] }],
+	},
+	"agent-indirect-injection": {
+		proofExit: "produce a minimal injection replay transcript with tool-call/memory/RAG boundary evidence and benign/sanitized controls.",
+		requiredSignals: [
+			{ gate: "payload", any: ["injection", "payload", "prompt", "untrusted"] },
+			{ gate: "boundary-trace", any: ["tool-call", "memory", "rag", "trace", "decision"] },
+		],
+		negativeControls: [{ gate: "agent-control", any: ["benign", "sanitized", "tool disabled", "negative control"] }],
+	},
+	"reliability-replay-matrix": {
+		proofExit: "run the same proof multiple times with pinned environment plus at least one wrong-input/control replay.",
+		requiredSignals: [
+			{ gate: "n-run", any: ["3/3", "n-run", "multiple runs", "replay matrix", "stable"] },
+			{ gate: "pinned-env", any: ["pinned", "timeout", "env", "sha256", "libc", "version"] },
+		],
+		negativeControls: [{ gate: "replay-control", any: ["wrong input", "wrong token", "wrong offset", "negative control", "负控制"] }],
+	},
+};
+
 const universalTechniqueRules = [
 	"map before exploit: inventory files/routes/imports/configs/assets/logs and tool availability before claiming a primitive",
 	"bind to live path: identify the runtime/request/process path actually exercised now before expanding sideways",
@@ -741,6 +840,37 @@ function routeAgentToolsFor(profile) {
 	return routeAgentToolchains[id] ?? routeAgentToolchains["reverse-pentest-general"];
 }
 
+function techniqueProofContractFor(techniqueId, options = {}) {
+	const id = String(techniqueId ?? "").trim();
+	if (!id) return undefined;
+	const contract = techniqueProofContracts[id];
+	const full = {
+		id,
+		proofExit:
+			contract?.proofExit ??
+			"bind the named technique to its re_techniques proofExit with concrete runtime/artifact evidence and an explicit negative control.",
+		requiredSignals: contract?.requiredSignals ?? [
+			{ gate: "named-technique-proof", any: ["proofExit", "proof exit", "replay", "accepted", "artifact", "hash"] },
+		],
+		negativeControls: contract?.negativeControls ?? [
+			{ gate: "named-technique-control", any: ["negative control", "counter-evidence", "wrong", "tampered", "负控制", "反证"] },
+		],
+		source: contract ? "swarm-local-contract" : "generic-re_techniques-contract",
+	};
+	if (options.full) return full;
+	return {
+		id: full.id,
+		proofExit: full.proofExit,
+		requiredGates: full.requiredSignals.map((row) => row.gate),
+		negativeGates: full.negativeControls.map((row) => row.gate),
+		source: full.source,
+	};
+}
+
+function techniqueProofContractsFor(techniqueIds) {
+	return uniqueList(Array.isArray(techniqueIds) ? techniqueIds : []).map(techniqueProofContractFor).filter(Boolean);
+}
+
 function defaultToolsForProfile(profile) {
 	return uniqueList([...DEFAULT_SWARM_BUILTIN_TOOLS, ...DEFAULT_SWARM_UNIVERSAL_RE_TOOLS, ...routeAgentToolsFor(profile)]).join(",");
 }
@@ -798,6 +928,30 @@ function techniqueHintsFor(profile) {
 		...routeTechniqueHints[id],
 		universalRules: universalTechniqueRules,
 		playbook: routeDeepTechniquePlaybooks[id] ?? routeDeepTechniquePlaybooks["reverse-pentest-general"],
+		proofContracts: techniqueProofContractsFor(routeTechniqueHints[id]?.techniqueIds),
+	};
+}
+
+function compactTechniqueHintsForPrompt(hints) {
+	return {
+		...(hints ?? {}),
+		proofContracts: (hints?.proofContracts ?? []).map((contract) => ({
+			id: contract.id,
+			proofExit: contract.proofExit,
+			requiredGates: contract.requiredGates ?? (contract.requiredSignals ?? []).map((row) => row.gate),
+			negativeGates: contract.negativeGates ?? (contract.negativeControls ?? []).map((row) => row.gate),
+		})),
+	};
+}
+
+function minimalTechniqueHintsForPrompt(hints) {
+	return {
+		domains: hints?.domains ?? [],
+		techniqueIds: hints?.techniqueIds ?? [],
+		proofContracts: (hints?.proofContracts ?? []).map((contract) => ({
+			id: contract.id,
+			proofExit: contract.proofExit,
+		})),
 	};
 }
 
@@ -936,10 +1090,53 @@ function extractArtifactPathCandidates(text) {
 	return [...candidates];
 }
 
+function harvestArtifactSourceTexts(worker) {
+	const parsed = extractJsonObject(worker.stdoutPreview);
+	const sources = [];
+	const push = (value) => {
+		if (value === undefined || value === null) return;
+		if (typeof value === "string") sources.push(value);
+		else if (Array.isArray(value)) value.forEach(push);
+		else if (typeof value === "object") {
+			push(value.artifact);
+			push(value.artifacts);
+			push(value.path);
+			push(value.file);
+			push(value.locator);
+			push(value.evidence);
+			push(value.summary);
+			push(value.command);
+		}
+	};
+	if (parsed && typeof parsed === "object") {
+		push(parsed.artifacts);
+		push(parsed.artifact);
+		push(parsed.evidence);
+		push(parsed.evidenceItems);
+		for (const claim of Array.isArray(parsed.claims) ? parsed.claims : []) {
+			push(claim?.artifacts);
+			push(claim?.artifact);
+			push(claim?.evidence);
+			push(claim?.evidenceItems);
+		}
+		for (const finding of Array.isArray(parsed.findings) ? parsed.findings : []) {
+			if (typeof finding === "object") {
+				push(finding?.artifacts);
+				push(finding?.artifact);
+				push(finding?.evidence);
+				push(finding?.evidenceItems);
+			}
+		}
+		return sources;
+	}
+	return [`${worker.stdoutPreview}\n${worker.stderrPreview}`];
+}
+
 function harvestWorkerArtifacts(worker, evidenceRoot) {
 	const artifactDir = join(evidenceRoot, `worker-${worker.workerId}-artifacts`);
 	const rows = [];
-	for (const sourcePath of extractArtifactPathCandidates(`${worker.stdoutPreview}\n${worker.stderrPreview}`)) {
+	const sourcePaths = uniqueList(harvestArtifactSourceTexts(worker).flatMap(extractArtifactPathCandidates));
+	for (const sourcePath of sourcePaths) {
 		if (rows.length >= MAX_HARVESTED_ARTIFACTS_PER_WORKER) break;
 		try {
 			const stat = statSync(sourcePath);
@@ -969,7 +1166,7 @@ function substitute(template, workerId, target, role = "worker", context = {}) {
 	const route = context.route ?? {};
 	const proofKit = context.proofKit ?? {};
 	const commandPalette = context.commandPalette ?? {};
-	const techniqueHints = context.techniqueHints ?? {};
+	const techniqueHints = minimalTechniqueHintsForPrompt(context.techniqueHints ?? {});
 	const agentToolchain = context.agentToolchain ?? {};
 	return String(template ?? "")
 		.replaceAll("{{id}}", String(workerId))
@@ -1251,7 +1448,7 @@ function promptForWorker(plan, packet, promptTemplate, mode) {
 			packet.toolProbeCommand ? "Route tool probe command:" : undefined,
 			packet.toolProbeCommand,
 			"Route technique hints:",
-			JSON.stringify(packet.techniqueHints ?? techniqueHintsFor(packet.route || { id: "reverse-pentest-general" }), null, 2),
+			JSON.stringify(minimalTechniqueHintsForPrompt(packet.techniqueHints ?? techniqueHintsFor(packet.route || { id: "reverse-pentest-general" })), null, 2),
 			"Agent toolchain (LLM-callable tools; distinct from shell commands):",
 			JSON.stringify(packet.agentToolchain ?? agentToolchainFor(packet.route || { id: "reverse-pentest-general" }, packet.tools, packet.toolsMode), null, 2),
 			"Capability matrix doctrine:",
@@ -1284,7 +1481,7 @@ function promptForWorker(plan, packet, promptTemplate, mode) {
 		packet.toolProbeCommand ? "Route tool probe command (run first when tools are enabled; record missing tools and choose fallbacks instead of hallucinating availability):" : undefined,
 		packet.toolProbeCommand,
 		packet.techniqueHints ? "Route technique hints (pull with re_techniques where available; use these as starting hypotheses, not proof):" : undefined,
-		packet.techniqueHints ? JSON.stringify(packet.techniqueHints, null, 2) : undefined,
+		packet.techniqueHints ? JSON.stringify(compactTechniqueHintsForPrompt(packet.techniqueHints), null, 2) : undefined,
 		packet.agentToolchain ? "Agent toolchain (LLM-callable tools; use these to load playbooks, build harnesses, replay, and verify; if explicit --tools blocks one, record the fallback):" : undefined,
 		packet.agentToolchain ? JSON.stringify(packet.agentToolchain, null, 2) : undefined,
 		`Evidence contract: ${packet.evidenceContract.join("; ")}`,
@@ -1295,7 +1492,18 @@ function promptForWorker(plan, packet, promptTemplate, mode) {
 		JSON.stringify({
 			workerId: packet.id,
 			role: packet.role,
-			claims: [{ id: `${packet.role}-claim-1`, statement: "...", evidence: ["command/output/path"], confidence: 0.0, blockers: [], conflicts: [] }],
+			claims: [
+				{
+					id: `${packet.role}-claim-1`,
+					statement: "...",
+					techniqueId: "optional re_techniques id when asserting a named technique",
+					techniqueProof: { proofExitObserved: "what satisfied the technique proofExit", counterControls: ["wrong-key/wrong-principal/wrong-offset result"] },
+					evidence: ["command/output/path"],
+					confidence: 0.0,
+					blockers: [],
+					conflicts: [],
+				},
+			],
 			evidenceItems: [{ class: "runtime-behavior|network-traffic|served-assets|process-config|persisted-state|artifact|source|comment", locator: "command/path/frame/offset", summary: "what proves it" }],
 			conflicts: [{ claimId: `${packet.role}-claim-1`, evidenceClass: "runtime-behavior", evidence: "counter-evidence anchor", reason: "why this downgrades", nextCommand: "repair command" }],
 			artifacts: ["path or command output anchor"],
@@ -1550,6 +1758,71 @@ const commandSignalPattern = /\b(?:curl|httpie|python3?|node|npm|go test|pytest|
 const artifactPathSignalPattern = /(?:^|[\s"'[(,])(?:\.{0,2}\/|\/)[A-Za-z0-9._~+@%=:,/\-]+|(?:^|[\s"'[(,])[A-Za-z]:\\[A-Za-z0-9._~+@%=:,\\/\-]+/;
 const diffOrStatusSignalPattern = /\b(?:HTTP\s*[1-5][0-9]{2}|status[:= ]?[1-5][0-9]{2}|diff|before\/after|body[_ -]?hash|registers?|rip|rsp|eip|esp|offset|frame|packet|stream|exit(?:ed)?|exit[:= ]?\d+)\b|(?:状态码|响应差异|前后状态|正文哈希|寄存器|偏移|帧|数据包|流编号|退出码)/i;
 const negativeControlSignalPattern = /\b(?:negative control|tampered|missing|unsigned|stale|counter[- ]?evidence|control failed|rejected|forbidden|unauthorized|invalid token|wrong principal|wrong key|wrong offset|401|403|crash vs no-crash)\b|(?:负控制|阴性对照|反证|反例|篡改|错误(?:签名|密钥|key|token|令牌|主体|principal|偏移)|未授权|禁止|拒绝|被拒绝|失败对照|崩溃对照)/i;
+const exactTechniqueIdPattern = /\b(?:pwn|web|webscan|js|mobile|dfir|crypto|mem|malware|rev|fw|cloud|ad|agent|reliability)-[A-Za-z0-9_.-]+\b/g;
+
+function techniqueTextBundle(claim, evidence = [], evidenceItems = []) {
+	return [
+		claim?.statement,
+		claim?.title,
+		claim?.techniqueProof?.proofExitObserved,
+		...(Array.isArray(claim?.techniqueProof?.counterControls) ? claim.techniqueProof.counterControls : []),
+		...(Array.isArray(evidence) ? evidence : []),
+		...(Array.isArray(evidenceItems) ? evidenceItems.map(evidenceTextFromItem) : []),
+	]
+		.filter(Boolean)
+		.map(String)
+		.join("\n");
+}
+
+function extractTechniqueIdsFromClaim(claim, evidence = [], evidenceItems = []) {
+	const ids = [];
+	for (const value of [
+		claim?.techniqueId,
+		claim?.technique,
+		...(Array.isArray(claim?.techniqueIds) ? claim.techniqueIds : []),
+		...(Array.isArray(claim?.techniques) ? claim.techniques : []),
+	]) {
+		if (typeof value === "string" && value.trim()) ids.push(value.trim());
+		else if (value && typeof value === "object" && typeof value.id === "string") ids.push(value.id.trim());
+	}
+	const text = techniqueTextBundle(claim, evidence, evidenceItems);
+	for (const match of text.matchAll(exactTechniqueIdPattern)) ids.push(match[0]);
+	return uniqueList(ids);
+}
+
+function signalGroupMatches(text, group) {
+	const haystack = String(text ?? "").toLowerCase();
+	return (group?.any ?? []).some((needle) => haystack.includes(String(needle).toLowerCase()));
+}
+
+function buildTechniqueProofChecks(claim, evidence = [], evidenceItems = []) {
+	const text = techniqueTextBundle(claim, evidence, evidenceItems);
+	return extractTechniqueIdsFromClaim(claim, evidence, evidenceItems).map((techniqueId) => {
+		const contract = techniqueProofContractFor(techniqueId, { full: true });
+		const required = (contract?.requiredSignals ?? []).map((group) => ({
+			gate: group.gate,
+			matched: signalGroupMatches(text, group),
+			any: group.any,
+		}));
+		const controls = (contract?.negativeControls ?? []).map((group) => ({
+			gate: group.gate,
+			matched: signalGroupMatches(text, group) || negativeControlSignalPattern.test(text),
+			any: group.any,
+		}));
+		const missing = [
+			...required.filter((row) => !row.matched).map((row) => row.gate),
+			...controls.filter((row) => !row.matched).map((row) => row.gate),
+		];
+		return {
+			techniqueId,
+			contract,
+			required,
+			negativeControls: controls,
+			missing,
+			proofReady: missing.length === 0,
+		};
+	});
+}
 
 function evidenceClassRank(evidenceClass) {
 	return evidenceRankByClass.get(String(evidenceClass ?? "unknown")) ?? 0;
@@ -1658,7 +1931,7 @@ function claimProofCoverage(qualitySignals) {
 
 function claimProofReady(claim) {
 	const coverage = claim?.proofCoverage ?? claimProofCoverage(claim?.qualitySignals ?? {});
-	return claim?.status === "promoted" && coverage.passive && coverage.proofExit && coverage.negativeControls;
+	return claim?.status === "promoted" && coverage.passive && coverage.proofExit && coverage.negativeControls && claim?.techniqueProofReady !== false;
 }
 
 function parsedEvidenceBundle(parsed, parsedClaims, stdout, evidenceItems = []) {
@@ -1787,6 +2060,20 @@ function routeProofRepairCommand(plan, readiness) {
 		"Produce one promoted-quality claim with passive evidence, proof/replay evidence, and negative control or counter-evidence for this exact route.",
 	].filter(Boolean).join(" ");
 	return `${swarmRunBaseCommand(plan)} --workers 1 --route ${shellQuote(route.id)} --roles solo --prompt ${shellQuote(prompt)}`;
+}
+
+function techniqueProofRepairCommand(plan, claim) {
+	const failing = (claim?.techniqueProofChecks ?? []).filter((row) => !row.proofReady);
+	if (!claim || !failing.length) return undefined;
+	const route = claim.route?.id ? ` --route ${shellQuote(claim.route.id)}` : "";
+	const prompt = [
+		`Close named-technique proof-exit gap for claim ${claim.claimId}.`,
+		`Claim statement: ${claim.statement || "n/a"}.`,
+		`Technique contracts: ${JSON.stringify(failing.map((row) => row.contract))}`,
+		`Missing gates: ${failing.flatMap((row) => row.missing.map((gate) => `${row.techniqueId}:${gate}`)).join(", ")}.`,
+		"Run or build the smallest replay/harness that satisfies each technique proofExit, include command/path/hash/status/offset evidence, and include the contract-specific negative control.",
+	].join(" ");
+	return `${swarmRunBaseCommand(plan)} --workers 1${route} --roles verifier --prompt ${shellQuote(prompt)}`;
 }
 
 function normalizeRouteHandoff(worker, row, index) {
@@ -2040,6 +2327,9 @@ function verifySwarmClaimProofGates(claimRows, proofReadyPromotedClaims, evidenc
 			coverage,
 			evidenceItemIds: referencedEvidenceItems,
 			evidenceItemsResolved: referencedEvidenceItems.every((id) => evidenceItemIds.has(id)),
+			techniqueIds: source.techniqueIds ?? [],
+			techniqueProofReady: source.techniqueProofReady !== false,
+			techniqueProofMissing: source.techniqueProofMissing ?? [],
 			conflictStatus: source.conflictResolution?.status ?? "unknown",
 			counterEvidenceCount: (conflictByClaimId.get(source.claimId) ?? []).length,
 			verified:
@@ -2048,6 +2338,7 @@ function verifySwarmClaimProofGates(claimRows, proofReadyPromotedClaims, evidenc
 				Boolean(coverage.passive) &&
 				Boolean(coverage.proofExit) &&
 				Boolean(coverage.negativeControls) &&
+				source.techniqueProofReady !== false &&
 				referencedEvidenceItems.every((id) => evidenceItemIds.has(id)) &&
 				source.conflictResolution?.downgraded !== true,
 		};
@@ -2338,6 +2629,9 @@ function buildMergeReport(evidenceRoot) {
 			const evidence = [...directEvidence, ...allClaimEvidenceItems.map((item) => item.evidenceText).filter(Boolean)];
 			const confidence = Number.isFinite(Number(claim.confidence)) ? Number(claim.confidence) : evidence.length > 0 ? 0.6 : 0;
 			const blockers = Array.isArray(claim.blockers) ? claim.blockers.map((item) => redact(String(item))).slice(0, 6) : [];
+			const techniqueProofChecks = buildTechniqueProofChecks(claim, evidence, allClaimEvidenceItems);
+			const techniqueIds = techniqueProofChecks.map((row) => row.techniqueId);
+			const techniqueProofReady = techniqueProofChecks.every((row) => row.proofReady);
 			const qualitySignals = claimQualitySignals(evidence, blockers, allClaimEvidenceItems);
 			const proofCoverage = claimProofCoverage(qualitySignals);
 			const baseStatus = worker.status === "pass" && evidence.length > 0 && confidence >= 0.5 ? "promoted" : "observation";
@@ -2355,6 +2649,10 @@ function buildMergeReport(evidenceRoot) {
 				qualitySignals,
 				proofCoverage,
 				proofReady: false,
+				techniqueIds,
+				techniqueProofChecks,
+				techniqueProofReady,
+				techniqueProofMissing: techniqueProofChecks.flatMap((row) => row.missing.map((gate) => `${row.techniqueId}:${gate}`)),
 				evidenceItemIds: allClaimEvidenceItems.map((item) => item.evidenceItemId).slice(0, 12),
 				conflictResolution: conflictResolutionForClaim({ claimId, qualitySignals }, workerConflicts),
 			});
@@ -2378,8 +2676,12 @@ function buildMergeReport(evidenceRoot) {
 	for (const claim of claimRows) {
 		const conflictResolution = conflictResolutionForClaim(claim, conflictRows);
 		claim.conflictResolution = conflictResolution;
-		claim.status = claim.baseStatus === "promoted" && !conflictResolution.downgraded ? "promoted" : "observation";
+		claim.status = claim.baseStatus === "promoted" && !conflictResolution.downgraded && claim.techniqueProofReady !== false ? "promoted" : "observation";
 		delete claim.baseStatus;
+	}
+	for (const claim of claimRows.filter((row) => row.techniqueProofReady === false)) {
+		const command = techniqueProofRepairCommand(plan, claim);
+		if (command) nextCommands.add(command);
 	}
 	for (const checklist of proofChecklists) {
 		const command = proofRepairCommand(plan, checklist);
@@ -2398,6 +2700,12 @@ function buildMergeReport(evidenceRoot) {
 		if (command) nextCommands.add(command);
 	}
 	const promotedClaims = claimRows.filter((claim) => claim.status === "promoted");
+	const techniqueProofChecks = claimRows.flatMap((claim) =>
+		(claim.techniqueProofChecks ?? []).map((check) => ({ claimId: claim.claimId, workerId: claim.workerId, route: claim.route, ...check })),
+	);
+	const missingTechniqueProofClaims = claimRows
+		.filter((claim) => claim.techniqueProofReady === false)
+		.map((claim) => ({ claimId: claim.claimId, workerId: claim.workerId, route: claim.route, missing: claim.techniqueProofMissing }));
 	const proofReadyWorkerIds = new Set(proofChecklists.filter((row) => row.proofReady).map((row) => row.workerId));
 	for (const claim of claimRows) claim.proofReady = proofReadyWorkerIds.has(claim.workerId) && claimProofReady(claim);
 	const proofReadyPromotedClaims = promotedClaims.filter((claim) => claim.proofReady);
@@ -2429,6 +2737,8 @@ function buildMergeReport(evidenceRoot) {
 		blockerRows,
 		conflictRows,
 		evidenceItemRows,
+		techniqueProofChecks,
+		missingTechniqueProofClaims,
 		proofChecklists,
 		routeHandoffs,
 		proofReadyPromotedClaims,
@@ -2454,8 +2764,182 @@ function buildMergeReport(evidenceRoot) {
 	return mergeReport;
 }
 
+function compactTechniqueHintsForReport(hints) {
+	return {
+		domains: hints?.domains ?? [],
+		techniqueIds: hints?.techniqueIds ?? [],
+		proofContracts: (hints?.proofContracts ?? []).map((contract) => ({
+			id: contract.id,
+			proofExit: contract.proofExit,
+			requiredGates: contract.requiredGates ?? (contract.requiredSignals ?? []).map((row) => row.gate),
+			negativeGates: contract.negativeGates ?? (contract.negativeControls ?? []).map((row) => row.gate),
+			source: contract.source,
+		})),
+	};
+}
+
+function compactAgentToolchainForReport(toolchain) {
+	if (!toolchain) return toolchain;
+	return {
+		AgentToolchainV1: Boolean(toolchain.AgentToolchainV1),
+		toolsMode: toolchain.toolsMode,
+		enabledTools: toolchain.enabledTools ?? [],
+		routeTools: toolchain.routeTools ?? [],
+		requiredBeforePromotion: toolchain.requiredBeforePromotion ?? [],
+		callOrder: toolchain.callOrder ?? [],
+		fallbackPolicy: toolchain.fallbackPolicy,
+	};
+}
+
+function compactRouteRowForReport(route) {
+	if (!route) return route;
+	return {
+		id: route.id,
+		domain: route.domain,
+		workflow: route.workflow ?? [],
+		proofKit: route.proofKit,
+		commandPalette: route.commandPalette,
+		toolProbeCommand: route.toolProbeCommand,
+		techniqueHints: compactTechniqueHintsForReport(route.techniqueHints ?? {}),
+		agentToolchain: compactAgentToolchainForReport(route.agentToolchain),
+	};
+}
+
+function compactWorkerPacketForReport(packet) {
+	if (!packet) return packet;
+	return {
+		workerId: packet.workerId,
+		id: packet.id,
+		role: packet.role,
+		route: packet.route,
+		objective: packet.objective,
+		tools: packet.tools,
+		toolsMode: packet.toolsMode,
+		dependencies: packet.dependencies ?? [],
+		evidenceContract: packet.evidenceContract ?? [],
+		mergeKeys: packet.mergeKeys ?? [],
+		proofKit: packet.proofKit,
+		commandPalette: packet.commandPalette,
+		toolProbeCommand: packet.toolProbeCommand,
+		techniqueHints: compactTechniqueHintsForReport(packet.techniqueHints ?? {}),
+		agentToolchain: compactAgentToolchainForReport(packet.agentToolchain),
+		limits: packet.limits,
+	};
+}
+
+function compactPlanForReport(plan, mode) {
+	if (mode !== "llm-run") return plan;
+	return {
+		kind: plan.kind,
+		schemaVersion: plan.schemaVersion,
+		SwarmPlannerV1: plan.SwarmPlannerV1,
+		generatedAt: plan.generatedAt,
+		runId: plan.runId,
+		root: plan.root,
+		runRoot: plan.runRoot,
+		target: plan.target,
+		route: plan.route,
+		routeCandidates: (plan.routeCandidates ?? []).map(compactRouteRowForReport),
+		routeCoverage: plan.routeCoverage
+			? {
+					routeCount: plan.routeCoverage.routeCount,
+					coveredCount: plan.routeCoverage.coveredCount,
+					uncoveredCount: plan.routeCoverage.uncoveredCount,
+					covered: (plan.routeCoverage.covered ?? []).map((route) => ({ id: route.id, domain: route.domain })),
+					uncovered: (plan.routeCoverage.uncovered ?? []).map((route) => ({ id: route.id, domain: route.domain })),
+					complete: plan.routeCoverage.complete,
+				}
+			: undefined,
+		provider: plan.provider,
+		model: plan.model,
+		workers: plan.workers,
+		autoExpandedWorkers: plan.autoExpandedWorkers,
+		maxConcurrency: plan.maxConcurrency,
+		timeoutMs: plan.timeoutMs,
+		toolsMode: plan.toolsMode,
+		toolsDisabled: plan.toolsDisabled,
+		workerPackets: (plan.workerPackets ?? []).map(compactWorkerPacketForReport),
+		operatorGuidance: plan.operatorGuidance,
+	};
+}
+
+function compactWorkerReportForReport(worker, mode) {
+	const row = {
+		workerId: worker.workerId,
+		role: worker.role,
+		status: worker.status,
+		exit: worker.exit,
+		signal: worker.signal,
+		timedOut: worker.timedOut,
+		ms: worker.ms,
+		provider: worker.provider,
+		model: worker.model,
+		route: worker.route,
+		toolsMode: worker.toolsMode,
+		proofKit: worker.proofKit,
+		commandPalette: worker.commandPalette,
+		toolProbeCommand: worker.toolProbeCommand,
+		techniqueHints: mode === "llm-run" ? compactTechniqueHintsForReport(worker.techniqueHints ?? {}) : worker.techniqueHints,
+		agentToolchain: mode === "llm-run" ? compactAgentToolchainForReport(worker.agentToolchain) : worker.agentToolchain,
+		stdoutSha256: worker.stdoutSha256,
+		stderrSha256: worker.stderrSha256,
+		promptSha256: worker.promptSha256,
+		expect: worker.expect,
+		expectOk: worker.expectOk,
+		stdoutTail: worker.stdoutPreview.slice(-1200),
+		stderrTail: worker.stderrPreview.slice(-800),
+		harvestedArtifacts: worker.harvestedArtifacts ?? [],
+	};
+	return row;
+}
+
+function compactMergeForOutput(merge, mode) {
+	if (mode !== "llm-run" || !merge) return merge;
+	return {
+		kind: merge.kind,
+		schemaVersion: merge.schemaVersion,
+		StructuredSubagentMergeV1: merge.StructuredSubagentMergeV1,
+		generatedAt: merge.generatedAt,
+		runId: merge.runId,
+		evidenceRoot: merge.evidenceRoot,
+		workerCount: merge.workerCount,
+		passedWorkers: merge.passedWorkers,
+		failedWorkers: merge.failedWorkers ?? [],
+		promotedClaimCount: merge.promotedClaims?.length ?? 0,
+		observationCount: merge.observations?.length ?? 0,
+		blockerCount: merge.blockerRows?.length ?? 0,
+		proofPromotionReady: merge.proofPromotionReady,
+		routeProofReady: merge.routeProofReady,
+		routeCoverageReady: merge.routeCoverageReady,
+		routeCoverage: merge.routeCoverage
+			? {
+					routeCount: merge.routeCoverage.routeCount,
+					coveredCount: merge.routeCoverage.coveredCount,
+					uncoveredCount: merge.routeCoverage.uncoveredCount,
+					covered: (merge.routeCoverage.covered ?? []).map((route) => ({ id: route.id, domain: route.domain })),
+					uncovered: (merge.routeCoverage.uncovered ?? []).map((route) => ({ id: route.id, domain: route.domain })),
+					complete: merge.routeCoverage.complete,
+				}
+			: undefined,
+		missingProofRoutes: (merge.missingProofRoutes ?? []).map((route) => ({ id: route.id ?? route.routeId, domain: route.domain })),
+		mergeVerification: merge.mergeVerification
+			? {
+					proofReady: merge.mergeVerification.proofReady,
+					finalPromotionReady: merge.mergeVerification.finalPromotionReady,
+					stats: merge.mergeVerification.stats,
+					blockers: merge.mergeVerification.promotionReport?.blockers ?? [],
+				}
+			: undefined,
+		ok: merge.ok,
+		finalPromotionReady: merge.finalPromotionReady,
+		narrativeOnlyBlocked: merge.narrativeOnlyBlocked,
+		mergeDigest: merge.mergeDigest,
+	};
+}
+
 function buildRunReport({ plan, rows, tempRoot, mode }) {
 	const evidenceRoot = evidenceRootFor(plan.runId);
+	const reportPlan = compactPlanForReport(plan, mode);
 	const report = {
 		kind: mode === "llm-run" ? "repi-llm-worker-pool-report" : "repi-swarm-run-report",
 		schemaVersion: 1,
@@ -2477,33 +2961,8 @@ function buildRunReport({ plan, rows, tempRoot, mode }) {
 		tempRoot,
 		planPath: join(evidenceRoot, "plan.json"),
 		promptTemplateSha256: mode === "llm-run" ? sha256(plan.operatorGuidance) : undefined,
-		plan,
-		workersReport: rows.map((worker) => ({
-			workerId: worker.workerId,
-			role: worker.role,
-			status: worker.status,
-			exit: worker.exit,
-			signal: worker.signal,
-			timedOut: worker.timedOut,
-			ms: worker.ms,
-			provider: worker.provider,
-			model: worker.model,
-			route: worker.route,
-			toolsMode: worker.toolsMode,
-			proofKit: worker.proofKit,
-			commandPalette: worker.commandPalette,
-			toolProbeCommand: worker.toolProbeCommand,
-			techniqueHints: worker.techniqueHints,
-			agentToolchain: worker.agentToolchain,
-			stdoutSha256: worker.stdoutSha256,
-			stderrSha256: worker.stderrSha256,
-			promptSha256: worker.promptSha256,
-			expect: worker.expect,
-			expectOk: worker.expectOk,
-			stdoutTail: worker.stdoutPreview.slice(-1200),
-			stderrTail: worker.stderrPreview.slice(-800),
-			harvestedArtifacts: worker.harvestedArtifacts ?? [],
-		})),
+		plan: reportPlan,
+		workersReport: rows.map((worker) => compactWorkerReportForReport(worker, mode)),
 		mergeDigest: sha256(rows.map((worker) => `${worker.workerId}:${worker.role}:${worker.status}:${worker.stdoutSha256}`).join("\n")),
 		ok: rows.every((worker) => worker.status === "pass"),
 	};
@@ -2724,6 +3183,6 @@ if (mode === "run" && (!merge.finalPromotionReady || rows.some((worker) => worke
 					: "no promoted evidence-bearing claims after structured merge";
 	atomicWriteFile(join(evidenceRoot, "report.json"), `${JSON.stringify(report, null, 2)}\n`, 0o600);
 }
-if (json) await writeStdout(`${JSON.stringify({ ...report, merge }, null, 2)}\n`);
+if (json) await writeStdout(`${JSON.stringify({ ...report, merge: compactMergeForOutput(merge, mode) }, null, 2)}\n`);
 else printRun(report, merge);
 process.exitCode = report.ok ? 0 : 1;

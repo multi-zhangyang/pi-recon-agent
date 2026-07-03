@@ -113,6 +113,7 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 						techniqueIds: string[];
 						universalRules: string[];
 						playbook: string[];
+						proofContracts: Array<{ id: string; proofExit: string }>;
 					};
 					agentToolchain: {
 						AgentToolchainV1: boolean;
@@ -128,7 +129,13 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 				proofKit: { proofExit: string[] };
 				commandPalette: { passive: string[]; proof: string[]; negative: string[] };
 				toolProbeCommand: string;
-				techniqueHints: { domains: string[]; techniqueIds: string[]; universalRules: string[]; playbook: string[] };
+				techniqueHints: {
+					domains: string[];
+					techniqueIds: string[];
+					universalRules: string[];
+					playbook: string[];
+					proofContracts: Array<{ id: string; proofExit: string }>;
+				};
 				agentToolchain: {
 					AgentToolchainV1: boolean;
 					toolsMode: string;
@@ -154,6 +161,7 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 						techniqueIds: string[];
 						universalRules: string[];
 						playbook: string[];
+						proofContracts: Array<{ id: string; proofExit: string }>;
 					};
 					agentToolchain: {
 						AgentToolchainV1: boolean;
@@ -193,6 +201,9 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		expect(report.plan.workerPackets[0].techniqueHints.techniqueIds).toContain("reliability-replay-matrix");
 		expect(report.plan.workerPackets[0].techniqueHints.universalRules.join("\n")).toContain("map before exploit");
 		expect(report.plan.workerPackets[0].techniqueHints.playbook.join("\n")).toContain("One-proof loop");
+		expect(report.plan.workerPackets[0].techniqueHints.proofContracts.map((row) => row.id)).toContain(
+			"reliability-replay-matrix",
+		);
 		expect(report.plan.workerPackets[0].agentToolchain.AgentToolchainV1).toBe(true);
 		expect(report.plan.workerPackets[0].agentToolchain.toolsMode).toBe("default");
 		expect(report.plan.workerPackets[0].agentToolchain.enabledTools).toEqual(
@@ -204,6 +215,7 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		expect(report.workersReport[0].commandPalette.proof.length).toBeGreaterThan(0);
 		expect(report.workersReport[0].toolProbeCommand).toContain("tool:");
 		expect(report.workersReport[0].techniqueHints.techniqueIds).toContain("reliability-replay-matrix");
+		expect(report.workersReport[0].techniqueHints.proofContracts[0].proofExit).toContain("proof");
 		expect(report.workersReport[0].agentToolchain.enabledTools).toContain("re_techniques");
 		expect(report.merge.promotedClaims.length).toBe(1);
 		expect(report.merge.proofReadyPromotedClaims.length).toBe(1);
@@ -216,6 +228,7 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		expect(report.merge.proofChecklists[0].toolProbeCommand).toContain("command -v");
 		expect(report.merge.proofChecklists[0].techniqueHints.domains).toContain("exploit-reliability");
 		expect(report.merge.proofChecklists[0].techniqueHints.playbook.join("\n")).toContain("Merge discipline");
+		expect(report.merge.proofChecklists[0].techniqueHints.proofContracts.length).toBeGreaterThan(0);
 		expect(report.merge.proofChecklists[0].agentToolchain.enabledTools).toContain("re_verifier");
 		expect(report.merge.proofChecklists[0].coverage).toMatchObject({
 			passive: true,
@@ -752,6 +765,155 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		expect(report.merge.proofPromotionReady).toBe(false);
 		expect(report.merge.finalPromotionReady).toBe(false);
 		expect(report.mergeFailureReason).toContain("route proof incomplete");
+	});
+
+	it("downgrades named technique claims until the technique proof-exit contract is satisfied", () => {
+		const fakeRepiPath = join(fakeRoot, "repi");
+		writeFileSync(
+			fakeRepiPath,
+			`#!/usr/bin/env node\nconsole.log(JSON.stringify({workerId:"worker-1",role:"verifier",claims:[{id:"ret2libc-weak",techniqueId:"pwn-ret2libc",statement:"pwn-ret2libc works",evidence:["python3 exploit.py exited 0 HTTP 200 body hash sha256:${"45".repeat(32)}","negative control: wrong offset exits 1"],confidence:0.9,blockers:[]}],blockers:[],nextCommands:["python3 exploit.py"]}, null, 2));\n`,
+		);
+		chmodSync(fakeRepiPath, 0o755);
+
+		const result = spawnSync(
+			process.execPath,
+			[
+				SWARM,
+				fakeRoot,
+				"run",
+				"./ret2libc-target",
+				"--route",
+				"native-pwn",
+				"--workers",
+				"1",
+				"--max-concurrency",
+				"1",
+				"--cwd",
+				workspace,
+				"--timeout-ms",
+				"5000",
+				"--json",
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(1);
+		const report = JSON.parse(result.stdout) as {
+			mergeFailureReason: string;
+			merge: {
+				finalPromotionReady: boolean;
+				promotedClaims: unknown[];
+				proofReadyPromotedClaims: unknown[];
+				techniqueProofChecks: Array<{
+					claimId: string;
+					techniqueId: string;
+					proofReady: boolean;
+					missing: string[];
+				}>;
+				missingTechniqueProofClaims: Array<{ claimId: string; missing: string[] }>;
+				claimRows: Array<{
+					claimId: string;
+					status: string;
+					techniqueIds: string[];
+					techniqueProofReady: boolean;
+					techniqueProofMissing: string[];
+				}>;
+				nextCommands: string[];
+			};
+		};
+		expect(report.merge.finalPromotionReady).toBe(false);
+		expect(report.merge.promotedClaims).toEqual([]);
+		expect(report.merge.proofReadyPromotedClaims).toEqual([]);
+		expect(report.merge.claimRows[0]).toMatchObject({
+			claimId: "ret2libc-weak",
+			status: "observation",
+			techniqueIds: ["pwn-ret2libc"],
+			techniqueProofReady: false,
+		});
+		expect(report.merge.claimRows[0].techniqueProofMissing).toEqual(
+			expect.arrayContaining(["pwn-ret2libc:libc-leak", "pwn-ret2libc:libc-base", "pwn-ret2libc:code-exec"]),
+		);
+		expect(report.merge.techniqueProofChecks[0]).toMatchObject({
+			claimId: "ret2libc-weak",
+			techniqueId: "pwn-ret2libc",
+			proofReady: false,
+		});
+		expect(report.merge.missingTechniqueProofClaims[0].claimId).toBe("ret2libc-weak");
+		const repairCommand = report.merge.nextCommands.find((command) =>
+			command.includes("Close named-technique proof-exit gap for claim ret2libc-weak"),
+		);
+		expect(repairCommand).toContain("--route 'native-pwn'");
+		expect(repairCommand).toContain("pwn-ret2libc");
+		expect(repairCommand).toContain("libc-leak");
+		expect(report.mergeFailureReason).toContain("route proof incomplete");
+	});
+
+	it("promotes named technique claims when evidence satisfies proof-exit and controls", () => {
+		const fakeRepiPath = join(fakeRoot, "repi");
+		writeFileSync(
+			fakeRepiPath,
+			`#!/usr/bin/env node\nconsole.log(JSON.stringify({workerId:"worker-1",role:"verifier",claims:[{id:"ret2libc-proof",techniqueId:"pwn-ret2libc",statement:"pwn-ret2libc proof is complete",evidence:["gdb leak proof: puts@got leak 0x7f00 and computed libc base = 0x7e000 for matching libc sha256:${"56".repeat(32)}","python3 exploit.py exited 0 and system('/bin/sh') interactive shell printed id output","negative control: wrong libc build exits SIGSEGV and wrong offset exits 1"],confidence:0.9,blockers:[]}],blockers:[],nextCommands:["python3 exploit.py"]}, null, 2));\n`,
+		);
+		chmodSync(fakeRepiPath, 0o755);
+
+		const result = spawnSync(
+			process.execPath,
+			[
+				SWARM,
+				fakeRoot,
+				"run",
+				"./ret2libc-target",
+				"--route",
+				"native-pwn",
+				"--workers",
+				"1",
+				"--max-concurrency",
+				"1",
+				"--cwd",
+				workspace,
+				"--timeout-ms",
+				"5000",
+				"--json",
+			],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			},
+		);
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			merge: {
+				finalPromotionReady: boolean;
+				proofReadyPromotedClaims: Array<{ claimId: string; techniqueProofReady: boolean }>;
+				techniqueProofChecks: Array<{ techniqueId: string; proofReady: boolean; missing: string[] }>;
+				claimRows: Array<{ claimId: string; status: string; techniqueProofReady: boolean }>;
+			};
+		};
+		expect(report.merge.finalPromotionReady).toBe(true);
+		expect(report.merge.claimRows[0]).toMatchObject({
+			claimId: "ret2libc-proof",
+			status: "promoted",
+			techniqueProofReady: true,
+		});
+		expect(report.merge.proofReadyPromotedClaims[0]).toMatchObject({
+			claimId: "ret2libc-proof",
+			techniqueProofReady: true,
+		});
+		expect(report.merge.techniqueProofChecks[0]).toMatchObject({
+			techniqueId: "pwn-ret2libc",
+			proofReady: true,
+			missing: [],
+		});
 	});
 
 	it("applies cross-worker conflicts globally before promotion", () => {
