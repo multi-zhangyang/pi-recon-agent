@@ -69,6 +69,7 @@ const requiredFiles = [
 	"packages/coding-agent/src/core/repi/memory-vector.ts",
 	"packages/coding-agent/src/core/repi/profile.ts",
 	"packages/coding-agent/src/core/repi/proof-loop.ts",
+	"packages/coding-agent/src/core/repi/resources.ts",
 	"packages/coding-agent/src/core/repi/routes.ts",
 	"packages/coding-agent/src/core/repi/mission.ts",
 	"packages/coding-agent/src/core/repi/memory-scope.ts",
@@ -195,6 +196,23 @@ rows.push(
 		]),
 		"source=builtin:repi tool/command names externalized",
 		"Add REPI profile constants in core/repi/profile.ts instead of growing recon-profile.ts.",
+	),
+);
+rows.push(
+	check(
+		"profile:resource-loader-split-contract",
+		includesAll(read("packages/coding-agent/src/core/repi/resources.ts"), [
+			"RECON_SYSTEM_PROMPT",
+			"RECON_APPEND_SYSTEM_PROMPT",
+			"RECON_SKILL_CONTENT",
+			"RECON_PROMPTS",
+			"ensureReconStorage",
+			"createReconResourceLoaderOptions",
+			"suppressLegacyReconConflicts",
+			"isExternalGoalModeExtension",
+		]),
+		"REPI prompt/skill/resource-loader and legacy extension suppression live outside recon-profile.ts",
+		"Keep prompt/resource-loader contracts in core/repi/resources.ts so recon-profile.ts remains an assembly layer.",
 	),
 );
 
@@ -1071,6 +1089,7 @@ rows.push(
 			"./repi/jsonl.ts",
 			"./repi/knowledge-scope.ts",
 			"./repi/profile.ts",
+			"./repi/resources.ts",
 			"./repi/routes.ts",
 			"./repi/mission.ts",
 			"./repi/memory-active.ts",
@@ -1107,6 +1126,7 @@ rows.push(
 );
 
 const goalMode = read("packages/coding-agent/src/core/repi/goal.ts");
+const resourceSource = read("packages/coding-agent/src/core/repi/resources.ts");
 const extensionLoader = read("packages/coding-agent/src/core/extensions/loader.ts");
 rows.push(
 	check(
@@ -1119,7 +1139,8 @@ rows.push(
 			"formatGoalFooterStatus",
 			"repi-goal-continuation",
 		]) &&
-			includesAll(reconProfile, ["./repi/goal.ts", "installRepiGoalMode(pi)", "isExternalGoalModeExtension"]),
+			includesAll(reconProfile, ["./repi/goal.ts", "installRepiGoalMode(pi)", "./repi/resources.ts"]) &&
+			includesAll(resourceSource, ["createReconResourceLoaderOptions", "isExternalGoalModeExtension"]),
 		"/goal command, goal_complete tool, footer status, continuation, and legacy conflict suppression are built in",
 		"Keep REPI goal mode built into the inline profile and suppress external @narumitw/pi-goal conflicts.",
 	),
@@ -1256,6 +1277,7 @@ const scanFiles = [
 	"packages/coding-agent/src/core/repi/jsonl.ts",
 	"packages/coding-agent/src/core/repi/knowledge-scope.ts",
 	"packages/coding-agent/src/core/repi/profile.ts",
+	"packages/coding-agent/src/core/repi/resources.ts",
 	"packages/coding-agent/src/core/repi/routes.ts",
 	"packages/coding-agent/src/core/repi/mission.ts",
 	"packages/coding-agent/src/core/repi/memory-active.ts",

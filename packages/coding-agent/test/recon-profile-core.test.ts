@@ -6,8 +6,8 @@ import {
 	createReconResourceLoaderOptions,
 	RECON_APPEND_SYSTEM_PROMPT,
 	RECON_SYSTEM_PROMPT,
-	routeReconTask,
-} from "../src/core/recon-profile.ts";
+} from "../src/core/repi/resources.ts";
+import { routeRepiTask as routeReconTask } from "../src/core/repi/routes.ts";
 
 const ENV_AGENT_DIR = "REPI_CODING_AGENT_DIR";
 const ENV_BRANCH_ID = "REPI_BRANCH_ID";

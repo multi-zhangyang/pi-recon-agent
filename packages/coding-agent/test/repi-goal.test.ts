@@ -255,6 +255,33 @@ describe("REPI built-in goal mode", () => {
 		expect(harness.notifications.map((item) => item.message).join("\n")).toContain("Goal: rpc objective");
 	});
 
+	it("stops auto-continuation at the token budget and keeps resume bounded", async () => {
+		const harness = createHarness();
+		await harness.commands.get("goal").handler("--tokens 1k budget objective", harness.ctx);
+		harness.entries.push({
+			type: "message",
+			message: { role: "assistant", usage: { input: 800, output: 400 } },
+		});
+
+		await harness.handlers.get("agent_end")![0](
+			{ type: "agent_end", messages: [{ role: "assistant", stopReason: "stop" }] },
+			harness.ctx,
+		);
+
+		expect(harness.sent).toHaveLength(1);
+		expect(harness.statuses.get("goal")).toBe("🎯 budget 1.2k/1k");
+		expect(harness.notifications.at(-1)).toMatchObject({
+			message: "Goal token budget reached: 1.2k/1k",
+			level: "warning",
+		});
+
+		await harness.commands.get("goal").handler("resume", harness.ctx);
+
+		expect(harness.sent).toHaveLength(1);
+		expect(harness.statuses.get("goal")).toBe("🎯 budget 1.2k/1k");
+		expect(harness.notifications.at(-1)?.message).toBe("Goal token budget is still reached: 1.2k/1k");
+	});
+
 	it("shows /goal help with current status without starting a turn", async () => {
 		const harness = createHarness();
 

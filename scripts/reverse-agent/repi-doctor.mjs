@@ -361,6 +361,10 @@ const reconProfileSource = readFirstExistingText([
 	"packages/coding-agent/src/core/recon-profile.ts",
 	"dist/core/recon-profile.js",
 ]);
+const resourceSource = readFirstExistingText([
+	"packages/coding-agent/src/core/repi/resources.ts",
+	"dist/core/repi/resources.js",
+]);
 const modelRegistrySource = readFirstExistingText([
 	"packages/coding-agent/src/core/model-registry.ts",
 	"dist/core/model-registry.js",
@@ -395,9 +399,9 @@ const goalFooterStatusOk =
 	goalSource.includes('"🎯 complete"') &&
 	goalSource.includes("The footer shows");
 const goalConflictSuppressionOk =
-	reconProfileSource.includes("hasGoalModeSignature") &&
-	reconProfileSource.includes("isExternalGoalModeExtension") &&
-	reconProfileSource.includes("suppressLegacyReconConflicts");
+	resourceSource.includes("hasGoalModeSignature") &&
+	resourceSource.includes("isExternalGoalModeExtension") &&
+	resourceSource.includes("suppressLegacyReconConflicts");
 const envModelSource = [launcherSource, bootstrapSource, argsSource].join("\n");
 const envModelGuardOk =
 	launcherSource.includes("validate_repi_env_model_config") ||
@@ -507,7 +511,7 @@ const checks = [
 	check(
 		"goal:extension-conflict-suppression",
 		goalConflictSuppressionOk,
-		`hasGoalSignature=${reconProfileSource.includes("hasGoalModeSignature")} externalGoalSuppression=${reconProfileSource.includes("isExternalGoalModeExtension")}`,
+		`hasGoalSignature=${resourceSource.includes("hasGoalModeSignature")} externalGoalSuppression=${resourceSource.includes("isExternalGoalModeExtension")}`,
 		"suppress external @narumitw/pi-goal when built-in REPI goal mode is active",
 	),
 	check(
