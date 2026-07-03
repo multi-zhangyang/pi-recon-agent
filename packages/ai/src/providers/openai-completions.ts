@@ -173,6 +173,8 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			let textBlock: TextContent | null = null;
 			let thinkingBlock: ThinkingContent | null = null;
 			let hasFinishReason = false;
+			let sawExplicitNullFinishReason = false;
+			let sawEmptyNullFinishReasonChunk = false;
 			const toolCallBlocksByIndex = new Map<number, StreamingToolCallBlock>();
 			const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
 			// opt #211: reasoning.encrypted details carry the id of the tool call
@@ -314,6 +316,11 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 						output.errorMessage = finishReasonResult.errorMessage;
 					}
 					hasFinishReason = true;
+				} else if ("finish_reason" in choice && choice.finish_reason === null) {
+					sawExplicitNullFinishReason = true;
+					if (choice.delta && Object.keys(choice.delta).length === 0) {
+						sawEmptyNullFinishReasonChunk = true;
+					}
 				}
 
 				if (choice.delta) {
@@ -431,12 +438,15 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 				throw new Error(output.errorMessage || "Provider returned an error stop reason");
 			}
 			if (!hasFinishReason) {
-				// opt #187: a clean stream end without finish_reason is not
-				// necessarily an error — the SDK guarantees finish_reason on
-				// normal completion, but a missing one shouldn't discard
-				// streamed content. output.stopReason defaults to "stop"
-				// (init at :135), so fall through to the done event instead of
-				// throwing. Mirrors openai-responses-shared.ts graceful default.
+				if (sawExplicitNullFinishReason && !sawEmptyNullFinishReasonChunk) {
+					throw new Error("Stream ended without finish_reason");
+				}
+				// opt #187: a clean stream end where the provider omits the
+				// finish_reason field entirely (or sends an empty terminal delta
+				// with finish_reason:null) is not necessarily an error — keep
+				// streamed content. But if every explicit null finish_reason chunk
+				// carried content/tool deltas and no empty terminal marker arrived,
+				// treat it as truncated instead of silently accepting a partial answer.
 				output.stopReason = "stop";
 			}
 

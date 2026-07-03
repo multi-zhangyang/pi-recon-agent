@@ -829,6 +829,31 @@ describe("Coding Agent Tools", () => {
 			);
 		});
 
+		it("rejects invalid local bash timeout values before spawning", async () => {
+			const ops = createLocalBashOperations();
+
+			await expect(
+				ops.exec("echo should-not-run", testDir, {
+					onData: () => {},
+					timeout: 0,
+				}),
+			).rejects.toThrow("Invalid timeout");
+
+			await expect(
+				ops.exec("echo should-not-run", testDir, {
+					onData: () => {},
+					timeout: Number.POSITIVE_INFINITY,
+				}),
+			).rejects.toThrow("Invalid timeout");
+
+			await expect(
+				ops.exec("echo should-not-run", testDir, {
+					onData: () => {},
+					timeout: 3_000_000,
+				}),
+			).rejects.toThrow("maximum");
+		});
+
 		it("should include full output path for truncated timeout and abort errors", async () => {
 			for (const testCase of [
 				{ error: "timeout:5", expected: "Command timed out after 5 seconds" },

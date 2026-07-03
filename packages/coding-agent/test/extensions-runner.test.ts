@@ -293,6 +293,37 @@ describe("ExtensionRunner", () => {
 		});
 	});
 
+	describe("context hooks", () => {
+		it("aborts stuck context handlers when the active run signal aborts", async () => {
+			const extCode = `
+				export default function(pi) {
+					pi.on("context", async () => {
+						await new Promise(() => {});
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "stuck-context.ts"), extCode);
+
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			expect(result.errors).toEqual([]);
+
+			const controller = new AbortController();
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			runner.bindCore(extensionActions, {
+				...extensionContextActions,
+				getSignal: () => controller.signal,
+			});
+
+			const pending = runner.emitContext([]);
+			const abortTimer = setTimeout(() => controller.abort(), 10);
+			try {
+				await expect(pending).rejects.toThrow("Agent run aborted");
+			} finally {
+				clearTimeout(abortTimer);
+			}
+		});
+	});
+
 	describe("tool collection", () => {
 		it("collects tools from multiple extensions", async () => {
 			const toolCode = (name: string) => `

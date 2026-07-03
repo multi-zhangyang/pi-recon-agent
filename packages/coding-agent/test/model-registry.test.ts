@@ -108,6 +108,8 @@ describe("ModelRegistry", () => {
 			"REPI_PROVIDER_ID",
 			"REPI_CONTEXT_WINDOW",
 			"REPI_MODEL_CONTEXT_WINDOW",
+			"REPI_AUTO_COMPACT_WINDOW",
+			"REPI_MODEL_AUTO_COMPACT_WINDOW",
 			"REPI_MAX_TOKENS",
 			"REPI_MODEL_MAX_TOKENS",
 			"REPI_MAX_OUTPUT_TOKENS",
@@ -116,6 +118,11 @@ describe("ModelRegistry", () => {
 			"REPI_MODEL_REASONING",
 			"REPI_REASONING",
 			"REPI_SUBAGENT_MODEL",
+			"REPI_LOAD_BUILTIN_MODELS",
+			"REPI_ENABLE_BUILTIN_MODELS",
+			"REPI_BUILTIN_PROVIDERS",
+			"OPENAI_API_KEY",
+			"ANTHROPIC_API_KEY",
 		];
 		const originals = new Map(names.map((name) => [name, process.env[name]]));
 		for (const name of names) delete process.env[name];
@@ -178,6 +185,40 @@ describe("ModelRegistry", () => {
 				() => {
 					const registry = ModelRegistry.create(authStorage, modelsJsonPath);
 					expect(registry.find("repi-env", `env-model-${alias}`)?.api).toBe(api);
+				},
+			);
+		});
+
+		test("accepts REPI_AUTO_COMPACT_WINDOW as a Claude Code-style context-window alias", async () => {
+			await withRepiModelEnv(
+				{
+					REPI_AUTH_TOKEN: "env-runtime-key",
+					REPI_BASE_URL: "https://gateway.example.invalid/v1",
+					REPI_MODEL: "env-auto-window-model",
+					REPI_AUTO_COMPACT_WINDOW: "524288",
+				},
+				() => {
+					const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+					expect(registry.find("repi-env", "env-auto-window-model")?.contextWindow).toBe(524288);
+				},
+			);
+		});
+
+		test("can disable the upstream built-in catalog while keeping the REPI env-only provider", async () => {
+			await withRepiModelEnv(
+				{
+					REPI_LOAD_BUILTIN_MODELS: "0",
+					OPENAI_API_KEY: "ambient-openai-key-should-not-enable-builtins",
+					REPI_AUTH_TOKEN: "env-runtime-key",
+					REPI_BASE_URL: "https://gateway.example.invalid/v1",
+					REPI_MODEL: "env-only-model",
+					REPI_MODEL_API: "openai-compatible",
+				},
+				() => {
+					const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+					expect(getModelsForProvider(registry, "openai")).toHaveLength(0);
+					expect(registry.find("repi-env", "env-only-model")).toBeDefined();
+					expect(registry.getAvailable().map((model) => model.provider)).toEqual(["repi-env"]);
 				},
 			);
 		});

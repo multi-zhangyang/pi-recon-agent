@@ -1377,7 +1377,7 @@ Plan/run options:
   --target <text>          Target/task label if no positional target is supplied
   --workers <N>            Number of parallel LLM workers (default: 3; broad multi-route tasks auto-expand up to 16)
   --max-concurrency <N>    Max simultaneous child processes (default: workers)
-  --provider <id>          Provider id from ~/.repi/agent/models.json or built-ins
+  --provider <id>          Provider id from REPI_* env (default: repi-env) or ~/.repi/agent/models.json
   --model <id>             Model id
   --route <id[,id...]|all> Force one or more route ids, or the full route catalog, instead of keyword routing
   --roles <csv>            Role order. Defaults to solo for one worker, else mapper,reverser,exploiter,verifier,adversary

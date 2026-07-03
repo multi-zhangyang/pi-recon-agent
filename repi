@@ -41,6 +41,7 @@ export REPI_PRINT_MAX_TURNS="${REPI_PRINT_MAX_TURNS:-24}"
 export REPI_PRINT_MAX_TOOL_CALLS="${REPI_PRINT_MAX_TOOL_CALLS:-80}"
 export REPI_STDIN_READ_TIMEOUT_MS="${REPI_STDIN_READ_TIMEOUT_MS:-1500}"
 export REPI_BASH_DEFAULT_TIMEOUT_SECONDS="${REPI_BASH_DEFAULT_TIMEOUT_SECONDS:-120}"
+export REPI_LOAD_BUILTIN_MODELS="${REPI_LOAD_BUILTIN_MODELS:-0}"
 # Compatibility for inherited upstream internals; user-facing REPI docs prefer REPI_* names.
 export PI_SKIP_VERSION_CHECK="${PI_SKIP_VERSION_CHECK:-$REPI_SKIP_VERSION_CHECK}"
 export PI_SKIP_PACKAGE_UPDATE_CHECK="${PI_SKIP_PACKAGE_UPDATE_CHECK:-$REPI_SKIP_PACKAGE_UPDATE_CHECK}"
@@ -110,9 +111,12 @@ Health:
   repi attack|reverse|web <target>                   Aliases for repi engage
 
 Models:
+  export REPI_AUTH_TOKEN=sk-... REPI_BASE_URL=https://... REPI_MODEL=vendor/model
+  export REPI_MODEL_API=openai-compatible   # also: openai-responses, anthropic
+  repi --list-models                        # REPI env-only model appears as repi-env by default
   repi model add --provider <id> --api openai-completions --base-url <url> --model <model>
   repi model login --provider <id> --api-key-stdin
-  repi model default --provider <id> --model <model>
+  repi model default --provider <id> --model <model>  # legacy; REPI_* env is preferred
   repi model list [--provider <id>] [--model <id>] [--show-urls]
   repi model doctor|test|cost|export|import
 

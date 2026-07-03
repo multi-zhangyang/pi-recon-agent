@@ -123,6 +123,7 @@ export function bootstrapRepiCli(args: readonly string[]): string[] {
 	process.env.REPI_PRINT_MAX_TOOL_CALLS = process.env.REPI_PRINT_MAX_TOOL_CALLS || "80";
 	process.env.REPI_STDIN_READ_TIMEOUT_MS = process.env.REPI_STDIN_READ_TIMEOUT_MS || "1500";
 	process.env.REPI_BASH_DEFAULT_TIMEOUT_SECONDS = process.env.REPI_BASH_DEFAULT_TIMEOUT_SECONDS || "120";
+	process.env.REPI_LOAD_BUILTIN_MODELS = process.env.REPI_LOAD_BUILTIN_MODELS || "0";
 	process.env.PI_SKIP_VERSION_CHECK = process.env.PI_SKIP_VERSION_CHECK || process.env.REPI_SKIP_VERSION_CHECK;
 	process.env.PI_SKIP_PACKAGE_UPDATE_CHECK =
 		process.env.PI_SKIP_PACKAGE_UPDATE_CHECK || process.env.REPI_SKIP_PACKAGE_UPDATE_CHECK;

@@ -651,9 +651,9 @@ export async function compact(
 	let summary: string;
 
 	if (isSplitTurn && turnPrefixMessages.length > 0) {
-		const [historyResult, turnPrefixResult] = await Promise.all([
+		const historyResult =
 			messagesToSummarize.length > 0
-				? generateSummary(
+				? await generateSummary(
 						messagesToSummarize,
 						model,
 						settings.reserveTokens,
@@ -664,34 +664,38 @@ export async function compact(
 						previousSummary,
 						thinkingLevel,
 					)
-				: Promise.resolve(ok<string, CompactionError>("No prior history.")),
-			generateTurnPrefixSummary(
-				turnPrefixMessages,
-				model,
-				settings.reserveTokens,
-				apiKey,
-				headers,
-				signal,
-				thinkingLevel,
-			),
-		]);
+				: ok<string, CompactionError>(previousSummary ?? "No prior history.");
 		if (!historyResult.ok) return err(historyResult.error);
-		if (!turnPrefixResult.ok) return err(turnPrefixResult.error);
-		summary = `${historyResult.value}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.value}`;
-	} else {
-		const summaryResult = await generateSummary(
-			messagesToSummarize,
+
+		const turnPrefixResult = await generateTurnPrefixSummary(
+			turnPrefixMessages,
 			model,
 			settings.reserveTokens,
 			apiKey,
 			headers,
 			signal,
-			customInstructions,
-			previousSummary,
 			thinkingLevel,
 		);
-		if (!summaryResult.ok) return err(summaryResult.error);
-		summary = summaryResult.value;
+		if (!turnPrefixResult.ok) return err(turnPrefixResult.error);
+		summary = `${historyResult.value}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.value}`;
+	} else {
+		if (messagesToSummarize.length === 0) {
+			summary = previousSummary ?? "No prior history.";
+		} else {
+			const summaryResult = await generateSummary(
+				messagesToSummarize,
+				model,
+				settings.reserveTokens,
+				apiKey,
+				headers,
+				signal,
+				customInstructions,
+				previousSummary,
+				thinkingLevel,
+			);
+			if (!summaryResult.ok) return err(summaryResult.error);
+			summary = summaryResult.value;
+		}
 	}
 
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);

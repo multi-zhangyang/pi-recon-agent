@@ -56,6 +56,13 @@ describe("isContextOverflow", () => {
 		expect(isContextOverflow(message, 131072)).toBe(true);
 	});
 
+	it("detects DS4 configured context-size errors", () => {
+		const message = createErrorMessage(
+			"Prompt has 265,330 tokens, but the configured context size is 262,144 tokens",
+		);
+		expect(isContextOverflow(message, 262144)).toBe(true);
+	});
+
 	it("does not treat generic non-overflow Ollama errors as overflow", () => {
 		const message = createErrorMessage("500 `model runner crashed unexpectedly`");
 		expect(isContextOverflow(message, 32768)).toBe(false);

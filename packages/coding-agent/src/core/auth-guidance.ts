@@ -6,15 +6,20 @@ const UNKNOWN_PROVIDER = "unknown";
 export function getProviderLoginHelp(): string {
 	if (IS_REPI_PRODUCT) {
 		return [
-			"Configure a provider in ~/.repi/agent/models.json or use /login for built-in OAuth/API-key providers. See:",
+			"Configure a model with REPI_* environment variables (Claude Code-style) or ~/.repi/agent/models.json. See:",
 			`  ${join(getDocsPath(), "repi-runtime-configuration.md")}`,
 			`  ${join(getDocsPath(), "model-provider-formats.md")}`,
 			"",
-			"Quick custom provider path:",
-			"  1) write ~/.repi/agent/models.json with provider id, baseUrl, api, apiKey env reference, and models[].id",
-			"  2) export the referenced API key environment variable",
-			"  3) run: repi --list-models",
-			"  4) run: repi --provider <provider-id> --model <model-id>",
+			"Quick env-only path:",
+			"  export REPI_AUTH_TOKEN=sk-...",
+			"  export REPI_BASE_URL=https://gateway.example/v1",
+			"  export REPI_MODEL=vendor/model-id",
+			"  export REPI_MODEL_API=openai-compatible",
+			"  export REPI_AUTO_COMPACT_WINDOW=262144  # optional alias of REPI_CONTEXT_WINDOW",
+			"  repi --list-models",
+			'  repi -p "Reply exactly: REPI_OK"',
+			"",
+			"REPI does not load upstream pi's large built-in model catalog by default; set REPI_LOAD_BUILTIN_MODELS=1 only for legacy compatibility.",
 		].join("\n");
 	}
 	return [

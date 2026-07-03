@@ -14,17 +14,40 @@ REPI 是独立产品，不读写原版 `pi` 的默认 profile。
 | 用途 | 路径 |
 |---|---|
 | 自定义 provider / model | `~/.repi/agent/models.json` |
-| 默认 provider/model、compact、运行偏好 | `~/.repi/agent/settings.json` |
+| compact、运行偏好、legacy 默认值 | `~/.repi/agent/settings.json` |
 | OAuth / API key 登录态 | `~/.repi/agent/auth.json` |
 | 逆向/渗透 evidence、memory、mission | `~/.repi/agent/recon/` |
 
 只有显式执行旧登录态导入时，才会从 `~/.pi/agent` 做一次单向复制；正常配置不要改 `~/.pi/agent`。
 
-## 2. 最小 OpenAI-compatible provider
+## 2. 默认模型：Claude Code 风格的 REPI 环境变量
 
-适用于大多数商业网关、本地 vLLM/SGLang/LM Studio/Ollama OpenAI shim。
+REPI 默认不再依赖写入 `defaultProvider/defaultModel`，优先学习 Claude Code 的“一个 shell 环境即可切换供应商/模型”方式；区别是 REPI 支持 OpenAI-compatible、OpenAI Responses 和 Anthropic Messages 多种 wire format。
+REPI 启动器默认设置 `REPI_LOAD_BUILTIN_MODELS=0`，不会把 upstream pi 的大内置 provider/model catalog 自动暴露出来；你显式设置的 `REPI_*` env-only provider 和 `models.json` provider 才是默认运行面。确实需要兼容旧 pi 内置模型表时，可临时设 `REPI_LOAD_BUILTIN_MODELS=1`。
 
-推荐用命令写入：
+```bash
+export REPI_AUTH_TOKEN=sk-xxxxx
+export REPI_BASE_URL=https://api.example.com/v1
+export REPI_MODEL=provider/model-id
+export REPI_MODEL_API=openai-compatible   # aliases: openai-completions, openai-responses, response, anthropic
+export REPI_CONTEXT_WINDOW=128000
+# Claude Code-style alias also accepted:
+# export REPI_AUTO_COMPACT_WINDOW=128000
+export REPI_MAX_TOKENS=16384
+export REPI_SUBAGENT_MODEL=provider/smaller-or-worker-model
+
+IS_SANDBOX=1 repi --approve --thinking off -p "Reply exactly: REPI_OK"
+```
+
+常见别名：
+
+- `REPI_MODEL_API=openai-compatible` / `openai-completions` → Chat Completions wire format。
+- `REPI_MODEL_API=openai-responses` / `response` → OpenAI Responses wire format。
+- `REPI_MODEL_API=anthropic` / `anthropic-messages` → Anthropic Messages wire format。
+
+## 3. 可选：写入 models.json 的 provider
+
+只有需要长期保存多个 provider、成本字段、headers 或复杂 compat 时才写 `models.json`。适用于大多数商业网关、本地 vLLM/SGLang/LM Studio/Ollama OpenAI shim。
 
 ```bash
 repi model add \
@@ -33,8 +56,7 @@ repi model add \
   --base-url https://api.example.com/v1 \
   --model provider/model-id \
   --context-window 128000 \
-  --max-tokens 16384 \
-  --set-default
+  --max-tokens 16384
 
 repi model login --provider openai-compatible --api-key-stdin
 repi model test --provider openai-compatible --model provider/model-id
@@ -128,7 +150,7 @@ repi model doctor
 repi model test --provider openai-compatible --model provider/model-id
 ```
 
-## 3. Anthropic-compatible provider
+## 4. Anthropic-compatible provider
 
 ```json
 {
@@ -153,31 +175,17 @@ repi model test --provider openai-compatible --model provider/model-id
 
 如果某个网关虽然转发 Anthropic 模型，但接口是 `/v1/chat/completions`，仍然优先按 `openai-completions` 配。
 
-## 4. 默认模型
+## 5. 临时覆盖模型
 
-推荐命令：
-
-```bash
-repi model default --provider openai-compatible --model provider/model-id
-```
-
-也可以在 `~/.repi/agent/settings.json` 里写：
-
-```json
-{
-  "defaultProvider": "openai-compatible",
-  "defaultModel": "provider/model-id",
-  "defaultThinkingLevel": "high"
-}
-```
-
-也可以每次启动临时指定：
+默认推荐使用 `REPI_*` 环境变量。临时覆盖仍可用 CLI 参数：
 
 ```bash
 repi --provider openai-compatible --model provider/model-id
 ```
 
-## 5. auto compact
+`settings.json` 里的 `defaultProvider/defaultModel` 只作为 legacy/user-explicit fallback；新配置不要依赖它，`repi model doctor --fix` 也不会再自动挑一个 provider 写成默认值。
+
+## 6. auto compact
 
 REPI 默认使用百分比阈值 + reserve token 双保护：
 
@@ -216,7 +224,7 @@ min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)
 - 因此 footer 显示超过 `auto@85%` 时，若模型正在持续吐 token，不会强行中断当前 stream；一旦当前 turn 结束，REPI 会自动写 context pack、执行 compact/resume，再继续后续 autonomous loop。
 
 
-## 6. 非交互长任务稳定性
+## 7. 非交互长任务稳定性
 
 `repi -p` / `repi --mode text` 默认启用长任务 guardrails，避免模型工具循环、慢 provider、stdin 未关闭或 bash 无超时导致“看起来卡死”。这些输出走 stderr，不污染最终 stdout。
 
@@ -239,7 +247,7 @@ REPI_BASH_DEFAULT_TIMEOUT_SECONDS=30 repi --tools bash -p "跑一个有边界的
 
 Provider stream idle timeout 使用同一套 provider timeout：`settings.retry.provider.timeoutMs` 或 HTTP idle timeout 设置；OpenAI Codex Responses SSE fallback 和 Anthropic-compatible SSE body read 都会在 idle 超时后取消 reader。
 
-## 7. 常见故障
+## 8. 常见故障
 
 | 现象 | 处理 |
 |---|---|

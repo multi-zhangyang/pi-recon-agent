@@ -889,14 +889,15 @@ export async function compact(
 		settings,
 	} = preparation;
 
-	// Generate summaries (can be parallel if both needed) and merge into one
+	// Generate summaries and merge into one. Split-turn summaries are serialized
+	// so provider-side prompt/cache state cannot race between two concurrent
+	// summarization calls using the same compacting session context.
 	let summary: string;
 
 	if (isSplitTurn && turnPrefixMessages.length > 0) {
-		// Generate both summaries in parallel
-		const [historyResult, turnPrefixResult] = await Promise.all([
+		const historyResult =
 			messagesToSummarize.length > 0
-				? generateSummary(
+				? await generateSummary(
 						messagesToSummarize,
 						model,
 						settings.reserveTokens,
@@ -918,18 +919,17 @@ export async function compact(
 					// buildSessionContext emits only the latest compaction's summary, so
 					// dropping previousSummary here permanently and silently lost the
 					// prior history from the context (DATA-LOSS).
-					Promise.resolve(previousSummary ?? "No prior history."),
-			generateTurnPrefixSummary(
-				turnPrefixMessages,
-				model,
-				settings.reserveTokens,
-				apiKey,
-				headers,
-				signal,
-				thinkingLevel,
-				streamFn,
-			),
-		]);
+					(previousSummary ?? "No prior history.");
+		const turnPrefixResult = await generateTurnPrefixSummary(
+			turnPrefixMessages,
+			model,
+			settings.reserveTokens,
+			apiKey,
+			headers,
+			signal,
+			thinkingLevel,
+			streamFn,
+		);
 		// Merge into single summary
 		summary = `${historyResult}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult}`;
 	} else {

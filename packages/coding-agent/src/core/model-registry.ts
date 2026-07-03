@@ -279,6 +279,10 @@ function envBool(names: string[], fallback = false): boolean {
 	return fallback;
 }
 
+function shouldLoadBuiltInModelCatalog(): boolean {
+	return envBool(["REPI_LOAD_BUILTIN_MODELS", "REPI_ENABLE_BUILTIN_MODELS", "REPI_BUILTIN_PROVIDERS"], true);
+}
+
 function envInputList(value: string | undefined): ("text" | "image")[] {
 	const items = (value || "text")
 		.split(",")
@@ -308,7 +312,17 @@ function repiEnvProviderConfig(): { providerName: string; config: ProviderConfig
 		(value, index, values): value is string => Boolean(value) && values.indexOf(value) === index,
 	);
 	const input = envInputList(firstEnvValue(["REPI_MODEL_INPUT", "REPI_INPUT"]));
-	const contextWindow = envInt(["REPI_CONTEXT_WINDOW", "REPI_MODEL_CONTEXT_WINDOW"], 262144, 1024, 1048576);
+	const contextWindow = envInt(
+		[
+			"REPI_CONTEXT_WINDOW",
+			"REPI_MODEL_CONTEXT_WINDOW",
+			"REPI_AUTO_COMPACT_WINDOW",
+			"REPI_MODEL_AUTO_COMPACT_WINDOW",
+		],
+		262144,
+		1024,
+		1048576,
+	);
 	const maxTokens = envInt(["REPI_MAX_TOKENS", "REPI_MODEL_MAX_TOKENS", "REPI_MAX_OUTPUT_TOKENS"], 16384, 64, 131072);
 	const reasoning = envBool(["REPI_MODEL_REASONING", "REPI_REASONING"], false);
 	const providerName = envProviderId();
@@ -525,7 +539,7 @@ export class ModelRegistry {
 	}
 
 	/**
-	 * Reload models from disk (built-in + custom from models.json).
+	 * Reload models from disk/env (optional built-in catalog + custom models.json + REPI_* env-only provider).
 	 */
 	refresh(): void {
 		this.providerRequestConfigs.clear();
@@ -573,7 +587,7 @@ export class ModelRegistry {
 
 		if (error) {
 			this.loadError = error;
-			// Keep built-in models even if custom models failed to load
+			// Keep any already-loadable catalog/env models even if custom models failed to load.
 		}
 
 		const builtInModels = this.loadBuiltInModels(overrides, modelOverrides);
@@ -611,11 +625,15 @@ export class ModelRegistry {
 		}
 	}
 
-	/** Load built-in models and apply provider/model overrides */
+	/** Load the optional upstream built-in model catalog and apply provider/model overrides. */
 	private loadBuiltInModels(
 		overrides: Map<string, ProviderOverride>,
 		modelOverrides: Map<string, Map<string, ModelOverride>>,
 	): Model<Api>[] {
+		if (!shouldLoadBuiltInModelCatalog()) {
+			return [];
+		}
+
 		return getProviders().flatMap((provider) => {
 			const models = getModels(provider as KnownProvider) as Model<Api>[];
 			const providerOverride = overrides.get(provider);
@@ -817,8 +835,8 @@ export class ModelRegistry {
 	}
 
 	/**
-	 * Get all models (built-in + custom).
-	 * If models.json had errors, returns only built-in models.
+	 * Get all models (optional built-in catalog + custom + REPI_* env-only).
+	 * If models.json had errors, returns the remaining loadable model sources.
 	 */
 	getAll(): Model<Api>[] {
 		return this.models;

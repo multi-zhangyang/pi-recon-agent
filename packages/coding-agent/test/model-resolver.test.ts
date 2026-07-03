@@ -1,11 +1,6 @@
 import type { Model } from "@pi-recon/repi-ai";
 import { describe, expect, test } from "vitest";
-import {
-	defaultModelPerProvider,
-	findInitialModel,
-	parseModelPattern,
-	resolveCliModel,
-} from "../src/core/model-resolver.ts";
+import { findInitialModel, parseModelPattern, resolveCliModel } from "../src/core/model-resolver.ts";
 
 async function withRepiEnv<T>(values: Record<string, string>, fn: () => T | Promise<T>): Promise<T> {
 	const names = [
@@ -397,23 +392,6 @@ describe("resolveCliModel", () => {
 });
 
 describe("default model selection", () => {
-	test("openai defaults track current models", () => {
-		expect(defaultModelPerProvider.openai).toBe("gpt-5.4");
-		expect(defaultModelPerProvider["openai-codex"]).toBe("gpt-5.5");
-	});
-
-	test("zai, minimax, cerebras, and ant-ling defaults track current models", () => {
-		expect(defaultModelPerProvider.zai).toBe("glm-5.1");
-		expect(defaultModelPerProvider.minimax).toBe("MiniMax-M2.7");
-		expect(defaultModelPerProvider["minimax-cn"]).toBe("MiniMax-M2.7");
-		expect(defaultModelPerProvider.cerebras).toBe("zai-glm-4.7");
-		expect(defaultModelPerProvider["ant-ling"]).toBe("Ring-2.6-1T");
-	});
-
-	test("ai-gateway default tracks current model", () => {
-		expect(defaultModelPerProvider["vercel-ai-gateway"]).toBe("zai/glm-5.1");
-	});
-
 	test("findInitialModel accepts explicit provider custom model ids", async () => {
 		const registry = {
 			getAll: () => allModels,
@@ -431,8 +409,8 @@ describe("default model selection", () => {
 		expect(result.model?.id).toBe("openai/ghost-model");
 	});
 
-	test("findInitialModel selects ai-gateway default when available", async () => {
-		const aiGatewayModel: Model<"anthropic-messages"> = {
+	test("findInitialModel uses the first available model when REPI env is not set", async () => {
+		const firstAvailable: Model<"anthropic-messages"> = {
 			id: "anthropic/claude-opus-4-6",
 			name: "Claude Opus 4.6",
 			api: "anthropic-messages",
@@ -446,7 +424,7 @@ describe("default model selection", () => {
 		};
 
 		const registry = {
-			getAvailable: async () => [aiGatewayModel],
+			getAvailable: async () => [firstAvailable],
 		} as unknown as Parameters<typeof findInitialModel>[0]["modelRegistry"];
 
 		const result = await findInitialModel({
@@ -504,5 +482,49 @@ describe("default model selection", () => {
 				expect(result.model?.id).toBe("moonshotai/Kimi-K2.7-Code");
 			},
 		);
+	});
+
+	test("findInitialModel skips saved defaults without configured auth", async () => {
+		const savedDefault: Model<"anthropic-messages"> = {
+			id: "claude-opus-4-8",
+			name: "Claude Opus 4.8",
+			api: "anthropic-messages",
+			provider: "anthropic",
+			baseUrl: "https://api.anthropic.com",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+			contextWindow: 200000,
+			maxTokens: 32000,
+		};
+		const availableFallback: Model<"openai-completions"> = {
+			id: "openai/fallback-model",
+			name: "Fallback Model",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 8192,
+		};
+		const registry = {
+			find: (provider: string, id: string) =>
+				provider === savedDefault.provider && id === savedDefault.id ? savedDefault : undefined,
+			hasConfiguredAuth: () => false,
+			getAvailable: async () => [availableFallback],
+		} as unknown as Parameters<typeof findInitialModel>[0]["modelRegistry"];
+
+		const result = await findInitialModel({
+			scopedModels: [],
+			isContinuing: false,
+			defaultProvider: savedDefault.provider,
+			defaultModelId: savedDefault.id,
+			modelRegistry: registry,
+		});
+
+		expect(result.model?.provider).toBe("openrouter");
+		expect(result.model?.id).toBe("openai/fallback-model");
 	});
 });

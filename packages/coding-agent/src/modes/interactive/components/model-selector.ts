@@ -93,7 +93,8 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			this.scopeHintText = new Text(this.getScopeHintText(), 0, 0);
 			this.addChild(this.scopeHintText);
 		} else {
-			const hintText = "Only showing models from configured providers. Use /login to add providers.";
+			const hintText =
+				"Only showing configured models. Prefer REPI_AUTH_TOKEN/REPI_BASE_URL/REPI_MODEL or models.json.";
 			this.addChild(new Text(theme.fg("warning", hintText), 0, 0));
 		}
 		this.addChild(new Spacer(1));
@@ -146,7 +147,8 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			this.errorMessage = loadError;
 		}
 
-		// Load available models (built-in models still work even if models.json failed)
+		// Load available models (env-only, models.json, dynamic providers, and
+		// optionally the legacy built-in catalog when REPI_LOAD_BUILTIN_MODELS=1).
 		try {
 			const availableModels = await this.modelRegistry.getAvailable();
 			models = availableModels.map((model: Model<any>) => ({

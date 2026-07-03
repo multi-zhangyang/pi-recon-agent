@@ -37,18 +37,20 @@ function usage() {
   repi model export [--output <path>] [--json]
   repi model import --input <path|-> [--merge|--replace] [--json] [--stdin-timeout-ms N] [--stdin-max-bytes N]
 
-model doctor is offline: it parses ~/.repi/agent/models.json, checks provider/model metadata, local auth, default model, context window and cost fields; --fix repairs safe local config issues.
-model list hides provider base URLs by default to avoid leaking private gateway endpoints into screenshots/logs; add --show-urls for local troubleshooting.
-model add writes ~/.repi/agent/models.json and can store a local credential immediately with --api-key-stdin; model login writes/updates ~/.repi/agent/auth.json locally.
-model add --preset baseten-kimi-k2.7-code configures Baseten's OpenAI-compatible endpoint for moonshotai/Kimi-K2.7-Code with a 262144 context window; it never embeds an API key unless supplied through --api-key-stdin.
-Environment-only model setup requires no files and supports multiple API wire formats:
+Environment-only model setup is the recommended default path (Claude Code style, REPI-specific names):
   export REPI_AUTH_TOKEN=sk-...
   export REPI_BASE_URL=https://gateway.example/v1
   export REPI_MODEL=vendor/model
-  export REPI_MODEL_API=openai-compatible   # aliases: openai-completions, openai-responses, anthropic
+  export REPI_MODEL_API=openai-compatible   # aliases: openai-completions, openai-responses, response, anthropic
   export REPI_CONTEXT_WINDOW=262144
+  export REPI_AUTO_COMPACT_WINDOW=262144    # alias of REPI_CONTEXT_WINDOW
   export REPI_SUBAGENT_MODEL=vendor/subagent-model
   repi --approve -p "..."
+
+model doctor is offline: it parses ~/.repi/agent/models.json plus REPI_* env-only providers, checks provider/model metadata, local auth, context window and cost fields; --fix repairs safe local config issues but does not auto-pick a settings default provider/model.
+model list hides provider base URLs by default to avoid leaking private gateway endpoints into screenshots/logs; add --show-urls for local troubleshooting.
+model add writes ~/.repi/agent/models.json and can store a local credential immediately with --api-key-stdin; model login writes/updates ~/.repi/agent/auth.json locally.
+model add --preset baseten-kimi-k2.7-code configures Baseten's OpenAI-compatible endpoint for moonshotai/Kimi-K2.7-Code with a 262144 context window; it never embeds an API key unless supplied through --api-key-stdin.
 For shell-history safety, pass API keys through --api-key-stdin. Plain --api-key is rejected unless REPI_ALLOW_INSECURE_API_KEY_ARG=1.
 model export never exports local API keys; model import preserves/creates env-ref apiKey fields and never writes auth.json.
 `;
@@ -367,32 +369,10 @@ function modelExistsInProvider(provider, modelId) {
 	return Array.isArray(provider?.models) && provider.models.some((model) => model?.id === modelId);
 }
 
-function findBestLocalDefault(providers, authData) {
-	const preferred = [
-		{ providerId: "aigateway", modelId: "moonshot/kimi-k2.6" },
-		{ providerId: "2go-openai", modelId: "moonshot/kimi-k2.6" },
-		{ providerId: "2go-anthropic", modelId: "moonshot/kimi-k2.6" },
-	];
-	const candidates = [];
-	for (const [providerId, provider] of Object.entries(providers)) {
-		const key = envRef(provider?.apiKey);
-		const storedAuth = storedAuthStatus(authData, providerId);
-		const usable = storedAuth.configured || key.present;
-		for (const model of Array.isArray(provider?.models) ? provider.models : []) {
-			if (model?.id) candidates.push({ providerId, modelId: model.id, usable });
-		}
-	}
-	for (const item of preferred) {
-		const found = candidates.find((candidate) => candidate.usable && candidate.providerId === item.providerId && candidate.modelId === item.modelId);
-		if (found) return found;
-	}
-	return candidates.find((candidate) => candidate.usable) ?? candidates[0];
-}
-
 function defaultStatusFor(providers, settings, listModels) {
 	const providerId = settings?.defaultProvider;
 	const modelId = settings?.defaultModel;
-	if (!providerId && !modelId) return { configured: false, ok: true, providerId: null, modelId: null, message: "not configured" };
+	if (!providerId && !modelId) return { configured: false, ok: true, providerId: null, modelId: null, message: "not configured; REPI_* environment variables are the preferred default path" };
 	if (!providerId || !modelId) return { configured: true, ok: false, providerId: providerId ?? null, modelId: modelId ?? null, message: "defaultProvider/defaultModel must be set together" };
 	const provider = providers[providerId];
 	if (provider) {
@@ -452,14 +432,13 @@ function repairModelConfig() {
 	const listModels = listModelsProbe();
 	const status = defaultStatusFor(modelsConfig.providers, settings, listModels);
 	if (!status.ok) {
-		const best = findBestLocalDefault(modelsConfig.providers, authData);
-		if (best) {
-			settings.defaultProvider = best.providerId;
-			settings.defaultModel = best.modelId;
+		if (settings.defaultProvider !== undefined || settings.defaultModel !== undefined) {
+			delete settings.defaultProvider;
+			delete settings.defaultModel;
 			writeJsonFile(settingsPath, settings, 0o600);
-			actions.push({ id: "default-model", status: "fixed", detail: `set default to ${best.providerId}/${best.modelId}` });
+			actions.push({ id: "default-model", status: "fixed", detail: "removed invalid legacy settings default; use REPI_PROVIDER/REPI_MODEL/REPI_BASE_URL env vars for the default model" });
 		} else {
-			actions.push({ id: "default-model", status: "blocked", detail: "no configured model available for automatic default repair" });
+			actions.push({ id: "default-model", status: "skipped", detail: "no settings default configured; use REPI_PROVIDER/REPI_MODEL/REPI_BASE_URL env vars" });
 		}
 	}
 	if (modelsChanged) writeJsonFile(modelsPath, modelsConfig, 0o600);
@@ -477,7 +456,7 @@ function buildDoctorReport() {
 	let modelCount = 0;
 	if (loaded.parseError) diagnostics.push({ level: "fail", id: "models-json-parse", message: loaded.parseError });
 	if (settings?.__error) diagnostics.push({ level: "fail", id: "settings-json-parse", message: settings.__error });
-	if (loaded.missing) diagnostics.push({ level: "warn", id: "models-json-missing", message: `${modelsPath} not found; built-in providers may still work` });
+	if (loaded.missing) diagnostics.push({ level: "warn", id: "models-json-missing", message: `${modelsPath} not found; use REPI_* environment variables for the default env-only provider, or create models.json for persistent providers` });
 	for (const [providerId, provider] of Object.entries(loaded.providers)) {
 		const api = provider.api;
 		const key = envRef(provider.apiKey);
@@ -714,7 +693,7 @@ function envOnlyProviderConfig() {
 			name: id === model ? firstEnv(["REPI_MODEL_NAME"]) || id : firstEnv(["REPI_SUBAGENT_MODEL_NAME"]) || id,
 			input: inputList(firstEnv(["REPI_MODEL_INPUT", "REPI_INPUT"]) || "text"),
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: envInt(["REPI_CONTEXT_WINDOW", "REPI_MODEL_CONTEXT_WINDOW"], 262144, 1024, 1048576),
+			contextWindow: envInt(["REPI_CONTEXT_WINDOW", "REPI_MODEL_CONTEXT_WINDOW", "REPI_AUTO_COMPACT_WINDOW", "REPI_MODEL_AUTO_COMPACT_WINDOW"], 262144, 1024, 1048576),
 			maxTokens: envInt(["REPI_MAX_TOKENS", "REPI_MODEL_MAX_TOKENS", "REPI_MAX_OUTPUT_TOKENS"], 16384, 64, 131072),
 			reasoning: envBool(["REPI_MODEL_REASONING", "REPI_REASONING"], false),
 		}));

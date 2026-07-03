@@ -64,6 +64,21 @@ function resolveExecMaxBytes(maxBytes: number | undefined): number {
  * released as soon as `close` arrives.
  */
 const KILL_GRACE_MS = 2000;
+const MAX_TIMEOUT_MS = 2_147_483_647;
+const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
+
+function resolveTimeoutMs(timeout: number | undefined): Result<number | undefined, ExecutionError> {
+	if (timeout === undefined) return ok(undefined);
+	if (!Number.isFinite(timeout) || timeout <= 0) {
+		return err(new ExecutionError("timeout", "Invalid timeout: must be a finite number of seconds"));
+	}
+
+	const timeoutMs = timeout * 1000;
+	if (timeoutMs > MAX_TIMEOUT_MS) {
+		return err(new ExecutionError("timeout", `Invalid timeout: maximum is ${MAX_TIMEOUT_SECONDS} seconds`));
+	}
+	return ok(timeoutMs);
+}
 
 function fileKindFromStats(stats: {
 	isFile(): boolean;
@@ -408,6 +423,9 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		const shellConfig = await this.resolveShellConfig();
 		if (!shellConfig.ok) return shellConfig;
 		const maxBytes = resolveExecMaxBytes(options?.maxBytes);
+		const timeoutMsResult = resolveTimeoutMs(options?.timeout);
+		if (!timeoutMsResult.ok) return timeoutMsResult;
+		const timeoutMs = timeoutMsResult.value;
 
 		return await new Promise((resolvePromise) => {
 			let stdout = "";
@@ -468,14 +486,14 @@ export class NodeExecutionEnv implements ExecutionEnv {
 			}
 
 			timeoutId =
-				typeof options?.timeout === "number"
+				timeoutMs !== undefined
 					? setTimeout(() => {
 							timedOut = true;
 							if (child?.pid) {
 								killProcessTree(child.pid);
 							}
 							armKillGrace(new ExecutionError("timeout", `timeout:${options?.timeout}`));
-						}, options.timeout * 1000)
+						}, timeoutMs)
 					: undefined;
 
 			if (options?.abortSignal) {

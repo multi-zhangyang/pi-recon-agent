@@ -58,18 +58,22 @@ npm install --ignore-scripts
 npm run install:repi
 ```
 
-Authenticate with an API key:
+Configure a model with REPI's Claude Code-style env-only path:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+export REPI_AUTH_TOKEN=sk-...
+export REPI_BASE_URL=https://gateway.example/v1
+export REPI_MODEL=vendor/model-id
+export REPI_MODEL_API=openai-compatible   # also: openai-responses, anthropic
+export REPI_AUTO_COMPACT_WINDOW=262144    # optional alias of REPI_CONTEXT_WINDOW
 repi
 ```
 
-Or use your existing subscription:
+Persistent multi-provider setups can be stored in `~/.repi/agent/models.json` with `repi model add/login`.
 
 ```bash
-repi
-/login  # Then select provider
+repi model add --provider gateway --api openai-completions --base-url https://gateway.example/v1 --model vendor/model-id
+repi model login --provider gateway --api-key-stdin
 ```
 
 Then start with `/re-profile-check quick`, `/re-kernel build <target>`, `/re-map <target> 2`, `/re-operator plan <target>`, `/re-verifier matrix`, and `/re-complete audit`. REPI still exposes the standard `read`, `write`, `edit`, and `bash` tools, but its default system prompt and commands are the REPI reverse/pentest control plane.
@@ -80,46 +84,13 @@ Then start with `/re-profile-check quick`, `/re-kernel build <target>`, `/re-map
 
 ## Providers & Models
 
-For each built-in provider, repi maintains a list of tool-capable models, updated with every release. Authenticate via subscription (`/login`) or API key, then select any model from that provider via `/model` (or Ctrl+L).
+REPI does not load upstream pi's large built-in provider/model catalog by default (`REPI_LOAD_BUILTIN_MODELS=0`). The normal runtime surface is:
 
-**Subscriptions:**
-- Anthropic Claude Pro/Max
-- OpenAI ChatGPT Plus/Pro (Codex)
-- GitHub Copilot
+- `REPI_AUTH_TOKEN` + `REPI_BASE_URL` + `REPI_MODEL` (+ `REPI_MODEL_API`) for env-only one-off switching.
+- `~/.repi/agent/models.json` for persistent OpenAI-compatible, Responses-compatible, Anthropic-compatible, local runtime, or gateway configs.
+- Dynamically registered providers from extensions.
 
-**API keys:**
-- Anthropic
-- Ant Ling
-- OpenAI
-- Azure OpenAI
-- DeepSeek
-- NVIDIA NIM
-- Google Gemini
-- Google Vertex
-- Amazon Bedrock
-- Mistral
-- Groq
-- Cerebras
-- Cloudflare AI Gateway
-- Cloudflare Workers AI
-- xAI
-- OpenRouter
-- Vercel AI Gateway
-- ZAI
-- ZAI Coding Plan (China)
-- OpenCode Zen
-- OpenCode Go
-- Hugging Face
-- Fireworks
-- Together AI
-- Kimi For Coding
-- MiniMax
-- Xiaomi MiMo
-- Xiaomi MiMo Token Plan (China)
-- Xiaomi MiMo Token Plan (Amsterdam)
-- Xiaomi MiMo Token Plan (Singapore)
-
-See [docs/providers.md](docs/providers.md) for detailed setup instructions.
+Set `REPI_LOAD_BUILTIN_MODELS=1` only when you intentionally need upstream pi legacy provider discovery.
 
 **Custom providers & models:** Add providers via `~/.repi/agent/models.json` if they speak a supported API (OpenAI, Anthropic, Google). For custom APIs or OAuth, use extensions. See [docs/models.md](docs/models.md) and [docs/custom-provider.md](docs/custom-provider.md).
 

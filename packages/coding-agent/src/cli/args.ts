@@ -377,6 +377,14 @@ ${chalk.bold("Examples:")}
   ${APP_NAME} --export session.jsonl output.html
 
 ${chalk.bold("Environment Variables:")}
+  REPI_AUTH_TOKEN                  - Env-only model API key (preferred under REPI)
+  REPI_BASE_URL                    - Env-only provider base URL, e.g. https://gateway.example/v1
+  REPI_MODEL                       - Env-only model id
+  REPI_MODEL_API                   - openai-compatible|openai-responses|anthropic (default: openai-compatible)
+  REPI_CONTEXT_WINDOW              - Env-only model context window
+  REPI_AUTO_COMPACT_WINDOW         - Alias of REPI_CONTEXT_WINDOW for Claude Code-style setup
+  REPI_SUBAGENT_MODEL              - Optional env-only worker/subagent model id
+  REPI_LOAD_BUILTIN_MODELS         - Set 1 to expose upstream pi built-in model catalog (REPI default: 0)
   ANTHROPIC_API_KEY                - Anthropic Claude API key
   ANTHROPIC_OAUTH_TOKEN            - Anthropic OAuth token (alternative to API key)
   ANT_LING_API_KEY                 - Ant Ling API key

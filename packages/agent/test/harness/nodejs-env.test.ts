@@ -288,6 +288,29 @@ describe("NodeExecutionEnv", () => {
 		if (!result.ok) expect(result.error).toMatchObject({ code: "timeout" });
 	});
 
+	it("rejects invalid timeout values before spawning commands", async () => {
+		const root = createTempDir();
+		const env = new NodeExecutionEnv({ cwd: root });
+
+		for (const timeout of [0, -1, Number.POSITIVE_INFINITY]) {
+			const result = await env.exec("echo should-not-run", { timeout });
+			expect(result.ok).toBe(false);
+			if (!result.ok) {
+				expect(result.error).toMatchObject({
+					code: "timeout",
+					message: "Invalid timeout: must be a finite number of seconds",
+				});
+			}
+		}
+
+		const huge = await env.exec("echo should-not-run", { timeout: 3_000_000 });
+		expect(huge.ok).toBe(false);
+		if (!huge.ok) {
+			expect(huge.error).toMatchObject({ code: "timeout" });
+			expect(huge.error.message).toContain("maximum");
+		}
+	});
+
 	it("returns callback errors from exec stream handlers", async () => {
 		const root = createTempDir();
 		const env = new NodeExecutionEnv({ cwd: root });
