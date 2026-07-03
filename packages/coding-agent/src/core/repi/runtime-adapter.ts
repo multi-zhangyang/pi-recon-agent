@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { shellQuote } from "./target.ts";
 import { truncateMiddle } from "./text.ts";
@@ -432,6 +432,32 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 	},
 ];
 
+function readFileHead(path: string, maxBytes = 4096): Buffer {
+	const fd = openSync(path, "r");
+	try {
+		const buffer = Buffer.alloc(maxBytes);
+		const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
+		return buffer.subarray(0, bytesRead);
+	} finally {
+		closeSync(fd);
+	}
+}
+
+function hasMagic(buffer: Buffer, bytes: number[]): boolean {
+	return bytes.every((byte, index) => buffer[index] === byte);
+}
+
+function hasRootfsMarkers(path: string): boolean {
+	const rootfsMarkers = [
+		join(path, "etc", "passwd"),
+		join(path, "etc", "shadow"),
+		join(path, "etc", "init.d"),
+		join(path, "bin", "busybox"),
+		join(path, "sbin", "init"),
+	];
+	return rootfsMarkers.some((marker) => existsSync(marker));
+}
+
 export function detectRuntimeAdapterIds(target?: string): string[] {
 	const text = target?.trim() ?? "";
 	if (!text) return [];
@@ -440,27 +466,29 @@ export function detectRuntimeAdapterIds(target?: string): string[] {
 	const add = (id: string) => {
 		if (!picks.includes(id)) picks.push(id);
 	};
+	let targetKind: "file" | "directory" | undefined;
+
 	if (existsSync(text)) {
 		try {
 			const stat = statSync(text);
 			if (stat.isDirectory()) {
-				const rootfsMarkers = [
-					join(text, "etc", "passwd"),
-					join(text, "etc", "shadow"),
-					join(text, "etc", "init.d"),
-					join(text, "bin", "busybox"),
-					join(text, "sbin", "init"),
-				];
-				if (rootfsMarkers.some((marker) => existsSync(marker))) add("firmware-rootfs-service-map-adapter");
+				targetKind = "directory";
+				if (hasRootfsMarkers(text)) add("firmware-rootfs-service-map-adapter");
+			} else if (stat.isFile()) {
+				targetKind = "file";
 			}
 		} catch {
-			// Best-effort pre-pass only; full file/directory sniffing below repeats with file magic.
+			// Best-effort target sniffing only; lexical detection below remains authoritative.
 		}
 	}
+
 	if (/^https?:\/\//i.test(text) || /\b(?:xhr|websocket|cookie|authorization|graphql|api)\b/i.test(text)) {
 		add("web-cdp-network-adapter");
 	}
-	if (/\.(?:pcapng?|cap)(?:$|[?#\s])/.test(lower) || /\b(?:pcap|tshark|wireshark|packet|flow)\b/.test(lower)) {
+	if (
+		targetKind !== "directory" &&
+		(/\.(?:pcapng?|cap)(?:$|[?#\s])/.test(lower) || /\b(?:pcap|tshark|wireshark|packet|flow)\b/.test(lower))
+	) {
 		add("tshark-pcap-flow-adapter");
 	}
 	if (
@@ -493,33 +521,44 @@ export function detectRuntimeAdapterIds(target?: string): string[] {
 	) {
 		add("r2-native-xref-adapter");
 	}
-	if (existsSync(text)) {
+
+	if (targetKind === "directory") {
 		try {
-			const stat = statSync(text);
-			if (stat.isDirectory()) {
-				const rootfsMarkers = [
-					join(text, "etc", "passwd"),
-					join(text, "etc", "shadow"),
-					join(text, "etc", "init.d"),
-					join(text, "bin", "busybox"),
-					join(text, "sbin", "init"),
-				];
-				if (rootfsMarkers.some((marker) => existsSync(marker))) add("firmware-rootfs-service-map-adapter");
-			} else {
-				const head = readFileSync(text).subarray(0, 64);
-				const ascii = head.toString("latin1");
-				if (ascii.startsWith("\x7fELF") || ascii.startsWith("MZ")) add("gdb-native-trace-adapter");
-				if (
-					ascii.startsWith("\xd4\xc3\xb2\xa1") ||
-					ascii.startsWith("\xa1\xb2\xc3\xd4") ||
-					ascii.startsWith("\x0a\x0d\x0d\x0a")
-				)
-					add("tshark-pcap-flow-adapter");
-				if (/hsqs|sqsh|UBI#|uImage|OpenWrt|BusyBox/i.test(ascii)) add("binwalk-firmware-extract-adapter");
-				if (ascii.startsWith("PK\x03\x04") && /\.(?:apk|ipa)$/i.test(text)) add("frida-mobile-hook-adapter");
+			if (hasRootfsMarkers(text)) add("firmware-rootfs-service-map-adapter");
+		} catch {
+			// Directory probes are advisory only.
+		}
+	} else if (targetKind === "file") {
+		try {
+			const head = readFileHead(text);
+			const ascii = head.toString("latin1");
+			if (
+				hasMagic(head, [0x7f, 0x45, 0x4c, 0x46]) ||
+				hasMagic(head, [0x4d, 0x5a]) ||
+				hasMagic(head, [0xcf, 0xfa, 0xed, 0xfe]) ||
+				hasMagic(head, [0xca, 0xfe, 0xba, 0xbe])
+			) {
+				add("gdb-native-trace-adapter");
+				add("r2-native-xref-adapter");
+			}
+			if (
+				hasMagic(head, [0xd4, 0xc3, 0xb2, 0xa1]) ||
+				hasMagic(head, [0xa1, 0xb2, 0xc3, 0xd4]) ||
+				hasMagic(head, [0x4d, 0x3c, 0xb2, 0xa1]) ||
+				hasMagic(head, [0xa1, 0xb2, 0x3c, 0x4d]) ||
+				hasMagic(head, [0x0a, 0x0d, 0x0d, 0x0a])
+			) {
+				add("tshark-pcap-flow-adapter");
+			}
+			if (/hsqs|sqsh|UBI#|uImage|OpenWrt|BusyBox/i.test(ascii)) add("binwalk-firmware-extract-adapter");
+			if (
+				hasMagic(head, [0x50, 0x4b, 0x03, 0x04]) &&
+				(/\.(?:apk|ipa)$/i.test(text) || /AndroidManifest\.xml|classes\.dex|Payload\/|Info\.plist/i.test(ascii))
+			) {
+				add("frida-mobile-hook-adapter");
 			}
 		} catch {
-			// Best-effort target sniffing only; lexical detection above remains authoritative.
+			// Best-effort file magic only; lexical detection above remains authoritative.
 		}
 	}
 	return picks;

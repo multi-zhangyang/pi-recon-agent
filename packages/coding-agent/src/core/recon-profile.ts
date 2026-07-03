@@ -23252,10 +23252,12 @@ function parseOperatorArtifact(path: string): OperatorArtifact | undefined {
 }
 
 function latestOrBuildOperator(options: { target?: string } = {}): { operator: OperatorArtifact; path: string } {
-	const latest = !options.target ? latestOperatorArtifactPath() : undefined;
+	const latest = latestOperatorArtifactPath(
+		options.target ? { target: options.target, requestedBy: "latest_or_build_operator" } : {},
+	);
 	if (latest) {
 		const operator = parseOperatorArtifact(latest);
-		if (operator) return { operator, path: latest };
+		if (operator && artifactTargetMatches(options.target, operator.target)) return { operator, path: latest };
 	}
 	const operator = buildOperator({ target: options.target, mode: "verify" });
 	const path = writeOperatorArtifact(operator);
@@ -23842,10 +23844,12 @@ function parseVerifierArtifact(path: string): VerifierArtifact | undefined {
 }
 
 function latestOrBuildVerifier(options: { target?: string } = {}): { verifier: VerifierArtifact; path: string } {
-	const latest = !options.target ? latestVerifierArtifactPath() : undefined;
+	const latest = latestVerifierArtifactPath(
+		options.target ? { target: options.target, requestedBy: "latest_or_build_verifier" } : {},
+	);
 	if (latest) {
 		const verifier = parseVerifierArtifact(latest);
-		if (verifier) return { verifier, path: latest };
+		if (verifier && artifactTargetMatches(options.target, verifier.target)) return { verifier, path: latest };
 	}
 	const verifier = buildVerifier({ target: options.target, mode: "matrix" });
 	const path = writeVerifierArtifact(verifier);
@@ -24318,10 +24322,12 @@ function parseCompilerArtifact(path: string): CompilerArtifact | undefined {
 }
 
 function latestOrBuildCompiler(options: { target?: string } = {}): { compiler: CompilerArtifact; path: string } {
-	const latest = !options.target ? latestCompilerArtifactPath() : undefined;
+	const latest = latestCompilerArtifactPath(
+		options.target ? { target: options.target, requestedBy: "latest_or_build_compiler" } : {},
+	);
 	if (latest) {
 		const compiler = parseCompilerArtifact(latest);
-		if (compiler) return { compiler, path: latest };
+		if (compiler && artifactTargetMatches(options.target, compiler.target)) return { compiler, path: latest };
 	}
 	const compiler = buildCompiler({ target: options.target, mode: "draft" });
 	const path = writeCompilerArtifact(compiler);
@@ -25236,8 +25242,8 @@ function classifyProofLoopGap(item: ProofLoopGapItem): {
 	return { klass: "unknown", priority: 4, action: "re_delegate plan -> re_swarm run -> re_supervisor review" };
 }
 
-function proofLoopGapClassifier(target?: string): string[] {
-	return proofLoopGapItems(target)
+function formatProofLoopGapClassifier(items: ProofLoopGapItem[]): string[] {
+	return items
 		.map((item, index) => {
 			const classified = classifyProofLoopGap(item);
 			return `priority=${classified.priority} class=${classified.klass} worker=${item.worker} source=${item.source} gap=${index + 1} action="${classified.action}" evidence=${item.sourceArtifacts.slice(0, 3).join(" | ") || "none"} :: ${item.text}`;
@@ -25250,11 +25256,13 @@ function proofLoopGapClassifier(target?: string): string[] {
 		.slice(0, 24);
 }
 
-function proofLoopQuickPath(target?: string): string[] {
+function proofLoopGapClassifier(target?: string): string[] {
+	return formatProofLoopGapClassifier(proofLoopGapItems(target));
+}
+
+function proofLoopQuickPathFromItems(items: ProofLoopGapItem[], target?: string): string[] {
 	const targetRef = target?.trim() || "<target>";
-	const classes = new Set(
-		proofLoopGapItems(target).map((item) => classifyProofLoopGap(item).klass),
-	);
+	const classes = new Set(items.map((item) => classifyProofLoopGap(item).klass));
 	const commands: string[] = [];
 	if (classes.has("compact_resume")) {
 		commands.push("re_context resume", `re_operator plan ${targetRef}`);
@@ -25275,14 +25283,22 @@ function proofLoopQuickPath(target?: string): string[] {
 	return Array.from(new Set(commands)).slice(0, 14);
 }
 
-function proofLoopSpecialistQueue(target?: string): string[] {
+function proofLoopQuickPath(target?: string): string[] {
+	return proofLoopQuickPathFromItems(proofLoopGapItems(target), target);
+}
+
+function proofLoopSpecialistQueueFromItems(items: ProofLoopGapItem[], target?: string): string[] {
 	const suffix = proofLoopCommandTarget(target);
-	return proofLoopGapItems(target)
+	return items
 		.map(
 			(item, index) =>
 				`proof-gap:${index + 1}:${item.worker} source=${item.source} evidence=${item.sourceArtifacts.slice(0, 3).join(" | ") || "none"} :: ${item.text} -> re_delegate plan${suffix}`,
 		)
 		.slice(0, 24);
+}
+
+function proofLoopSpecialistQueue(target?: string): string[] {
+	return proofLoopSpecialistQueueFromItems(proofLoopGapItems(target), target);
 }
 
 function proofLoopSwarmRetryQueue(target?: string): string[] {
@@ -25295,7 +25311,7 @@ function proofLoopSwarmRetryQueue(target?: string): string[] {
 		.slice(0, 24);
 }
 
-function proofLoopSwarmBridge(target?: string): string[] {
+function proofLoopSwarmBridgeFromItems(items: ProofLoopGapItem[], target?: string): string[] {
 	const suffix = proofLoopCommandTarget(target);
 	const retry = latestSwarmRetryQueue(target);
 	const feedback = latestOperatorFeedback(target);
@@ -25310,7 +25326,7 @@ function proofLoopSwarmBridge(target?: string): string[] {
 			`retry_queue:${index + 1} source=swarm next="${retry.commands[index] ?? "re_swarm run"}" row=${row}`,
 	);
 	const grouped = new Map<DelegateWorker, ProofLoopGapItem[]>();
-	for (const item of proofLoopGapItems(target)) grouped.set(item.worker, [...(grouped.get(item.worker) ?? []), item]);
+	for (const item of items) grouped.set(item.worker, [...(grouped.get(item.worker) ?? []), item]);
 	const rows = [...grouped.entries()].map(([worker, items]) => {
 		const contracts = delegateEvidenceContract(worker).join(" | ");
 		const sources = Array.from(new Set(items.flatMap((item) => item.sourceArtifacts))).slice(0, 5);
@@ -25321,6 +25337,10 @@ function proofLoopSwarmBridge(target?: string): string[] {
 	return [
 		`general: no active proof gaps; bridge standby -> re_swarm run${suffix} 2 1 && re_swarm merge && re_supervisor review${suffix}`,
 	];
+}
+
+function proofLoopSwarmBridge(target?: string): string[] {
+	return proofLoopSwarmBridgeFromItems(proofLoopGapItems(target), target);
 }
 
 function proofLoopCommandTarget(target?: string): string {
@@ -25468,15 +25488,16 @@ function refreshProofLoop(proof: ProofLoopArtifact): ProofLoopArtifact {
 			sourceArtifacts: operatorFeedback.sourceArtifacts,
 		}));
 	const steps = [...proof.steps, ...failureSignatureSteps, ...compactResumeSteps, ...operatorFeedbackSteps];
+	const gapItems = proofLoopGapItems(proof.target);
 	const swarmRetry = proofLoopSwarmRetryQueue(proof.target);
-	const specialistQueue = proofLoopSpecialistQueue(proof.target);
-	const swarmBridge = proofLoopSwarmBridge(proof.target);
+	const specialistQueue = proofLoopSpecialistQueueFromItems(gapItems, proof.target);
+	const swarmBridge = proofLoopSwarmBridgeFromItems(gapItems, proof.target);
 	const bridgeArtifacts = proofLoopBridgeArtifacts(proof.target);
 	const caseMemoryLanePlan = currentCaseMemoryLanePlan(proof.target);
 	const caseMemoryBridge = caseMemoryProofBridge(caseMemoryLanePlan, proof.target);
 	const autonomousBudget = autonomousExecutionBudget(proof.target);
-	const gapClassifier = proofLoopGapClassifier(proof.target);
-	const quickPath = proofLoopQuickPath(proof.target);
+	const gapClassifier = formatProofLoopGapClassifier(gapItems);
+	const quickPath = proofLoopQuickPathFromItems(gapItems, proof.target);
 	return {
 		...proof,
 		steps,
@@ -25890,6 +25911,7 @@ async function runProofLoop(
 ): Promise<string> {
 	let proof = buildProofLoop({ ...options, mode: "run" });
 	let remaining = proof.maxSteps;
+	let proofDirty = false;
 	const executedCommands = new Set<string>();
 	const runStep = async (step: ProofLoopStep, replaySteps = proof.replaySteps) => {
 		if (remaining <= 0) return;
@@ -25900,6 +25922,7 @@ async function runProofLoop(
 		step.reason = result.status === "blocked" ? result.output : step.reason;
 		remaining -= 1;
 		proof = refreshProofLoop(proof);
+		proofDirty = false;
 	};
 	const runQuickPath = async () => {
 		const quickCommands = proof.quickPath.filter((command) => !/^re[-_]proof[-_]loop\s+run\b/i.test(command));
@@ -25915,7 +25938,12 @@ async function runProofLoop(
 			remaining -= 1;
 			touched = true;
 		}
-		if (touched) proof = refreshProofLoop(proof);
+		if (touched && remaining > 0) {
+			proof = refreshProofLoop(proof);
+			proofDirty = false;
+		} else if (touched) {
+			proofDirty = true;
+		}
 	};
 	const stepById = (id: string) => proof.steps.find((step) => step.id === id && step.status === "ready");
 	for (const step of proof.steps.filter((item) => item.phase === "compact-resume" && item.status === "ready")) {
@@ -25974,6 +26002,7 @@ async function runProofLoop(
 			proof.executed.push(result);
 			remaining -= 1;
 			proof = refreshProofLoop(proof);
+			proofDirty = false;
 		}
 	}
 	if (proof.verdict === "needs_repair") {
@@ -25988,8 +26017,9 @@ async function runProofLoop(
 			if (step) await runStep(step, proof.replaySteps);
 		}
 	}
+	const compactResumeExecution = proof.executed.some((execution) => /compact resume/i.test(execution.output));
 	updateReconCompactionTelemetryFromExecutions(proof.executed, proof.sourceArtifacts);
-	proof = refreshProofLoop(proof);
+	if (proofDirty || compactResumeExecution) proof = refreshProofLoop(proof);
 	const path = writeProofLoopArtifact(proof);
 	return formatProofLoop(proof, path);
 }
