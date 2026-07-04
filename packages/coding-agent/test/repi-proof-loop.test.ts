@@ -7,6 +7,7 @@ import {
 	repiProofLoopCommandTarget,
 	repiProofLoopQuickPathFromItems,
 	repiProofLoopQuickPlanFromItems,
+	repiProofLoopRuntimeAdapterClosureRows,
 	repiProofLoopRuntimeAdapterCommands,
 	repiProofLoopSpecialistQueueFromItems,
 	repiProofLoopWorkerForText,
@@ -93,6 +94,99 @@ describe("REPI proof-loop pure planner", () => {
 			"re_autofix plan https://target.local/app",
 			"re_proof_loop run https://target.local/app 4 2",
 		]);
+	});
+
+	it("extracts exact adapters from parser summaries and mitigation-map proof gaps", () => {
+		const items = [
+			gap(
+				"attack_graph runtime_adapter_gap: parser_signal_summary adapter=web-cdp-network-adapter matched=network request ledger missing=request order proof | auth/session proof rules=3/5 artifact=/tmp/repi/runtime-adapters/web-cdp-network-adapter/run.json",
+				{
+					source: "attack_graph",
+					sourceArtifacts: ["/tmp/repi/graph.md", "/tmp/repi/runtime-adapters/web-cdp-network-adapter/run.json"],
+				},
+			),
+			gap(
+				"attack_graph runtime_adapter_gap: runtime adapter missing mitigation map proof: gdb-native-trace-adapter",
+				{
+					source: "attack_graph",
+					sourceArtifacts: ["/tmp/repi/runtime-adapters/gdb-native-trace-adapter/run.json"],
+				},
+			),
+		];
+		const plan = repiProofLoopQuickPlanFromItems(items, "./target");
+		expect(plan.commands).toContain("re_runtime_adapter run web-cdp-network-adapter ./target");
+		expect(plan.commands).toContain("re_runtime_adapter run gdb-native-trace-adapter ./target");
+		expect(plan.commands.indexOf("re_runtime_adapter run web-cdp-network-adapter ./target")).toBeLessThan(
+			plan.commands.indexOf("re_replayer run ./target 1"),
+		);
+
+		const closure = repiProofLoopRuntimeAdapterClosureRows(items, "./target");
+		expect(closure).toEqual([
+			{
+				kind: "ProofLoopRuntimeAdapterClosureRowV1",
+				schemaVersion: 1,
+				adapterId: "gdb-native-trace-adapter",
+				status: "needs_adapter_rerun",
+				missingProofSignals: [],
+				matchedProofSignals: [],
+				sourceArtifacts: ["/tmp/repi/runtime-adapters/gdb-native-trace-adapter/run.json"],
+				commands: ["re_runtime_adapter run gdb-native-trace-adapter ./target"],
+			},
+			{
+				kind: "ProofLoopRuntimeAdapterClosureRowV1",
+				schemaVersion: 1,
+				adapterId: "web-cdp-network-adapter",
+				status: "needs_adapter_rerun",
+				missingProofSignals: ["request order proof", "auth/session proof"],
+				matchedProofSignals: ["network request ledger"],
+				sourceArtifacts: ["/tmp/repi/graph.md", "/tmp/repi/runtime-adapters/web-cdp-network-adapter/run.json"],
+				commands: ["re_runtime_adapter run web-cdp-network-adapter ./target"],
+			},
+		]);
+	});
+
+	it("promotes complete runtime-adapter parser summaries into proof-spine closure", () => {
+		const plan = repiProofLoopQuickPlanFromItems(
+			[
+				gap(
+					"attack_graph proof_spine_seed: runtime adapter proof-exit complete adapter=web-cdp-network-adapter matched=network request ledger | request order proof rules=2/2 artifact=/tmp/repi/runtime-adapters/web-cdp-network-adapter/run.json",
+					{
+						source: "attack_graph",
+						worker: "web-authz",
+						sourceArtifacts: ["/tmp/repi/runtime-adapters/web-cdp-network-adapter/run.json"],
+					},
+				),
+			],
+			"https://target.local/app",
+		);
+		expect(plan.classOrder.map((row) => row.klass)).toEqual(["proof_spine_seed"]);
+		expect(plan.commands).toEqual([
+			"re_graph build",
+			"re_verifier matrix https://target.local/app",
+			"re_compiler draft https://target.local/app",
+			"re_replayer run https://target.local/app 1",
+			"re_proof_loop run https://target.local/app 4 2",
+		]);
+		expect(
+			repiProofLoopRuntimeAdapterClosureRows(
+				[
+					gap(
+						"attack_graph proof_spine_seed: runtime adapter proof-exit complete adapter=web-cdp-network-adapter matched=network request ledger | request order proof",
+						{ source: "attack_graph" },
+					),
+				],
+				"https://target.local/app",
+			)[0],
+		).toMatchObject({
+			adapterId: "web-cdp-network-adapter",
+			status: "proof_spine_ready",
+			matchedProofSignals: ["network request ledger", "request order proof"],
+			commands: [
+				"re_verifier matrix https://target.local/app",
+				"re_compiler draft https://target.local/app",
+				"re_replayer run https://target.local/app 1",
+			],
+		});
 	});
 
 	it("turns attack-graph mitigation proof seeds into a direct proof spine", () => {

@@ -93,6 +93,17 @@ export type RepiProofLoopQuickPlanV1 = {
 	};
 };
 
+export type RepiProofLoopRuntimeAdapterClosureRowV1 = {
+	kind: "ProofLoopRuntimeAdapterClosureRowV1";
+	schemaVersion: 1;
+	adapterId: string;
+	status: "needs_adapter_rerun" | "proof_spine_ready";
+	missingProofSignals: string[];
+	matchedProofSignals: string[];
+	sourceArtifacts: string[];
+	commands: string[];
+};
+
 type RepiProofLoopMissionContext = {
 	route?: { domain?: string };
 	task?: string;
@@ -139,6 +150,13 @@ export function classifyRepiProofLoopGap(item: RepiProofLoopGapItem): RepiProofL
 	}
 	if (/contradiction|counter[_ -]?evidence|refute|conflict/i.test(text)) {
 		return { klass: "contradiction", priority: 1, action: "re_supervisor repair -> re_verifier matrix" };
+	}
+	if (/proof_spine_seed|runtime adapter proof[- ]exit complete|proof[- ]exit complete/i.test(text)) {
+		return {
+			klass: "proof_spine_seed",
+			priority: 2,
+			action: "re_verifier matrix -> re_compiler draft -> re_replayer run",
+		};
 	}
 	if (
 		/runtime adapter|re_runtime_adapter|missing-proof-exit|missing proof|parser_signal_summary|parser no-match/i.test(
@@ -277,14 +295,89 @@ function appendProofSpine(commands: string[], targetRef: string, options: { incl
 	if (options.includeAutofixPlan) commands.push(`re_autofix plan ${targetRef}`);
 }
 
-function runtimeAdapterIdFromGapText(text: string): string | undefined {
-	return (
-		/runtime adapter(?: missing proof| parser no-match| failed)?:\s*([a-z0-9][a-z0-9-]*-adapter)\b/i.exec(
-			text,
-		)?.[1] ??
-		/\badapter=([a-z0-9][a-z0-9-]*-adapter)\b/i.exec(text)?.[1] ??
-		/\b(re_runtime_adapter run|adapter:)\s+([a-z0-9][a-z0-9-]*-adapter)\b/i.exec(text)?.[2]
-	);
+function runtimeAdapterIdsFromGapText(text: string): string[] {
+	const ids = new Set<string>();
+	const patterns = [
+		/\bruntime adapter(?: missing proof| parser no-match| failed| missing mitigation map proof)?:\s*([a-z0-9][a-z0-9-]*-adapter)\b/gi,
+		/\badapter=([a-z0-9][a-z0-9-]*-adapter)\b/gi,
+		/\b(?:re_runtime_adapter run|adapter:|parser_signal_summary|runtime-adapter-artifact:)\s+([a-z0-9][a-z0-9-]*-adapter)\b/gi,
+		/\/runtime-adapters\/([a-z0-9][a-z0-9-]*-adapter)(?:\/|$)/gi,
+	];
+	for (const pattern of patterns) {
+		for (const match of text.matchAll(pattern)) {
+			const id = match[1]?.trim();
+			if (id) ids.add(id);
+		}
+	}
+	return Array.from(ids);
+}
+
+function proofSignalListFromGapText(text: string, field: "missing" | "matched"): string[] {
+	const names = field === "missing" ? ["missing_proof", "missing"] : ["matched_proof", "matched"];
+	const values: string[] = [];
+	for (const name of names) {
+		const pattern = new RegExp(
+			`\\b${name}=([^\\n]*?)(?=\\s+(?:matched_proof|matched|missing_proof|missing|rules|artifact|evidence|status)=|$)`,
+			"gi",
+		);
+		for (const match of text.matchAll(pattern)) {
+			const value = match[1]?.trim();
+			if (!value || value === "<none>") continue;
+			values.push(
+				...value
+					.split(/\s*(?:\||;|,)\s*/)
+					.map((item) => item.trim())
+					.filter(Boolean),
+			);
+		}
+	}
+	return uniqueNonEmpty(values, 12);
+}
+
+export function repiProofLoopRuntimeAdapterClosureRows(
+	items: RepiProofLoopGapItem[],
+	target?: string,
+): RepiProofLoopRuntimeAdapterClosureRowV1[] {
+	const rows = new Map<string, RepiProofLoopRuntimeAdapterClosureRowV1>();
+	const targetRef = target?.trim() || "<target>";
+	for (const item of items) {
+		const klass = classifyRepiProofLoopGap(item).klass;
+		if (klass !== "runtime_adapter_gap" && klass !== "proof_spine_seed") continue;
+		for (const adapterId of runtimeAdapterIdsFromGapText(item.text)) {
+			const current =
+				rows.get(adapterId) ??
+				({
+					kind: "ProofLoopRuntimeAdapterClosureRowV1",
+					schemaVersion: 1,
+					adapterId,
+					status: "proof_spine_ready",
+					missingProofSignals: [],
+					matchedProofSignals: [],
+					sourceArtifacts: [],
+					commands: [],
+				} satisfies RepiProofLoopRuntimeAdapterClosureRowV1);
+			if (klass === "runtime_adapter_gap") current.status = "needs_adapter_rerun";
+			current.missingProofSignals = uniqueNonEmpty(
+				[...current.missingProofSignals, ...proofSignalListFromGapText(item.text, "missing")],
+				12,
+			);
+			current.matchedProofSignals = uniqueNonEmpty(
+				[...current.matchedProofSignals, ...proofSignalListFromGapText(item.text, "matched")],
+				12,
+			);
+			current.sourceArtifacts = uniqueNonEmpty([...current.sourceArtifacts, ...item.sourceArtifacts], 12);
+			current.commands =
+				current.status === "needs_adapter_rerun"
+					? repiProofLoopRuntimeAdapterCommands([adapterId], targetRef)
+					: [
+							`re_verifier matrix ${targetRef}`,
+							`re_compiler draft ${targetRef}`,
+							`re_replayer run ${targetRef} 1`,
+						];
+			rows.set(adapterId, current);
+		}
+	}
+	return Array.from(rows.values()).sort((left, right) => left.adapterId.localeCompare(right.adapterId));
 }
 
 export function repiProofLoopQuickPlanFromItems(
@@ -345,9 +438,7 @@ export function repiProofLoopQuickPlanFromItems(
 		);
 	}
 	if (classes.has("runtime_adapter_gap")) {
-		const adapterIds = Array.from(
-			new Set(items.map((item) => runtimeAdapterIdFromGapText(item.text)).filter((id): id is string => Boolean(id))),
-		);
+		const adapterIds = Array.from(new Set(items.flatMap((item) => runtimeAdapterIdsFromGapText(item.text))));
 		addPhase(
 			"runtime_adapter_frontload",
 			"collect live/runtime artifacts before verifier/compiler/replayer consumes stale evidence",

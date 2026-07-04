@@ -24837,21 +24837,33 @@ function proofLoopAttackGraphGapItems(target?: string): Array<Omit<ProofLoopGapI
 		try {
 			const artifact = readJsonObjectFile<Partial<RuntimeAdapterExecutionArtifactV1>>(artifactPath);
 			if (!artifact || artifact.kind !== "RuntimeAdapterExecutionArtifactV1" || !artifact.adapterId) return [];
-			const summary = artifact.parserSignalSummary;
-			const missing = summary?.missingProofExitSignals ?? [];
-			const rows: string[] = [];
-			if (missing.length > 0)
-				rows.push(`attack_graph runtime_adapter_gap: runtime adapter missing proof: ${artifact.adapterId}: ${missing.join("; ")}`);
-			if ((summary?.matchedRules ?? 0) === 0)
-				rows.push(`attack_graph runtime_adapter_gap: runtime adapter parser no-match: ${artifact.adapterId}`);
-			if (
+			const canSummarize =
 				Array.isArray(artifact.parserSignals) &&
 				Array.isArray(artifact.artifactKinds) &&
-				Array.isArray(artifact.proofExitSignals)
-			) {
-				const mitigationEvidence = runtimeAdapterMitigationEvidenceForGraph(
-					artifact as RuntimeAdapterExecutionArtifactV1 & { stdoutHead?: string; stderrHead?: string },
+				Array.isArray(artifact.ingestTargets) &&
+				Array.isArray(artifact.proofExitSignals);
+			const typedArtifact = canSummarize
+				? (artifact as RuntimeAdapterExecutionArtifactV1 & { stdoutHead?: string; stderrHead?: string })
+				: undefined;
+			const summary = typedArtifact ? runtimeAdapterParserSummaryForGraph(typedArtifact) : artifact.parserSignalSummary;
+			const missing = summary?.missingProofExitSignals ?? [];
+			const matched = summary?.matchedProofExitSignals ?? [];
+			const rows: string[] = [];
+			if (summary && missing.length > 0) {
+				rows.push(
+					`attack_graph runtime_adapter_gap: parser_signal_summary adapter=${artifact.adapterId} matched=${matched.join(" | ") || "<none>"} missing=${missing.join(" | ") || "<none>"} rules=${summary.matchedRules}/${summary.totalRules} artifact=${artifactPath}`,
 				);
+				rows.push(`attack_graph runtime_adapter_gap: runtime adapter missing proof: ${artifact.adapterId}: ${missing.join("; ")}`);
+			}
+			if (summary && missing.length === 0 && matched.length > 0 && (artifact.proofExitSignals?.length ?? 0) > 0) {
+				rows.push(
+					`attack_graph proof_spine_seed: runtime adapter proof-exit complete adapter=${artifact.adapterId} matched=${matched.join(" | ")} rules=${summary.matchedRules}/${summary.totalRules} artifact=${artifactPath}`,
+				);
+			}
+			if ((summary?.matchedRules ?? 0) === 0)
+				rows.push(`attack_graph runtime_adapter_gap: runtime adapter parser no-match: ${artifact.adapterId}`);
+			if (typedArtifact) {
+				const mitigationEvidence = runtimeAdapterMitigationEvidenceForGraph(typedArtifact);
 				if (mitigationEvidence?.matched) {
 					rows.push(
 						`attack_graph proof_spine_seed: binary mitigation map matched: ${artifact.adapterId}: ${mitigationEvidence.evidence.slice(0, 6).join(" | ")}`,

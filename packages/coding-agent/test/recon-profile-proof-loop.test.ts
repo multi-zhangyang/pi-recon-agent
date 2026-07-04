@@ -177,4 +177,194 @@ describe("REPI kernel profile proof-loop flow", () => {
 			harness.restore();
 		}
 	});
+
+	it("turns attack-graph parser summaries into exact runtime-adapter closure", async () => {
+		const harness = createRegisteredReconHarness("repi-profile-proof-loop-parser-summary");
+		try {
+			const proofLoopTool = harness.tools.get("re_proof_loop") as {
+				execute: (
+					toolCallId: string,
+					params: Record<string, unknown>,
+				) => Promise<{ content: Array<{ text: string }> }>;
+			};
+			const graphTool = harness.tools.get("re_graph") as {
+				execute: (
+					toolCallId: string,
+					params: Record<string, unknown>,
+				) => Promise<{ content: Array<{ text: string }> }>;
+			};
+			const runtimeAdapterDir = join(
+				harness.agentDir,
+				"recon",
+				"evidence",
+				"toolchain",
+				"runtime-adapters",
+				"web-cdp-network-adapter",
+			);
+			const runtimeArtifact = join(runtimeAdapterDir, "2026-01-01T00-00-00-000Z.json");
+			mkdirSync(runtimeAdapterDir, { recursive: true });
+			writeFileSync(
+				runtimeArtifact,
+				`${JSON.stringify(
+					{
+						kind: "RuntimeAdapterExecutionArtifactV1",
+						schemaVersion: 1,
+						adapterId: "web-cdp-network-adapter",
+						domainId: "web-api",
+						bridgeId: "tool-bridge-runtime",
+						target: "opaque-web-target",
+						startedAt: new Date(0).toISOString(),
+						finishedAt: new Date(0).toISOString(),
+						selectedRunner: "fallback",
+						command: "re_runtime_adapter run web-cdp-network-adapter opaque-web-target",
+						exitCode: 0,
+						killed: false,
+						stdoutSha256: "c".repeat(64),
+						stderrSha256: "d".repeat(64),
+						stdoutHead: "GET /api/me before GET /api/orders\n",
+						stderrHead: "",
+						parserSignals: [
+							{
+								ruleId: "parser-web-network-ledger",
+								evidenceRank: "runtime_artifact",
+								proofExitSignal: "network request ledger",
+								matches: ["GET /api/me", "GET /api/orders"],
+							},
+							{
+								ruleId: "parser-web-request-order",
+								evidenceRank: "runtime_artifact",
+								proofExitSignal: "request order proof",
+								matches: [],
+							},
+						],
+						parserSignalSummary: {
+							matchedRules: 1,
+							totalRules: 2,
+							matchCount: 2,
+							evidenceRanks: ["runtime_artifact"],
+							matchedProofExitSignals: ["network request ledger"],
+							missingProofExitSignals: ["request order proof"],
+						},
+						artifactKinds: ["web-network-ledger", "runtime-adapter-transcript"],
+						ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
+						proofExitSignals: ["network request ledger", "request order proof"],
+					},
+					null,
+					2,
+				)}\n`,
+				"utf-8",
+			);
+
+			await graphTool.execute("tool-call-id", { action: "build" });
+			const proof = await proofLoopTool.execute("tool-call-id", {
+				action: "plan",
+				target: "opaque-web-target",
+			});
+			const text = proof.content[0]?.text ?? "";
+			expect(text).toContain(
+				"parser_signal_summary adapter=web-cdp-network-adapter matched=network request ledger missing=request order proof",
+			);
+			expect(text).toContain("class=runtime_adapter_gap");
+			expect(text).toContain("runtime adapter missing proof: web-cdp-network-adapter: request order proof");
+			expect(text).toContain("re_runtime_adapter run web-cdp-network-adapter opaque-web-target");
+			expect(text).toContain("runtime_adapter_before_replay=pass");
+		} finally {
+			harness.restore();
+		}
+	});
+
+	it("uses complete parser summaries as proof-spine seeds instead of stale adapter gaps", async () => {
+		const harness = createRegisteredReconHarness("repi-profile-proof-loop-parser-complete");
+		try {
+			const proofLoopTool = harness.tools.get("re_proof_loop") as {
+				execute: (
+					toolCallId: string,
+					params: Record<string, unknown>,
+				) => Promise<{ content: Array<{ text: string }> }>;
+			};
+			const graphTool = harness.tools.get("re_graph") as {
+				execute: (
+					toolCallId: string,
+					params: Record<string, unknown>,
+				) => Promise<{ content: Array<{ text: string }> }>;
+			};
+			const runtimeAdapterDir = join(
+				harness.agentDir,
+				"recon",
+				"evidence",
+				"toolchain",
+				"runtime-adapters",
+				"web-cdp-network-adapter",
+			);
+			mkdirSync(runtimeAdapterDir, { recursive: true });
+			writeFileSync(
+				join(runtimeAdapterDir, "2026-01-01T00-00-00-000Z.json"),
+				`${JSON.stringify(
+					{
+						kind: "RuntimeAdapterExecutionArtifactV1",
+						schemaVersion: 1,
+						adapterId: "web-cdp-network-adapter",
+						domainId: "web-api",
+						bridgeId: "tool-bridge-runtime",
+						target: "opaque-web-target-complete",
+						startedAt: new Date(0).toISOString(),
+						finishedAt: new Date(0).toISOString(),
+						selectedRunner: "fallback",
+						command: "re_runtime_adapter run web-cdp-network-adapter opaque-web-target-complete",
+						exitCode: 0,
+						killed: false,
+						stdoutSha256: "e".repeat(64),
+						stderrSha256: "f".repeat(64),
+						stdoutHead: "GET /api/me before GET /api/orders\n",
+						stderrHead: "",
+						parserSignals: [
+							{
+								ruleId: "parser-web-network-ledger",
+								evidenceRank: "runtime_artifact",
+								proofExitSignal: "network request ledger",
+								matches: ["GET /api/me", "GET /api/orders"],
+							},
+							{
+								ruleId: "parser-web-request-order",
+								evidenceRank: "runtime_artifact",
+								proofExitSignal: "request order proof",
+								matches: ["GET /api/me before GET /api/orders"],
+							},
+						],
+						parserSignalSummary: {
+							matchedRules: 2,
+							totalRules: 2,
+							matchCount: 3,
+							evidenceRanks: ["runtime_artifact"],
+							matchedProofExitSignals: ["network request ledger", "request order proof"],
+							missingProofExitSignals: [],
+						},
+						artifactKinds: ["web-network-ledger", "runtime-adapter-transcript"],
+						ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
+						proofExitSignals: ["network request ledger", "request order proof"],
+					},
+					null,
+					2,
+				)}\n`,
+				"utf-8",
+			);
+
+			await graphTool.execute("tool-call-id", { action: "build" });
+			const proof = await proofLoopTool.execute("tool-call-id", {
+				action: "plan",
+				target: "opaque-web-target-complete",
+			});
+			const text = proof.content[0]?.text ?? "";
+			expect(text).toContain("class=proof_spine_seed");
+			expect(text).toContain("runtime adapter proof-exit complete adapter=web-cdp-network-adapter");
+			expect(text).toContain("re_verifier matrix opaque-web-target-complete");
+			expect(text).toContain("re_compiler draft opaque-web-target-complete");
+			expect(text).toContain("re_replayer run opaque-web-target-complete 1");
+			expect(text).not.toContain(
+				"parser_signal_summary adapter=web-cdp-network-adapter matched=network request ledger | request order proof missing=",
+			);
+		} finally {
+			harness.restore();
+		}
+	});
 });
