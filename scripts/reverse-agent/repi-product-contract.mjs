@@ -1270,6 +1270,12 @@ rows.push(
 				"[adapter-rootfs-target]",
 				"stdout_sha256",
 				"stderr_sha256",
+			]) &&
+			includesAll(reconProfile, [
+				"hostToolPresent",
+				"resolvedToolPresent",
+				"runner_preflight_blocked_no_synthetic_success",
+				"command_preflight_blocked_no_synthetic_success",
 			]),
 		syntheticRuntimeAdapterHits.length
 			? JSON.stringify(syntheticRuntimeAdapterHits.slice(0, 12))

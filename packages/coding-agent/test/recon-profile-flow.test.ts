@@ -39,7 +39,7 @@ describe("REPI kernel profile runtime/proof/swarm flows", () => {
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 
-	it("auto-detects runtime adapters from target shape and runs the selected fallback", async () => {
+	it("auto-detects runtime adapters from target shape and runs the selected real runner", async () => {
 		const tools = new Map<string, unknown>();
 		const execCalls: Array<{ command: string; args: string[] }> = [];
 		const fakePi = {
@@ -133,7 +133,7 @@ describe("REPI kernel profile runtime/proof/swarm flows", () => {
 
 		const pcapRun = await runtimeAdapterTool.execute("tool-call-id", { action: "run", target: "capture.pcap" });
 		expect(execCalls[0]?.args.join("\n")).toContain("REPI_ADAPTER_TARGET");
-		expect(execCalls[0]?.args.join("\n")).toContain("strings -a 'capture.pcap'");
+		expect(execCalls[0]?.args.join("\n")).toMatch(/(?:strings -a 'capture\.pcap'|tshark -r 'capture\.pcap')/);
 		expect(pcapRun.content[0]?.text).toContain("adapter: tshark-pcap-flow-adapter");
 		expect(pcapRun.content[0]?.text).toContain("parser-tshark-conversation");
 
@@ -150,7 +150,7 @@ describe("REPI kernel profile runtime/proof/swarm flows", () => {
 		});
 		expect(webRun.content[0]?.text).toContain("adapter: web-cdp-network-adapter");
 		expect(webRun.content[0]?.text).toContain("parser_signal_summary:");
-		expect(webRun.content[0]?.text).toContain("missing_proof=request order proof");
+		expect(webRun.content[0]?.text).toContain("request order proof");
 
 		const graph = await graphTool.execute("tool-call-id", { action: "build" });
 		const graphPath = /graph_artifact: (.+)/.exec(graph.content[0]?.text ?? "")?.[1]?.trim();
@@ -162,7 +162,7 @@ describe("REPI kernel profile runtime/proof/swarm flows", () => {
 		expect(graphText).toContain("[parser_summary]");
 		expect(graphText).toContain("parser_signal_summary");
 		expect(graphText).toContain("runtime target profile");
-		expect(graphText).toContain("missing_proof=request order proof");
+		expect(graphText).toContain("request order proof");
 		expect(graphText).toContain("--blocks:missing-proof-exit");
 		expect(graphText).toContain("[command]");
 		expect(graphText).toContain("runtime-adapter-json");
@@ -171,6 +171,52 @@ describe("REPI kernel profile runtime/proof/swarm flows", () => {
 		expect(graphText).toContain("parser-tshark-conversation");
 		expect(graphText).toContain("parser-rootfs-passwd");
 		expect(graphText).toContain("--verifies:parser:");
+	});
+
+	it("blocks runtime adapter runs when no real native or fallback runner is available", async () => {
+		const tools = new Map<string, unknown>();
+		const execCalls: Array<{ command: string; args: string[] }> = [];
+		const previousPath = process.env.PATH;
+		const emptyPath = join(tempDir, "empty-path");
+		mkdirSync(emptyPath, { recursive: true });
+		process.env.PATH = emptyPath;
+		const fakePi = {
+			registerCommand() {},
+			registerTool(tool: { name: string }) {
+				tools.set(tool.name, tool);
+			},
+			on() {},
+			appendEntry() {},
+			getSessionName: () => undefined,
+			setSessionName() {},
+			sendMessage() {},
+			exec: async (command: string, args: string[]) => {
+				execCalls.push({ command, args });
+				return { code: 0, stdout: "synthetic should not run", stderr: "", killed: false };
+			},
+		} as unknown as ExtensionAPI;
+
+		try {
+			createReconExtensionFactory()(fakePi);
+			const runtimeAdapterTool = tools.get("re_runtime_adapter") as {
+				execute: (
+					toolCallId: string,
+					params: Record<string, unknown>,
+				) => Promise<{ content: Array<{ text: string }> }>;
+			};
+			const run = await runtimeAdapterTool.execute("tool-call-id", {
+				action: "run",
+				adapter: "frida-mobile-hook-adapter",
+				target: "com.example.app",
+			});
+			expect(run.content[0]?.text).toContain("blocked: runner_unavailable");
+			expect(run.content[0]?.text).toContain("runner_preflight_blocked_no_synthetic_success");
+			expect(run.content[0]?.text).toContain("next: re_bootstrap plan frida bash");
+			expect(execCalls).toHaveLength(0);
+		} finally {
+			if (previousPath === undefined) delete process.env.PATH;
+			else process.env.PATH = previousPath;
+		}
 	});
 
 	it("builds an evidence task tree linking commands, artifacts, hypotheses, and counter-evidence", async () => {

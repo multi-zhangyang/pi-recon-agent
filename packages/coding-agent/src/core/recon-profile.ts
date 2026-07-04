@@ -28154,7 +28154,7 @@ function buildRuntimeAdapterExecutionGate(adapterFilter?: string): RuntimeAdapte
 	const index = parseToolIndex();
 	return buildRuntimeAdapterExecutionGateReport(adapterFilter, {
 		toolIndexPath: toolIndexPath(),
-		isToolPresent: (tool) => indexedToolPresent(index, tool),
+		isToolPresent: (tool) => resolvedToolPresent(index, tool),
 	});
 }
 
@@ -28172,9 +28172,34 @@ async function runRuntimeAdapterExecution(pi: ExtensionAPI, options: { adapter?:
 	const adapter = report.adapters.find((row) => row.adapterId === inferredAdapter) ?? report.adapters[0];
 	if (!adapter) return "runtime_adapter_execution:\nstatus: missing\nnext: re_runtime_adapter show";
 	if (!options.target?.trim()) return `${formatRuntimeAdapterExecutionGate(report)}\n\nblocked: target_required\nnext: re_runtime_adapter run ${adapter.adapterId} <target>`;
-	const selectedRunner = adapter.present ? "native" : "fallback";
+	const selectedRunner = adapter.present ? "native" : adapter.fallbackPresent ? "fallback" : undefined;
+	if (!selectedRunner) {
+		const missingTools = Array.from(new Set([adapter.tool, adapter.fallbackTool]));
+		appendEvidence({
+			kind: "runtime",
+			title: `runtime-adapter blocked ${adapter.adapterId}`,
+			fact: `RuntimeAdapterExecutionCheckV1 adapter=${adapter.adapterId} blocked=runner_unavailable native=${adapter.tool} fallback=${adapter.fallbackTool}`,
+			command: `re_runtime_adapter run ${adapter.adapterId} ${options.target}`,
+			verify: `re_bootstrap plan ${missingTools.join(" ")}`,
+			confidence: "runtime:adapter-execution runner_preflight_blocked_no_synthetic_success",
+		});
+		return `${formatRuntimeAdapterExecutionGate(report)}\n\nblocked: runner_unavailable adapter=${adapter.adapterId} native=${adapter.tool} fallback=${adapter.fallbackTool}\nevidence: runner_preflight_blocked_no_synthetic_success\nnext: re_bootstrap plan ${missingTools.join(" ")}`;
+	}
 	const selectedTemplate = selectedRunner === "native" ? adapter.commandTemplate : adapter.fallbackCommandTemplate;
 	const command = materializeRuntimeAdapterCommand(selectedTemplate, options.target);
+	const index = parseToolIndex();
+	const missingCommandTools = commandKnownTools(command).filter((tool) => resolvedToolPresent(index, tool) === false);
+	if (missingCommandTools.length > 0) {
+		appendEvidence({
+			kind: "runtime",
+			title: `runtime-adapter preflight ${adapter.adapterId}`,
+			fact: `RuntimeAdapterExecutionCheckV1 adapter=${adapter.adapterId} blocked=command_tools_missing tools=${missingCommandTools.join(",")}`,
+			command: `re_runtime_adapter run ${adapter.adapterId} ${options.target}`,
+			verify: `re_bootstrap plan ${missingCommandTools.join(" ")}`,
+			confidence: "runtime:adapter-execution command_preflight_blocked_no_synthetic_success",
+		});
+		return `${formatRuntimeAdapterExecutionGate(report)}\n\nblocked: command_tools_missing adapter=${adapter.adapterId} tools=${missingCommandTools.join(",")}\nevidence: command_preflight_blocked_no_synthetic_success\ncommand: ${command}\nnext: re_bootstrap plan ${missingCommandTools.join(" ")}`;
+	}
 	const timeout = Math.max(5000, Math.min(options.timeoutMs ?? Number(process.env.REPI_RUNTIME_ADAPTER_TIMEOUT_MS ?? 60000), 600000));
 	const startedAt = new Date().toISOString();
 	const result = await pi.exec("bash", ["-lc", `set +e\nexport REPI_ADAPTER_TARGET=${shellQuote(options.target)}\n${command}`], { timeout });
@@ -29184,12 +29209,34 @@ function indexedToolPresent(
 	return entry?.present;
 }
 
+const hostToolPresenceCache = new Map<string, boolean>();
+
+function hostToolPresent(tool: string): boolean | undefined {
+	const name = tool.trim();
+	if (!/^[A-Za-z0-9_.:+-]+$/.test(name)) return undefined;
+	const lower = name.toLowerCase();
+	const cacheKey = `${lower}\0${process.env.PATH ?? ""}`;
+	const cached = hostToolPresenceCache.get(cacheKey);
+	if (cached !== undefined) return cached;
+	const result = spawnSync("bash", ["-lc", `command -v ${shellQuote(name)} >/dev/null 2>&1`], {
+		timeout: 2000,
+		stdio: "ignore",
+	});
+	const present = result.status === 0;
+	hostToolPresenceCache.set(cacheKey, present);
+	return present;
+}
+
+function resolvedToolPresent(index: Map<string, { present: boolean; path?: string }>, tool: string): boolean | undefined {
+	return indexedToolPresent(index, tool) ?? hostToolPresent(tool);
+}
+
 function commandKnownTools(command: string): string[] {
 	return toolsFromCommand(command).filter((tool) => knownReconTool(tool));
 }
 
 function missingToolsForCommand(command: string, index: Map<string, { present: boolean; path?: string }>): string[] {
-	return commandKnownTools(command).filter((tool) => indexedToolPresent(index, tool) === false);
+	return commandKnownTools(command).filter((tool) => resolvedToolPresent(index, tool) === false);
 }
 
 function targetArgForPack(pack: LaneCommandPack): string {
@@ -29200,7 +29247,7 @@ function replacementIfToolsAvailable(
 	index: Map<string, { present: boolean; path?: string }>,
 	tools: string[],
 ): boolean {
-	return tools.some((tool) => indexedToolPresent(index, tool) === true);
+	return tools.some((tool) => resolvedToolPresent(index, tool) === true);
 }
 
 function fallbackForMissingTools(
