@@ -54,11 +54,23 @@ describe("REPI kernel profile runtime/proof/swarm flows", () => {
 			sendMessage() {},
 			exec: async (command: string, args: string[]) => {
 				execCalls.push({ command, args });
-				if (args.join("\n").includes("parser-rootfs-marker")) {
+				if (args.join("\n").includes("[adapter-rootfs-target]")) {
 					return {
 						code: 0,
 						stdout:
-							"[parser-rootfs-marker] target=/tmp/rootfs\n/etc/passwd\n/etc/init.d/httpd\nroot:x:0:0:root:/root:/bin/sh\nconfig password=admin\n",
+							"[adapter-rootfs-target] target=/tmp/rootfs\n/etc/passwd\n/etc/init.d/httpd\nroot:x:0:0:root:/root:/bin/sh\nconfig password=admin\n",
+						stderr: "",
+						killed: false,
+					};
+				}
+				if (
+					args.join("\n").includes("adapter-web-cdp-network-runner") ||
+					args.join("\n").includes("repi-web-adapter-body")
+				) {
+					return {
+						code: 0,
+						stdout:
+							"[http-response] status=200 url=https://target.local/app content_type=text/html bytes=128 sha256=abc\n[route-candidate] fetch('/api/orders?nonce=123')\n[crypto-request-field] nonce=123 signature=abc\n",
 						stderr: "",
 						killed: false,
 					};
@@ -126,7 +138,7 @@ describe("REPI kernel profile runtime/proof/swarm flows", () => {
 		expect(pcapRun.content[0]?.text).toContain("parser-tshark-conversation");
 
 		const rootfsRun = await runtimeAdapterTool.execute("tool-call-id", { action: "run", target: rootfsDir });
-		expect(execCalls[1]?.args.join("\n")).toContain("parser-rootfs-marker");
+		expect(execCalls[1]?.args.join("\n")).toContain("[adapter-rootfs-target]");
 		expect(execCalls[1]?.args.join("\n")).toContain("find");
 		expect(rootfsRun.content[0]?.text).toContain("adapter: firmware-rootfs-service-map-adapter");
 		expect(rootfsRun.content[0]?.text).toContain("parser-rootfs-passwd");
@@ -138,7 +150,7 @@ describe("REPI kernel profile runtime/proof/swarm flows", () => {
 		});
 		expect(webRun.content[0]?.text).toContain("adapter: web-cdp-network-adapter");
 		expect(webRun.content[0]?.text).toContain("parser_signal_summary:");
-		expect(webRun.content[0]?.text).toContain("missing_proof=CDP network capture");
+		expect(webRun.content[0]?.text).toContain("missing_proof=request order proof");
 
 		const graph = await graphTool.execute("tool-call-id", { action: "build" });
 		const graphPath = /graph_artifact: (.+)/.exec(graph.content[0]?.text ?? "")?.[1]?.trim();
@@ -150,7 +162,7 @@ describe("REPI kernel profile runtime/proof/swarm flows", () => {
 		expect(graphText).toContain("[parser_summary]");
 		expect(graphText).toContain("parser_signal_summary");
 		expect(graphText).toContain("runtime target profile");
-		expect(graphText).toContain("missing_proof=CDP network capture");
+		expect(graphText).toContain("missing_proof=request order proof");
 		expect(graphText).toContain("--blocks:missing-proof-exit");
 		expect(graphText).toContain("[command]");
 		expect(graphText).toContain("runtime-adapter-json");

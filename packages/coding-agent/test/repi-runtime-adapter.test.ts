@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -94,7 +95,7 @@ describe("REPI runtime adapter pure contracts", () => {
 
 		const signals = parseRuntimeAdapterSignals(
 			rootfsAdapter!,
-			"[parser-rootfs-marker] /etc/passwd\nroot:x:0:0:root:/root:/bin/sh\n/etc/init.d/httpd\npassword=admin\n",
+			"[adapter-rootfs-target] /etc/passwd\nroot:x:0:0:root:/root:/bin/sh\n/etc/init.d/httpd\npassword=admin\n",
 		);
 		expect(signals.map((row) => row.ruleId)).toEqual(
 			expect.arrayContaining(["parser-rootfs-passwd", "parser-rootfs-service-init", "parser-rootfs-config-secret"]),
@@ -106,5 +107,92 @@ describe("REPI runtime adapter pure contracts", () => {
 			missingProofExitSignals: [],
 		});
 		expect(formatRuntimeAdapterExecutionGate(report)).toContain("target_profile:");
+	});
+
+	test("executes real rootfs and web adapter commands against local fixtures", () => {
+		const rootfs = join(tempDir, "squashfs-root");
+		mkdirSync(join(rootfs, "etc", "init.d"), { recursive: true });
+		mkdirSync(join(rootfs, "bin"), { recursive: true });
+		writeFileSync(join(rootfs, "etc", "passwd"), "root:x:0:0:root:/root:/bin/sh\n");
+		writeFileSync(join(rootfs, "etc", "config"), "config service httpd\n\toption password 'admin'\n");
+		writeFileSync(join(rootfs, "etc", "init.d", "httpd"), "#!/bin/sh\nbusybox httpd -f\n");
+		writeFileSync(join(rootfs, "bin", "busybox"), "busybox\n");
+
+		const rootfsReport = buildRuntimeAdapterExecutionGate("firmware-rootfs-service-map-adapter", {
+			toolIndexPath: "/tmp/tool-index.md",
+			isToolPresent: (tool) => tool === "find" || tool === "grep",
+		});
+		const rootfsAdapter = rootfsReport.adapters.find(
+			(row) => row.adapterId === "firmware-rootfs-service-map-adapter",
+		)!;
+		const rootfsOutput = execFileSync(
+			"bash",
+			["-lc", materializeRuntimeAdapterCommand(rootfsAdapter.commandTemplate, rootfs)],
+			{
+				encoding: "utf8",
+				timeout: 10_000,
+			},
+		);
+		const rootfsSummary = summarizeRuntimeAdapterSignals(
+			rootfsAdapter,
+			parseRuntimeAdapterSignals(rootfsAdapter, rootfsOutput),
+		);
+		expect(rootfsOutput).toContain("/etc/passwd");
+		expect(rootfsSummary.missingProofExitSignals).toEqual([]);
+
+		const html = [
+			"<script>",
+			"fetch('/api/orders?nonce=123&timestamp=456', {headers: {'x-signature': 'abc'}});",
+			"const ws = new WebSocket('wss://example.test/socket');",
+			"const signature = 'abc';",
+			"</script>",
+		].join("\n");
+		const url = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+		const webReport = buildRuntimeAdapterExecutionGate("web-cdp-network-adapter", {
+			toolIndexPath: "/tmp/tool-index.md",
+			isToolPresent: (tool) => tool === "node" || tool === "curl",
+		});
+		const webAdapter = webReport.adapters.find((row) => row.adapterId === "web-cdp-network-adapter")!;
+		const webOutput = execFileSync(
+			"bash",
+			["-lc", materializeRuntimeAdapterCommand(webAdapter.commandTemplate, url)],
+			{
+				encoding: "utf8",
+				env: { ...process.env, REPI_ADAPTER_TARGET: url },
+				timeout: 10_000,
+			},
+		);
+		expect(webOutput).toContain("[http-response] status=200");
+		expect(webOutput).not.toMatch(/replay diff pending|manual-confirm|fallback=portable/i);
+		const webSummary = summarizeRuntimeAdapterSignals(webAdapter, parseRuntimeAdapterSignals(webAdapter, webOutput));
+		expect(webSummary.matchedProofExitSignals).toEqual(
+			expect.arrayContaining(["HTTP/CDP response capture", "XHR/WS route extraction", "signed request replay"]),
+		);
+		expect(webSummary.missingProofExitSignals).toContain("request order proof");
+	});
+
+	test("keeps pwn verifier evidence tied to real runs instead of synthetic success markers", () => {
+		const report = buildRuntimeAdapterExecutionGate("pwntools-local-verifier-adapter", {
+			toolIndexPath: "/tmp/tool-index.md",
+			isToolPresent: (tool) => tool === "python3" || tool === "gdb",
+		});
+		const adapter = report.adapters.find((row) => row.adapterId === "pwntools-local-verifier-adapter")!;
+		expect(materializeRuntimeAdapterCommand(adapter.commandTemplate, "/tmp/vuln")).not.toMatch(
+			/manual-confirm|replay diff pending|fallback=portable/i,
+		);
+
+		const signals = parseRuntimeAdapterSignals(
+			adapter,
+			[
+				"[pwn-exec-run] run=1 exit=0 signal=NONE stdout_sha256=abc stderr_sha256=def",
+				"[pwn-primitive-candidate] symbols=read,write,puts",
+				"[pwn-multirun-summary] runs=1 crash_runs=0",
+			].join("\n"),
+		);
+		const summary = summarizeRuntimeAdapterSignals(adapter, signals);
+		expect(summary.matchedProofExitSignals).toEqual(
+			expect.arrayContaining(["primitive control evidence", "multi-run verifier", "stdout/stderr hash"]),
+		);
+		expect(summary.missingProofExitSignals).toContain("crash-to-offset proof");
 	});
 });

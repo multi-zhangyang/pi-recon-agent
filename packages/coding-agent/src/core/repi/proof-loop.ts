@@ -210,7 +210,8 @@ export function repiProofLoopQuickPathFromItems(items: RepiProofLoopGapItem[], t
 		appendProofSpine(commands, targetRef, { includeAutofixPlan: true });
 	}
 	if (classes.has("replay_failure") || classes.has("timeout_or_flake")) {
-		commands.push(`re_autofix plan ${targetRef}`, `re_autofix apply ${targetRef}`, `re_replayer run ${targetRef} 1`);
+		appendProofSpine(commands, targetRef, { includeAutofixPlan: true });
+		commands.push(`re_autofix apply ${targetRef}`, `re_replayer run ${targetRef} 2`);
 	}
 	if (classes.has("contradiction")) {
 		commands.push(`re_supervisor repair ${targetRef}`);
@@ -223,7 +224,9 @@ export function repiProofLoopQuickPathFromItems(items: RepiProofLoopGapItem[], t
 		!classes.has("missing_artifact") &&
 		!classes.has("weak_evidence") &&
 		!classes.has("contradiction") &&
-		!classes.has("runtime_adapter_gap")
+		!classes.has("runtime_adapter_gap") &&
+		!classes.has("replay_failure") &&
+		!classes.has("timeout_or_flake")
 	) {
 		appendProofSpine(commands, targetRef);
 	}

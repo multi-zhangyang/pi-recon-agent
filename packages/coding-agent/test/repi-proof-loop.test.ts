@@ -59,6 +59,7 @@ describe("REPI proof-loop pure planner", () => {
 			"re_replayer run target.bin 1",
 			"re_autofix plan target.bin",
 			"re_autofix apply target.bin",
+			"re_replayer run target.bin 2",
 			"re_proof_loop run target.bin 4 2",
 		]);
 	});

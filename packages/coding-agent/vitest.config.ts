@@ -5,24 +5,40 @@ const aiSrcIndex = fileURLToPath(new URL("../ai/src/index.ts", import.meta.url))
 const aiSrcOAuth = fileURLToPath(new URL("../ai/src/oauth.ts", import.meta.url));
 const agentSrcIndex = fileURLToPath(new URL("../agent/src/index.ts", import.meta.url));
 
+const sharedTestConfig = {
+	globals: true,
+	environment: "node",
+	reporters: ["dot" as const],
+	testTimeout: 30000,
+	server: {
+		deps: {
+			external: [/@silvia-odwyer\/photon-node/],
+		},
+	},
+};
+
 export default defineConfig({
 	test: {
-		globals: true,
-		environment: "node",
-		pool: "threads",
-		// Only the process.cwd characterization tests need forked workers:
-		// worker_threads intentionally forbid process.chdir().
-		poolMatchGlobs: [
-			["**/footer-data-provider.test.ts", "forks"],
-			["**/package-command-paths.test.ts", "forks"],
-		],
-		reporters: ["dot"],
-		testTimeout: 30000,
-		server: {
-			deps: {
-				external: [/@silvia-odwyer\/photon-node/],
+		...sharedTestConfig,
+		projects: [
+			{
+				test: {
+					...sharedTestConfig,
+					name: "threads",
+					include: ["test/**/*.test.ts"],
+					exclude: ["test/footer-data-provider.test.ts", "test/package-command-paths.test.ts"],
+					pool: "threads",
+				},
 			},
-		},
+			{
+				test: {
+					...sharedTestConfig,
+					name: "forks",
+					include: ["test/footer-data-provider.test.ts", "test/package-command-paths.test.ts"],
+					pool: "forks",
+				},
+			},
+		],
 	},
 	resolve: {
 		alias: [

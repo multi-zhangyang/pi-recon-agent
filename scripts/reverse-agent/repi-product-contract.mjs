@@ -70,6 +70,7 @@ const requiredFiles = [
 	"packages/coding-agent/src/core/repi/profile.ts",
 	"packages/coding-agent/src/core/repi/proof-loop.ts",
 	"packages/coding-agent/src/core/repi/resources.ts",
+	"packages/coding-agent/src/core/repi/runtime-adapter.ts",
 	"packages/coding-agent/src/core/repi/routes.ts",
 	"packages/coding-agent/src/core/repi/mission.ts",
 	"packages/coding-agent/src/core/repi/memory-scope.ts",
@@ -1243,6 +1244,32 @@ rows.push(
 		"Keep re_runtime_adapter able to infer the runner from URL, PCAP, APK/IPA/package, firmware/rootfs, pwn/crash, and native target shapes.",
 	),
 );
+const syntheticRuntimeAdapterHits = patternHits("packages/coding-agent/src/core/repi/runtime-adapter.ts", [
+	{ id: "synthetic-mobile-fallback", re: /fallback=portable|frida=optional|adb=optional/i },
+	{ id: "synthetic-pwn-success", re: /manual-confirm|primitive=manual-confirm/i },
+	{ id: "synthetic-web-replay", re: /replay diff pending|parser-signed-replay-diff.*pending/i },
+	{ id: "parser-marker-proof", re: /parser-(?:frida|mobile|cert|cdp|xhr|signed|pwn|tshark|http|binwalk|rootfs)[^"]*\|parser-/i },
+]);
+rows.push(
+	check(
+		"runtime:adapter-real-runner-contract",
+		syntheticRuntimeAdapterHits.length === 0 &&
+			includesAll(runtimeAdapterSource, [
+				"[http-response]",
+				"[route-candidate]",
+				"[crypto-request-field]",
+				"[pwn-exec-run]",
+				"[pwn-multirun-summary]",
+				"[adapter-rootfs-target]",
+				"stdout_sha256",
+				"stderr_sha256",
+			]),
+		syntheticRuntimeAdapterHits.length
+			? JSON.stringify(syntheticRuntimeAdapterHits.slice(0, 12))
+			: "runtime adapters collect live/local artifacts and do not synthesize proof-exit success markers",
+		"Keep runtime adapters evidence-backed: fallbacks may collect passive local artifacts, but must not print fake parser successes or placeholder proof-exit markers.",
+	),
+);
 
 const graphSource = read("packages/coding-agent/src/core/repi/graph.ts");
 rows.push(
@@ -1360,6 +1387,7 @@ const scanFiles = [
 	"packages/coding-agent/src/core/repi/knowledge-scope.ts",
 	"packages/coding-agent/src/core/repi/profile.ts",
 	"packages/coding-agent/src/core/repi/resources.ts",
+	"packages/coding-agent/src/core/repi/runtime-adapter.ts",
 	"packages/coding-agent/src/core/repi/routes.ts",
 	"packages/coding-agent/src/core/repi/mission.ts",
 	"packages/coding-agent/src/core/repi/memory-active.ts",
