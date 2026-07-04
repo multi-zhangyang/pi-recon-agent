@@ -31,6 +31,7 @@ describe("repi doctor scoped memory bootstrap", () => {
 		mkdirSync(join(repoRoot, "packages", "coding-agent", "src", "cli"), { recursive: true });
 		mkdirSync(join(repoRoot, "packages", "coding-agent", "src", "core", "repi"), { recursive: true });
 		mkdirSync(join(repoRoot, "packages", "coding-agent", "src", "core"), { recursive: true });
+		mkdirSync(join(repoRoot, "packages", "coding-agent", "src", "modes"), { recursive: true });
 		mkdirSync(join(repoRoot, "scripts", "reverse-agent"), { recursive: true });
 		writeFileSync(join(repoRoot, "package.json"), '{"name":"fake-repi"}\n');
 		writeFileSync(
@@ -65,6 +66,14 @@ describe("repi doctor scoped memory bootstrap", () => {
 		writeFileSync(
 			join(repoRoot, "packages", "coding-agent", "src", "core", "repi", "resources.ts"),
 			"hasGoalModeSignature\nisExternalGoalModeExtension\nsuppressLegacyReconConflicts\n",
+		);
+		writeFileSync(
+			join(repoRoot, "packages", "coding-agent", "src", "modes", "print-mode.ts"),
+			"createPrintExtensionUIContext\nformatPrintNotify\nextension_ui_request\nREPI_PRINT_STATUS\n",
+		);
+		writeFileSync(
+			join(repoRoot, "scripts", "reverse-agent", "repi-release-tarball-smoke.mjs"),
+			"package-bin:goal-help-print\npackage-bin:goal-help-json\n",
 		);
 		writeFileSync(
 			join(repoRoot, "packages", "coding-agent", "src", "core", "recon-profile.ts"),

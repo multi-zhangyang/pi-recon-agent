@@ -230,12 +230,20 @@ describe("REPI runtime adapter pure contracts", () => {
 		);
 
 		const apk = join(tempDir, "target.apk");
-		writeFileSync(
-			apk,
-			Buffer.from(
-				"PK\x03\x04 AndroidManifest.xml classes.dex OkHttp CertificatePinner TrustManager Cipher MessageDigest pinning X509",
-				"latin1",
-			),
+		execFileSync(
+			"python3",
+			[
+				"-c",
+				[
+					"import sys, zipfile",
+					"path = sys.argv[1]",
+					"with zipfile.ZipFile(path, 'w') as z:",
+					"    z.writestr('AndroidManifest.xml', '<manifest package=\"com.repi.fixture\"/>')",
+					"    z.writestr('classes.dex', 'OkHttp CertificatePinner TrustManager Cipher MessageDigest pinning X509')",
+				].join("\n"),
+				apk,
+			],
+			{ encoding: "utf8", timeout: 10_000 },
 		);
 		const mobileReport = buildRuntimeAdapterExecutionGate("frida-mobile-hook-adapter", {
 			toolIndexPath: "/tmp/tool-index.md",
@@ -280,5 +288,93 @@ describe("REPI runtime adapter pure contracts", () => {
 			expect.arrayContaining(["primitive control evidence", "multi-run verifier", "stdout/stderr hash"]),
 		);
 		expect(pwnOutput).not.toMatch(/manual-confirm|replay diff pending|fallback=portable/i);
+	});
+
+	test("executes real native fallback commands for r2, GDB, and Ghidra-style adapters", () => {
+		const compiler = execFileSync("bash", ["-lc", "command -v cc || command -v gcc || command -v clang || true"], {
+			encoding: "utf8",
+			timeout: 5_000,
+		})
+			.trim()
+			.split(/\r?\n/)[0];
+		expect(compiler).toBeTruthy();
+
+		const source = join(tempDir, "native-fixture.c");
+		const binary = join(tempDir, "native-fixture");
+		writeFileSync(
+			source,
+			[
+				"#include <stdio.h>",
+				"#include <string.h>",
+				"int main(int argc, char **argv) {",
+				'  const char *secret = "license password token flag";',
+				'  if (argc > 1 && strcmp(argv[1], "open-sesame") == 0) puts(secret);',
+				"  return 0;",
+				"}",
+			].join("\n"),
+			"utf8",
+		);
+		execFileSync(compiler, [source, "-O0", "-g", "-o", binary], { encoding: "utf8", timeout: 20_000 });
+
+		const r2Report = buildRuntimeAdapterExecutionGate("r2-native-xref-adapter", {
+			toolIndexPath: "/tmp/tool-index.md",
+			isToolPresent: (tool) => tool === "objdump",
+		});
+		const r2Adapter = r2Report.adapters.find((row) => row.adapterId === "r2-native-xref-adapter")!;
+		const r2Output = execFileSync(
+			"bash",
+			["-lc", materializeRuntimeAdapterCommand(r2Adapter.fallbackCommandTemplate, binary)],
+			{
+				encoding: "utf8",
+				timeout: 20_000,
+			},
+		);
+		const r2Summary = summarizeRuntimeAdapterSignals(r2Adapter, parseRuntimeAdapterSignals(r2Adapter, r2Output));
+		expect(r2Output).toContain("license password token flag");
+		expect(r2Summary.matchedProofExitSignals).toEqual(
+			expect.arrayContaining(["symbol/import map", "control-flow xref", "runtime adapter transcript"]),
+		);
+
+		const gdbReport = buildRuntimeAdapterExecutionGate("gdb-native-trace-adapter", {
+			toolIndexPath: "/tmp/tool-index.md",
+			isToolPresent: (tool) => tool === "objdump",
+		});
+		const gdbAdapter = gdbReport.adapters.find((row) => row.adapterId === "gdb-native-trace-adapter")!;
+		const gdbOutput = execFileSync(
+			"bash",
+			["-lc", materializeRuntimeAdapterCommand(gdbAdapter.fallbackCommandTemplate, binary)],
+			{
+				encoding: "utf8",
+				timeout: 20_000,
+			},
+		);
+		const gdbSummary = summarizeRuntimeAdapterSignals(gdbAdapter, parseRuntimeAdapterSignals(gdbAdapter, gdbOutput));
+		expect(gdbOutput).toMatch(/Entry point|\\.text|<main>/);
+		expect(gdbSummary.matchedProofExitSignals).toEqual(expect.arrayContaining(["function/runtime entry map"]));
+
+		const ghidraReport = buildRuntimeAdapterExecutionGate("ghidra-headless-summary-adapter", {
+			toolIndexPath: "/tmp/tool-index.md",
+			isToolPresent: (tool) => tool === "readelf",
+		});
+		const ghidraAdapter = ghidraReport.adapters.find((row) => row.adapterId === "ghidra-headless-summary-adapter")!;
+		const ghidraOutput = execFileSync(
+			"bash",
+			["-lc", materializeRuntimeAdapterCommand(ghidraAdapter.fallbackCommandTemplate, binary)],
+			{
+				encoding: "utf8",
+				timeout: 20_000,
+			},
+		);
+		const ghidraSummary = summarizeRuntimeAdapterSignals(
+			ghidraAdapter,
+			parseRuntimeAdapterSignals(ghidraAdapter, ghidraOutput),
+		);
+		expect(ghidraOutput).toMatch(/Symbol table|Entry point|GLOBAL/);
+		expect(ghidraSummary.matchedProofExitSignals).toEqual(
+			expect.arrayContaining(["function inventory", "import table proof"]),
+		);
+		expect(`${r2Output}\n${gdbOutput}\n${ghidraOutput}`).not.toMatch(
+			/manual-confirm|replay diff pending|fallback=portable/i,
+		);
 	});
 });

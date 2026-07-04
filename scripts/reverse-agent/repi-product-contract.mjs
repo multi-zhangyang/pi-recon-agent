@@ -122,6 +122,7 @@ rows.push(
 				"package-bin:path-command",
 				"package-bin:fresh-list-models",
 				"package-bin:goal-help-print",
+				"package-bin:goal-help-json",
 				"package-bin:env-incomplete-guard",
 				"package-bin:model-status-env",
 				"REPI_* environment",

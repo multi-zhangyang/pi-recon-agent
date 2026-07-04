@@ -422,6 +422,11 @@ const bootstrapSource = readFirstExistingText([
 	"dist/cli/repi-bootstrap.js",
 ]);
 const argsSource = readFirstExistingText(["packages/coding-agent/src/cli/args.ts", "dist/cli/args.js"]);
+const printModeSource = readFirstExistingText(["packages/coding-agent/src/modes/print-mode.ts", "dist/modes/print-mode.js"]);
+const releaseSmokeSource = readFirstExistingText([
+	"scripts/reverse-agent/repi-release-tarball-smoke.mjs",
+	"dist/reverse-agent/repi-release-tarball-smoke.mjs",
+]);
 const goalSource = readFirstExistingText(["packages/coding-agent/src/core/repi/goal.ts", "dist/core/repi/goal.js"]);
 const reconProfileSource = readFirstExistingText([
 	"packages/coding-agent/src/core/recon-profile.ts",
@@ -464,6 +469,13 @@ const goalFooterStatusOk =
 	goalSource.includes('ctx.ui.setStatus(STATUS_KEY, formatGoalFooterStatus(goal))') &&
 	goalSource.includes('"🎯 complete"') &&
 	goalSource.includes("The footer shows");
+const goalPrintUiOk =
+	printModeSource.includes("createPrintExtensionUIContext") &&
+	printModeSource.includes("formatPrintNotify") &&
+	printModeSource.includes("extension_ui_request") &&
+	printModeSource.includes("REPI_PRINT_STATUS") &&
+	releaseSmokeSource.includes("package-bin:goal-help-print") &&
+	releaseSmokeSource.includes("package-bin:goal-help-json");
 const goalConflictSuppressionOk =
 	resourceSource.includes("hasGoalModeSignature") &&
 	resourceSource.includes("isExternalGoalModeExtension") &&
@@ -573,6 +585,12 @@ const checks = [
 		goalFooterStatusOk,
 		`formatFooter=${goalSource.includes("formatGoalFooterStatus")} setStatus=${goalSource.includes("ctx.ui.setStatus")} completeStatus=${goalSource.includes("🎯 complete")}`,
 		"keep /goal footer status visible for active, paused, budget-limited, and complete states",
+	),
+	check(
+		"goal:print-non-tui-ui-context",
+		goalPrintUiOk,
+		`printUiContext=${printModeSource.includes("createPrintExtensionUIContext")} notify=${printModeSource.includes("formatPrintNotify")} jsonUi=${printModeSource.includes("extension_ui_request")} statusOptIn=${printModeSource.includes("REPI_PRINT_STATUS")} releaseSmokePrint=${releaseSmokeSource.includes("package-bin:goal-help-print")} releaseSmokeJson=${releaseSmokeSource.includes("package-bin:goal-help-json")}`,
+		"keep /goal help/status visible in print/json non-TUI mode and covered by release tarball smoke",
 	),
 	check(
 		"goal:extension-conflict-suppression",

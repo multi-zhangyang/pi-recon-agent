@@ -97,7 +97,9 @@ afterEach(() => {
 	delete process.env.REPI_PRINT_TIMEOUT_MS;
 	delete process.env.REPI_PRINT_TIMEOUT_GRACE_MS;
 	delete process.env.REPI_PRINT_TIMEOUT_TOOL_GRACE_MS;
+	delete process.env.REPI_PRINT_TIMEOUT_WARN_LEAD_MS;
 	delete process.env.REPI_PRINT_STREAM_TEXT;
+	delete process.env.REPI_PRINT_STATUS;
 });
 
 describe("runPrintMode", () => {
@@ -196,6 +198,26 @@ describe("runPrintMode", () => {
 		);
 
 		writeSpy.mockRestore();
+	});
+
+	it("prints text-mode extension status only when REPI_PRINT_STATUS is set", async () => {
+		process.env.REPI_PRINT_STATUS = "1";
+		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "" }));
+		const { session } = runtimeHost;
+		session.bindExtensions.mockImplementation(async (bindings: any) => {
+			bindings.uiContext.setStatus("goal", "🎯 active 0s");
+			bindings.uiContext.setStatus("goal", undefined);
+		});
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+			mode: "text",
+			initialMessage: "/goal status",
+		});
+
+		expect(exitCode).toBe(0);
+		expect(errorSpy).toHaveBeenCalledWith("[repi:status] goal=🎯 active 0s");
+		expect(errorSpy).toHaveBeenCalledWith("[repi:status] goal=<clear>");
 	});
 
 	it("emits session_shutdown and returns non-zero on assistant error", async () => {
