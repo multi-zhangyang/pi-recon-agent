@@ -1266,6 +1266,9 @@ rows.push(
 				"🎯 active 0/1k",
 				"🎯 complete",
 				"returns /goal help and fresh status over RPC without starting a model turn",
+				"keeps RPC budget-limited goal lifecycle bounded without extra model turns",
+				"Goal token budget is still reached:",
+				"Goal cleared: rpc budget lifecycle",
 				"No goal is currently set.",
 			]) &&
 			includesAll(printModeTests, [

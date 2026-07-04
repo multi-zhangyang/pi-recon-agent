@@ -11,7 +11,7 @@ import { installRepiGoalMode, REPI_GOAL_STATE_ENTRY_TYPE } from "../src/core/rep
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { runRpcMode } from "../src/modes/rpc/rpc-mode.ts";
-import { createFauxStreamFn, fauxModel } from "./test-harness.ts";
+import { createFauxStreamFn, type FauxResponseInput, fauxModel } from "./test-harness.ts";
 import { createTestExtensionsResult, createTestResourceLoader } from "./utilities.ts";
 
 const rpcIo = vi.hoisted(() => ({
@@ -55,7 +55,18 @@ function extensionRequests(method: string): RpcLine[] {
 	return parseOutputLines().filter((record) => record.type === "extension_ui_request" && record.method === method);
 }
 
-async function startGoalRpcHarness(): Promise<{
+async function startGoalRpcHarness(
+	responses: FauxResponseInput[] = [
+		{
+			toolCalls: [
+				{
+					name: "goal_complete",
+					args: { summary: "Implemented and verified through the RPC goal harness." },
+				},
+			],
+		},
+	],
+): Promise<{
 	lineHandler: (line: string) => void;
 	session: AgentSession;
 	sessionManager: SessionManager;
@@ -65,16 +76,7 @@ async function startGoalRpcHarness(): Promise<{
 	const tempDir = join(tmpdir(), `repi-goal-rpc-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	mkdirSync(tempDir, { recursive: true });
 
-	const { streamFn, state: faux } = createFauxStreamFn([
-		{
-			toolCalls: [
-				{
-					name: "goal_complete",
-					args: { summary: "Implemented and verified through the RPC goal harness." },
-				},
-			],
-		},
-	]);
+	const { streamFn, state: faux } = createFauxStreamFn(responses);
 	const agent = new Agent({
 		getApiKey: () => "faux-key",
 		initialState: {
@@ -219,6 +221,55 @@ describe("REPI goal mode over RPC", () => {
 					.getEntries()
 					.some((entry) => entry.type === "custom" && entry.customType === REPI_GOAL_STATE_ENTRY_TYPE),
 			).toBe(false);
+		} finally {
+			await harness.cleanup();
+		}
+	});
+
+	it("keeps RPC budget-limited goal lifecycle bounded without extra model turns", async () => {
+		const harness = await startGoalRpcHarness([{ text: "still working", usage: { input: 100, output: 50 } }]);
+		try {
+			harness.lineHandler(
+				JSON.stringify({ id: "goal-start", type: "prompt", message: "/goal --tokens 1 rpc budget lifecycle" }),
+			);
+
+			await vi.waitFor(
+				() => {
+					expect(responseById("goal-start")).toMatchObject({ success: true, command: "prompt" });
+					expect(
+						extensionRequests("setStatus").some(
+							(request) =>
+								request.statusKey === "goal" && String(request.statusText ?? "").startsWith("🎯 budget "),
+						),
+					).toBe(true);
+				},
+				{ timeout: 8_000 },
+			);
+
+			expect(harness.faux.callCount).toBe(1);
+
+			harness.lineHandler(JSON.stringify({ id: "goal-status-active", type: "prompt", message: "/goal status" }));
+			harness.lineHandler(JSON.stringify({ id: "goal-resume-budget", type: "prompt", message: "/goal resume" }));
+			harness.lineHandler(JSON.stringify({ id: "goal-clear-budget", type: "prompt", message: "/goal clear" }));
+
+			await vi.waitFor(() => {
+				expect(responseById("goal-status-active")).toMatchObject({ success: true, command: "prompt" });
+				expect(responseById("goal-resume-budget")).toMatchObject({ success: true, command: "prompt" });
+				expect(responseById("goal-clear-budget")).toMatchObject({ success: true, command: "prompt" });
+			});
+
+			const notificationText = extensionRequests("notify")
+				.map((request) => String(request.message))
+				.join("\n");
+			expect(notificationText).toContain("Goal: rpc budget lifecycle");
+			expect(notificationText).toContain("Goal token budget is still reached:");
+			expect(notificationText).toContain("Goal cleared: rpc budget lifecycle");
+			expect(
+				extensionRequests("setStatus").some(
+					(request) => request.statusKey === "goal" && request.statusText === undefined,
+				),
+			).toBe(true);
+			expect(harness.faux.callCount).toBe(1);
 		} finally {
 			await harness.cleanup();
 		}
