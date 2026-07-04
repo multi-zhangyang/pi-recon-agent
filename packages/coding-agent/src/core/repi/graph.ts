@@ -280,7 +280,7 @@ export function formatAttackGraphArtifactMarkdown(
 		"",
 		...graph.taskTree.map(
 			(node) =>
-				`- ${node.parentId ? `${node.parentId} -> ` : ""}${node.id} [${node.kind}] ${node.label}${node.status ? ` status=${node.status}` : ""}${node.command ? ` command=${truncate(node.command, 180)}` : ""}${node.path ? ` path=${node.path}` : ""}${node.note ? ` note=${truncate(node.note, 220)}` : ""}`,
+				`- ${node.parentId ? `${node.parentId} -> ` : ""}${node.id} [${node.kind}] ${node.label}${node.status ? ` status=${node.status}` : ""}${node.command ? ` command=${truncate(node.command, 180)}` : ""}${node.path ? ` path=${node.path}` : ""}${node.evidence?.length ? ` evidence=${truncate(node.evidence.slice(0, 4).join(" | "), 260)}` : ""}${node.note ? ` note=${truncate(node.note, 220)}` : ""}`,
 		),
 		"",
 		"## JSON",

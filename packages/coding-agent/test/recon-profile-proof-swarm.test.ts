@@ -87,6 +87,8 @@ describe("REPI kernel profile proof-loop and swarm flows", () => {
 		expect(proof.content[0]?.text).toContain("class=runtime_adapter_gap");
 		expect(proof.content[0]?.text).toContain("class=missing_artifact");
 		expect(proof.content[0]?.text).toContain("quick_path:");
+		expect(proof.content[0]?.text).toContain("quick_plan_phases:");
+		expect(proof.content[0]?.text).toContain("runtime_adapter_before_replay=pass");
 		expect(proof.content[0]?.text).toContain(
 			"re_runtime_adapter run web-cdp-network-adapter https://target.local/app",
 		);
@@ -119,6 +121,7 @@ describe("REPI kernel profile proof-loop and swarm flows", () => {
 		const graphText = readFileSync(graphPath!, "utf-8");
 		expect(graphText).toContain("proof_loop plan");
 		expect(graphText).toContain("quick_path");
+		expect(graphText).toContain("quick_plan_phases");
 		expect(graphText).toContain("proof-loop-gap");
 		expect(graphText).toContain("proof-loop-output-hash");
 		expect(graphText).toContain("output_sha256");

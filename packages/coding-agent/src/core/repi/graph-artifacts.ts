@@ -50,6 +50,8 @@ export type RepiProofLoopGraphArtifact = {
 	verdict?: "ready" | "partial" | "needs_repair" | "blocked" | string;
 	gapClassifier: string[];
 	quickPath: string[];
+	quickPlanPhases: string[];
+	quickPlanAssertions: string[];
 	nextActions: string[];
 	sourceArtifacts: string[];
 };
@@ -203,6 +205,8 @@ export function parseProofLoopArtifact(path: string): RepiProofLoopGraphArtifact
 			verdict: typeof parsed.verdict === "string" ? parsed.verdict : undefined,
 			gapClassifier: stringArray(parsed.gapClassifier),
 			quickPath: stringArray(parsed.quickPath),
+			quickPlanPhases: stringArray(parsed.quickPlanPhases),
+			quickPlanAssertions: stringArray(parsed.quickPlanAssertions),
 			nextActions: stringArray(parsed.nextActions),
 			sourceArtifacts: stringArray(parsed.sourceArtifacts),
 		};

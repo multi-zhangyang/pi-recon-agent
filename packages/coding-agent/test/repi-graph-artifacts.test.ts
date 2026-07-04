@@ -44,6 +44,8 @@ describe("REPI graph artifact readers", () => {
 					executed: [{ stepId: "runtime-adapter-1", command: "cmd", status: "blocked", output: "nonce missing" }],
 					gapClassifier: ["priority=1 class=runtime_adapter_gap"],
 					quickPath: ["re_graph build"],
+					quickPlanPhases: ["phase=1:attack_graph_refresh commands=re_graph build"],
+					quickPlanAssertions: ["bounded=pass"],
 					nextActions: ["re_proof_loop run https://target.local/app 4 2"],
 					sourceArtifacts: ["/tmp/proof.md"],
 				}),
@@ -57,6 +59,8 @@ describe("REPI graph artifact readers", () => {
 		expect(parsed?.steps[0]?.phase).toBe("runtime-adapter");
 		expect(parsed?.executed[0]?.output).toBe("nonce missing");
 		expect(parsed?.gapClassifier[0]).toContain("runtime_adapter_gap");
+		expect(parsed?.quickPlanPhases[0]).toContain("attack_graph_refresh");
+		expect(parsed?.quickPlanAssertions[0]).toBe("bounded=pass");
 	});
 
 	it("summarizes runtime-adapter parser matches and missing proof exits", () => {

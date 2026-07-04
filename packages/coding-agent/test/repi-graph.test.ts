@@ -107,6 +107,7 @@ describe("REPI attack graph task-tree prioritization", () => {
 		const markdown = formatAttackGraphArtifactMarkdown(graph);
 		expect(markdown).toContain("run:proof [run]");
 		expect(markdown).toContain("command=re_replayer run target 1");
+		expect(markdown).toContain("evidence=output_sha256=abc");
 		expect(markdown).toContain("artifact:proof-output [artifact]");
 		expect(markdown).toContain("proof-loop-output-hash");
 	});
