@@ -49,5 +49,43 @@ describe("F1: stopRun 'stopped' status preserved by close handler", () => {
 		await manager.awaitRun(manifest.runId);
 		const final = manager.getRun(manifest.runId);
 		expect(final?.status).toBe("stopped");
+		expect(final?.cancelledAt).toBeTruthy();
+		expect(final?.cancelSignal).toBe("SIGTERM");
+		expect(final?.error).toBe("stopped_by_user");
+	});
+
+	it("escalates stopped runs to SIGKILL when the worker ignores SIGTERM", async () => {
+		tempRoot = mkdtempSync(join(tmpdir(), "repi-agent-thread-stop-escalate-"));
+		const workspace = join(tempRoot, "workspace");
+		mkdirSync(workspace);
+		const wrapper = join(tempRoot, "ignore-term.sh");
+		writeFileSync(wrapper, "#!/usr/bin/env bash\ntrap '' TERM\nwhile true; do sleep 1; done\n", "utf8");
+		chmodSync(wrapper, 0o700);
+		const oldGrace = process.env.REPI_AGENT_THREAD_STOP_KILL_GRACE_MS;
+		process.env.REPI_AGENT_THREAD_STOP_KILL_GRACE_MS = "100";
+		try {
+			const manager = createAgentThreadManager({
+				cwd: workspace,
+				agentDir: join(tempRoot, "agent"),
+				repiBinPath: wrapper,
+			});
+			const manifest = await manager.spawnThread({
+				specName: "verifier",
+				task: "ignore sigterm until explicit stop escalation",
+				timeoutMs: 30000,
+			});
+			await sleep(150);
+			const stopped = manager.stopRun(manifest.runId);
+			expect(stopped?.status).toBe("stopped");
+			expect(stopped?.cancelledAt).toBeTruthy();
+			const settled = await manager.awaitRun(manifest.runId);
+			expect(settled.status).toBe("stopped");
+			expect(settled.cancelSignal).toBe("SIGTERM");
+			expect(settled.signal).toBe("SIGKILL");
+			expect(settled.error).toBe("stopped_by_user");
+		} finally {
+			if (oldGrace === undefined) delete process.env.REPI_AGENT_THREAD_STOP_KILL_GRACE_MS;
+			else process.env.REPI_AGENT_THREAD_STOP_KILL_GRACE_MS = oldGrace;
+		}
 	});
 });

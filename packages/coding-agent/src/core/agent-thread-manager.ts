@@ -514,6 +514,14 @@ function runtimeAgentThreadMaxRunDirs(): number {
 	return Math.floor(value);
 }
 
+function runtimeAgentThreadStopKillGraceMs(): number {
+	const raw = process.env.REPI_AGENT_THREAD_STOP_KILL_GRACE_MS;
+	if (raw === undefined || raw.trim() === "") return 2000;
+	const value = Number(raw);
+	if (!Number.isFinite(value) || value < 50) return 2000;
+	return Math.min(30_000, Math.floor(value));
+}
+
 export class AgentThreadManager {
 	private cwd: string;
 	private agentDir: string;
@@ -1025,7 +1033,16 @@ export class AgentThreadManager {
 		const child = this.children.get(run.runId);
 		if (child && child.exitCode === null) {
 			killWorkerProcessTree(child, "SIGTERM");
-			this.updateManifest(run.runId, { status: "stopped", endedAt: nowIso() });
+			this.updateManifest(run.runId, {
+				status: "stopped",
+				endedAt: nowIso(),
+				cancelledAt: nowIso(),
+				cancelSignal: "SIGTERM",
+				error: "stopped_by_user",
+			});
+			setTimeout(() => {
+				if (child.exitCode === null) killWorkerProcessTree(child, "SIGKILL");
+			}, runtimeAgentThreadStopKillGraceMs()).unref();
 		}
 		return this.getRun(run.runId);
 	}
