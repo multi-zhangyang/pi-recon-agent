@@ -6,11 +6,14 @@
  * - `pi --mode json "prompt"` - JSON event stream
  */
 
+import { randomUUID } from "node:crypto";
 import type { AssistantMessage, ImageContent } from "@pi-recon/repi-ai";
 import type { AgentSessionEvent } from "../core/agent-session.ts";
 import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
+import type { ExtensionUIContext } from "../core/extensions/types.ts";
 import { flushRawStdout, writeRawStdout } from "../core/output-guard.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
+import type { Theme } from "./interactive/theme/theme.ts";
 
 /**
  * Options for print mode.
@@ -151,6 +154,71 @@ function printMaxToolCalls(_mode: PrintModeOptions["mode"]): number | undefined 
 function printStreamTextEnabled(mode: PrintModeOptions["mode"]): boolean {
 	if (mode !== "text") return false;
 	return envFlag("REPI_PRINT_STREAM_TEXT", false);
+}
+
+function printStatusEnabled(mode: PrintModeOptions["mode"]): boolean {
+	if (mode !== "text") return false;
+	return envFlag("REPI_PRINT_STATUS", false);
+}
+
+function formatPrintNotify(message: string, type?: "info" | "warning" | "error"): string {
+	const prefix = type === "error" ? "error" : type === "warning" ? "warning" : "info";
+	return `[repi:${prefix}] ${message}`;
+}
+
+function writeJsonExtensionUiRequest(payload: Record<string, unknown>): void {
+	writeRawStdout(`${JSON.stringify({ type: "extension_ui_request", id: randomUUID(), ...payload })}\n`);
+}
+
+function createPrintExtensionUIContext(mode: PrintModeOptions["mode"]): ExtensionUIContext {
+	const notify = (message: string, type?: "info" | "warning" | "error"): void => {
+		if (mode === "json") {
+			writeJsonExtensionUiRequest({ method: "notify", message, notifyType: type });
+			return;
+		}
+		console.error(formatPrintNotify(message, type));
+	};
+
+	const setStatus = (key: string, text: string | undefined): void => {
+		if (mode === "json") {
+			writeJsonExtensionUiRequest({ method: "setStatus", statusKey: key, statusText: text });
+			return;
+		}
+		if (printStatusEnabled(mode)) console.error(`[repi:status] ${key}=${text ?? "<clear>"}`);
+	};
+
+	return {
+		select: async () => undefined,
+		confirm: async () => false,
+		input: async () => undefined,
+		notify,
+		onTerminalInput: () => () => {},
+		setStatus,
+		setWorkingMessage: () => {},
+		setWorkingVisible: () => {},
+		setWorkingIndicator: () => {},
+		setHiddenThinkingLabel: () => {},
+		setWidget: () => {},
+		setFooter: () => {},
+		setHeader: () => {},
+		setTitle: () => {},
+		custom: async () => undefined as never,
+		pasteToEditor: () => {},
+		setEditorText: () => {},
+		getEditorText: () => "",
+		editor: async () => undefined,
+		addAutocompleteProvider: () => {},
+		setEditorComponent: () => {},
+		getEditorComponent: () => undefined,
+		get theme() {
+			return {} as Theme;
+		},
+		getAllThemes: () => [],
+		getTheme: () => undefined,
+		setTheme: () => ({ success: false, error: "Print mode has no interactive theme UI" }),
+		getToolsExpanded: () => false,
+		setToolsExpanded: () => {},
+	};
 }
 
 function eventProgressLine(event: AgentSessionEvent): string | undefined {
@@ -497,6 +565,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		unsubscribe?.();
 		try {
 			await session.bindExtensions({
+				uiContext: createPrintExtensionUIContext(mode),
 				mode: mode === "json" ? "json" : "print",
 				commandContextActions: {
 					waitForIdle: () => session.agent.waitForIdle(),

@@ -133,6 +133,71 @@ describe("runPrintMode", () => {
 		expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
 	});
 
+	it("prints extension notifications in text mode so slash-command help is visible without a TUI", async () => {
+		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "" }));
+		const { session } = runtimeHost;
+		session.bindExtensions.mockImplementation(async (bindings: any) => {
+			bindings.uiContext.notify("REPI /goal runs a task until verified completion.", "info");
+			bindings.uiContext.setStatus("goal", "🎯 active 0s");
+		});
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+			mode: "text",
+			initialMessage: "/goal help",
+		});
+
+		expect(exitCode).toBe(0);
+		expect(errorSpy).toHaveBeenCalledWith("[repi:info] REPI /goal runs a task until verified completion.");
+		expect(session.prompt).toHaveBeenCalledWith("/goal help", { images: undefined });
+	});
+
+	it("emits extension UI requests in json print mode for headless clients", async () => {
+		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "" }));
+		const { session } = runtimeHost;
+		session.bindExtensions.mockImplementation(async (bindings: any) => {
+			bindings.uiContext.notify("Goal started: json print smoke", "info");
+			bindings.uiContext.setStatus("goal", "🎯 active 0s");
+		});
+		const written: string[] = [];
+		const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: any, encOrCb?: any, cb?: any) => {
+			written.push(String(chunk));
+			const callback = typeof encOrCb === "function" ? encOrCb : cb;
+			if (typeof callback === "function") callback();
+			return true;
+		});
+
+		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+			mode: "json",
+			initialMessage: "/goal status",
+		});
+
+		expect(exitCode).toBe(0);
+		const records = written
+			.join("")
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line) as Record<string, unknown>);
+		expect(records).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					type: "extension_ui_request",
+					method: "notify",
+					message: "Goal started: json print smoke",
+					notifyType: "info",
+				}),
+				expect.objectContaining({
+					type: "extension_ui_request",
+					method: "setStatus",
+					statusKey: "goal",
+					statusText: "🎯 active 0s",
+				}),
+			]),
+		);
+
+		writeSpy.mockRestore();
+	});
+
 	it("emits session_shutdown and returns non-zero on assistant error", async () => {
 		const runtimeHost = createRuntimeHost(
 			createAssistantMessage({ stopReason: "error", errorMessage: "provider failure" }),

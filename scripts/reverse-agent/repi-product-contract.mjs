@@ -121,6 +121,7 @@ rows.push(
 			includesAll(read("scripts/reverse-agent/repi-release-tarball-smoke.mjs"), [
 				"package-bin:path-command",
 				"package-bin:fresh-list-models",
+				"package-bin:goal-help-print",
 				"package-bin:env-incomplete-guard",
 				"package-bin:model-status-env",
 				"REPI_* environment",
@@ -1182,6 +1183,7 @@ rows.push(
 );
 const goalUnitTests = read("packages/coding-agent/test/repi-goal.test.ts");
 const goalRpcTests = read("packages/coding-agent/test/repi-goal-rpc-mode.test.ts");
+const printModeTests = read("packages/coding-agent/test/print-mode.test.ts");
 rows.push(
 	check(
 		"goal:non-tui-rpc-test-contract",
@@ -1197,9 +1199,13 @@ rows.push(
 				"goal_complete",
 				"🎯 active 0/1k",
 				"🎯 complete",
+			]) &&
+			includesAll(printModeTests, [
+				"prints extension notifications in text mode so slash-command help is visible without a TUI",
+				"emits extension UI requests in json print mode for headless clients",
 			]),
 		"/goal has explicit print/json/RPC/fresh-profile coverage plus an RPC wire test for status/footer events",
-		"Keep /goal usable outside TUI: no blocking confirm dialogs, follow-up queuing when busy, fresh profile silence, and RPC-visible status events.",
+		"Keep /goal usable outside TUI: no blocking confirm dialogs, follow-up queuing when busy, fresh profile silence, print-visible help, and RPC/JSON-visible status events.",
 	),
 );
 rows.push(
