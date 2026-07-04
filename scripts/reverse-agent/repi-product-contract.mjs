@@ -1436,7 +1436,9 @@ rows.push(
 				"[mobile-ios-info]",
 				"[mobile-ios-binary]",
 				"[mobile-artifact-string]",
+				"[native-mitigation]",
 				"[pwn-exec-run]",
+				"[pwn-mitigation]",
 				"[pwn-multirun-summary]",
 				"[pcap-file]",
 				"[flow-conversation]",
@@ -1445,6 +1447,8 @@ rows.push(
 				"[adapter-rootfs-target]",
 				"stdout_sha256",
 				"stderr_sha256",
+				"binary-mitigation-map",
+				"binary mitigation map",
 			]) &&
 			includesAll(toolPresenceSource, ["repiHostToolPresent", "repiResolvedToolPresent"]) &&
 			includesAll(reconProfile, [

@@ -435,12 +435,18 @@ describe("REPI runtime adapter pure contracts", () => {
 			[
 				"[pwn-exec-run] run=1 exit=0 signal=NONE stdout_sha256=abc stderr_sha256=def",
 				"[pwn-primitive-candidate] symbols=read,write,puts",
+				"[pwn-mitigation] pie=yes nx=enabled relro=partial canary=no fortify=no type=DYN",
 				"[pwn-multirun-summary] runs=1 crash_runs=0",
 			].join("\n"),
 		);
 		const summary = summarizeRuntimeAdapterSignals(adapter, signals);
 		expect(summary.matchedProofExitSignals).toEqual(
-			expect.arrayContaining(["primitive control evidence", "multi-run verifier", "stdout/stderr hash"]),
+			expect.arrayContaining([
+				"primitive control evidence",
+				"multi-run verifier",
+				"stdout/stderr hash",
+				"binary mitigation map",
+			]),
 		);
 		expect(summary.missingProofExitSignals).toContain("crash-to-offset proof");
 	});
@@ -791,10 +797,16 @@ describe("REPI runtime adapter pure contracts", () => {
 		);
 		const r2Summary = summarizeRuntimeAdapterSignals(r2Adapter, parseRuntimeAdapterSignals(r2Adapter, r2Output));
 		expect(r2Output).toContain("[native-target]");
+		expect(r2Output).toContain("[native-mitigation]");
 		expect(r2Output).toMatch(/\[native-(?:symbol|xref|branch)\]/);
 		expect(r2Output).toContain("license password token flag");
 		expect(r2Summary.matchedProofExitSignals).toEqual(
-			expect.arrayContaining(["symbol/import map", "control-flow xref", "runtime adapter transcript"]),
+			expect.arrayContaining([
+				"symbol/import map",
+				"control-flow xref",
+				"runtime adapter transcript",
+				"binary mitigation map",
+			]),
 		);
 
 		const gdbReport = buildRuntimeAdapterExecutionGate("gdb-native-trace-adapter", {
@@ -812,9 +824,12 @@ describe("REPI runtime adapter pure contracts", () => {
 		);
 		const gdbSummary = summarizeRuntimeAdapterSignals(gdbAdapter, parseRuntimeAdapterSignals(gdbAdapter, gdbOutput));
 		expect(gdbOutput).toContain("[native-debug-target]");
+		expect(gdbOutput).toContain("[native-mitigation]");
 		expect(gdbOutput).toContain("[native-entrypoint]");
 		expect(gdbOutput).toMatch(/Entry point|\\.text|<main>/);
-		expect(gdbSummary.matchedProofExitSignals).toEqual(expect.arrayContaining(["function/runtime entry map"]));
+		expect(gdbSummary.matchedProofExitSignals).toEqual(
+			expect.arrayContaining(["function/runtime entry map", "binary mitigation map"]),
+		);
 
 		const ghidraReport = buildRuntimeAdapterExecutionGate("ghidra-headless-summary-adapter", {
 			toolIndexPath: "/tmp/tool-index.md",
@@ -834,10 +849,11 @@ describe("REPI runtime adapter pure contracts", () => {
 			parseRuntimeAdapterSignals(ghidraAdapter, ghidraOutput),
 		);
 		expect(ghidraOutput).toContain("[decompiler-summary-fallback]");
+		expect(ghidraOutput).toContain("[native-mitigation]");
 		expect(ghidraOutput).toMatch(/\[native-(?:symbol-table|import-table|dynamic-import)\]|\[function-summary\]/);
 		expect(ghidraOutput).toMatch(/Symbol table|Entry point|GLOBAL/);
 		expect(ghidraSummary.matchedProofExitSignals).toEqual(
-			expect.arrayContaining(["function inventory", "import table proof"]),
+			expect.arrayContaining(["function inventory", "import table proof", "binary mitigation map"]),
 		);
 		expect(`${r2Output}\n${gdbOutput}\n${ghidraOutput}`).not.toMatch(
 			/manual-confirm|replay diff pending|fallback=portable/i,

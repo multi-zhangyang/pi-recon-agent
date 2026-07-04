@@ -135,6 +135,8 @@ export type RuntimeAdapterParserSignalSummaryV1 = {
 
 export type RuntimeAdapterToolPresence = (tool: string) => boolean | undefined;
 
+const NATIVE_MITIGATION_MARKER = "[native-mitigation]";
+
 export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 	{
 		id: "r2-native-xref-adapter",
@@ -143,7 +145,9 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 		tool: "r2",
 		fallbackTool: "objdump",
 		runnerKind: "shell-command",
-		commandTemplate: "adapter-r2-native-xref-runner: r2 -A -q -c 'iI; afl; izz; axt @@ sym.main' <target>",
+		commandTemplate:
+			"adapter-r2-native-xref-runner: target=<target>; r2 -A -q -c 'iI; afl; izz; axt @@ sym.main' \"$target\"; " +
+			nativeMitigationShellSnippet(),
 		fallbackCommandTemplate: nativeXrefFallbackCommandTemplate(),
 		parserRules: [
 			{
@@ -164,11 +168,22 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 				evidenceRank: "runtime_artifact",
 				proofExitSignal: "runtime adapter transcript",
 			},
+			{
+				id: "parser-native-mitigation-map",
+				regex: "(\\[native-mitigation\\]|RELRO|GNU_RELRO|BIND_NOW|GNU_STACK|NX|PIE|canary|fortify)",
+				evidenceRank: "runtime_artifact",
+				proofExitSignal: "binary mitigation map",
+			},
 		],
-		artifactKinds: ["native-xref-json", "native-symbol-map", "runtime-adapter-transcript"],
+		artifactKinds: ["native-xref-json", "native-symbol-map", "binary-mitigation-map", "runtime-adapter-transcript"],
 		ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
 		envRefs: ["REPI_RUNTIME_ADAPTER_TIMEOUT_MS", "REPI_RUNTIME_ADAPTER_WORKDIR"],
-		proofExitSignals: ["symbol/import map", "control-flow xref", "runtime adapter transcript"],
+		proofExitSignals: [
+			"symbol/import map",
+			"control-flow xref",
+			"runtime adapter transcript",
+			"binary mitigation map",
+		],
 	},
 	{
 		id: "gdb-native-trace-adapter",
@@ -178,7 +193,8 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 		fallbackTool: "objdump",
 		runnerKind: "shell-command",
 		commandTemplate:
-			"adapter-gdb-native-trace-runner: gdb -q <target> -ex 'set pagination off' -ex 'set disassembly-flavor intel' -ex 'info files' -ex 'info functions' -ex 'break main' -ex 'run' -ex 'bt' -ex 'info registers' -ex 'quit'",
+			"adapter-gdb-native-trace-runner: target=<target>; gdb -q \"$target\" -ex 'set pagination off' -ex 'set disassembly-flavor intel' -ex 'info files' -ex 'info functions' -ex 'break main' -ex 'run' -ex 'bt' -ex 'info registers' -ex 'quit'; " +
+			nativeMitigationShellSnippet(),
 		fallbackCommandTemplate: nativeDebuggerFallbackCommandTemplate(),
 		parserRules: [
 			{
@@ -199,11 +215,27 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 				evidenceRank: "runtime_artifact",
 				proofExitSignal: "crash/register proof",
 			},
+			{
+				id: "parser-native-mitigation-map",
+				regex: "(\\[native-mitigation\\]|RELRO|GNU_RELRO|BIND_NOW|GNU_STACK|NX|PIE|canary|fortify)",
+				evidenceRank: "runtime_artifact",
+				proofExitSignal: "binary mitigation map",
+			},
 		],
-		artifactKinds: ["gdb-runtime-trace", "native-register-map", "runtime-adapter-transcript"],
+		artifactKinds: [
+			"gdb-runtime-trace",
+			"native-register-map",
+			"binary-mitigation-map",
+			"runtime-adapter-transcript",
+		],
 		ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
 		envRefs: ["REPI_RUNTIME_ADAPTER_TIMEOUT_MS", "REPI_RUNTIME_ADAPTER_WORKDIR"],
-		proofExitSignals: ["debugger runtime trace", "function/runtime entry map", "crash/register proof"],
+		proofExitSignals: [
+			"debugger runtime trace",
+			"function/runtime entry map",
+			"crash/register proof",
+			"binary mitigation map",
+		],
 	},
 	{
 		id: "ghidra-headless-summary-adapter",
@@ -213,11 +245,12 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 		fallbackTool: "readelf",
 		runnerKind: "shell-command",
 		commandTemplate:
-			"adapter-ghidra-headless-summary-runner: analyzeHeadless " +
+			"adapter-ghidra-headless-summary-runner: target=<target>; analyzeHeadless " +
 			"$" +
-			"{REPI_GHIDRA_PROJECT_DIR:-/tmp/repi-ghidra} repi -import <target> -overwrite -scriptPath " +
+			'{REPI_GHIDRA_PROJECT_DIR:-/tmp/repi-ghidra} repi -import "$target" -overwrite -scriptPath ' +
 			"$" +
-			"{REPI_GHIDRA_SCRIPT_DIR:-/tmp} -postScript RepiSummary.java",
+			"{REPI_GHIDRA_SCRIPT_DIR:-/tmp} -postScript RepiSummary.java; " +
+			nativeMitigationShellSnippet(),
 		fallbackCommandTemplate: nativeDecompilerSummaryFallbackCommandTemplate(),
 		parserRules: [
 			{
@@ -238,11 +271,22 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 				evidenceRank: "runtime_artifact",
 				proofExitSignal: "import table proof",
 			},
+			{
+				id: "parser-native-mitigation-map",
+				regex: "(\\[native-mitigation\\]|RELRO|GNU_RELRO|BIND_NOW|GNU_STACK|NX|PIE|canary|fortify)",
+				evidenceRank: "runtime_artifact",
+				proofExitSignal: "binary mitigation map",
+			},
 		],
-		artifactKinds: ["ghidra-headless-summary", "native-import-table", "runtime-adapter-transcript"],
+		artifactKinds: [
+			"ghidra-headless-summary",
+			"native-import-table",
+			"binary-mitigation-map",
+			"runtime-adapter-transcript",
+		],
 		ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
 		envRefs: ["REPI_GHIDRA_PROJECT_DIR", "REPI_GHIDRA_SCRIPT_DIR", "REPI_RUNTIME_ADAPTER_TIMEOUT_MS"],
-		proofExitSignals: ["decompiler summary", "function inventory", "import table proof"],
+		proofExitSignals: ["decompiler summary", "function inventory", "import table proof", "binary mitigation map"],
 	},
 	{
 		id: "frida-mobile-hook-adapter",
@@ -455,7 +499,7 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 		runnerKind: "python-harness",
 		commandTemplate: [
 			"adapter-pwntools-local-verifier-runner: python3 - <<'PY'",
-			"import hashlib, os, shutil, signal, stat, subprocess, sys",
+			"import hashlib, os, re, shutil, signal, stat, subprocess, sys",
 			"target = os.environ.get('REPI_ADAPTER_TARGET', '')",
 			"runs = max(1, min(int(os.environ.get('REPI_EXPLOIT_VERIFY_RUNS', '3') or '3'), 12))",
 			"def sha(data): return hashlib.sha256(data or b'').hexdigest()[:24]",
@@ -474,6 +518,28 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 			"    sys.exit(2)",
 			"run(['file', target]) if shutil.which('file') else None",
 			"run(['readelf', '-h', target]) if shutil.which('readelf') else None",
+			"def readelf_text(args):",
+			"    if not shutil.which('readelf'): return ''",
+			"    try:",
+			"        result = subprocess.run(['readelf'] + args + [target], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=4)",
+			"        return (result.stdout + result.stderr).decode('latin1', 'replace')",
+			"    except Exception: return ''",
+			"def emit_mitigation_map():",
+			"    header = readelf_text(['-h'])",
+			"    if 'ELF' not in header and 'Type:' not in header: return",
+			"    program = readelf_text(['-W', '-l'])",
+			"    dynamic = readelf_text(['-W', '-d'])",
+			"    symbols = readelf_text(['-Ws'])",
+			"    m = re.search(r'Type:\\s+(\\S+)', header)",
+			"    elf_type = m.group(1) if m else 'unknown'",
+			"    pie = 'yes' if elf_type == 'DYN' else 'no'",
+			"    relro = 'full' if 'BIND_NOW' in dynamic else ('partial' if 'GNU_RELRO' in program else 'none')",
+			"    stack = next((line for line in program.splitlines() if 'GNU_STACK' in line), '')",
+			"    nx = 'unknown' if not stack else ('disabled' if 'RWE' in stack else 'enabled')",
+			"    canary = 'yes' if '__stack_chk_fail' in symbols else 'no'",
+			"    fortify = 'yes' if re.search(r'(__.*_chk|_chk@)', symbols) else 'no'",
+			"    print('[pwn-mitigation] pie=%s nx=%s relro=%s canary=%s fortify=%s type=%s' % (pie, nx, relro, canary, fortify, elf_type))",
+			"emit_mitigation_map()",
 			"if shutil.which('strings'):",
 			"    result = run(['strings', '-a', target], timeout=5)",
 			"    text = ((result.stdout if result else b'') or b'').decode('latin1', 'replace')",
@@ -499,7 +565,9 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 			"PY",
 		].join("\n"),
 		fallbackCommandTemplate:
-			"adapter-pwntools-local-verifier-runner-fallback: file <target>; checksec --file=<target> 2>/dev/null || true; gdb -q <target> -ex 'set pagination off' -ex 'info files' -ex quit 2>/dev/null | head -220 || true",
+			'adapter-pwntools-local-verifier-runner-fallback: target=<target>; file "$target" 2>/dev/null || true; ' +
+			nativeMitigationShellSnippet("pwn-mitigation") +
+			" checksec --file=\"$target\" 2>/dev/null || true; gdb -q \"$target\" -ex 'set pagination off' -ex 'info files' -ex quit 2>/dev/null | head -220 || true",
 		parserRules: [
 			{
 				id: "parser-pwn-crash-offset",
@@ -525,8 +593,19 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 				evidenceRank: "runtime_artifact",
 				proofExitSignal: "stdout/stderr hash",
 			},
+			{
+				id: "parser-pwn-mitigation-map",
+				regex: "(\\[pwn-mitigation\\]|RELRO|GNU_RELRO|BIND_NOW|GNU_STACK|NX|PIE|canary|fortify)",
+				evidenceRank: "runtime_artifact",
+				proofExitSignal: "binary mitigation map",
+			},
 		],
-		artifactKinds: ["pwn-verifier-matrix", "stdout-stderr-hashes", "runtime-adapter-transcript"],
+		artifactKinds: [
+			"pwn-verifier-matrix",
+			"stdout-stderr-hashes",
+			"binary-mitigation-map",
+			"runtime-adapter-transcript",
+		],
 		ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
 		envRefs: ["REPI_EXPLOIT_VERIFY_RUNS", "REPI_RUNTIME_ADAPTER_TIMEOUT_MS"],
 		proofExitSignals: [
@@ -534,6 +613,7 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 			"primitive control evidence",
 			"multi-run verifier",
 			"stdout/stderr hash",
+			"binary mitigation map",
 		],
 	},
 	{
@@ -800,11 +880,30 @@ function rootfsServiceMapCommandTemplate(mode: "native" | "fallback"): string {
 		.join(" ");
 }
 
+function nativeMitigationShellSnippet(label = NATIVE_MITIGATION_MARKER.slice(1, -1)): string {
+	return [
+		"if command -v readelf >/dev/null 2>&1; then",
+		'  elf_type="$(readelf -h "$target" 2>/dev/null | awk \'/Type:/ {print $2; exit}\')";',
+		'  if [ -n "$elf_type" ]; then',
+		'    pie=no; [ "$elf_type" = "DYN" ] && pie=yes;',
+		"    if readelf -W -l \"$target\" 2>/dev/null | grep -q 'GNU_RELRO'; then relro=partial; else relro=none; fi;",
+		"    if readelf -W -d \"$target\" 2>/dev/null | grep -q 'BIND_NOW'; then relro=full; fi;",
+		'    stack_line="$(readelf -W -l "$target" 2>/dev/null | awk \'/GNU_STACK/ {print; exit}\')";',
+		"    nx=unknown; [ -n \"$stack_line\" ] && nx=enabled; printf '%s' \"$stack_line\" | grep -q 'RWE' && nx=disabled;",
+		"    if readelf -Ws \"$target\" 2>/dev/null | grep -q '__stack_chk_fail'; then canary=yes; else canary=no; fi;",
+		"    if readelf -Ws \"$target\" 2>/dev/null | grep -Eq '(__.*_chk|_chk@)'; then fortify=yes; else fortify=no; fi;",
+		`    printf '[${label}] pie=%s nx=%s relro=%s canary=%s fortify=%s type=%s\\n' "$pie" "$nx" "$relro" "$canary" "$fortify" "$elf_type";`,
+		"  fi;",
+		"fi;",
+	].join(" ");
+}
+
 function nativeXrefFallbackCommandTemplate(): string {
 	return [
 		"adapter-r2-native-xref-runner-fallback: target=<target>;",
 		'printf "[native-target] path=%s\\n" "$target";',
 		'file "$target" 2>/dev/null || true;',
+		nativeMitigationShellSnippet(),
 		"if command -v readelf >/dev/null 2>&1; then",
 		'  readelf -h "$target" 2>/dev/null | awk \'/Entry point/ {print "[native-entrypoint] " $0}\';',
 		'  readelf -Ws "$target" 2>/dev/null | awk \'/FUNC|OBJECT|UND|GLOBAL/ {print "[native-symbol] " $0}\' | head -180;',
@@ -823,6 +922,7 @@ function nativeDebuggerFallbackCommandTemplate(): string {
 		"adapter-gdb-native-trace-runner-fallback: target=<target>;",
 		'printf "[native-debug-target] path=%s\\n" "$target";',
 		'file "$target" 2>/dev/null || true;',
+		nativeMitigationShellSnippet(),
 		"if command -v readelf >/dev/null 2>&1; then",
 		'  readelf -h "$target" 2>/dev/null | awk \'/Entry point/ {print "[native-entrypoint] " $0} /Type:/ {print "[native-file-type] " $0} /Machine:/ {print "[native-machine] " $0}\';',
 		'  readelf -Ws "$target" 2>/dev/null | awk \'/\\bmain\\b|FUNC|UND/ {print "[native-function] " $0}\' | head -140;',
@@ -838,6 +938,7 @@ function nativeDecompilerSummaryFallbackCommandTemplate(): string {
 		"adapter-ghidra-headless-summary-runner-fallback: target=<target>;",
 		'printf "[decompiler-summary-fallback] path=%s\\n" "$target";',
 		'file "$target" 2>/dev/null || true;',
+		nativeMitigationShellSnippet(),
 		"if command -v readelf >/dev/null 2>&1; then",
 		'  readelf -h "$target" 2>/dev/null | awk \'/Entry point/ {print "[native-entrypoint] " $0}\';',
 		'  readelf -Ws "$target" 2>/dev/null | awk \'/Symbol table/ {print "[native-symbol-table] " $0} /FUNC|OBJECT|UND|GLOBAL|GLIBC/ {print "[native-import-table] " $0}\' | head -220;',
