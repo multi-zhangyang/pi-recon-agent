@@ -105,14 +105,6 @@ repi install npm:pi-web-access
 
 Then start with `/goal <objective>`, `/re-profile-check quick`, `/re-map <target> 2`, `/re-operator plan <target>`, `/re-verifier matrix`, and `/re-complete audit`. REPI still exposes standard `read`, `write`, `edit`, and `bash`, but its default system prompt and commands are the REPI reverse/pentest control plane.
 
-Release readiness is continuously checked with real, runnable scenarios:
-
-- Native reverse: a stripped `crackme` was solved end-to-end and verified with live execution.
-- Web/API authz: a local API IDOR/BOLA was proven with live HTTP requests and reusable PoC evidence.
-- PCAP/DFIR: a `capture.pcap` was carved with `tshark`, the real 200-flow flag/credentials were recovered, and a 404 decoy was excluded.
-
-Those runs directly hardened route precedence (`capture.pcap`/URL/binary targets beat harness-feedback wording), route-specific mission checkpoints, and `re_techniques` aliases such as `web-api-authz` and `pcap-dfir-carve`.
-
 **Platform notes:** [Windows](docs/windows.md) | [Termux (Android)](docs/termux.md) | [tmux](docs/tmux.md) | [Terminal setup](docs/terminal-setup.md) | [Shell aliases](docs/shell-aliases.md)
 
 ---
