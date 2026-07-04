@@ -35,6 +35,13 @@ describe("REPI proof-loop pure planner", () => {
 		expect(classifyRepiProofLoopGap(gap("counter_evidence refutes the replay claim")).klass).toBe("contradiction");
 		expect(classifyRepiProofLoopGap(gap("command not found: gdb")).klass).toBe("tool_or_dependency");
 		expect(classifyRepiProofLoopGap(gap("failed: replay exit=1 stderr=nonce mismatch")).klass).toBe("replay_failure");
+		expect(
+			classifyRepiProofLoopGap(
+				gap("attack_graph gap: runtime adapter missing proof: web-cdp-network-adapter: CDP network capture", {
+					source: "attack_graph",
+				}),
+			).klass,
+		).toBe("runtime_adapter_gap");
 		expect(classifyRepiProofLoopGap(gap("weak=2 missing=1 low confidence transcript")).klass).toBe("weak_evidence");
 	});
 
@@ -53,6 +60,27 @@ describe("REPI proof-loop pure planner", () => {
 			"re_autofix plan target.bin",
 			"re_autofix apply target.bin",
 			"re_proof_loop run target.bin 4 2",
+		]);
+	});
+
+	it("turns attack-graph runtime adapter proof gaps into an executable adapter→proof spine", () => {
+		const commands = repiProofLoopQuickPathFromItems(
+			[
+				gap("attack_graph gap: runtime adapter missing proof: web-cdp-network-adapter: request order proof", {
+					source: "attack_graph",
+					worker: "web-authz",
+				}),
+			],
+			"https://target.local/app",
+		);
+		expect(commands).toEqual([
+			"re_graph build",
+			"re_runtime_adapter run web-cdp-network-adapter https://target.local/app",
+			"re_verifier matrix https://target.local/app",
+			"re_compiler draft https://target.local/app",
+			"re_replayer run https://target.local/app 1",
+			"re_autofix plan https://target.local/app",
+			"re_proof_loop run https://target.local/app 4 2",
 		]);
 	});
 

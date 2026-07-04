@@ -102,6 +102,76 @@ export type RepiWorkerRuntimePoolV1 = {
 	claimLedgerEvents: RepiSwarmClaimLedgerEventV1[];
 };
 
+export type RepiWorkerRetryHandoffClosureWorkerV1 = {
+	workerId: string;
+	role: string;
+	packetId: string;
+	status: RepiWorkerRuntimePoolWorkerV1["status"];
+	attempt: number;
+	maxAttempts: number;
+	retryRemaining: number;
+	retryState:
+		| "passed"
+		| "not_needed"
+		| "retry_queued"
+		| "handoff_recovered"
+		| "exhausted_escalated"
+		| "blocked_without_closure";
+	timeoutMs: number;
+	timedOut: boolean;
+	cancelledAt?: string;
+	retryQueueRefs: string[];
+	handoffRefs: string[];
+	repairRefs: string[];
+	claimRefs: string[];
+	sourceArtifacts: string[];
+	mergeKeys: string[];
+	assertions: {
+		attemptBounded: boolean;
+		retryBudgetConsistent: boolean;
+		timeoutCancellationRecorded: boolean;
+		failureHasRetryOrHandoff: boolean;
+		exhaustionEscalated: boolean;
+		handoffBoundToClaim: boolean;
+		sourceArtifactsPreserved: boolean;
+	};
+};
+
+export type RepiWorkerRetryHandoffClosureV1 = {
+	kind: "WorkerRetryHandoffClosureV1";
+	schemaVersion: 1;
+	closureId: string;
+	poolId: string;
+	generatedAt: string;
+	strategy: "retry-budgeted claim-bound handoff closure";
+	workers: RepiWorkerRetryHandoffClosureWorkerV1[];
+	merge: {
+		strategy: "claim-bound handoff merge";
+		recoveredWorkers: string[];
+		unresolvedWorkers: string[];
+		collisions: {
+			mergeKey: string;
+			workers: string[];
+			status: "resolved" | "unresolved";
+			winner?: string;
+			evidenceRefs: string[];
+			resolutionReason?: string;
+		}[];
+	};
+	assertions: {
+		retryAttemptsBounded: boolean;
+		retryBudgetsConsistent: boolean;
+		timeoutCancellationRecorded: boolean;
+		failedWorkersHaveRetryOrHandoff: boolean;
+		exhaustedWorkersEscalated: boolean;
+		handoffRefsBoundToClaims: boolean;
+		mergeCollisionsResolved: boolean;
+		claimRefsPreserved: boolean;
+		sourceArtifactsPreserved: boolean;
+	};
+	errors: string[];
+};
+
 export type RepiWorkerLeaseSchedulerTaskV1 = {
 	taskId: string;
 	shardKey: string;
@@ -621,6 +691,8 @@ export function workerRuntimePoolEvidenceContract(): string[] {
 		"worker stdout/stderr sha256 must match captured artifacts",
 		"timeout/cancel must be explicit when elapsedMs exceeds timeoutMs",
 		"retryBudget signature/attempt/remaining/exhausted must be consistent",
+		"failed or timed-out workers must close through retry queue, handoff recovery, or exhausted escalation",
+		"handoff artifacts must be claim-bound before supervisor merge",
 		"resourceLease must fit the pool resourceBudget and group maxConcurrency",
 		"claim-aware merge must resolve duplicate mergeKey conflicts before supervisor promotion",
 		"each promoted worker claim must have artifact_handoff → claim → validation → challenge → resolution",
@@ -862,6 +934,92 @@ export function workerChildSessionToWorkerRuntimePoolBridge(
 		claimLedgerEvents: batch.claimLedgerEvents.filter(
 			(event) => event.source === "re_swarm",
 		) as RepiSwarmClaimLedgerEventV1[],
+	};
+}
+
+export function workerRetryHandoffClosureEvidenceContract(): string[] {
+	return [
+		"WorkerRetryHandoffClosureV1",
+		"runtime:retry-handoff-closure-validation",
+		"retry attempts must not exceed maxAttempts",
+		"timeout/cancel closure must record cancelledAt",
+		"failed workers must have retryQueueRefs, repairRefs, or handoffRefs",
+		"exhausted workers must escalate with repairRefs and no hidden retry",
+		"handoffRefs must bind to claimRefs before merge",
+		"merge collisions must be resolved or block promotion",
+	];
+}
+
+export function verifyWorkerRetryHandoffClosureV1(report: RepiWorkerRetryHandoffClosureV1): {
+	ok: boolean;
+	errors: string[];
+	evidenceContract: string[];
+} {
+	const errors: string[] = [];
+	if (report.kind !== "WorkerRetryHandoffClosureV1") errors.push("retry_handoff_closure_kind_invalid");
+	if (report.schemaVersion !== 1) errors.push("retry_handoff_closure_schema_version_invalid");
+	if (!report.poolId) errors.push("retry_handoff_closure_pool_missing");
+	if (!report.workers.length) errors.push("retry_handoff_closure_workers_missing");
+	for (const worker of report.workers) {
+		const closedByRetry = worker.retryQueueRefs.length > 0;
+		const closedByHandoff = worker.handoffRefs.length > 0;
+		const closedByRepair = worker.repairRefs.length > 0;
+		const isPassing = worker.status === "done" || worker.status === "passed";
+		const isFailure = ["failed", "timeout", "cancelled", "retry_queued", "exhausted", "blocked"].includes(
+			worker.status,
+		);
+		if (worker.attempt > worker.maxAttempts) errors.push(`retry_handoff_attempt_exceeded:${worker.workerId}`);
+		if (worker.retryRemaining !== Math.max(0, worker.maxAttempts - worker.attempt))
+			errors.push(`retry_handoff_remaining_inconsistent:${worker.workerId}`);
+		if (worker.timedOut && !worker.cancelledAt)
+			errors.push(`retry_handoff_timeout_without_cancel:${worker.workerId}`);
+		if (worker.status === "timeout" && !worker.cancelledAt)
+			errors.push(`retry_handoff_timeout_status_without_cancel:${worker.workerId}`);
+		if (isFailure && !closedByRetry && !closedByHandoff && !closedByRepair)
+			errors.push(`retry_handoff_failed_without_closure:${worker.workerId}`);
+		if (worker.status === "retry_queued" && worker.retryRemaining < 1)
+			errors.push(`retry_handoff_retry_queued_without_budget:${worker.workerId}`);
+		if (worker.status === "exhausted" && (worker.retryRemaining !== 0 || !closedByRepair))
+			errors.push(`retry_handoff_exhausted_without_escalation:${worker.workerId}`);
+		if (!isPassing && closedByHandoff && !worker.claimRefs.length)
+			errors.push(`retry_handoff_handoff_without_claim:${worker.workerId}`);
+		if (!worker.sourceArtifacts.length) errors.push(`retry_handoff_source_artifacts_missing:${worker.workerId}`);
+		if (!worker.assertions.attemptBounded)
+			errors.push(`retry_handoff_assertion_attempt_unbounded:${worker.workerId}`);
+		if (!worker.assertions.retryBudgetConsistent)
+			errors.push(`retry_handoff_assertion_retry_budget_inconsistent:${worker.workerId}`);
+		if (!worker.assertions.timeoutCancellationRecorded)
+			errors.push(`retry_handoff_assertion_timeout_cancel_missing:${worker.workerId}`);
+		if (!worker.assertions.failureHasRetryOrHandoff)
+			errors.push(`retry_handoff_assertion_failure_unclosed:${worker.workerId}`);
+		if (!worker.assertions.exhaustionEscalated)
+			errors.push(`retry_handoff_assertion_exhaustion_not_escalated:${worker.workerId}`);
+		if (!worker.assertions.handoffBoundToClaim)
+			errors.push(`retry_handoff_assertion_handoff_unbound:${worker.workerId}`);
+		if (!worker.assertions.sourceArtifactsPreserved)
+			errors.push(`retry_handoff_assertion_artifacts_missing:${worker.workerId}`);
+		if (worker.retryState === "blocked_without_closure")
+			errors.push(`retry_handoff_worker_unclosed:${worker.workerId}`);
+	}
+	for (const conflict of report.merge.collisions) {
+		if (conflict.status !== "resolved") errors.push(`retry_handoff_merge_collision_unresolved:${conflict.mergeKey}`);
+		if (conflict.status === "resolved" && (!conflict.winner || !conflict.evidenceRefs.length))
+			errors.push(`retry_handoff_merge_resolution_unproven:${conflict.mergeKey}`);
+	}
+	if (!report.assertions.retryAttemptsBounded) errors.push("retry_handoff_attempts_not_bounded");
+	if (!report.assertions.retryBudgetsConsistent) errors.push("retry_handoff_budgets_inconsistent");
+	if (!report.assertions.timeoutCancellationRecorded) errors.push("retry_handoff_timeout_cancel_not_recorded");
+	if (!report.assertions.failedWorkersHaveRetryOrHandoff) errors.push("retry_handoff_failures_not_closed");
+	if (!report.assertions.exhaustedWorkersEscalated) errors.push("retry_handoff_exhausted_not_escalated");
+	if (!report.assertions.handoffRefsBoundToClaims) errors.push("retry_handoff_refs_not_claim_bound");
+	if (!report.assertions.mergeCollisionsResolved) errors.push("retry_handoff_merge_collisions_unresolved");
+	if (!report.assertions.claimRefsPreserved) errors.push("retry_handoff_claim_refs_missing");
+	if (!report.assertions.sourceArtifactsPreserved) errors.push("retry_handoff_source_artifacts_missing");
+	if (report.errors.length) errors.push(...report.errors.map((error) => `retry_handoff_report_error:${error}`));
+	return {
+		ok: errors.length === 0,
+		errors: uniqueNonEmpty(errors, 120),
+		evidenceContract: workerRetryHandoffClosureEvidenceContract(),
 	};
 }
 

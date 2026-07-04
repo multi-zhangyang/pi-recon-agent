@@ -14,6 +14,9 @@ export type AttackGraphNode = {
 		| "counter_evidence"
 		| "verification"
 		| "tool"
+		| "target_profile"
+		| "parser_summary"
+		| "gap"
 		| "next";
 	label: string;
 	status?: string;

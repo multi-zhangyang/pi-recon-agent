@@ -562,8 +562,10 @@ import {
 	detectRuntimeAdapterIds,
 	formatRuntimeAdapterExecutionArtifact,
 	formatRuntimeAdapterExecutionGate,
+	inspectRuntimeAdapterTarget,
 	materializeRuntimeAdapterCommand,
 	parseRuntimeAdapterSignals,
+	summarizeRuntimeAdapterSignals,
 	type RuntimeAdapterExecutionArtifactV1,
 	type RuntimeAdapterExecutionCheckV1,
 } from "./repi/runtime-adapter.ts";
@@ -571,7 +573,9 @@ import {
 	verifyRepairRollbackPolicyV1,
 	verifyWorkerChildSessionRuntimeBatch,
 	verifyWorkerLeaseSchedulerV1,
+	verifyWorkerRetryHandoffClosureV1,
 	verifyWorkerRuntimePool,
+	type RepiWorkerRetryHandoffClosureV1,
 	workerChildSessionLaunchPolicy,
 	workerChildSessionToWorkerRuntimePoolBridge,
 	workerLeaseSchedulerEventHash,
@@ -1918,6 +1922,10 @@ type SwarmArtifact = {
 	workerRuntimePoolBridge?: WorkerRuntimePoolV1;
 	workerRuntimePoolBridgeStatus?: "pass" | "blocked" | "missing";
 	workerRuntimePoolBridgeErrors: string[];
+	workerRetryHandoffClosurePath?: string;
+	workerRetryHandoffClosure?: RepiWorkerRetryHandoffClosureV1;
+	workerRetryHandoffClosureStatus?: "pass" | "blocked" | "missing";
+	workerRetryHandoffClosureErrors: string[];
 	memoryWritebackEvents: string[];
 	memoryWritebackCount: number;
 	memoryWritebackStatus: "pending" | "pass" | "skipped" | "blocked";
@@ -2411,6 +2419,8 @@ type ProofLoopPhase =
 	| "failure-signature"
 	| "operator-feedback"
 	| "swarm-retry"
+	| "attack-graph"
+	| "runtime-adapter"
 	| "verifier"
 	| "compiler"
 	| "replayer"
@@ -13261,6 +13271,37 @@ type RuntimeAdapterExecutionGraphArtifact = RuntimeAdapterExecutionArtifactV1 & 
 	stderrHead?: string;
 };
 
+type RuntimeAdapterGraphParserSummary = NonNullable<RuntimeAdapterExecutionArtifactV1["parserSignalSummary"]>;
+type RuntimeAdapterGraphEvidenceRank = RuntimeAdapterGraphParserSummary["evidenceRanks"][number];
+
+function runtimeAdapterParserSummaryForGraph(
+	artifact: RuntimeAdapterExecutionGraphArtifact,
+): RuntimeAdapterGraphParserSummary {
+	if (artifact.parserSignalSummary) return artifact.parserSignalSummary;
+	const matchedSignals = artifact.parserSignals.filter((signal) => Array.isArray(signal.matches) && signal.matches.length > 0);
+	const matchedProofExitSignals = Array.from(
+		new Set(matchedSignals.map((signal) => signal.proofExitSignal).filter((signal): signal is string => Boolean(signal))),
+	);
+	const missingProofExitSignals = artifact.proofExitSignals.filter(
+		(signal) => !matchedProofExitSignals.includes(signal),
+	);
+	const evidenceRanks = Array.from(
+		new Set(
+			matchedSignals
+				.map((signal) => signal.evidenceRank)
+				.filter((rank): rank is RuntimeAdapterGraphEvidenceRank => Boolean(rank)),
+		),
+	);
+	return {
+		matchedRules: matchedSignals.length,
+		totalRules: artifact.parserSignals.length,
+		matchCount: matchedSignals.reduce((sum, signal) => sum + signal.matches.length, 0),
+		evidenceRanks,
+		matchedProofExitSignals,
+		missingProofExitSignals,
+	};
+}
+
 function isRuntimeAdapterExecutionGraphArtifact(row: unknown): row is RuntimeAdapterExecutionGraphArtifact {
 	if (typeof row !== "object" || row === null) return false;
 	const record = row as Record<string, unknown>;
@@ -13463,6 +13504,11 @@ function buildAttackGraph(): AttackGraphArtifact {
 		const artifactId = `artifact:runtime-adapter:${slug(artifact.adapterId)}:${slug(artifactBase)}`;
 		const commandId = `command:runtime-adapter:${slug(artifact.adapterId)}:${slug(artifactBase)}`;
 		const parserMatchCount = artifact.parserSignals.reduce((sum, signal) => sum + signal.matches.length, 0);
+		const parserSummary = runtimeAdapterParserSummaryForGraph(artifact);
+		const parserSummaryId = `summary:runtime-adapter:${slug(artifact.adapterId)}:${slug(artifactBase)}`;
+		const targetProfile = artifact.targetProfile;
+		const targetProfileId = `target:runtime-adapter:${slug(artifact.adapterId)}:${slug(artifactBase)}`;
+
 		addNode({
 			id: adapterId,
 			kind: "tool",
@@ -13478,6 +13524,37 @@ function buildAttackGraph(): AttackGraphArtifact {
 			status: `${artifact.selectedRunner}/${artifact.domainId}`,
 			note: `runtime-adapter target=${artifact.target ?? "<none>"}`,
 		});
+
+		if (targetProfile) {
+			addNode({
+				id: targetProfileId,
+				kind: "target_profile",
+				label: truncateMiddle(targetProfile.target || artifact.target || "<none>", 160),
+				status: `kinds=${targetProfile.targetKinds.join(",")} exists=${targetProfile.exists}`,
+				note: [
+					`path=${targetProfile.pathKind ?? "<none>"}`,
+					`magic=${targetProfile.magic ?? "<none>"}`,
+					`adapters=${targetProfile.adapterIds.join(",") || "<none>"}`,
+					`reasons=${targetProfile.reasons.join(" | ") || "<none>"}`,
+				].join(" "),
+			});
+			addTask({
+				id: targetProfileId,
+				parentId: adapterId,
+				kind: "target_profile",
+				label: truncateMiddle(targetProfile.target || artifact.target || "<none>", 180),
+				status: `kinds=${targetProfile.targetKinds.join(",")} exists=${targetProfile.exists}`,
+				evidence: targetProfile.signals
+					.slice(0, 8)
+					.map(
+						(signal) =>
+							`rank=${signal.evidenceRank} kind=${signal.targetKind} adapter=${signal.adapterId} reason=${signal.reason}`,
+					),
+				note: `runtime target profile magic=${targetProfile.magic ?? "<none>"}`,
+			});
+			addEdge({ from: targetProfileId, to: adapterId, kind: "supports", label: "target-profile-auto-detect" });
+		}
+
 		addNode({
 			id: artifactId,
 			kind: "artifact",
@@ -13500,6 +13577,7 @@ function buildAttackGraph(): AttackGraphArtifact {
 				`stderr_sha256=${artifact.stderrSha256}`,
 			],
 		});
+
 		addNode({
 			id: commandId,
 			kind: "command",
@@ -13517,14 +13595,63 @@ function buildAttackGraph(): AttackGraphArtifact {
 		});
 		addEdge({ from: adapterId, to: commandId, kind: "requires", label: artifact.selectedRunner });
 		addEdge({ from: commandId, to: artifactId, kind: "produces", label: "runtime-adapter-json" });
+		if (targetProfile) addEdge({ from: targetProfileId, to: artifactId, kind: "evidences", label: "target-profile" });
+
+		addNode({
+			id: parserSummaryId,
+			kind: "parser_summary",
+			label: `parser_signal_summary ${artifact.adapterId}`,
+			status: `matched=${parserSummary.matchedRules}/${parserSummary.totalRules} missing=${parserSummary.missingProofExitSignals.length}`,
+			note: `ranks=${parserSummary.evidenceRanks.join(",") || "<none>"} matched_proof=${parserSummary.matchedProofExitSignals.join(" | ") || "<none>"}`,
+		});
+		addTask({
+			id: parserSummaryId,
+			parentId: artifactId,
+			kind: "parser_summary",
+			label: `parser_signal_summary ${artifact.adapterId}`,
+			status: `matched=${parserSummary.matchedRules}/${parserSummary.totalRules} missing=${parserSummary.missingProofExitSignals.length}`,
+			evidence: [
+				`matched=${parserSummary.matchedRules}/${parserSummary.totalRules}`,
+				`match_count=${parserSummary.matchCount}`,
+				`ranks=${parserSummary.evidenceRanks.join(",") || "<none>"}`,
+				`matched_proof=${parserSummary.matchedProofExitSignals.join(" | ") || "<none>"}`,
+				`missing_proof=${parserSummary.missingProofExitSignals.join(" | ") || "<none>"}`,
+			],
+		});
+		addEdge({ from: parserSummaryId, to: artifactId, kind: "verifies", label: "parser-signal-summary" });
+
+		if (parserSummary.missingProofExitSignals.length > 0) {
+			gaps.push(`runtime adapter missing proof: ${artifact.adapterId}: ${parserSummary.missingProofExitSignals.join("; ")}`);
+			for (const missingProofExit of parserSummary.missingProofExitSignals.slice(0, 6)) {
+				const gapId = `gap:runtime-adapter:${slug(artifact.adapterId)}:${slug(artifactBase)}:${slug(missingProofExit)}`;
+				addNode({
+					id: gapId,
+					kind: "gap",
+					label: missingProofExit,
+					status: "missing-proof-exit",
+					note: `adapter=${artifact.adapterId} parser_signal_summary missing_proof=${missingProofExit}`,
+				});
+				addTask({
+					id: gapId,
+					parentId: parserSummaryId,
+					kind: "gap",
+					label: missingProofExit,
+					status: "missing-proof-exit",
+					evidence: [`missing_proof=${missingProofExit}`, `adapter=${artifact.adapterId}`, `artifact=${path}`],
+				});
+				addEdge({ from: gapId, to: parserSummaryId, kind: "blocks", label: "missing-proof-exit" });
+			}
+		}
+
 		if (mission) addEdge({ from: `mission:${mission.id}`, to: adapterId, kind: "requires", label: "runtime-adapter" });
 		for (const [index, signal] of artifact.parserSignals.entries()) {
 			const signalId = `verify:runtime-adapter:${slug(artifact.adapterId)}:${slug(artifactBase)}:${index + 1}:${slug(signal.ruleId)}`;
+			const evidenceRank = signal.evidenceRank ?? "unranked";
 			addNode({
 				id: signalId,
 				kind: "verification",
 				label: `${signal.ruleId} => ${signal.proofExitSignal}`,
-				status: signal.matches.length ? `matches=${signal.matches.length}` : "no-match",
+				status: signal.matches.length ? `rank=${evidenceRank} matches=${signal.matches.length}` : `rank=${evidenceRank} no-match`,
 				note: signal.matches.slice(0, 4).join(" | ") || "parser signal did not match runner output",
 			});
 			addTask({
@@ -13532,11 +13659,18 @@ function buildAttackGraph(): AttackGraphArtifact {
 				parentId: artifactId,
 				kind: "verification",
 				label: `${signal.ruleId} => ${signal.proofExitSignal}`,
-				status: signal.matches.length ? `matches=${signal.matches.length}` : "no-match",
-				evidence: signal.matches.slice(0, 6),
+				status: signal.matches.length ? `rank=${evidenceRank} matches=${signal.matches.length}` : `rank=${evidenceRank} no-match`,
+				evidence: [`rank=${evidenceRank}`, ...signal.matches.slice(0, 6)],
 			});
-			addEdge({ from: signalId, to: artifactId, kind: "verifies", label: "parser" });
+			addEdge({ from: signalId, to: artifactId, kind: "verifies", label: `parser:${evidenceRank}` });
+			addEdge({
+				from: signalId,
+				to: parserSummaryId,
+				kind: signal.matches.length ? "supports" : "blocks",
+				label: signal.matches.length ? "matched-rule" : "no-match",
+			});
 		}
+
 		if (artifact.killed || (artifact.exitCode !== null && artifact.exitCode !== 0)) {
 			gaps.push(`runtime adapter failed: ${artifact.adapterId} exit=${artifact.exitCode ?? "null"} killed=${artifact.killed}`);
 		}
@@ -15981,6 +16115,10 @@ function swarmWorkerChildSessionRuntimePath(swarm: Pick<SwarmArtifact, "timestam
 	return swarmArtifactPath(swarm).replace(/\.md$/i, "-worker-child-session-runtime.json");
 }
 
+function swarmWorkerRetryHandoffClosurePath(swarm: Pick<SwarmArtifact, "timestamp" | "route" | "mode">): string {
+	return swarmArtifactPath(swarm).replace(/\.md$/i, "-worker-retry-handoff-closure.json");
+}
+
 function swarmWorkerLeaseSchedulerPath(swarm: Pick<SwarmArtifact, "timestamp" | "route" | "mode">): string {
 	return swarmArtifactPath(swarm).replace(/\.md$/i, "-worker-lease-scheduler.json");
 }
@@ -16836,6 +16974,8 @@ function buildSwarm(options: { target?: string; task?: string; mode?: "plan" | "
 		workerLeaseSchedulerErrors: [],
 		workerRuntimePoolBridgeStatus: "missing",
 		workerRuntimePoolBridgeErrors: [],
+		workerRetryHandoffClosureStatus: "missing",
+		workerRetryHandoffClosureErrors: [],
 		memoryWritebackEvents: [],
 		memoryWritebackCount: 0,
 		memoryWritebackStatus: "pending",
@@ -17818,6 +17958,207 @@ function runWorkerChildProcessProbe(batch: WorkerChildSessionRuntimeBatchV1, art
 	};
 }
 
+function workerPoolStatusPassed(status: WorkerRuntimePoolWorkerV1["status"]): boolean {
+	return status === "done" || status === "passed";
+}
+
+function workerPoolStatusFailed(status: WorkerRuntimePoolWorkerV1["status"]): boolean {
+	return ["blocked", "failed", "timeout", "cancelled", "retry_queued", "exhausted"].includes(status);
+}
+
+function workerRetryQueueRefsForSwarmWorker(swarm: SwarmArtifact, workerId: string): string[] {
+	const refs = swarm.retryQueue.filter((row) => row.includes(`worker=${workerId}`));
+	return uniqueNonEmpty(refs, 12);
+}
+
+function workerHandoffRefsForSwarmWorker(swarm: SwarmArtifact, workerId: string): string[] {
+	const manifests = (swarm.subagentRuntimeManifests ?? []).filter((manifest) => manifest.workerId === workerId);
+	return uniqueNonEmpty(
+		manifests.flatMap((manifest) => [
+			manifest.runtimeManifestFile,
+			manifest.stdoutPath,
+			manifest.stderrPath,
+			...manifest.evidenceRefs,
+		]),
+		24,
+	);
+}
+
+function workerRepairRefsForSwarmWorker(swarm: SwarmArtifact, workerId: string): string[] {
+	const manifests = (swarm.subagentRuntimeManifests ?? []).filter((manifest) => manifest.workerId === workerId);
+	const failed = swarm.executions.some((execution) => execution.workerId === workerId && execution.status === "blocked");
+	return uniqueNonEmpty(
+		[
+			...manifests.flatMap((manifest) => [manifest.failureLedgerPath, manifest.repairQueuePath]),
+			...(failed ? [runtimeFailureLedgerPath(), runtimeRepairQueuePath()] : []),
+		],
+		12,
+	);
+}
+
+function workerRetryHandoffState(params: {
+	worker: WorkerRuntimePoolWorkerV1;
+	retryQueueRefs: string[];
+	handoffRefs: string[];
+	repairRefs: string[];
+}): RepiWorkerRetryHandoffClosureV1["workers"][number]["retryState"] {
+	const { worker, retryQueueRefs, handoffRefs, repairRefs } = params;
+	if (workerPoolStatusPassed(worker.status)) return "passed";
+	if (!workerPoolStatusFailed(worker.status)) return "not_needed";
+	if (worker.status === "exhausted") return repairRefs.length ? "exhausted_escalated" : "blocked_without_closure";
+	if (retryQueueRefs.length && worker.retryBudget.remaining > 0) return "retry_queued";
+	if (handoffRefs.length && worker.claimRefs.length) return "handoff_recovered";
+	if (repairRefs.length) return worker.retryBudget.remaining > 0 ? "retry_queued" : "exhausted_escalated";
+	return "blocked_without_closure";
+}
+
+function buildSwarmWorkerRetryHandoffClosure(
+	swarm: SwarmArtifact,
+	pool: WorkerRuntimePoolV1,
+): RepiWorkerRetryHandoffClosureV1 {
+	const generatedAt = new Date().toISOString();
+	const closureId = `worker-retry-handoff/${slug(swarm.route ?? swarm.target ?? "swarm")}/${swarm.timestamp}`;
+	const workers = pool.workers.map((worker): RepiWorkerRetryHandoffClosureV1["workers"][number] => {
+		const retryQueueRefs = workerRetryQueueRefsForSwarmWorker(swarm, worker.workerId);
+		const handoffRefs = workerHandoffRefsForSwarmWorker(swarm, worker.workerId);
+		const repairRefs = workerRepairRefsForSwarmWorker(swarm, worker.workerId);
+		const mergeKeys = Array.isArray(worker.mergeKey) ? worker.mergeKey : [worker.mergeKey];
+		const sourceArtifacts = uniqueNonEmpty(
+			[
+				...worker.claimRefs,
+				...mergeKeys,
+				...retryQueueRefs,
+				...handoffRefs,
+				...repairRefs,
+				worker.stdoutPath,
+				worker.stderrPath,
+				swarm.claimLedgerPath,
+				swarm.workerChildSessionRuntimePath,
+			],
+			40,
+		);
+		const timedOut = worker.status === "timeout" || (worker.endedAt && worker.startedAt ? Date.parse(worker.endedAt) - Date.parse(worker.startedAt) > worker.timeoutMs : false);
+		const retryRemaining = Math.max(0, worker.maxAttempts - worker.attempt);
+		const isFailure = workerPoolStatusFailed(worker.status);
+		const exhausted = worker.status === "exhausted" || worker.retryBudget.exhausted || worker.attempt >= worker.maxAttempts;
+		const retryState = workerRetryHandoffState({ worker, retryQueueRefs, handoffRefs, repairRefs });
+		const assertions = {
+			attemptBounded: worker.attempt <= worker.maxAttempts,
+			retryBudgetConsistent:
+				worker.retryBudget.attempt === worker.attempt &&
+				worker.retryBudget.maxAttempts === worker.maxAttempts &&
+				worker.retryBudget.remaining === retryRemaining &&
+				worker.retryBudget.exhausted === exhausted,
+			timeoutCancellationRecorded: !timedOut || Boolean(worker.cancelledAt),
+			failureHasRetryOrHandoff: !isFailure || retryQueueRefs.length > 0 || handoffRefs.length > 0 || repairRefs.length > 0,
+			exhaustionEscalated: !exhausted || workerPoolStatusPassed(worker.status) || repairRefs.length > 0,
+			handoffBoundToClaim: handoffRefs.length === 0 || worker.claimRefs.length > 0,
+			sourceArtifactsPreserved: sourceArtifacts.length > 0,
+		};
+		return {
+			workerId: worker.workerId,
+			role: worker.role,
+			packetId: worker.packetId,
+			status: worker.status,
+			attempt: worker.attempt,
+			maxAttempts: worker.maxAttempts,
+			retryRemaining,
+			retryState,
+			timeoutMs: worker.timeoutMs,
+			timedOut,
+			cancelledAt: worker.cancelledAt,
+			retryQueueRefs,
+			handoffRefs,
+			repairRefs,
+			claimRefs: worker.claimRefs,
+			sourceArtifacts,
+			mergeKeys,
+			assertions,
+		};
+	});
+	const recoveredWorkers = workers
+		.filter((worker) => worker.retryState === "handoff_recovered" || worker.retryState === "retry_queued")
+		.map((worker) => worker.workerId);
+	const unresolvedWorkers = workers
+		.filter((worker) => worker.retryState === "blocked_without_closure")
+		.map((worker) => worker.workerId);
+	const collisions = pool.mergeProtocol.conflicts.map((conflict) => ({
+		mergeKey: conflict.mergeKey,
+		workers: conflict.workers,
+		status: conflict.status,
+		winner: conflict.winner,
+		evidenceRefs: conflict.evidenceRefs,
+		resolutionReason: conflict.resolutionReason,
+	}));
+	const reportWithoutAssertions = {
+		kind: "WorkerRetryHandoffClosureV1" as const,
+		schemaVersion: 1 as const,
+		closureId,
+		poolId: pool.poolId,
+		generatedAt,
+		strategy: "retry-budgeted claim-bound handoff closure" as const,
+		workers,
+		merge: {
+			strategy: "claim-bound handoff merge" as const,
+			recoveredWorkers,
+			unresolvedWorkers,
+			collisions,
+		},
+	};
+	const assertions = {
+		retryAttemptsBounded: workers.every((worker) => worker.assertions.attemptBounded),
+		retryBudgetsConsistent: workers.every((worker) => worker.assertions.retryBudgetConsistent),
+		timeoutCancellationRecorded: workers.every((worker) => worker.assertions.timeoutCancellationRecorded),
+		failedWorkersHaveRetryOrHandoff: workers.every((worker) => worker.assertions.failureHasRetryOrHandoff),
+		exhaustedWorkersEscalated: workers.every((worker) => worker.assertions.exhaustionEscalated),
+		handoffRefsBoundToClaims: workers.every((worker) => worker.assertions.handoffBoundToClaim),
+		mergeCollisionsResolved: collisions.every((collision) => collision.status === "resolved"),
+		claimRefsPreserved: workers.every((worker) => worker.claimRefs.length > 0),
+		sourceArtifactsPreserved: workers.every((worker) => worker.assertions.sourceArtifactsPreserved),
+	};
+	return {
+		...reportWithoutAssertions,
+		assertions,
+		errors: [],
+	};
+}
+
+function refreshSwarmWorkerRetryHandoffClosure(swarm: SwarmArtifact): SwarmArtifact {
+	const path = swarmWorkerRetryHandoffClosurePath(swarm);
+	const pool = swarm.workerRuntimePoolBridge;
+	if (!pool) {
+		return {
+			...swarm,
+			workerRetryHandoffClosurePath: path,
+			workerRetryHandoffClosureStatus: "missing",
+			workerRetryHandoffClosureErrors: ["worker_runtime_pool_bridge_missing"],
+		};
+	}
+	const report = buildSwarmWorkerRetryHandoffClosure(swarm, pool);
+	const validation = verifyWorkerRetryHandoffClosureV1(report);
+	const artifact = { closure: report, validation };
+	atomicWriteFileSync(path, `${JSON.stringify(artifact, null, 2)}\n`, 0o644);
+	return {
+		...swarm,
+		workerRetryHandoffClosurePath: path,
+		workerRetryHandoffClosure: report,
+		workerRetryHandoffClosureStatus: validation.ok ? "pass" : "blocked",
+		workerRetryHandoffClosureErrors: validation.errors,
+		sourceArtifacts: uniqueNonEmpty(
+			[
+				...swarm.sourceArtifacts,
+				path,
+				...report.workers.flatMap((worker) => [
+					...worker.handoffRefs,
+					...worker.retryQueueRefs,
+					...worker.repairRefs,
+				]),
+			],
+			120,
+		),
+	};
+}
+
 function refreshSwarmWorkerChildSessionRuntime(swarm: SwarmArtifact): SwarmArtifact {
 	const path = swarmWorkerChildSessionRuntimePath(swarm);
 	if (!(swarm.subagentRuntimeManifests ?? []).length) {
@@ -18363,6 +18704,27 @@ function formatSwarm(swarm: SwarmArtifact, path?: string): string {
 		...(swarm.workerRuntimePoolBridgeErrors?.length
 			? swarm.workerRuntimePoolBridgeErrors.slice(0, 8).map((error) => `- pool_error=${error}`)
 			: ["- pool_errors=none"]),
+		"worker_retry_handoff_closure:",
+		`- path=${swarm.workerRetryHandoffClosurePath ?? "pending"}`,
+		`- status=${swarm.workerRetryHandoffClosureStatus ?? "missing"}`,
+		`- workers=${swarm.workerRetryHandoffClosure?.workers.length ?? 0}`,
+		`- recovered=${swarm.workerRetryHandoffClosure?.merge.recoveredWorkers.length ?? 0}`,
+		`- unresolved=${swarm.workerRetryHandoffClosure?.merge.unresolvedWorkers.length ?? 0}`,
+		`- retry_attempts_bounded=${swarm.workerRetryHandoffClosure?.assertions.retryAttemptsBounded ? "pass" : "fail"}`,
+		`- failed_workers_closed=${swarm.workerRetryHandoffClosure?.assertions.failedWorkersHaveRetryOrHandoff ? "pass" : "fail"}`,
+		`- timeout_cancel_recorded=${swarm.workerRetryHandoffClosure?.assertions.timeoutCancellationRecorded ? "pass" : "fail"}`,
+		`- handoff_recovered=${(swarm.workerRetryHandoffClosure?.merge.recoveredWorkers.length ?? 0) > 0 ? "true" : "false"}`,
+		...((swarm.workerRetryHandoffClosure?.workers ?? []).length
+			? (swarm.workerRetryHandoffClosure?.workers ?? [])
+					.slice(0, 12)
+					.map(
+						(worker) =>
+							`- worker=${worker.workerId} status=${worker.status} retryState=${worker.retryState} attempt=${worker.attempt}/${worker.maxAttempts} retryRemaining=${worker.retryRemaining} timedOut=${worker.timedOut} handoffRefs=${worker.handoffRefs.length} retryQueueRefs=${worker.retryQueueRefs.length} claimRefs=${worker.claimRefs.length}`,
+					)
+			: ["- workers=none"]),
+		...(swarm.workerRetryHandoffClosureErrors?.length
+			? swarm.workerRetryHandoffClosureErrors.slice(0, 8).map((error) => `- retry_handoff_error=${error}`)
+			: ["- retry_handoff_errors=none"]),
 		"worker_lease_scheduler:",
 		`- path=${swarm.workerLeaseSchedulerPath ?? "pending"}`,
 		`- status=${swarm.workerLeaseSchedulerStatus ?? "missing"}`,
@@ -18404,9 +18766,11 @@ function writeSwarmArtifact(swarm: SwarmArtifact): string {
 	swarm.structuredClaimMergePath = swarmStructuredClaimMergePath(swarm);
 	swarm.subagentRuntimeManifestPath = swarmSubagentRuntimeManifestIndexPath(swarm);
 	swarm.workerLeaseSchedulerPath = swarmWorkerLeaseSchedulerPath(swarm);
+	swarm.workerRetryHandoffClosurePath = swarmWorkerRetryHandoffClosurePath(swarm);
 	Object.assign(swarm, refreshSwarmSubagentRuntimeManifestCapture(swarm));
 	Object.assign(swarm, refreshSwarmRuntimeClaimLedger(swarm));
 	Object.assign(swarm, refreshSwarmWorkerChildSessionRuntime(swarm));
+	Object.assign(swarm, refreshSwarmWorkerRetryHandoffClosure(swarm));
 	Object.assign(swarm, refreshSwarmWorkerLeaseScheduler(swarm));
 	// opt #162: atomic temp+rename for the swarm runtime state writes below —
 	// a torn writeFileSync would leave truncated JSON/JSONL that the verifier
@@ -18500,7 +18864,7 @@ function writeSwarmArtifact(swarm: SwarmArtifact): string {
 	appendEvidence({
 		kind: swarm.mode === "run" ? "runtime" : "artifact",
 		title: `swarm-${swarm.mode} ${swarm.missionId ?? "no-mission"}`,
-		fact: `Built swarm ${swarm.mode} with ${swarm.workers.length} worker runtime packet(s), ${swarm.executions.length} execution(s), ${swarm.parallelGroups.length} parallel group(s), ${swarm.collisionMatrix.length} collision(s), ${swarm.blocked.length} blocked, audit=${swarm.executionAudit.length}, retries=${swarm.retryQueue.length}, parallel_plan=${swarm.parallelPlan?.planId ?? "missing"}, plan_coverage=${swarm.planCoverage.length}, release_check_metadata=${swarm.releaseCheckMetadata.length}, subagent_runtime_manifests=${swarm.subagentRuntimeManifestCount} captured=${swarm.subagentRuntimeManifestsCaptured ? "pass" : "fail"}, runtime_claim_ledger=${swarm.claimLedgerEventCount} hash_chain=${swarm.runtimeClaimLedgerCaptured ? "pass" : "fail"}, structured_claim_merge=${swarm.structuredClaimMergeStatus ?? "missing"}`,
+		fact: `Built swarm ${swarm.mode} with ${swarm.workers.length} worker runtime packet(s), ${swarm.executions.length} execution(s), ${swarm.parallelGroups.length} parallel group(s), ${swarm.collisionMatrix.length} collision(s), ${swarm.blocked.length} blocked, audit=${swarm.executionAudit.length}, retries=${swarm.retryQueue.length}, parallel_plan=${swarm.parallelPlan?.planId ?? "missing"}, plan_coverage=${swarm.planCoverage.length}, release_check_metadata=${swarm.releaseCheckMetadata.length}, subagent_runtime_manifests=${swarm.subagentRuntimeManifestCount} captured=${swarm.subagentRuntimeManifestsCaptured ? "pass" : "fail"}, runtime_claim_ledger=${swarm.claimLedgerEventCount} hash_chain=${swarm.runtimeClaimLedgerCaptured ? "pass" : "fail"}, structured_claim_merge=${swarm.structuredClaimMergeStatus ?? "missing"}, retry_handoff_closure=${swarm.workerRetryHandoffClosureStatus ?? "missing"}`,
 		command: `re_swarm ${swarm.mode}`,
 		path,
 		verify: `cat ${path}`,
@@ -24125,6 +24489,84 @@ function latestProofLoopArtifactPath(options: ArtifactScopeFilterOptions = {}): 
 	return latestScopedMarkdownArtifact("proof_loop", evidenceProofLoopsDir(), options);
 }
 
+function parseAttackGraphArtifact(path: string): AttackGraphArtifact | undefined {
+	const match = /```json\s*([\s\S]*?)\s*```/m.exec(readText(path));
+	if (!match?.[1]) return undefined;
+	try {
+		const parsed = JSON.parse(match[1]) as Partial<AttackGraphArtifact>;
+		return Array.isArray(parsed.nodes) &&
+			Array.isArray(parsed.edges) &&
+			Array.isArray(parsed.taskTree) &&
+			Array.isArray(parsed.gaps)
+			? (parsed as AttackGraphArtifact)
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function proofLoopAttackGraphGapItems(target?: string): Array<Omit<ProofLoopGapItem, "worker">> {
+	const scope = target ? { target, requestedBy: "proof_loop_attack_graph_gap_consumer" } : {};
+	const path = latestAttackGraphArtifactPath(scope) ?? latestAttackGraphArtifactPath();
+	if (!path) {
+		return [
+			{
+				source: "attack_graph",
+				text: "attack graph artifact missing: run re_graph build before proof-loop planning",
+				sourceArtifacts: [],
+			},
+		];
+	}
+	const graph = parseAttackGraphArtifact(path);
+	if (!graph) {
+		return [
+			{
+				source: "attack_graph",
+				text: `attack graph artifact unreadable: ${path}`,
+				sourceArtifacts: [path],
+			},
+		];
+	}
+	if (target && graph.target && !artifactTargetMatches(target, graph.target)) return [];
+	const sourceArtifacts = [path, ...(graph.sourceArtifacts ?? [])].filter((item) => existsSync(item)).slice(0, 16);
+	const runtimeAdapterGapRows = sourceArtifacts.flatMap((artifactPath) => {
+		if (!/\/runtime-adapters\/.+\.json$/i.test(artifactPath)) return [];
+		try {
+			const artifact = readJsonObjectFile<Partial<RuntimeAdapterExecutionArtifactV1>>(artifactPath);
+			if (!artifact || artifact.kind !== "RuntimeAdapterExecutionArtifactV1" || !artifact.adapterId) return [];
+			const summary = artifact.parserSignalSummary;
+			const missing = summary?.missingProofExitSignals ?? [];
+			const rows: string[] = [];
+			if (missing.length > 0)
+				rows.push(`attack_graph runtime_adapter_gap: runtime adapter missing proof: ${artifact.adapterId}: ${missing.join("; ")}`);
+			if ((summary?.matchedRules ?? 0) === 0)
+				rows.push(`attack_graph runtime_adapter_gap: runtime adapter parser no-match: ${artifact.adapterId}`);
+			return rows;
+		} catch {
+			return [];
+		}
+	});
+	const rows = [
+		...runtimeAdapterGapRows,
+		...(graph.gaps ?? []).map((gap) => `attack_graph gap: ${gap}`),
+		...(graph.taskTree ?? [])
+			.filter((node) => node.kind === "gap")
+			.map(
+				(node) =>
+					`attack_graph task_tree_gap: ${node.label} status=${node.status ?? "gap"} evidence=${(node.evidence ?? []).join(" | ") || "none"}`,
+			),
+		...(graph.taskTree ?? [])
+			.filter((node) => node.kind === "parser_summary" && /missing=(?!0\b)/i.test(node.status ?? ""))
+			.map(
+				(node) =>
+					`attack_graph parser_signal_summary: ${node.label} status=${node.status ?? "unknown"} evidence=${(node.evidence ?? []).join(" | ") || "none"}`,
+			),
+	];
+	return Array.from(new Set(rows))
+		.slice(0, 16)
+		.map((text) => ({ source: "attack_graph" as const, text, sourceArtifacts }));
+}
+
 function proofLoopSourceArtifacts(target?: string): string[] {
 	const scope = target ? { target, requestedBy: "proof_loop_source_latest_artifact_consumer" } : {};
 	return Array.from(
@@ -24141,6 +24583,7 @@ function proofLoopSourceArtifacts(target?: string): string[] {
 				latestCompilerArtifactPath(scope),
 				latestReplayerArtifactPath(scope),
 				latestAutofixArtifactPath(scope),
+				latestAttackGraphArtifactPath(scope),
 				latestKnowledgeGraphArtifactPath(scope),
 				...contextArtifactIndex({ target, requestedBy: "proof_loop_source_artifact_index" }).map((artifact) => artifact.path),
 			].filter((path): path is string => Boolean(path && existsSync(path))),
@@ -24182,6 +24625,8 @@ function proofLoopVerdict(target?: string): ProofLoopVerdict {
 	const feedbackRows = latestOperatorFeedback(target).rows.filter(
 		(row) => !/category=(strong_evidence|worker_retry_progress)/i.test(row),
 	);
+	const graphPath = latestAttackGraphArtifactPath(scope);
+	const graph = graphPath ? parseAttackGraphArtifact(graphPath) : undefined;
 	if (compactResume?.commandStatus.some((row) => row.status === "blocked")) return "needs_repair";
 	if (
 		compactResume?.contractVerified &&
@@ -24201,6 +24646,8 @@ function proofLoopVerdict(target?: string): ProofLoopVerdict {
 			),
 		)
 	)
+		return "needs_repair";
+	if (graph?.gaps.some((gap) => /runtime adapter missing proof|runtime adapter parser no-match|missing-proof-exit/i.test(gap)))
 		return "needs_repair";
 	if (feedbackRows.length) return "partial";
 	if (!compiler || !replay) return "partial";
@@ -24224,6 +24671,8 @@ function proofLoopEvidenceSummary(target?: string): string[] {
 	const autofixPath = latestAutofixArtifactPath(scope);
 	const candidateAutofix = autofixPath ? parseAutofixArtifact(autofixPath) : undefined;
 	const autofix = artifactTargetMatches(target, candidateAutofix?.target) ? candidateAutofix : undefined;
+	const graphPath = latestAttackGraphArtifactPath(scope);
+	const graph = graphPath ? parseAttackGraphArtifact(graphPath) : undefined;
 	const feedback = latestOperatorFeedback(target);
 	const compactResume = latestReconCompactionResumeTelemetry();
 	return [
@@ -24231,6 +24680,7 @@ function proofLoopEvidenceSummary(target?: string): string[] {
 		`compiler: ${compilerPath ?? "missing"} proved=${compiler?.statusSummary.proved ?? 0} weak=${compiler?.statusSummary.weak ?? 0} contradicted=${compiler?.statusSummary.contradicted ?? 0} missing=${compiler?.statusSummary.missing ?? 0}`,
 		`replayer: ${replayPath ?? "missing"} executed=${replay?.executions.length ?? 0} passed=${replay?.passed ?? 0} failed=${replay?.failed ?? 0} blocked=${replay?.blocked.length ?? 0}`,
 		`autofix: ${autofixPath ?? "missing"} failures=${autofix?.failures.length ?? 0} applied=${autofix?.applied.length ?? 0}`,
+		`attack_graph: ${graphPath ?? "missing"} gaps=${graph?.gaps.length ?? 0} task_tree=${graph?.taskTree.length ?? 0} runtime_adapter_gaps=${graph?.gaps.filter((gap) => /runtime adapter|missing proof|parser no-match/i.test(gap)).length ?? 0}`,
 		`operator_feedback: rows=${feedback.rows.length} commands=${feedback.commands.length} sources=${feedback.sourceArtifacts.length}`,
 		`compact_resume: ${compactResume.path} rows=${compactResume.lines.length} queued=${compactResume.telemetry?.commandStatus.filter((row) => row.status === "queued").length ?? 0} blocked=${compactResume.telemetry?.commandStatus.filter((row) => row.status === "blocked").length ?? 0} proof_loop_entered=${compactResume.telemetry?.proofLoopEntered ?? false}`,
 	];
@@ -24329,6 +24779,9 @@ function proofLoopGapItems(target?: string): ProofLoopGapItem[] {
 				...item.sourceArtifacts,
 			]);
 		}
+	}
+	for (const graphGap of proofLoopAttackGraphGapItems(targetRef)) {
+		add("attack_graph", graphGap.text, graphGap.sourceArtifacts);
 	}
 	const feedback = latestOperatorFeedback(targetRef);
 	for (const row of feedback.rows
@@ -24447,6 +24900,10 @@ function buildProofLoopSteps(target?: string): ProofLoopStep[] {
 	const failureSignatureCommands = failureSignaturePriority.commands;
 	const compactResume = latestReconCompactionResumeTelemetry();
 	const compactResumeCommands = compactResumeProofQueue();
+	const graphGapItems = proofLoopGapItems(target).filter((item) => item.source === "attack_graph");
+	const graphGapCommands = proofLoopQuickPathFromItems(graphGapItems, target).filter((command) =>
+		/^(?:re_graph build|re_runtime_adapter )/i.test(command),
+	);
 	const specs: Array<[ProofLoopPhase, string]> = [
 		["verifier", `re_verifier matrix${suffix}`],
 		["compiler", `re_compiler draft${suffix}`],
@@ -24465,6 +24922,8 @@ function buildProofLoopSteps(target?: string): ProofLoopStep[] {
 	}
 	for (const command of failureSignatureCommands.slice(0, 4)) specs.push(["failure-signature", command]);
 	for (const command of compactResumeCommands.slice(0, 4)) specs.push(["compact-resume", command]);
+	for (const command of graphGapCommands.slice(0, 4))
+		specs.push([/^re_runtime_adapter /i.test(command) ? "runtime-adapter" : "attack-graph", command]);
 	for (const command of operatorFeedbackCommands.slice(0, 4)) specs.push(["operator-feedback", command]);
 	for (const command of swarmRetryCommands.slice(0, 4)) specs.push(["swarm-retry", command]);
 		return specs.map(([phase, command], index) => {
@@ -24474,21 +24933,25 @@ function buildProofLoopSteps(target?: string): ProofLoopStep[] {
 				phase,
 				command,
 				status: placeholderBlocked ? "blocked" : "ready",
-				reason: placeholderBlocked
-					? "target placeholder is unresolved"
-					: phase === "compact-resume"
-						? "source=compact_resume"
-						: phase === "failure-signature"
-							? "source=failure_signature_priority"
+			reason: placeholderBlocked
+				? "target placeholder is unresolved"
+				: phase === "compact-resume"
+					? "source=compact_resume"
+					: phase === "failure-signature"
+						? "source=failure_signature_priority"
+						: phase === "attack-graph" || phase === "runtime-adapter"
+							? "source=attack_graph_gap"
 							: undefined,
-				sourceArtifacts:
-					phase === "compact-resume"
-						? [compactResume.path, ...sourceArtifacts]
-						: phase === "failure-signature"
-							? failureSignaturePriority.sourceArtifacts
+			sourceArtifacts:
+				phase === "compact-resume"
+					? [compactResume.path, ...sourceArtifacts]
+					: phase === "failure-signature"
+						? failureSignaturePriority.sourceArtifacts
+						: phase === "attack-graph" || phase === "runtime-adapter"
+							? Array.from(new Set(graphGapItems.flatMap((item) => item.sourceArtifacts))).slice(0, 16)
 							: sourceArtifacts,
-			};
-		});
+		};
+	});
 }
 
 function proofLoopNextActions(proof: ProofLoopArtifact): string[] {
@@ -24539,6 +25002,10 @@ function refreshProofLoop(proof: ProofLoopArtifact): ProofLoopArtifact {
 	const failureSignature = failureSignaturePriorityReport(proof.target);
 	const compactResume = latestReconCompactionResumeTelemetry();
 	const compactResumeQueue = compactResumeProofQueue();
+	const graphGapItems = proofLoopGapItems(proof.target).filter((item) => item.source === "attack_graph");
+	const graphGapCommands = proofLoopQuickPathFromItems(graphGapItems, proof.target).filter((command) =>
+		/^(?:re_graph build|re_runtime_adapter )/i.test(command),
+	);
 	const compactResumeSteps: ProofLoopStep[] = compactResumeQueue
 		.filter((command) => !existingCommands.has(command))
 		.slice(0, 4)
@@ -24551,11 +25018,25 @@ function refreshProofLoop(proof: ProofLoopArtifact): ProofLoopArtifact {
 				/<target>/i.test(command) && !proof.target ? "target placeholder is unresolved" : "source=compact_resume",
 			sourceArtifacts: [compactResume.path],
 			}));
+	const graphGapSteps: ProofLoopStep[] = graphGapCommands
+		.filter((command) => !existingCommands.has(command))
+		.slice(0, 4)
+		.map((command, index) => ({
+			id: `proof:${proof.steps.length + compactResumeSteps.length + index + 1}:attack-graph`,
+			phase: /^re_runtime_adapter /i.test(command) ? ("runtime-adapter" as const) : ("attack-graph" as const),
+			command,
+			status: /<target>/i.test(command) && !proof.target ? "blocked" : "ready",
+			reason:
+				/<target>/i.test(command) && !proof.target
+					? "target placeholder is unresolved"
+					: "source=attack_graph_gap",
+			sourceArtifacts: Array.from(new Set(graphGapItems.flatMap((item) => item.sourceArtifacts))).slice(0, 16),
+		}));
 	const failureSignatureSteps: ProofLoopStep[] = failureSignature.commands
 		.filter((command) => !existingCommands.has(command))
 		.slice(0, 4)
 		.map((command, index) => ({
-			id: `proof:${proof.steps.length + compactResumeSteps.length + index + 1}:failure-signature`,
+			id: `proof:${proof.steps.length + compactResumeSteps.length + graphGapSteps.length + index + 1}:failure-signature`,
 			phase: "failure-signature",
 			command,
 			status: /<target>/i.test(command) && !proof.target ? "blocked" : "ready",
@@ -24569,14 +25050,14 @@ function refreshProofLoop(proof: ProofLoopArtifact): ProofLoopArtifact {
 		.filter((command) => !existingCommands.has(command))
 		.slice(0, 4)
 		.map((command, index) => ({
-			id: `proof:${proof.steps.length + compactResumeSteps.length + failureSignatureSteps.length + index + 1}:operator-feedback`,
+			id: `proof:${proof.steps.length + compactResumeSteps.length + graphGapSteps.length + failureSignatureSteps.length + index + 1}:operator-feedback`,
 			phase: "operator-feedback",
 			command,
 			status: /<target>/i.test(command) && !proof.target ? "blocked" : "ready",
 			reason: /<target>/i.test(command) && !proof.target ? "target placeholder is unresolved" : undefined,
 			sourceArtifacts: operatorFeedback.sourceArtifacts,
 		}));
-	const steps = [...proof.steps, ...failureSignatureSteps, ...compactResumeSteps, ...operatorFeedbackSteps];
+	const steps = [...proof.steps, ...failureSignatureSteps, ...compactResumeSteps, ...graphGapSteps, ...operatorFeedbackSteps];
 	const gapItems = proofLoopGapItems(proof.target);
 	const swarmRetry = proofLoopSwarmRetryQueue(proof.target);
 	const specialistQueue = proofLoopSpecialistQueueFromItems(gapItems, proof.target);
@@ -24861,9 +25342,9 @@ async function executeProofLoopStep(
 		}
 		case "operator-feedback":
 		case "failure-signature":
-		case "swarm-retry":
-			return executeOperatorStep(
-				pi,
+			case "swarm-retry":
+				return executeOperatorStep(
+					pi,
 				{
 					id: step.id,
 					command: step.command,
@@ -24871,10 +25352,19 @@ async function executeProofLoopStep(
 					priority: operatorStepPriority(step.command),
 					sourceArtifacts: step.sourceArtifacts,
 				},
-				target,
-			);
-		case "verifier":
-			return done(buildVerifierOutput("matrix", { target }));
+					target,
+				);
+			case "attack-graph":
+				return done(buildAttackGraphOutput("build"));
+			case "runtime-adapter": {
+				const match = /^re[-_]runtime[-_]adapter\s+run\s+(\S+)(?:\s+(.+))?$/i.exec(step.command.trim());
+				const adapter = match?.[1];
+				const adapterTarget = match?.[2]?.trim() || target;
+				if (!adapter) return blocked(`runtime adapter step missing adapter id: ${step.command}`);
+				return done(await runRuntimeAdapterExecution(pi, { adapter, target: adapterTarget }));
+			}
+			case "verifier":
+				return done(buildVerifierOutput("matrix", { target }));
 		case "compiler": {
 			const action = /\sfinal\b/i.test(step.command) ? "final" : "draft";
 			return done(buildCompilerOutput(action, { target }));
@@ -24940,6 +25430,8 @@ function proofLoopPhaseForCommand(command: string): ProofLoopPhase | undefined {
 	if (/^re[-_]compiler\b/i.test(command)) return "compiler";
 	if (/^re[-_]replayer\b/i.test(command)) return "replayer";
 	if (/^re[-_]autofix\b/i.test(command)) return "autofix";
+	if (/^re[-_]graph\b/i.test(command)) return "attack-graph";
+	if (/^re[-_]runtime[-_]adapter\b/i.test(command)) return "runtime-adapter";
 	if (/^re[-_]knowledge(?:[-_]graph)?\b/i.test(command)) return "knowledge";
 	if (/^re[-_]complete\b/i.test(command)) return "completion";
 	if (/^re[-_]context\s+resume\b/i.test(command)) return "compact-resume";
@@ -24974,21 +25466,36 @@ async function executeProofLoopQuickPathCommand(
 	command: string,
 	index: number,
 ): Promise<OperationExecution> {
-	const result = await executeOperatorStep(
-		pi,
-		{
-			id: `proof:quick:${index + 1}:${slug(command).slice(0, 32)}`,
-			command,
-			status: "ready",
-			priority: 0,
-			sourceArtifacts: proof.sourceArtifacts,
-		},
-		proof.target,
-	);
+	const phase = proofLoopPhaseForCommand(command);
+	const stepId = `proof:quick:${index + 1}:${slug(command).slice(0, 32)}`;
+	const result = phase
+		? await executeProofLoopStep(
+				pi,
+				{
+					id: stepId,
+					phase,
+					command,
+					status: "ready",
+					sourceArtifacts: proof.sourceArtifacts,
+				},
+				proof.target,
+				proof.replaySteps,
+			)
+		: await executeOperatorStep(
+				pi,
+				{
+					id: stepId,
+					command,
+					status: "ready",
+					priority: 0,
+					sourceArtifacts: proof.sourceArtifacts,
+				},
+				proof.target,
+			);
 	return {
 		...result,
 		output: [
-			`quick_path_execution: index=${index + 1} phase=${proofLoopPhaseForCommand(command) ?? "operator"} command=${command}`,
+			`quick_path_execution: index=${index + 1} phase=${phase ?? "operator"} command=${command}`,
 			result.output,
 		].join("\n"),
 	};
@@ -27544,6 +28051,7 @@ async function runRuntimeAdapterExecution(pi: ExtensionAPI, options: { adapter?:
 	const result = await pi.exec("bash", ["-lc", `set +e\nexport REPI_ADAPTER_TARGET=${shellQuote(options.target)}\n${command}`], { timeout });
 	const finishedAt = new Date().toISOString();
 	const combined = `${result.stdout}\n${result.stderr}`;
+	const parserSignals = parseRuntimeAdapterSignals(adapter, combined);
 	const artifact: RuntimeAdapterExecutionArtifactV1 = {
 		kind: "RuntimeAdapterExecutionArtifactV1",
 		schemaVersion: 1,
@@ -27551,6 +28059,7 @@ async function runRuntimeAdapterExecution(pi: ExtensionAPI, options: { adapter?:
 		domainId: adapter.domainId,
 		bridgeId: adapter.bridgeId,
 		target: options.target,
+		targetProfile: inspectRuntimeAdapterTarget(options.target),
 		startedAt,
 		finishedAt,
 		selectedRunner,
@@ -27559,7 +28068,8 @@ async function runRuntimeAdapterExecution(pi: ExtensionAPI, options: { adapter?:
 		killed: result.killed,
 		stdoutSha256: sha256Text(result.stdout),
 		stderrSha256: sha256Text(result.stderr),
-		parserSignals: parseRuntimeAdapterSignals(adapter, combined),
+		parserSignals,
+		parserSignalSummary: summarizeRuntimeAdapterSignals(adapter, parserSignals),
 		artifactKinds: adapter.artifactKinds,
 		ingestTargets: adapter.ingestTargets,
 		proofExitSignals: adapter.proofExitSignals,

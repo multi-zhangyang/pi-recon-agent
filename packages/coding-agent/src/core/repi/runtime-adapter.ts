@@ -5,6 +5,16 @@ import { truncateMiddle } from "./text.ts";
 
 export type RuntimeAdapterStatus = "native-ready" | "fallback-ready" | "blocked";
 export type RuntimeAdapterRunnerKind = "shell-command" | "cdp-capture" | "frida-hook" | "python-harness";
+export type RuntimeAdapterTargetKind =
+	| "web-url"
+	| "cdp-endpoint"
+	| "native-binary"
+	| "pwn-binary"
+	| "mobile-package"
+	| "pcap-flow"
+	| "firmware-image"
+	| "firmware-rootfs"
+	| "unknown";
 
 export type RuntimeAdapterParserRuleV1 = {
 	id: string;
@@ -50,6 +60,7 @@ export type RuntimeAdapterExecutionCheckV1 = {
 	runtime: "runtime:adapter-execution";
 	toolIndexPath: string;
 	requiredChecks: string[];
+	targetProfile?: RuntimeAdapterTargetProfileV1;
 	adapters: RuntimeAdapterExecutionRowV1[];
 	closure: {
 		allAdapterSpecsPresent: boolean;
@@ -72,6 +83,7 @@ export type RuntimeAdapterExecutionArtifactV1 = {
 	domainId: string;
 	bridgeId: string;
 	target?: string;
+	targetProfile?: RuntimeAdapterTargetProfileV1;
 	startedAt: string;
 	finishedAt: string;
 	selectedRunner: "native" | "fallback";
@@ -80,10 +92,45 @@ export type RuntimeAdapterExecutionArtifactV1 = {
 	killed: boolean;
 	stdoutSha256: string;
 	stderrSha256: string;
-	parserSignals: Array<{ ruleId: string; proofExitSignal: string; matches: string[] }>;
+	parserSignals: Array<{
+		ruleId: string;
+		evidenceRank: RuntimeAdapterParserRuleV1["evidenceRank"];
+		proofExitSignal: string;
+		matches: string[];
+	}>;
+	parserSignalSummary?: RuntimeAdapterParserSignalSummaryV1;
 	artifactKinds: string[];
 	ingestTargets: string[];
 	proofExitSignals: string[];
+};
+
+export type RuntimeAdapterTargetSignalV1 = {
+	adapterId: string;
+	targetKind: RuntimeAdapterTargetKind;
+	reason: string;
+	evidenceRank: "runtime_artifact" | "network" | "served_asset" | "process_config";
+};
+
+export type RuntimeAdapterTargetProfileV1 = {
+	kind: "RuntimeAdapterTargetProfileV1";
+	schemaVersion: 1;
+	target: string;
+	exists: boolean;
+	pathKind?: "file" | "directory";
+	magic?: string;
+	targetKinds: RuntimeAdapterTargetKind[];
+	adapterIds: string[];
+	signals: RuntimeAdapterTargetSignalV1[];
+	reasons: string[];
+};
+
+export type RuntimeAdapterParserSignalSummaryV1 = {
+	matchedRules: number;
+	totalRules: number;
+	matchCount: number;
+	evidenceRanks: Array<RuntimeAdapterParserRuleV1["evidenceRank"]>;
+	matchedProofExitSignals: string[];
+	missingProofExitSignals: string[];
 };
 
 export type RuntimeAdapterToolPresence = (tool: string) => boolean | undefined;
@@ -452,28 +499,96 @@ function hasRootfsMarkers(path: string): boolean {
 		join(path, "etc", "passwd"),
 		join(path, "etc", "shadow"),
 		join(path, "etc", "init.d"),
+		join(path, "etc", "config"),
+		join(path, "etc", "os-release"),
 		join(path, "bin", "busybox"),
 		join(path, "sbin", "init"),
+		join(path, "usr", "sbin", "httpd"),
 	];
 	return rootfsMarkers.some((marker) => existsSync(marker));
 }
 
-export function detectRuntimeAdapterIds(target?: string): string[] {
+function magicLabel(head: Buffer, ascii: string): string | undefined {
+	if (hasMagic(head, [0x7f, 0x45, 0x4c, 0x46])) return "elf";
+	if (hasMagic(head, [0x4d, 0x5a])) return "pe-mz";
+	if (
+		hasMagic(head, [0xcf, 0xfa, 0xed, 0xfe]) ||
+		hasMagic(head, [0xce, 0xfa, 0xed, 0xfe]) ||
+		hasMagic(head, [0xfe, 0xed, 0xfa, 0xcf]) ||
+		hasMagic(head, [0xfe, 0xed, 0xfa, 0xce]) ||
+		hasMagic(head, [0xca, 0xfe, 0xba, 0xbe])
+	)
+		return "mach-o";
+	if (hasMagic(head, [0x00, 0x61, 0x73, 0x6d])) return "wasm";
+	if (hasMagic(head, [0x64, 0x65, 0x78, 0x0a])) return "android-dex";
+	if (hasMagic(head, [0x50, 0x4b, 0x03, 0x04])) return "zip";
+	if (
+		hasMagic(head, [0xd4, 0xc3, 0xb2, 0xa1]) ||
+		hasMagic(head, [0xa1, 0xb2, 0xc3, 0xd4]) ||
+		hasMagic(head, [0x4d, 0x3c, 0xb2, 0xa1]) ||
+		hasMagic(head, [0xa1, 0xb2, 0x3c, 0x4d])
+	)
+		return "pcap";
+	if (hasMagic(head, [0x0a, 0x0d, 0x0d, 0x0a])) return "pcapng";
+	if (/hsqs|sqsh/i.test(ascii)) return "squashfs";
+	if (/UBI#|uImage|OpenWrt|BusyBox|u-boot|CFE/i.test(ascii)) return "firmware-signature";
+	if (/^\s*[{[]/.test(ascii) && /"log"\s*:|"entries"\s*:|"request"\s*:|"response"\s*:/i.test(ascii)) return "har-json";
+	return undefined;
+}
+
+function pushSignal(signals: RuntimeAdapterTargetSignalV1[], signal: RuntimeAdapterTargetSignalV1): void {
+	if (signals.some((row) => row.adapterId === signal.adapterId && row.reason === signal.reason)) return;
+	signals.push(signal);
+}
+
+function uniqueTargetKinds(signals: RuntimeAdapterTargetSignalV1[]): RuntimeAdapterTargetKind[] {
+	return Array.from(new Set(signals.map((signal) => signal.targetKind)));
+}
+
+function uniqueAdapterIds(signals: RuntimeAdapterTargetSignalV1[]): string[] {
+	return Array.from(new Set(signals.map((signal) => signal.adapterId)));
+}
+
+export function inspectRuntimeAdapterTarget(target?: string): RuntimeAdapterTargetProfileV1 {
 	const text = target?.trim() ?? "";
-	if (!text) return [];
+	const signals: RuntimeAdapterTargetSignalV1[] = [];
+	const add = (
+		adapterId: string,
+		targetKind: RuntimeAdapterTargetKind,
+		reason: string,
+		evidenceRank: RuntimeAdapterTargetSignalV1["evidenceRank"],
+	) => pushSignal(signals, { adapterId, targetKind, reason, evidenceRank });
+	if (!text) {
+		return {
+			kind: "RuntimeAdapterTargetProfileV1",
+			schemaVersion: 1,
+			target: "",
+			exists: false,
+			targetKinds: ["unknown"],
+			adapterIds: [],
+			signals: [],
+			reasons: [],
+		};
+	}
 	const lower = text.toLowerCase();
-	const picks: string[] = [];
-	const add = (id: string) => {
-		if (!picks.includes(id)) picks.push(id);
-	};
 	let targetKind: "file" | "directory" | undefined;
+	let exists = false;
+	let magic: string | undefined;
 
 	if (existsSync(text)) {
 		try {
 			const stat = statSync(text);
+			exists = true;
 			if (stat.isDirectory()) {
 				targetKind = "directory";
-				if (hasRootfsMarkers(text)) add("firmware-rootfs-service-map-adapter");
+				if (hasRootfsMarkers(text)) {
+					add(
+						"firmware-rootfs-service-map-adapter",
+						"firmware-rootfs",
+						"rootfs markers on existing directory",
+						"process_config",
+					);
+				}
 			} else if (stat.isFile()) {
 				targetKind = "file";
 			}
@@ -482,36 +597,47 @@ export function detectRuntimeAdapterIds(target?: string): string[] {
 		}
 	}
 
-	if (/^https?:\/\//i.test(text) || /\b(?:xhr|websocket|cookie|authorization|graphql|api)\b/i.test(text)) {
-		add("web-cdp-network-adapter");
+	if (/^https?:\/\//i.test(text)) add("web-cdp-network-adapter", "web-url", "http url target", "network");
+	if (/\.(?:har)(?:$|[?#\s])/.test(lower))
+		add("web-cdp-network-adapter", "web-url", "HAR network archive target", "network");
+	if (
+		/^(?:ws|wss):\/\//i.test(text) ||
+		/\b(?:devtools\/browser|cdp|chrome-debugging|remote-debugging-port)\b/i.test(text)
+	) {
+		add("web-cdp-network-adapter", "cdp-endpoint", "cdp/websocket endpoint target", "network");
+	}
+	if (/\b(?:xhr|websocket|cookie|authorization|graphql|api|signed request|nonce|timestamp)\b/i.test(text)) {
+		add("web-cdp-network-adapter", "web-url", "web api/replay lexical signal", "network");
 	}
 	if (
 		targetKind !== "directory" &&
-		(/\.(?:pcapng?|cap)(?:$|[?#\s])/.test(lower) || /\b(?:pcap|tshark|wireshark|packet|flow)\b/.test(lower))
+		(/\.(?:pcapng?|pcap|cap)(?:$|[?#\s])/.test(lower) || /\b(?:pcap|tshark|wireshark|packet|flow)\b/.test(lower))
 	) {
-		add("tshark-pcap-flow-adapter");
+		add("tshark-pcap-flow-adapter", "pcap-flow", "pcap/flow lexical signal", "network");
 	}
 	if (
 		/\.(?:apk|ipa)(?:$|[?#\s])/.test(lower) ||
-		/\b(?:frida|android|ios|objc|swift|keychain|okhttp|trustmanager|certificatepinner)\b/.test(lower) ||
+		/\b(?:frida|android|ios|objc|swift|keychain|okhttp|trustmanager|certificatepinner|jadx|dex|apktool)\b/.test(
+			lower,
+		) ||
 		/^([a-z][a-z0-9_]*\.){2,}[a-z][a-z0-9_]*$/i.test(text)
 	) {
-		add("frida-mobile-hook-adapter");
+		add("frida-mobile-hook-adapter", "mobile-package", "mobile package/runtime lexical signal", "runtime_artifact");
 	}
 	if (/\b(?:rootfs|openwrt-root|busybox-root|squashfs-root|init\.d|dropbear|uci)\b/.test(lower)) {
-		add("firmware-rootfs-service-map-adapter");
+		add("firmware-rootfs-service-map-adapter", "firmware-rootfs", "rootfs/service lexical signal", "process_config");
 	}
 	if (
 		/\.(?:bin|img|trx|chk|ubi|ubifs|squashfs|sqsh|uimage)(?:$|[?#\s])/.test(lower) ||
 		/\b(?:firmware|rootfs|openwrt|busybox|u-boot|uboot|mtd|jffs2|cramfs)\b/.test(lower)
 	) {
-		add("binwalk-firmware-extract-adapter");
+		add("binwalk-firmware-extract-adapter", "firmware-image", "firmware image lexical signal", "runtime_artifact");
 	}
 	if (/\b(?:pwn|exploit|rop|ret2|heap|tcache|format string|one_gadget|pwntools)\b/i.test(text)) {
-		add("pwntools-local-verifier-adapter");
+		add("pwntools-local-verifier-adapter", "pwn-binary", "pwn/exploit lexical signal", "runtime_artifact");
 	}
 	if (/\b(?:gdb|breakpoint|register|core dump|coredump|sigsegv|crash)\b/i.test(text)) {
-		add("gdb-native-trace-adapter");
+		add("gdb-native-trace-adapter", "native-binary", "debugger/crash lexical signal", "runtime_artifact");
 	}
 	if (
 		/\b(?:radare2|\br2\b|xref|symbol|import|decompile|elf|pe|dll|so|wasm|binary|native|license|strcmp|memcmp)\b/i.test(
@@ -519,12 +645,18 @@ export function detectRuntimeAdapterIds(target?: string): string[] {
 		) ||
 		/\.(?:elf|exe|dll|so|wasm|dylib)(?:$|[?#\s])/.test(lower)
 	) {
-		add("r2-native-xref-adapter");
+		add("r2-native-xref-adapter", "native-binary", "native reverse lexical signal", "runtime_artifact");
 	}
 
 	if (targetKind === "directory") {
 		try {
-			if (hasRootfsMarkers(text)) add("firmware-rootfs-service-map-adapter");
+			if (hasRootfsMarkers(text))
+				add(
+					"firmware-rootfs-service-map-adapter",
+					"firmware-rootfs",
+					"rootfs markers on directory",
+					"process_config",
+				);
 		} catch {
 			// Directory probes are advisory only.
 		}
@@ -532,14 +664,19 @@ export function detectRuntimeAdapterIds(target?: string): string[] {
 		try {
 			const head = readFileHead(text);
 			const ascii = head.toString("latin1");
+			magic = magicLabel(head, ascii);
 			if (
 				hasMagic(head, [0x7f, 0x45, 0x4c, 0x46]) ||
 				hasMagic(head, [0x4d, 0x5a]) ||
+				hasMagic(head, [0x00, 0x61, 0x73, 0x6d]) ||
 				hasMagic(head, [0xcf, 0xfa, 0xed, 0xfe]) ||
+				hasMagic(head, [0xce, 0xfa, 0xed, 0xfe]) ||
+				hasMagic(head, [0xfe, 0xed, 0xfa, 0xcf]) ||
+				hasMagic(head, [0xfe, 0xed, 0xfa, 0xce]) ||
 				hasMagic(head, [0xca, 0xfe, 0xba, 0xbe])
 			) {
-				add("gdb-native-trace-adapter");
-				add("r2-native-xref-adapter");
+				add("gdb-native-trace-adapter", "native-binary", `file magic=${magic ?? "native"}`, "runtime_artifact");
+				add("r2-native-xref-adapter", "native-binary", `file magic=${magic ?? "native"}`, "runtime_artifact");
 			}
 			if (
 				hasMagic(head, [0xd4, 0xc3, 0xb2, 0xa1]) ||
@@ -548,20 +685,52 @@ export function detectRuntimeAdapterIds(target?: string): string[] {
 				hasMagic(head, [0xa1, 0xb2, 0x3c, 0x4d]) ||
 				hasMagic(head, [0x0a, 0x0d, 0x0d, 0x0a])
 			) {
-				add("tshark-pcap-flow-adapter");
+				add("tshark-pcap-flow-adapter", "pcap-flow", `file magic=${magic ?? "pcap"}`, "network");
 			}
-			if (/hsqs|sqsh|UBI#|uImage|OpenWrt|BusyBox/i.test(ascii)) add("binwalk-firmware-extract-adapter");
+			if (/^\s*[{[]/.test(ascii) && /"log"\s*:|"entries"\s*:|"request"\s*:|"response"\s*:/i.test(ascii)) {
+				add("web-cdp-network-adapter", "web-url", `file magic=${magic ?? "har-json"}`, "network");
+			}
+			if (/hsqs|sqsh|UBI#|uImage|OpenWrt|BusyBox|u-boot|CFE/i.test(ascii))
+				add(
+					"binwalk-firmware-extract-adapter",
+					"firmware-image",
+					`file magic=${magic ?? "firmware-signature"}`,
+					"runtime_artifact",
+				);
+			if (hasMagic(head, [0x64, 0x65, 0x78, 0x0a]))
+				add("frida-mobile-hook-adapter", "mobile-package", "android dex magic", "runtime_artifact");
 			if (
 				hasMagic(head, [0x50, 0x4b, 0x03, 0x04]) &&
 				(/\.(?:apk|ipa)$/i.test(text) || /AndroidManifest\.xml|classes\.dex|Payload\/|Info\.plist/i.test(ascii))
 			) {
-				add("frida-mobile-hook-adapter");
+				add(
+					"frida-mobile-hook-adapter",
+					"mobile-package",
+					`zip mobile manifest magic=${magic ?? "zip"}`,
+					"runtime_artifact",
+				);
 			}
 		} catch {
 			// Best-effort file magic only; lexical detection above remains authoritative.
 		}
 	}
-	return picks;
+	const targetKinds = uniqueTargetKinds(signals);
+	return {
+		kind: "RuntimeAdapterTargetProfileV1",
+		schemaVersion: 1,
+		target: text,
+		exists,
+		pathKind: targetKind,
+		magic,
+		targetKinds: targetKinds.length ? targetKinds : ["unknown"],
+		adapterIds: uniqueAdapterIds(signals),
+		signals,
+		reasons: Array.from(new Set(signals.map((signal) => signal.reason))),
+	};
+}
+
+export function detectRuntimeAdapterIds(target?: string): string[] {
+	return inspectRuntimeAdapterTarget(target).adapterIds;
 }
 
 export function runtimeAdapterSecretLike(value: string): boolean {
@@ -574,7 +743,8 @@ export function buildRuntimeAdapterExecutionGate(
 	adapterFilter: string | undefined,
 	options: { toolIndexPath: string; isToolPresent: RuntimeAdapterToolPresence },
 ): RuntimeAdapterExecutionCheckV1 {
-	const detectedAdapterIds = detectRuntimeAdapterIds(adapterFilter);
+	const targetProfile = inspectRuntimeAdapterTarget(adapterFilter);
+	const detectedAdapterIds = targetProfile.adapterIds;
 	const specs = adapterFilter
 		? RUNTIME_ADAPTER_EXECUTION_MATRIX.filter(
 				(adapter) =>
@@ -619,6 +789,7 @@ export function buildRuntimeAdapterExecutionGate(
 		RuntimeAdapterExecutionCheckV1: true,
 		runtime: "runtime:adapter-execution",
 		toolIndexPath: options.toolIndexPath,
+		targetProfile: adapterFilter ? targetProfile : undefined,
 		requiredChecks: [
 			"runtime_adapter_execution_check",
 			"adapter_runner_parser_ingest_contract",
@@ -631,6 +802,8 @@ export function buildRuntimeAdapterExecutionGate(
 			"binwalk_firmware_adapter_contract",
 			"firmware_rootfs_service_map_adapter_contract",
 			"target_auto_detection_contract",
+			"runtime_adapter_target_profile_contract",
+			"parser_signal_summary_contract",
 		],
 		adapters,
 		closure: {
@@ -669,6 +842,9 @@ export function formatRuntimeAdapterExecutionGate(report: RuntimeAdapterExecutio
 		"runtime: runtime:adapter-execution",
 		path ? `artifact: ${path}` : undefined,
 		`tool_index: ${report.toolIndexPath}`,
+		report.targetProfile
+			? `target_profile: kinds=${report.targetProfile.targetKinds.join(",")} adapters=${report.targetProfile.adapterIds.join(",") || "<none>"} magic=${report.targetProfile.magic ?? "<none>"} reasons=${report.targetProfile.reasons.join(" | ") || "<none>"}`
+			: undefined,
 		`closure: specs=${report.closure.allAdapterSpecsPresent} runner=${report.closure.allHaveRunnerTemplates} parser=${report.closure.allHaveParserRules} artifact=${report.closure.allHaveArtifactKinds} ingest=${report.closure.allHaveIngestTargets} proof=${report.closure.allHaveProofExitSignals} fallback=${report.closure.allHaveNativeOrFallbackTool} env_ref=${report.closure.allEnvRefsSecretFree}`,
 		"adapters:",
 		...report.adapters.flatMap((adapter) => [
@@ -709,8 +885,27 @@ export function parseRuntimeAdapterSignals(
 		} catch (error) {
 			matches = [`parser_error=${error instanceof Error ? error.message : String(error)}`];
 		}
-		return { ruleId: rule.id, proofExitSignal: rule.proofExitSignal, matches };
+		return { ruleId: rule.id, evidenceRank: rule.evidenceRank, proofExitSignal: rule.proofExitSignal, matches };
 	});
+}
+
+export function summarizeRuntimeAdapterSignals(
+	adapter: RuntimeAdapterExecutionRowV1,
+	parserSignals: RuntimeAdapterExecutionArtifactV1["parserSignals"],
+): RuntimeAdapterParserSignalSummaryV1 {
+	const matchedSignals = parserSignals.filter((signal) => signal.matches.length > 0);
+	const matchedProofExitSignals = Array.from(new Set(matchedSignals.map((signal) => signal.proofExitSignal)));
+	const missingProofExitSignals = adapter.proofExitSignals.filter(
+		(signal) => !matchedProofExitSignals.includes(signal),
+	);
+	return {
+		matchedRules: matchedSignals.length,
+		totalRules: adapter.parserRules.length,
+		matchCount: matchedSignals.reduce((sum, signal) => sum + signal.matches.length, 0),
+		evidenceRanks: Array.from(new Set(matchedSignals.map((signal) => signal.evidenceRank))),
+		matchedProofExitSignals,
+		missingProofExitSignals,
+	};
 }
 
 export function formatRuntimeAdapterExecutionArtifact(
@@ -732,8 +927,12 @@ export function formatRuntimeAdapterExecutionArtifact(
 		`command: ${artifact.command}`,
 		"parser_signals:",
 		...artifact.parserSignals.map(
-			(signal) => `- ${signal.ruleId} => ${signal.proofExitSignal}: ${signal.matches.join(" | ") || "no-match"}`,
+			(signal) =>
+				`- ${signal.ruleId} rank=${signal.evidenceRank} => ${signal.proofExitSignal}: ${signal.matches.join(" | ") || "no-match"}`,
 		),
+		artifact.parserSignalSummary
+			? `parser_signal_summary: matched=${artifact.parserSignalSummary.matchedRules}/${artifact.parserSignalSummary.totalRules} matches=${artifact.parserSignalSummary.matchCount} ranks=${artifact.parserSignalSummary.evidenceRanks.join(",") || "<none>"} missing_proof=${artifact.parserSignalSummary.missingProofExitSignals.join("; ") || "<none>"}`
+			: undefined,
 		`artifact_kinds: ${artifact.artifactKinds.join(", ")}`,
 		`ingest_targets: ${artifact.ingestTargets.join(", ")}`,
 		`proof_exit_signals: ${artifact.proofExitSignals.join("; ")}`,

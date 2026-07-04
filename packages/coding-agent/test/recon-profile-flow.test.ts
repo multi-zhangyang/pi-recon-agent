@@ -132,17 +132,31 @@ describe("REPI kernel profile runtime/proof/swarm flows", () => {
 		expect(rootfsRun.content[0]?.text).toContain("parser-rootfs-passwd");
 		expect(rootfsRun.content[0]?.text).toContain("rootfs service map");
 
+		const webRun = await runtimeAdapterTool.execute("tool-call-id", {
+			action: "run",
+			target: "https://target.local/app",
+		});
+		expect(webRun.content[0]?.text).toContain("adapter: web-cdp-network-adapter");
+		expect(webRun.content[0]?.text).toContain("parser_signal_summary:");
+		expect(webRun.content[0]?.text).toContain("missing_proof=CDP network capture");
+
 		const graph = await graphTool.execute("tool-call-id", { action: "build" });
 		const graphPath = /graph_artifact: (.+)/.exec(graph.content[0]?.text ?? "")?.[1]?.trim();
 		expect(graphPath).toBeDefined();
 		const graphText = readFileSync(graphPath!, "utf-8");
 		expect(graphText).toContain("tool:runtime-adapter:tshark-pcap-flow-adapter");
 		expect(graphText).toContain("tool:runtime-adapter:firmware-rootfs-service-map-adapter");
+		expect(graphText).toContain("[target_profile]");
+		expect(graphText).toContain("[parser_summary]");
+		expect(graphText).toContain("parser_signal_summary");
+		expect(graphText).toContain("runtime target profile");
+		expect(graphText).toContain("missing_proof=CDP network capture");
+		expect(graphText).toContain("--blocks:missing-proof-exit");
 		expect(graphText).toContain("[command]");
 		expect(graphText).toContain("runtime-adapter-json");
 		expect(graphText).toContain("parser-tshark-conversation");
 		expect(graphText).toContain("parser-rootfs-passwd");
-		expect(graphText).toContain("--verifies:parser");
+		expect(graphText).toContain("--verifies:parser:");
 	});
 
 	it("builds an evidence task tree linking commands, artifacts, hypotheses, and counter-evidence", async () => {
@@ -241,16 +255,39 @@ describe("REPI kernel profile runtime/proof/swarm flows", () => {
 				params: Record<string, unknown>,
 			) => Promise<{ content: Array<{ text: string }> }>;
 		};
+		const runtimeAdapterTool = tools.get("re_runtime_adapter") as {
+			execute: (
+				toolCallId: string,
+				params: Record<string, unknown>,
+			) => Promise<{ content: Array<{ text: string }> }>;
+		};
+		const graphTool = tools.get("re_graph") as {
+			execute: (
+				toolCallId: string,
+				params: Record<string, unknown>,
+			) => Promise<{ content: Array<{ text: string }> }>;
+		};
+		await runtimeAdapterTool.execute("tool-call-id", {
+			action: "run",
+			target: "https://target.local/app",
+		});
+		await graphTool.execute("tool-call-id", { action: "build" });
 		const proof = await proofLoopTool.execute("tool-call-id", {
 			action: "plan",
-			target: "proof-fixture-target",
+			target: "https://target.local/app",
 		});
 		expect(proof.content[0]?.text).toContain("gap_classifier:");
+		expect(proof.content[0]?.text).toContain("source=attack_graph");
+		expect(proof.content[0]?.text).toContain("class=runtime_adapter_gap");
 		expect(proof.content[0]?.text).toContain("class=missing_artifact");
 		expect(proof.content[0]?.text).toContain("quick_path:");
-		expect(proof.content[0]?.text).toContain("re_verifier matrix proof-fixture-target");
-		expect(proof.content[0]?.text).toContain("re_replayer run proof-fixture-target 1");
-		expect(proof.content[0]?.text).toContain("re_autofix plan proof-fixture-target");
+		expect(proof.content[0]?.text).toContain(
+			"re_runtime_adapter run web-cdp-network-adapter https://target.local/app",
+		);
+		expect(proof.content[0]?.text).toContain("re_verifier matrix https://target.local/app");
+		expect(proof.content[0]?.text).toContain("re_replayer run https://target.local/app 1");
+		expect(proof.content[0]?.text).toContain("re_autofix plan https://target.local/app");
+		expect(proof.content[0]?.text).toContain("source=attack_graph_gap");
 	});
 
 	it("propagates swarm worker timeout budgets into runtime manifests", async () => {
@@ -288,6 +325,9 @@ describe("REPI kernel profile runtime/proof/swarm flows", () => {
 			expect(swarm.content[0]?.text).toContain("timeoutMs=12345");
 			expect(swarm.content[0]?.text).toContain("worker_child_session_runtime:");
 			expect(swarm.content[0]?.text).toContain("pool_bridge=pass");
+			expect(swarm.content[0]?.text).toContain("worker_retry_handoff_closure:");
+			expect(swarm.content[0]?.text).toContain("- status=pass");
+			expect(swarm.content[0]?.text).toContain("retry_attempts_bounded=pass");
 		} finally {
 			if (previousTimeout === undefined) delete process.env.REPI_SWARM_WORKER_TIMEOUT_MS;
 			else process.env.REPI_SWARM_WORKER_TIMEOUT_MS = previousTimeout;
@@ -402,6 +442,9 @@ describe("REPI kernel profile runtime/proof/swarm flows", () => {
 			expect(swarm.content[0]?.text).toContain("attempt=2/");
 			expect(swarm.content[0]?.text).toContain("retryRemaining=");
 			expect(swarm.content[0]?.text).toContain("retries=1");
+			expect(swarm.content[0]?.text).toContain("worker_retry_handoff_closure:");
+			expect(swarm.content[0]?.text).toContain("attempt=2/3");
+			expect(swarm.content[0]?.text).toContain("failed_workers_closed=pass");
 		} finally {
 			if (previousRetryLimit === undefined) delete process.env.REPI_SWARM_RETRY_LIMIT;
 			else process.env.REPI_SWARM_RETRY_LIMIT = previousRetryLimit;

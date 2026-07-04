@@ -5,8 +5,11 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
 	buildRuntimeAdapterExecutionGate,
 	detectRuntimeAdapterIds,
+	formatRuntimeAdapterExecutionGate,
+	inspectRuntimeAdapterTarget,
 	materializeRuntimeAdapterCommand,
 	parseRuntimeAdapterSignals,
+	summarizeRuntimeAdapterSignals,
 } from "../src/core/repi/runtime-adapter.ts";
 
 describe("REPI runtime adapter pure contracts", () => {
@@ -39,6 +42,31 @@ describe("REPI runtime adapter pure contracts", () => {
 		const firmware = join(tempDir, "firmware.payload");
 		writeFileSync(firmware, Buffer.from("hsqs\x00\x00OpenWrt BusyBox", "latin1"));
 		expect(detectRuntimeAdapterIds(firmware)).toContain("binwalk-firmware-extract-adapter");
+
+		const dex = join(tempDir, "payload.bin");
+		writeFileSync(dex, Buffer.concat([Buffer.from("dex\n035\0", "latin1"), Buffer.alloc(128)]));
+		expect(detectRuntimeAdapterIds(dex)).toContain("frida-mobile-hook-adapter");
+
+		const wasm = join(tempDir, "module.payload");
+		writeFileSync(wasm, Buffer.concat([Buffer.from([0x00, 0x61, 0x73, 0x6d]), Buffer.alloc(128)]));
+		expect(detectRuntimeAdapterIds(wasm)).toEqual(
+			expect.arrayContaining(["gdb-native-trace-adapter", "r2-native-xref-adapter"]),
+		);
+	});
+
+	test("profiles CDP/HAR/mobile/native targets with ranked reasons", () => {
+		expect(detectRuntimeAdapterIds("ws://127.0.0.1:9222/devtools/browser/abc")).toContain("web-cdp-network-adapter");
+
+		const har = join(tempDir, "capture.har");
+		writeFileSync(har, JSON.stringify({ log: { entries: [{ request: { url: "https://example.test/api" } }] } }));
+		const harProfile = inspectRuntimeAdapterTarget(har);
+		expect(harProfile.magic).toBe("har-json");
+		expect(harProfile.adapterIds).toContain("web-cdp-network-adapter");
+		expect(harProfile.signals.some((signal) => signal.evidenceRank === "network")).toBe(true);
+
+		const mobileProfile = inspectRuntimeAdapterTarget("com.example.target.app");
+		expect(mobileProfile.targetKinds).toContain("mobile-package");
+		expect(mobileProfile.reasons.join("\n")).toContain("mobile package/runtime lexical signal");
 	});
 
 	test("prioritizes rootfs directory markers over misleading flow-like path names", () => {
@@ -71,5 +99,12 @@ describe("REPI runtime adapter pure contracts", () => {
 		expect(signals.map((row) => row.ruleId)).toEqual(
 			expect.arrayContaining(["parser-rootfs-passwd", "parser-rootfs-service-init", "parser-rootfs-config-secret"]),
 		);
+		expect(signals.every((row) => row.evidenceRank)).toBe(true);
+		expect(summarizeRuntimeAdapterSignals(rootfsAdapter!, signals)).toMatchObject({
+			matchedRules: 3,
+			totalRules: 3,
+			missingProofExitSignals: [],
+		});
+		expect(formatRuntimeAdapterExecutionGate(report)).toContain("target_profile:");
 	});
 });

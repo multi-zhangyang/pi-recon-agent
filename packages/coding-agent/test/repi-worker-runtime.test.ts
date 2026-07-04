@@ -4,9 +4,11 @@ import {
 	type RepiWorkerChildSessionRuntimeBatchV1,
 	type RepiWorkerLeaseSchedulerEventV1,
 	type RepiWorkerLeaseSchedulerV1,
+	type RepiWorkerRetryHandoffClosureV1,
 	type RepiWorkerRuntimePoolV1,
 	verifyWorkerChildSessionRuntimeBatch,
 	verifyWorkerLeaseSchedulerV1,
+	verifyWorkerRetryHandoffClosureV1,
 	verifyWorkerRuntimePool,
 	workerChildSessionLaunchPolicy,
 	workerLeaseSchedulerEventHash,
@@ -131,6 +133,67 @@ function validScheduler(overrides: Partial<RepiWorkerLeaseSchedulerV1> = {}): Re
 	};
 }
 
+function validRetryHandoffClosure(
+	overrides: Partial<RepiWorkerRetryHandoffClosureV1> = {},
+): RepiWorkerRetryHandoffClosureV1 {
+	return {
+		kind: "WorkerRetryHandoffClosureV1",
+		schemaVersion: 1,
+		closureId: "closure-a",
+		poolId: "pool-a",
+		generatedAt: ts,
+		strategy: "retry-budgeted claim-bound handoff closure",
+		workers: [
+			{
+				workerId: "w1",
+				role: "native-runtime",
+				packetId: "packet-a",
+				status: "passed",
+				attempt: 1,
+				maxAttempts: 3,
+				retryRemaining: 2,
+				retryState: "passed",
+				timeoutMs: 10_000,
+				timedOut: false,
+				retryQueueRefs: [],
+				handoffRefs: ["/tmp/repi/w1/runtime-manifest.json"],
+				repairRefs: ["/tmp/repi/failure-ledger.jsonl"],
+				claimRefs: ["claim-a"],
+				sourceArtifacts: ["/tmp/repi/w1/runtime-manifest.json", "/tmp/repi/w1/stdout.log"],
+				mergeKeys: ["claim-a"],
+				assertions: {
+					attemptBounded: true,
+					retryBudgetConsistent: true,
+					timeoutCancellationRecorded: true,
+					failureHasRetryOrHandoff: true,
+					exhaustionEscalated: true,
+					handoffBoundToClaim: true,
+					sourceArtifactsPreserved: true,
+				},
+			},
+		],
+		merge: {
+			strategy: "claim-bound handoff merge",
+			recoveredWorkers: [],
+			unresolvedWorkers: [],
+			collisions: [],
+		},
+		assertions: {
+			retryAttemptsBounded: true,
+			retryBudgetsConsistent: true,
+			timeoutCancellationRecorded: true,
+			failedWorkersHaveRetryOrHandoff: true,
+			exhaustedWorkersEscalated: true,
+			handoffRefsBoundToClaims: true,
+			mergeCollisionsResolved: true,
+			claimRefsPreserved: true,
+			sourceArtifactsPreserved: true,
+		},
+		errors: [],
+		...overrides,
+	};
+}
+
 describe("REPI worker runtime pure contracts", () => {
 	it("accepts a complete worker runtime pool with claim-ledger proof chain", () => {
 		const result = verifyWorkerRuntimePool(validPool());
@@ -193,6 +256,85 @@ describe("REPI worker runtime pure contracts", () => {
 		});
 		expect(verifyWorkerLeaseSchedulerV1(missingAssertions).errors).toContain(
 			"worker_lease_scheduler_duplicate_completion_rejection_missing",
+		);
+	});
+
+	it("validates retry, timeout, and claim-bound handoff closure", () => {
+		const result = verifyWorkerRetryHandoffClosureV1(validRetryHandoffClosure());
+		expect(result.ok).toBe(true);
+		expect(result.evidenceContract.join("\n")).toContain("runtime:retry-handoff-closure-validation");
+
+		const overAttempt = validRetryHandoffClosure({
+			workers: [{ ...validRetryHandoffClosure().workers[0], attempt: 4, retryRemaining: 0 }],
+			assertions: { ...validRetryHandoffClosure().assertions, retryAttemptsBounded: false },
+		});
+		expect(verifyWorkerRetryHandoffClosureV1(overAttempt).errors).toEqual(
+			expect.arrayContaining(["retry_handoff_attempt_exceeded:w1", "retry_handoff_attempts_not_bounded"]),
+		);
+
+		const timeoutNoCancel = validRetryHandoffClosure({
+			workers: [
+				{
+					...validRetryHandoffClosure().workers[0],
+					status: "timeout",
+					timedOut: true,
+					cancelledAt: undefined,
+					retryState: "handoff_recovered",
+					assertions: {
+						...validRetryHandoffClosure().workers[0].assertions,
+						timeoutCancellationRecorded: false,
+					},
+				},
+			],
+			assertions: {
+				...validRetryHandoffClosure().assertions,
+				timeoutCancellationRecorded: false,
+			},
+		});
+		expect(verifyWorkerRetryHandoffClosureV1(timeoutNoCancel).errors).toContain(
+			"retry_handoff_timeout_without_cancel:w1",
+		);
+
+		const failedWithoutClosure = validRetryHandoffClosure({
+			workers: [
+				{
+					...validRetryHandoffClosure().workers[0],
+					status: "failed",
+					retryState: "blocked_without_closure",
+					retryQueueRefs: [],
+					handoffRefs: [],
+					repairRefs: [],
+					assertions: {
+						...validRetryHandoffClosure().workers[0].assertions,
+						failureHasRetryOrHandoff: false,
+					},
+				},
+			],
+			assertions: {
+				...validRetryHandoffClosure().assertions,
+				failedWorkersHaveRetryOrHandoff: false,
+			},
+		});
+		expect(verifyWorkerRetryHandoffClosureV1(failedWithoutClosure).errors).toEqual(
+			expect.arrayContaining([
+				"retry_handoff_failed_without_closure:w1",
+				"retry_handoff_worker_unclosed:w1",
+				"retry_handoff_failures_not_closed",
+			]),
+		);
+
+		const unresolvedCollision = validRetryHandoffClosure({
+			merge: {
+				...validRetryHandoffClosure().merge,
+				collisions: [{ mergeKey: "claim-a", workers: ["w1", "w2"], status: "unresolved", evidenceRefs: [] }],
+			},
+			assertions: { ...validRetryHandoffClosure().assertions, mergeCollisionsResolved: false },
+		});
+		expect(verifyWorkerRetryHandoffClosureV1(unresolvedCollision).errors).toEqual(
+			expect.arrayContaining([
+				"retry_handoff_merge_collision_unresolved:claim-a",
+				"retry_handoff_merge_collisions_unresolved",
+			]),
 		);
 	});
 

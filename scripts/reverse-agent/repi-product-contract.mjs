@@ -1138,6 +1138,9 @@ rows.push(
 			"verifyWorkerRuntimePool",
 			"workerLeaseSchedulerEventHash",
 			"verifyWorkerLeaseSchedulerV1",
+			"WorkerRetryHandoffClosureV1",
+			"verifyWorkerRetryHandoffClosureV1",
+			"runtime:retry-handoff-closure-validation",
 			"workerChildSessionLaunchPolicy",
 			"workerChildSessionToWorkerRuntimePoolBridge",
 			"verifyWorkerChildSessionRuntimeBatch",
@@ -1149,8 +1152,9 @@ rows.push(
 				"verifyWorkerRuntimePool",
 				"workerChildSessionToWorkerRuntimePoolBridge",
 				"verifyWorkerLeaseSchedulerV1",
+				"verifyWorkerRetryHandoffClosureV1",
 			]),
-		"worker/subagent runtime pool, lease scheduler, and child-session validation live in a split pure module",
+		"worker/subagent runtime pool, lease scheduler, retry-handoff closure, and child-session validation live in a split pure module",
 		"Keep heavy runtime validation outside recon-profile.ts; profile should assemble live artifacts and call pure contracts.",
 	),
 );
@@ -1221,7 +1225,12 @@ rows.push(
 		"runtime:adapter-auto-detect-contract",
 		includesAll(runtimeAdapterSource, [
 			"detectRuntimeAdapterIds",
+			"inspectRuntimeAdapterTarget",
+			"RuntimeAdapterTargetProfileV1",
+			"summarizeRuntimeAdapterSignals",
 			"target_auto_detection_contract",
+			"runtime_adapter_target_profile_contract",
+			"parser_signal_summary_contract",
 			"gdb-native-trace-adapter",
 			"r2-native-xref-adapter",
 			"frida-mobile-hook-adapter",
@@ -1239,12 +1248,24 @@ const graphSource = read("packages/coding-agent/src/core/repi/graph.ts");
 rows.push(
 	check(
 		"evidence:task-tree-graph-contract",
-		includesAll(graphSource, ["AttackGraphTaskTreeNode", "taskTree", "counter_evidence", "hypothesis"]) &&
+		includesAll(graphSource, [
+			"AttackGraphTaskTreeNode",
+			"taskTree",
+			"counter_evidence",
+			"hypothesis",
+			"target_profile",
+			"parser_summary",
+			"gap",
+		]) &&
 			includesAll(reconProfile, [
 				"parseEvidenceLedgerTaskRecords",
 				"recentRuntimeAdapterExecutionArtifacts",
+				"runtimeAdapterParserSummaryForGraph",
 				"runtime-adapter-json",
 				"tool:runtime-adapter",
+				"target-profile-auto-detect",
+				"parser_signal_summary",
+				"missing-proof-exit",
 				"evidenceRecordHasCounterSignal",
 				"evidenceRecordHasHypothesisSignal",
 				"command",
@@ -1262,9 +1283,13 @@ rows.push(
 		"proof-loop:gap-classifier-contract",
 		includesAll(read("packages/coding-agent/src/core/repi/proof-loop.ts"), [
 			"RepiProofLoopGapClass",
+			"runtime_adapter_gap",
 			"classifyRepiProofLoopGap",
 			"repiProofLoopQuickPathFromItems",
+			"runtimeAdapterIdFromGapText",
 			"appendProofSpine",
+			"re_graph build",
+			"re_runtime_adapter run",
 			"re_verifier matrix",
 			"re_compiler draft",
 			"re_replayer run",
@@ -1272,8 +1297,11 @@ rows.push(
 		]) &&
 			includesAll(reconProfile, [
 				"./repi/proof-loop.ts",
+				"parseAttackGraphArtifact",
+				"proofLoopAttackGraphGapItems",
 				"proofLoopGapClassifier",
 				"proofLoopQuickPath",
+				"source=attack_graph_gap",
 				"executeProofLoopQuickPathCommand",
 				"quick_path_execution",
 				"gap_classifier",
@@ -1298,6 +1326,8 @@ rows.push(
 			"timedOut",
 			"cancelledAt",
 			"WorkerRuntimePoolV1",
+			"workerRetryHandoffClosure",
+			"worker_retry_handoff_closure",
 		]) &&
 			includesAll(read("packages/coding-agent/src/core/agent-thread-manager.ts"), [
 				"killWorkerProcessTree",

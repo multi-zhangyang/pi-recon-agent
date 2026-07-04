@@ -22,6 +22,7 @@ export type RepiProofLoopGapSource =
 	| "replayer"
 	| "autofix"
 	| "checkpoint"
+	| "attack_graph"
 	| "artifact";
 
 export type RepiProofLoopGapItem = {
@@ -37,6 +38,7 @@ export type RepiProofLoopGapClass =
 	| "replay_failure"
 	| "tool_or_dependency"
 	| "target_or_state"
+	| "runtime_adapter_gap"
 	| "weak_evidence"
 	| "timeout_or_flake"
 	| "compact_resume"
@@ -94,6 +96,17 @@ export function classifyRepiProofLoopGap(item: RepiProofLoopGapItem): RepiProofL
 	}
 	if (/contradiction|counter[_ -]?evidence|refute|conflict/i.test(text)) {
 		return { klass: "contradiction", priority: 1, action: "re_supervisor repair -> re_verifier matrix" };
+	}
+	if (
+		/runtime adapter|re_runtime_adapter|missing-proof-exit|missing proof|parser_signal_summary|parser no-match/i.test(
+			text,
+		)
+	) {
+		return {
+			klass: "runtime_adapter_gap",
+			priority: 1,
+			action: "re_runtime_adapter run -> re_verifier matrix -> re_compiler draft -> re_replayer run",
+		};
 	}
 	if (
 		/command not found|not recognized|No such file|cannot stat|cannot access|ModuleNotFoundError|ImportError|Cannot find module|ERR_MODULE_NOT_FOUND|permission denied|EACCES|ENOENT|missing tool|dependency|bootstrap/i.test(
@@ -163,16 +176,35 @@ function appendProofSpine(commands: string[], targetRef: string, options: { incl
 	if (options.includeAutofixPlan) commands.push(`re_autofix plan ${targetRef}`);
 }
 
+function runtimeAdapterIdFromGapText(text: string): string | undefined {
+	return (
+		/runtime adapter(?: missing proof| parser no-match| failed)?:\s*([a-z0-9][a-z0-9-]*-adapter)\b/i.exec(
+			text,
+		)?.[1] ??
+		/\badapter=([a-z0-9][a-z0-9-]*-adapter)\b/i.exec(text)?.[1] ??
+		/\b(re_runtime_adapter run|adapter:)\s+([a-z0-9][a-z0-9-]*-adapter)\b/i.exec(text)?.[2]
+	);
+}
+
 export function repiProofLoopQuickPathFromItems(items: RepiProofLoopGapItem[], target?: string): string[] {
 	const targetRef = target?.trim() || "<target>";
 	const classes = new Set(items.map((item) => classifyRepiProofLoopGap(item).klass));
 	const commands: string[] = [];
+	if (items.some((item) => item.source === "attack_graph")) commands.push("re_graph build");
 	if (classes.has("compact_resume")) {
 		commands.push("re_context resume", `re_operator plan ${targetRef}`);
 	}
 	if (classes.has("tool_or_dependency")) commands.push("re_bootstrap plan", `re_operator dispatch ${targetRef} 1`);
 	if (classes.has("target_or_state")) {
 		commands.push(`re_map ${targetRef}`, `re_live_browser plan ${targetRef}`, `re_web_authz_state plan ${targetRef}`);
+	}
+	if (classes.has("runtime_adapter_gap")) {
+		const adapterIds = Array.from(
+			new Set(items.map((item) => runtimeAdapterIdFromGapText(item.text)).filter((id): id is string => Boolean(id))),
+		);
+		if (adapterIds.length === 0) commands.push(`re_runtime_adapter plan ${targetRef}`);
+		for (const adapterId of adapterIds.slice(0, 4)) commands.push(`re_runtime_adapter run ${adapterId} ${targetRef}`);
+		appendProofSpine(commands, targetRef, { includeAutofixPlan: true });
 	}
 	if (classes.has("missing_artifact") || classes.has("weak_evidence") || classes.size === 0) {
 		appendProofSpine(commands, targetRef, { includeAutofixPlan: true });
@@ -190,7 +222,8 @@ export function repiProofLoopQuickPathFromItems(items: RepiProofLoopGapItem[], t
 		classes.size > 0 &&
 		!classes.has("missing_artifact") &&
 		!classes.has("weak_evidence") &&
-		!classes.has("contradiction")
+		!classes.has("contradiction") &&
+		!classes.has("runtime_adapter_gap")
 	) {
 		appendProofSpine(commands, targetRef);
 	}
