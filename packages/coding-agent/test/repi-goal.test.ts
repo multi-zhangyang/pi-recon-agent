@@ -238,6 +238,44 @@ describe("REPI built-in goal mode", () => {
 		}
 	});
 
+	it("handles pause, resume, and clear deterministically in print/RPC/json non-TUI modes", async () => {
+		for (const mode of ["print", "rpc", "json"] as const) {
+			const harness = createHarness();
+			harness.ctx.hasUI = false;
+			harness.ctx.mode = mode;
+
+			await harness.commands.get("goal").handler(`${mode} lifecycle objective`, harness.ctx);
+			await harness.commands.get("goal").handler("pause", harness.ctx);
+
+			expect(harness.abort).toHaveBeenCalled();
+			expect(harness.statuses.get("goal")).toBe("🎯 paused");
+			expect(harness.notifications.at(-1)?.message).toBe(`Goal paused: ${mode} lifecycle objective`);
+			expect(
+				harness.handlers.get("tool_call")![0]({ type: "tool_call", toolName: "bash" }, harness.ctx),
+			).toMatchObject({ block: true });
+
+			await harness.commands.get("goal").handler("resume", harness.ctx);
+
+			expect(harness.statuses.get("goal")).toBe("🎯 active 0s");
+			expect(harness.sent).toHaveLength(2);
+			expect(harness.sent[1].content).toContain("explicitly resumed the paused REPI /goal");
+			expect(harness.sent[1].content).toContain(`${mode} lifecycle objective`);
+			expect(
+				harness.handlers.get("tool_call")![0]({ type: "tool_call", toolName: "bash" }, harness.ctx),
+			).toBeUndefined();
+
+			await harness.commands.get("goal").handler("clear", harness.ctx);
+
+			expect(harness.statuses.get("goal")).toBeUndefined();
+			expect(harness.notifications.at(-1)?.message).toBe(`Goal cleared: ${mode} lifecycle objective`);
+			expect(harness.entries.at(-1)).toMatchObject({
+				type: "custom",
+				customType: REPI_GOAL_STATE_ENTRY_TYPE,
+				data: { version: 1, goal: null },
+			});
+		}
+	});
+
 	it("replaces an existing goal without waiting for RPC/non-TUI confirmation dialogs", async () => {
 		for (const mode of ["rpc", "json"] as const) {
 			const harness = createHarness();

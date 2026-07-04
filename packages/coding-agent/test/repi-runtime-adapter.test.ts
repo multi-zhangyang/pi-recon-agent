@@ -13,6 +13,116 @@ import {
 	summarizeRuntimeAdapterSignals,
 } from "../src/core/repi/runtime-adapter.ts";
 
+function be16(value: number): Buffer {
+	const buffer = Buffer.alloc(2);
+	buffer.writeUInt16BE(value, 0);
+	return buffer;
+}
+
+function be24(value: number): Buffer {
+	return Buffer.from([(value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff]);
+}
+
+function dnsQueryPayload(name: string): Buffer {
+	const header = Buffer.alloc(12);
+	header.writeUInt16BE(0x1234, 0);
+	header.writeUInt16BE(0x0100, 2);
+	header.writeUInt16BE(1, 4);
+	const labels = name
+		.split(".")
+		.flatMap((label) => [Buffer.from([Buffer.byteLength(label, "ascii")]), Buffer.from(label, "ascii")]);
+	return Buffer.concat([header, ...labels, Buffer.from([0]), be16(1), be16(1)]);
+}
+
+function tlsClientHelloSniPayload(hostname: string): Buffer {
+	const host = Buffer.from(hostname, "ascii");
+	const serverName = Buffer.concat([Buffer.from([0]), be16(host.length), host]);
+	const sniList = Buffer.concat([be16(serverName.length), serverName]);
+	const sniExtension = Buffer.concat([be16(0), be16(sniList.length), sniList]);
+	const clientHello = Buffer.concat([
+		Buffer.from([0x03, 0x03]),
+		Buffer.alloc(32, 0x42),
+		Buffer.from([0]),
+		be16(2),
+		Buffer.from([0x13, 0x01]),
+		Buffer.from([1, 0]),
+		be16(sniExtension.length),
+		sniExtension,
+	]);
+	const handshake = Buffer.concat([Buffer.from([1]), be24(clientHello.length), clientHello]);
+	return Buffer.concat([Buffer.from([22, 3, 3]), be16(handshake.length), handshake]);
+}
+
+function ethernetIpv4TcpFrame(payload: Buffer, sourcePort: number, destPort: number): Buffer {
+	const ethernet = Buffer.concat([Buffer.alloc(6, 0xaa), Buffer.alloc(6, 0xbb), Buffer.from([0x08, 0x00])]);
+	const ip = Buffer.alloc(20);
+	ip[0] = 0x45;
+	ip.writeUInt16BE(20 + 20 + payload.length, 2);
+	ip[8] = 64;
+	ip[9] = 6;
+	Buffer.from([10, 1, 0, 2]).copy(ip, 12);
+	Buffer.from([93, 184, 216, 34]).copy(ip, 16);
+	const tcp = Buffer.alloc(20);
+	tcp.writeUInt16BE(sourcePort, 0);
+	tcp.writeUInt16BE(destPort, 2);
+	tcp.writeUInt32BE(1, 4);
+	tcp[12] = 0x50;
+	tcp[13] = 0x18;
+	tcp.writeUInt16BE(8192, 14);
+	return Buffer.concat([ethernet, ip, tcp, payload]);
+}
+
+function ethernetIpv4UdpFrame(payload: Buffer, sourcePort: number, destPort: number): Buffer {
+	const ethernet = Buffer.concat([Buffer.alloc(6, 0xcc), Buffer.alloc(6, 0xdd), Buffer.from([0x08, 0x00])]);
+	const ip = Buffer.alloc(20);
+	ip[0] = 0x45;
+	ip.writeUInt16BE(20 + 8 + payload.length, 2);
+	ip[8] = 64;
+	ip[9] = 17;
+	Buffer.from([10, 1, 0, 2]).copy(ip, 12);
+	Buffer.from([8, 8, 8, 8]).copy(ip, 16);
+	const udp = Buffer.alloc(8);
+	udp.writeUInt16BE(sourcePort, 0);
+	udp.writeUInt16BE(destPort, 2);
+	udp.writeUInt16BE(8 + payload.length, 4);
+	return Buffer.concat([ethernet, ip, udp, payload]);
+}
+
+function pcapngBlock(type: number, body: Buffer): Buffer {
+	const padding = Buffer.alloc((4 - (body.length % 4)) % 4);
+	const totalLength = 12 + body.length + padding.length;
+	const header = Buffer.alloc(8);
+	header.writeUInt32LE(type, 0);
+	header.writeUInt32LE(totalLength, 4);
+	const trailer = Buffer.alloc(4);
+	trailer.writeUInt32LE(totalLength, 0);
+	return Buffer.concat([header, body, padding, trailer]);
+}
+
+function pcapngSectionHeader(): Buffer {
+	const body = Buffer.alloc(16);
+	body.writeUInt32LE(0x1a2b3c4d, 0);
+	body.writeUInt16LE(1, 4);
+	body.writeUInt16LE(0, 6);
+	body.writeBigInt64LE(-1n, 8);
+	return pcapngBlock(0x0a0d0d0a, body);
+}
+
+function pcapngInterfaceDescription(): Buffer {
+	const body = Buffer.alloc(8);
+	body.writeUInt16LE(1, 0);
+	body.writeUInt32LE(65535, 4);
+	return pcapngBlock(1, body);
+}
+
+function pcapngEnhancedPacket(frame: Buffer): Buffer {
+	const header = Buffer.alloc(20);
+	header.writeUInt32LE(0, 0);
+	header.writeUInt32LE(frame.length, 12);
+	header.writeUInt32LE(frame.length, 16);
+	return pcapngBlock(6, Buffer.concat([header, frame]));
+}
+
 describe("REPI runtime adapter pure contracts", () => {
 	let tempDir: string;
 
@@ -358,6 +468,42 @@ describe("REPI runtime adapter pure contracts", () => {
 			expect.arrayContaining(["primitive control evidence", "multi-run verifier", "stdout/stderr hash"]),
 		);
 		expect(pwnOutput).not.toMatch(/manual-confirm|replay diff pending|fallback=portable/i);
+	});
+
+	test("executes the PCAP fallback against pcapng DNS and TLS-SNI fixtures", () => {
+		const pcapng = join(tempDir, "dns-tls.fixture");
+		const hostname = "api.target.local";
+		writeFileSync(
+			pcapng,
+			Buffer.concat([
+				pcapngSectionHeader(),
+				pcapngInterfaceDescription(),
+				pcapngEnhancedPacket(ethernetIpv4UdpFrame(dnsQueryPayload(hostname), 53000, 53)),
+				pcapngEnhancedPacket(ethernetIpv4TcpFrame(tlsClientHelloSniPayload(hostname), 44321, 443)),
+			]),
+		);
+
+		const pcapReport = buildRuntimeAdapterExecutionGate("tshark-pcap-flow-adapter", {
+			toolIndexPath: "/tmp/tool-index.md",
+			isToolPresent: (tool) => tool === "python3",
+		});
+		const pcapAdapter = pcapReport.adapters.find((row) => row.adapterId === "tshark-pcap-flow-adapter")!;
+		const output = execFileSync(
+			"bash",
+			["-lc", materializeRuntimeAdapterCommand(pcapAdapter.fallbackCommandTemplate, pcapng)],
+			{ encoding: "utf8", timeout: 10_000 },
+		);
+		const summary = summarizeRuntimeAdapterSignals(pcapAdapter, parseRuntimeAdapterSignals(pcapAdapter, output));
+
+		expect(output).toContain("format=pcapng");
+		expect(output).toContain("[dns-query]");
+		expect(output).toContain(`qname=${hostname}`);
+		expect(output).toContain("[tls-sni]");
+		expect(output).toContain(`server_name=${hostname}`);
+		expect(output).toContain("[flow-conversation]");
+		expect(summary.matchedProofExitSignals).toEqual(
+			expect.arrayContaining(["flow conversation", "dns timeline", "tls sni proof"]),
+		);
 	});
 
 	test("executes real native fallback commands for r2, GDB, and Ghidra-style adapters", () => {
