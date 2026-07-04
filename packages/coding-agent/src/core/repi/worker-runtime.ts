@@ -725,10 +725,22 @@ export function verifyWorkerRuntimePool(pool: RepiWorkerRuntimePoolV1): {
 } {
 	const errors: string[] = [];
 	const maxConcurrency = Math.max(1, Math.floor(pool.maxConcurrency));
+	const runtimeIntervals: Array<{
+		workerId: string;
+		start: number;
+		end: number;
+		resourceLease: RepiWorkerRuntimePoolWorkerV1["resourceLease"];
+	}> = [];
 	const activePoints = pool.workers.flatMap((worker) => {
 		const start = worker.startedAt ? Date.parse(worker.startedAt) : Number.NaN;
 		const end = worker.endedAt ? Date.parse(worker.endedAt) : Number.NaN;
 		if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return [];
+		runtimeIntervals.push({
+			workerId: worker.workerId,
+			start,
+			end,
+			resourceLease: worker.resourceLease,
+		});
 		if (end - start > worker.timeoutMs && worker.status !== "timeout" && worker.status !== "cancelled")
 			errors.push(`timeout_not_marked:${worker.workerId}`);
 		if (worker.status === "timeout" && pool.cancelOnTimeout && !worker.cancelledAt)
@@ -755,6 +767,28 @@ export function verifyWorkerRuntimePool(pool: RepiWorkerRuntimePoolV1): {
 	for (const point of activePoints.sort((left, right) => left.t - right.t || left.delta - right.delta)) {
 		active += point.delta;
 		if (active > maxConcurrency) errors.push(`maxConcurrency_exceeded:${active}>${maxConcurrency}`);
+	}
+	for (const t of Array.from(new Set(runtimeIntervals.map((interval) => interval.start))).sort((a, b) => a - b)) {
+		const activeAtTime = runtimeIntervals.filter((interval) => interval.start <= t && t < interval.end);
+		const cpuSlots = activeAtTime.reduce((sum, interval) => sum + interval.resourceLease.cpuSlots, 0);
+		const memoryMb = activeAtTime.reduce((sum, interval) => sum + interval.resourceLease.memoryMb, 0);
+		const maxProcesses = activeAtTime.reduce((sum, interval) => sum + interval.resourceLease.maxProcesses, 0);
+		if (cpuSlots > pool.resourceBudget.cpuSlots)
+			errors.push(`resource_cpu_active_exceeds_budget:${cpuSlots}>${pool.resourceBudget.cpuSlots}`);
+		if (memoryMb > pool.resourceBudget.memoryMb)
+			errors.push(`resource_memory_active_exceeds_budget:${memoryMb}>${pool.resourceBudget.memoryMb}`);
+		if (maxProcesses > pool.resourceBudget.maxProcesses)
+			errors.push(`resource_process_active_exceeds_budget:${maxProcesses}>${pool.resourceBudget.maxProcesses}`);
+	}
+	for (const group of pool.parallelGroups) {
+		const groupWorkerIds = new Set(group.workers);
+		const groupIntervals = runtimeIntervals.filter((interval) => groupWorkerIds.has(interval.workerId));
+		const groupLimit = Math.max(1, Math.floor(group.maxConcurrency));
+		for (const t of Array.from(new Set(groupIntervals.map((interval) => interval.start))).sort((a, b) => a - b)) {
+			const groupActive = groupIntervals.filter((interval) => interval.start <= t && t < interval.end).length;
+			if (groupActive > groupLimit)
+				errors.push(`parallelGroup_maxConcurrency_exceeded:${group.groupId}:${groupActive}>${groupLimit}`);
+		}
 	}
 	if (claimAwareWorkerMergeProtocol(pool).some((row) => row.includes("unresolved")))
 		errors.push("duplicate_mergeKey_unresolved");

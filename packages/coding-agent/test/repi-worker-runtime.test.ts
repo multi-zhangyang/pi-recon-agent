@@ -226,6 +226,41 @@ describe("REPI worker runtime pure contracts", () => {
 		);
 	});
 
+	it("rejects overlapping workers that exceed active resource or group budgets", () => {
+		const secondWorker = {
+			...validPool().workers[0],
+			workerId: "w2",
+			sessionDir: "/tmp/repi/w2",
+			stdoutPath: "/tmp/repi/w2/stdout.log",
+			stderrPath: "/tmp/repi/w2/stderr.log",
+			mergeKey: "claim-b",
+			claimRefs: ["claim-b"],
+		};
+		const overlappingPool = validPool({
+			maxConcurrency: 2,
+			resourceBudget: { cpuSlots: 1, memoryMb: 768, maxProcesses: 3 },
+			workers: [validPool().workers[0], secondWorker],
+			parallelGroups: [{ groupId: "g1", workers: ["w1", "w2"], dependsOn: [], maxConcurrency: 1 }],
+			claimLedgerEvents: [
+				...validPool().claimLedgerEvents,
+				claimEvent("artifact_handoff", "claim-b"),
+				claimEvent("claim", "claim-b"),
+				claimEvent("validation", "claim-b"),
+				claimEvent("challenge", "claim-b"),
+				claimEvent("resolution", "claim-b"),
+			],
+		});
+
+		expect(verifyWorkerRuntimePool(overlappingPool).errors).toEqual(
+			expect.arrayContaining([
+				"resource_cpu_active_exceeds_budget:2>1",
+				"resource_memory_active_exceeds_budget:1024>768",
+				"resource_process_active_exceeds_budget:4>3",
+				"parallelGroup_maxConcurrency_exceeded:g1:2>1",
+			]),
+		);
+	});
+
 	it("validates worker lease scheduler hash-chain and rejection assertions", () => {
 		expect(verifyWorkerLeaseSchedulerV1(validScheduler()).ok).toBe(true);
 
