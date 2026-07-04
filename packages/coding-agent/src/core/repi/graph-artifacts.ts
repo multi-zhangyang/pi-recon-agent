@@ -62,6 +62,7 @@ export type RepiProofLoopGraphArtifact = {
 	quickPath: string[];
 	quickPlanPhases: string[];
 	quickPlanAssertions: string[];
+	runtimeAdapterClosure: string[];
 	nextActions: string[];
 	sourceArtifacts: string[];
 };
@@ -270,6 +271,7 @@ export function parseProofLoopArtifact(path: string): RepiProofLoopGraphArtifact
 			quickPath: stringArray(parsed.quickPath),
 			quickPlanPhases: stringArray(parsed.quickPlanPhases),
 			quickPlanAssertions: stringArray(parsed.quickPlanAssertions),
+			runtimeAdapterClosure: stringArray(parsed.runtimeAdapterClosure),
 			nextActions: stringArray(parsed.nextActions),
 			sourceArtifacts: stringArray(parsed.sourceArtifacts),
 		};

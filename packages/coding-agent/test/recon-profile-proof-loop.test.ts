@@ -43,6 +43,7 @@ describe("REPI kernel profile proof-loop flow", () => {
 			expect(proof.content[0]?.text).toContain("quick_path:");
 			expect(proof.content[0]?.text).toContain("quick_plan_phases:");
 			expect(proof.content[0]?.text).toContain("runtime_adapter_before_replay=pass");
+			expect(proof.content[0]?.text).toContain("runtime_adapter_closure:");
 			expect(proof.content[0]?.text).toContain(
 				"re_runtime_adapter run web-cdp-network-adapter https://target.local/app",
 			);
@@ -86,6 +87,7 @@ describe("REPI kernel profile proof-loop flow", () => {
 			expect(graphText).toContain("re_runtime_adapter run web-cdp-network-adapter https://target.local/app");
 			expect(graphText).toContain("runtime-adapter-lineage");
 			expect(graphText).toContain("runtime-adapter-artifact");
+			expect(graphText).toContain("runtime-adapter-closure");
 		} finally {
 			harness.restore();
 		}
@@ -264,6 +266,9 @@ describe("REPI kernel profile proof-loop flow", () => {
 			expect(text).toContain(
 				"parser_signal_summary adapter=web-cdp-network-adapter matched=network request ledger missing=request order proof",
 			);
+			expect(text).toContain("runtime_adapter_closure:");
+			expect(text).toContain("adapter=web-cdp-network-adapter status=needs_adapter_rerun");
+			expect(text).toContain("missing=request order proof matched=network request ledger");
 			expect(text).toContain("class=runtime_adapter_gap");
 			expect(text).toContain("runtime adapter missing proof: web-cdp-network-adapter: request order proof");
 			expect(text).toContain("re_runtime_adapter run web-cdp-network-adapter opaque-web-target");
@@ -357,6 +362,8 @@ describe("REPI kernel profile proof-loop flow", () => {
 			const text = proof.content[0]?.text ?? "";
 			expect(text).toContain("class=proof_spine_seed");
 			expect(text).toContain("runtime adapter proof-exit complete adapter=web-cdp-network-adapter");
+			expect(text).toContain("adapter=web-cdp-network-adapter status=proof_spine_ready");
+			expect(text).toContain("matched=network request ledger | request order proof");
 			expect(text).toContain("re_verifier matrix opaque-web-target-complete");
 			expect(text).toContain("re_compiler draft opaque-web-target-complete");
 			expect(text).toContain("re_replayer run opaque-web-target-complete 1");

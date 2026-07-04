@@ -313,7 +313,10 @@ function runtimeAdapterIdsFromGapText(text: string): string[] {
 }
 
 function proofSignalListFromGapText(text: string, field: "missing" | "matched"): string[] {
-	const names = field === "missing" ? ["missing_proof", "missing"] : ["matched_proof", "matched"];
+	const names = field === "missing" ? ["missing_proof"] : ["matched_proof"];
+	if (/parser_signal_summary\s+adapter=|runtime adapter proof[- ]exit complete/i.test(text)) {
+		names.push(field === "missing" ? "missing" : "matched");
+	}
 	const values: string[] = [];
 	for (const name of names) {
 		const pattern = new RegExp(
@@ -327,7 +330,7 @@ function proofSignalListFromGapText(text: string, field: "missing" | "matched"):
 				...value
 					.split(/\s*(?:\||;|,)\s*/)
 					.map((item) => item.trim())
-					.filter(Boolean),
+					.filter((item) => item.length > 0 && !/^(?:adapter|artifact|matched|missing|rules|status)=/i.test(item)),
 			);
 		}
 	}

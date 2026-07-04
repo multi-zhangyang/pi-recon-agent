@@ -63,10 +63,12 @@ import {
 	repiProofLoopQuickPathFromItems as proofLoopQuickPathFromItems,
 	repiProofLoopQuickPlanFromItems as proofLoopQuickPlanFromItems,
 	repiProofLoopRuntimeAdapterCommands as proofLoopRuntimeAdapterCommands,
+	repiProofLoopRuntimeAdapterClosureRows as proofLoopRuntimeAdapterClosureRows,
 	repiProofLoopSpecialistQueueFromItems as proofLoopSpecialistQueueFromItems,
 	repiProofLoopWorkerForText as proofLoopWorkerForText,
 	type RepiProofLoopGapItem as ProofLoopGapItem,
 	type RepiProofLoopGapSource as ProofLoopGapSource,
+	type RepiProofLoopRuntimeAdapterClosureRowV1 as ProofLoopRuntimeAdapterClosureRow,
 } from "./repi/proof-loop.ts";
 import {
 	caseMemorySnapshotFromEvent,
@@ -2477,6 +2479,7 @@ type ProofLoopArtifact = {
 	quickPath: string[];
 	quickPlanPhases: string[];
 	quickPlanAssertions: string[];
+	runtimeAdapterClosure: string[];
 	caseMemoryLanePlan?: CaseMemoryLanePlan;
 	caseMemoryBridge: string[];
 	failureSignaturePriority: string[];
@@ -13713,6 +13716,7 @@ function buildAttackGraph(): AttackGraphArtifact {
 				`quick_path=${proof.quickPath.length}`,
 				`quick_plan_phases=${proof.quickPlanPhases.length}`,
 				`quick_plan_assertions=${proof.quickPlanAssertions.join(" | ") || "none"}`,
+				`runtime_adapter_closure=${proof.runtimeAdapterClosure.length}`,
 				`next_actions=${proof.nextActions.length}`,
 			],
 			note: `target=${proof.target ?? "<none>"}`,
@@ -13737,6 +13741,37 @@ function buildAttackGraph(): AttackGraphArtifact {
 				command,
 			});
 			addEdge({ from: proofId, to: commandId, kind: "suggests", label: "quick_path" });
+		}
+
+		for (const [index, row] of proof.runtimeAdapterClosure.slice(0, 12).entries()) {
+			const adapterId = /\badapter=([^\s]+)/.exec(row)?.[1] ?? `adapter-${index + 1}`;
+			const status = /\bstatus=([^\s]+)/.exec(row)?.[1] ?? "unknown";
+			const commands = /\bcommands=(.*?)(?:\s+evidence=|$)/.exec(row)?.[1]?.trim() ?? "";
+			const closureId = `verify:proof-loop-runtime-closure:${slug(proofBase)}:${slug(adapterId)}:${index + 1}`;
+			addNode({
+				id: closureId,
+				kind: "verification",
+				label: `runtime_adapter_closure ${adapterId}`,
+				status,
+				path,
+				note: row,
+			});
+			addTask({
+				id: closureId,
+				parentId: proofId,
+				kind: "verification",
+				label: `runtime_adapter_closure ${adapterId}`,
+				status,
+				command: commands && commands !== "<none>" ? commands : undefined,
+				path,
+				evidence: [row],
+			});
+			addEdge({
+				from: closureId,
+				to: proofId,
+				kind: status === "needs_adapter_rerun" ? "blocks" : "verifies",
+				label: "runtime-adapter-closure",
+			});
 		}
 
 			for (const step of proof.steps.slice(0, 18)) {
@@ -25250,6 +25285,23 @@ function proofLoopQuickPath(target?: string): string[] {
 	return proofLoopQuickPlanRows(proofLoopGapItems(target), target).commands;
 }
 
+function formatProofLoopRuntimeAdapterClosureRow(row: ProofLoopRuntimeAdapterClosureRow): string {
+	return [
+		`adapter=${row.adapterId}`,
+		`status=${row.status}`,
+		`missing=${row.missingProofSignals.join(" | ") || "<none>"}`,
+		`matched=${row.matchedProofSignals.join(" | ") || "<none>"}`,
+		`commands=${row.commands.join(" && ") || "<none>"}`,
+		`evidence=${row.sourceArtifacts.slice(0, 4).join(" | ") || "none"}`,
+	].join(" ");
+}
+
+function proofLoopRuntimeAdapterClosure(target?: string): string[] {
+	return proofLoopRuntimeAdapterClosureRows(proofLoopGapItems(target), target)
+		.map(formatProofLoopRuntimeAdapterClosureRow)
+		.slice(0, 12);
+}
+
 function proofLoopSpecialistQueue(target?: string): string[] {
 	return proofLoopSpecialistQueueFromItems(proofLoopGapItems(target), target);
 }
@@ -25505,6 +25557,9 @@ function refreshProofLoop(proof: ProofLoopArtifact): ProofLoopArtifact {
 	const gapClassifier = formatProofLoopGapClassifier(gapItems);
 	const quickPlan = proofLoopQuickPlanRows(gapItems, proof.target);
 	const quickPath = quickPlan.commands;
+	const runtimeAdapterClosure = proofLoopRuntimeAdapterClosureRows(gapItems, proof.target)
+		.map(formatProofLoopRuntimeAdapterClosureRow)
+		.slice(0, 12);
 	return {
 		...proof,
 		steps,
@@ -25515,6 +25570,7 @@ function refreshProofLoop(proof: ProofLoopArtifact): ProofLoopArtifact {
 		quickPath,
 		quickPlanPhases: quickPlan.phases,
 		quickPlanAssertions: quickPlan.assertions,
+		runtimeAdapterClosure,
 		caseMemoryLanePlan,
 		caseMemoryBridge,
 		autonomousBudget,
@@ -25539,6 +25595,7 @@ function refreshProofLoop(proof: ProofLoopArtifact): ProofLoopArtifact {
 			quickPath,
 			quickPlanPhases: quickPlan.phases,
 			quickPlanAssertions: quickPlan.assertions,
+			runtimeAdapterClosure,
 			caseMemoryLanePlan,
 			caseMemoryBridge,
 			autonomousBudget,
@@ -25600,6 +25657,7 @@ function buildProofLoop(
 		quickPath: [],
 		quickPlanPhases: [],
 		quickPlanAssertions: [],
+		runtimeAdapterClosure: [],
 		caseMemoryLanePlan: undefined,
 		caseMemoryBridge: [],
 		autonomousBudget: autonomousExecutionBudget(options.target ?? mission?.task),
@@ -25645,6 +25703,8 @@ function formatProofLoop(proof: ProofLoopArtifact, path?: string): string {
 		...(proof.quickPlanPhases.length ? proof.quickPlanPhases.map((item) => `- ${item}`) : ["- none"]),
 		"quick_plan_assertions:",
 		...(proof.quickPlanAssertions.length ? proof.quickPlanAssertions.map((item) => `- ${item}`) : ["- none"]),
+		"runtime_adapter_closure:",
+		...(proof.runtimeAdapterClosure.length ? proof.runtimeAdapterClosure.map((item) => `- ${item}`) : ["- none"]),
 		"case_memory_lane_plan:",
 		...(proof.caseMemoryLanePlan
 			? caseMemoryLanePlanLines(proof.caseMemoryLanePlan).map((item) => `- ${item}`)
@@ -25738,7 +25798,7 @@ function writeProofLoopArtifact(proof: ProofLoopArtifact): string {
 	appendEvidence({
 		kind: proof.mode === "run" ? "runtime" : "artifact",
 		title: `proof-loop-${proof.mode} ${proof.missionId ?? "no-mission"}`,
-		fact: `Proof loop ${proof.mode}: verdict=${proof.verdict}, executed=${proof.executed.length}, replay_steps=${proof.replaySteps}, gaps=${proof.gapClassifier.length}, quick_path=${proof.quickPath.length}, quick_plan_phases=${proof.quickPlanPhases.length}, quick_plan_assertions=${proof.quickPlanAssertions.length}, compact_resume_queue=${proof.compactResumeQueue.length}, compact_resume_telemetry=${proof.compactResumeTelemetry.length}, operator_feedback=${proof.operatorFeedback.length}, operator_feedback_queue=${proof.operatorFeedbackQueue.length}, swarm_retry_queue=${proof.swarmRetryQueue.length}, specialist_queue=${proof.specialistQueue.length}, swarm_bridge=${proof.swarmBridge.length}, autonomous_budget=${proof.autonomousBudget?.maxTurns ?? "none"}/${proof.autonomousBudget?.maxProofLoops ?? "none"}, score_decay=${(proof.dispatcherScoreDecay ?? []).length}, demotions=${(proof.repeatedFailureDemotions ?? []).length}, promotions=${(proof.highScorePromotions ?? []).length}, case_memory_lane_plan=${proof.caseMemoryLanePlan?.action ?? "none"}`,
+		fact: `Proof loop ${proof.mode}: verdict=${proof.verdict}, executed=${proof.executed.length}, replay_steps=${proof.replaySteps}, gaps=${proof.gapClassifier.length}, quick_path=${proof.quickPath.length}, quick_plan_phases=${proof.quickPlanPhases.length}, quick_plan_assertions=${proof.quickPlanAssertions.length}, runtime_adapter_closure=${proof.runtimeAdapterClosure.length}, compact_resume_queue=${proof.compactResumeQueue.length}, compact_resume_telemetry=${proof.compactResumeTelemetry.length}, operator_feedback=${proof.operatorFeedback.length}, operator_feedback_queue=${proof.operatorFeedbackQueue.length}, swarm_retry_queue=${proof.swarmRetryQueue.length}, specialist_queue=${proof.specialistQueue.length}, swarm_bridge=${proof.swarmBridge.length}, autonomous_budget=${proof.autonomousBudget?.maxTurns ?? "none"}/${proof.autonomousBudget?.maxProofLoops ?? "none"}, score_decay=${(proof.dispatcherScoreDecay ?? []).length}, demotions=${(proof.repeatedFailureDemotions ?? []).length}, promotions=${(proof.highScorePromotions ?? []).length}, case_memory_lane_plan=${proof.caseMemoryLanePlan?.action ?? "none"}`,
 		command: `re_proof_loop ${proof.mode}`,
 		path,
 		verify: `cat ${path}`,
