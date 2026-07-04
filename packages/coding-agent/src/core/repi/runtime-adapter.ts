@@ -255,35 +255,23 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 			"adapter-frida-mobile-hook-runner: frida -U -f <target> -l " +
 			"$" +
 			"{REPI_FRIDA_HOOK:-hooks/repi-mobile.js} --no-pause",
-		fallbackCommandTemplate: [
-			"adapter-frida-mobile-hook-runner-fallback: target=<target>;",
-			'if [ -f "$target" ]; then',
-			'  file "$target";',
-			"  if command -v unzip >/dev/null 2>&1; then unzip -l \"$target\" | sed -n '1,180p'; fi;",
-			"  if command -v strings >/dev/null 2>&1; then strings -a \"$target\" | grep -E -i 'Crypto|Cipher|MessageDigest|NSURLSession|OkHttp|KeyStore|Keychain|TrustManager|CertificatePinner|SecTrust|pinning|X509' | head -180 || true; fi;",
-			'  if command -v jadx >/dev/null 2>&1; then work="' +
-				"$" +
-				'{REPI_RUNTIME_ADAPTER_WORKDIR:-/tmp/repi-jadx-adapter}"; rm -rf "$work"; mkdir -p "$work"; jadx -q -d "$work" "$target" >/dev/null 2>&1 || true; grep -R -I -n -E \'Cipher|MessageDigest|OkHttp|TrustManager|CertificatePinner|KeyStore|Keychain|SecTrust|pinning\' "$work" 2>/dev/null | head -180 || true; fi;',
-			"else",
-			'  if command -v adb >/dev/null 2>&1; then adb shell pm path "$target" 2>/dev/null | head -20; adb shell dumpsys package "$target" 2>/dev/null | grep -E -i \'versionName|userId|permission|activity|service|provider|receiver|signatures\' | head -180 || true; else echo "[mobile-runtime-blocked] reason=adb_missing_and_target_not_file target=$target"; fi;',
-			"fi",
-		].join(" "),
+		fallbackCommandTemplate: mobileRuntimeFallbackCommandTemplate(),
 		parserRules: [
 			{
 				id: "parser-frida-hook-output",
-				regex: "(frida|hook|Interceptor|Java\\.perform|ObjC|Spawned|Attached)",
+				regex: "(frida|hook|Interceptor|Java\\.perform|ObjC|Spawned|Attached|\\[mobile-hook-surface\\]|\\[mobile-package-runtime\\])",
 				evidenceRank: "runtime_artifact",
 				proofExitSignal: "Java/ObjC/Swift hook",
 			},
 			{
 				id: "parser-mobile-method-anchor",
-				regex: "(Crypto|Cipher|MessageDigest|NSURLSession|OkHttp|KeyStore|Keychain|classes\\.dex|AndroidManifest\\.xml)",
+				regex: "(\\[mobile-manifest\\]|\\[mobile-archive-entry\\]|\\[mobile-dex-string\\]|Crypto|Cipher|MessageDigest|NSURLSession|OkHttp|KeyStore|Keychain|classes\\.dex|AndroidManifest\\.xml)",
 				evidenceRank: "runtime_artifact",
 				proofExitSignal: "runtime attach env checkpoint",
 			},
 			{
 				id: "parser-cert-pinning-anchor",
-				regex: "(TrustManager|CertificatePinner|SecTrust|pinning|X509)",
+				regex: "(\\[mobile-cert-pinning\\]|TrustManager|CertificatePinner|SecTrust|pinning|X509)",
 				evidenceRank: "runtime_artifact",
 				proofExitSignal: "hook output artifact contract",
 			},
@@ -597,26 +585,24 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 		tool: "find",
 		fallbackTool: "grep",
 		runnerKind: "shell-command",
-		commandTemplate:
-			"adapter-firmware-rootfs-service-map-runner: printf '[adapter-rootfs-target] target=%s\\n' <target>; find <target> -maxdepth 3 \\( -name passwd -o -name shadow -o -name '*.conf' -o -path '*/init.d/*' \\) -print | head -220; grep -R -I -n -E 'httpd|dropbear|telnet|busybox|passwd|shadow|uci|init\\.d|password|token|key' <target>/etc <target>/bin <target>/sbin 2>/dev/null | head -260 || true",
-		fallbackCommandTemplate:
-			"adapter-firmware-rootfs-service-map-runner-fallback: printf '[adapter-rootfs-target] target=%s\\n' <target>; file <target>; find <target> -maxdepth 3 -type f 2>/dev/null | head -220; grep -R -I -n -E 'httpd|dropbear|telnet|busybox|passwd|shadow|config' <target> 2>/dev/null | head -220 || true",
+		commandTemplate: rootfsServiceMapCommandTemplate("native"),
+		fallbackCommandTemplate: rootfsServiceMapCommandTemplate("fallback"),
 		parserRules: [
 			{
 				id: "parser-rootfs-passwd",
-				regex: "(root:|/etc/passwd|passwd|shadow)",
+				regex: "(\\[rootfs-account\\]|root:|/etc/passwd|passwd|shadow)",
 				evidenceRank: "runtime_artifact",
 				proofExitSignal: "account database proof",
 			},
 			{
 				id: "parser-rootfs-service-init",
-				regex: "(init\\.d|rc\\.d|systemd|httpd|dropbear|telnet|busybox)",
+				regex: "(\\[rootfs-service\\]|\\[rootfs-binary\\]|init\\.d|rc\\.d|systemd|httpd|dropbear|telnet|busybox)",
 				evidenceRank: "process_config",
 				proofExitSignal: "rootfs service map",
 			},
 			{
 				id: "parser-rootfs-config-secret",
-				regex: "(uci|config|password|token|key|credential|secret)",
+				regex: "(\\[rootfs-config-secret\\]|uci|config|password|token|key|credential|secret)",
 				evidenceRank: "process_config",
 				proofExitSignal: "credential/config proof",
 			},
@@ -627,6 +613,89 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 		proofExitSignals: ["account database proof", "rootfs service map", "credential/config proof"],
 	},
 ];
+
+function mobileRuntimeFallbackCommandTemplate(): string {
+	return [
+		"adapter-frida-mobile-hook-runner-fallback: target=<target>;",
+		'printf "[mobile-target] target=%s exists=%s\\n" "$target" "$([ -e "$target" ] && echo yes || echo no)";',
+		'if [ -f "$target" ]; then',
+		'  file "$target" 2>/dev/null || true;',
+		"  if command -v python3 >/dev/null 2>&1; then",
+		"    python3 - \"$target\" <<'PY'",
+		"import hashlib, os, re, sys, zipfile",
+		"path = sys.argv[1]",
+		"def sha(raw): return hashlib.sha256(raw or b'').hexdigest()[:24]",
+		"def clean(value, max_len=700): return re.sub(r'\\s+', ' ', str(value)).strip()[:max_len]",
+		"anchor_re = re.compile(r'(Crypto|Cipher|MessageDigest|NSURLSession|OkHttp|KeyStore|Keychain|TrustManager|CertificatePinner|SecTrust|pinning|X509|HostnameVerifier|SSLSocketFactory)', re.I)",
+		"pin_re = re.compile(r'(TrustManager|CertificatePinner|SecTrust|pinning|X509|HostnameVerifier|SSLSocketFactory)', re.I)",
+		"def printable_strings(raw):",
+		"    return [item.decode('latin1', 'replace') for item in re.findall(rb'[\\x20-\\x7e]{4,}', raw[:2_000_000])]",
+		"try:",
+		"    total_anchors = []",
+		"    if zipfile.is_zipfile(path):",
+		"        with zipfile.ZipFile(path) as archive:",
+		"            names = archive.namelist()",
+		"            for info in archive.infolist()[:240]:",
+		"                name = info.filename",
+		"                if re.search(r'(AndroidManifest\\.xml|Info\\.plist|classes.*\\.dex|\\.so$|\\.jar$|\\.framework/|Payload/)', name, re.I):",
+		"                    print('[mobile-archive-entry] name=%s size=%d sha256=%s' % (clean(name), info.file_size, sha(name.encode())))",
+		"            manifest_name = next((name for name in names if name.endswith('AndroidManifest.xml') or name.endswith('Info.plist')), None)",
+		"            if manifest_name:",
+		"                manifest = archive.read(manifest_name)",
+		"                text = manifest.decode('latin1', 'replace')",
+		"                package = (re.search(r'package=[\\\"\\']([^\\\"\\']+)', text) or [None, '<binary-or-unknown>'])[1]",
+		"                print('[mobile-manifest] name=%s package=%s bytes=%d sha256=%s' % (manifest_name, clean(package), len(manifest), sha(manifest)))",
+		"            for name in [name for name in names if re.search(r'(classes.*\\.dex|\\.so$|\\.jar$|\\.plist$)', name, re.I)][:12]:",
+		"                raw = archive.read(name)",
+		"                anchors = []",
+		"                for item in printable_strings(raw):",
+		"                    if anchor_re.search(item):",
+		"                        anchors.append(item)",
+		"                total_anchors.extend(anchors)",
+		"                print('[mobile-dex] name=%s bytes=%d anchors=%d sha256=%s' % (clean(name), len(raw), len(anchors), sha(raw)))",
+		"                for item in anchors[:120]:",
+		"                    print('[mobile-dex-string] name=%s value=%s' % (clean(name, 180), clean(item)))",
+		"                for item in [item for item in anchors if pin_re.search(item)][:80]:",
+		"                    print('[mobile-cert-pinning] name=%s anchor=%s' % (clean(name, 180), clean(item)))",
+		"    else:",
+		"        raw = open(path, 'rb').read(2_000_000)",
+		"        anchors = [item for item in printable_strings(raw) if anchor_re.search(item)]",
+		"        total_anchors.extend(anchors)",
+		"        print('[mobile-raw-artifact] bytes=%d anchors=%d sha256=%s' % (len(raw), len(anchors), sha(raw)))",
+		"        for item in anchors[:160]: print('[mobile-dex-string] value=%s' % clean(item))",
+		"        for item in [item for item in anchors if pin_re.search(item)][:80]: print('[mobile-cert-pinning] anchor=%s' % clean(item))",
+		"    print('[mobile-hook-surface] anchors=%d hook_contract=frida-java-objc-swift' % len(total_anchors))",
+		"except Exception as error:",
+		"    print('[mobile-parse-error] %s' % clean(error))",
+		"PY",
+		"  fi;",
+		'  if command -v jadx >/dev/null 2>&1; then work="' +
+			"$" +
+			'{REPI_RUNTIME_ADAPTER_WORKDIR:-/tmp/repi-jadx-adapter}"; rm -rf "$work"; mkdir -p "$work"; jadx -q -d "$work" "$target" >/dev/null 2>&1 || true; grep -R -I -n -E \'Cipher|MessageDigest|OkHttp|TrustManager|CertificatePinner|KeyStore|Keychain|SecTrust|pinning\' "$work" 2>/dev/null | sed \'s/^/[mobile-jadx-match] /\' | head -180 || true; fi;',
+		"else",
+		"  if command -v adb >/dev/null 2>&1; then printf '[mobile-package-runtime] package=%s transport=adb\\n' \"$target\"; adb shell pm path \"$target\" 2>/dev/null | sed 's/^/[mobile-adb-path] /' | head -20; adb shell dumpsys package \"$target\" 2>/dev/null | grep -E -i 'versionName|userId|permission|activity|service|provider|receiver|signatures' | sed 's/^/[mobile-adb-package] /' | head -180 || true; else echo \"[mobile-runtime-blocked] reason=adb_missing_and_target_not_file target=$target\"; fi;",
+		"fi",
+	].join("\n");
+}
+
+function rootfsServiceMapCommandTemplate(mode: "native" | "fallback"): string {
+	const prefix =
+		mode === "native"
+			? "adapter-firmware-rootfs-service-map-runner:"
+			: "adapter-firmware-rootfs-service-map-runner-fallback:";
+	return [
+		`${prefix} target=<target>;`,
+		`printf "[adapter-rootfs-target] target=%s mode=${mode}\\n" "$target";`,
+		mode === "fallback" ? 'file "$target" 2>/dev/null || true;' : "",
+		'if [ -f "$target/etc/passwd" ]; then awk \'{print "[rootfs-account] path=/etc/passwd line=" $0}\' "$target/etc/passwd" | head -80; fi;',
+		'if [ -f "$target/etc/shadow" ]; then printf "[rootfs-account] path=/etc/shadow present=true\\n"; fi;',
+		`for dir in "$target/etc/init.d" "$target/etc/rc.d" "$target/lib/systemd/system"; do [ -d "$dir" ] || continue; find "$dir" -maxdepth 2 -type f 2>/dev/null | head -160 | while IFS= read -r f; do rel="\${f#$target/}"; printf "[rootfs-service] path=%s name=%s\\n" "$rel" "$(basename "$f")"; done; done;`,
+		`for dir in "$target/bin" "$target/sbin" "$target/usr/bin" "$target/usr/sbin"; do [ -d "$dir" ] || continue; find "$dir" -maxdepth 2 -type f 2>/dev/null | grep -E -i "/(busybox|httpd|dropbear|telnetd|uhttpd|init)$" | head -160 | while IFS= read -r f; do rel="\${f#$target/}"; printf "[rootfs-binary] path=%s name=%s\\n" "$rel" "$(basename "$f")"; done; done;`,
+		'grep -R -I -n -E \'httpd|dropbear|telnet|busybox|passwd|shadow|uci|init\\.d|password|token|key|credential|secret\' "$target/etc" "$target/bin" "$target/sbin" 2>/dev/null | head -260 | sed \'s/^/[rootfs-config-secret] /\' || true',
+	]
+		.filter(Boolean)
+		.join(" ");
+}
 
 function nativeXrefFallbackCommandTemplate(): string {
 	return [

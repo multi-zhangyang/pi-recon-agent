@@ -248,6 +248,10 @@ describe("REPI runtime adapter pure contracts", () => {
 			parseRuntimeAdapterSignals(rootfsAdapter, rootfsOutput),
 		);
 		expect(rootfsOutput).toContain("/etc/passwd");
+		expect(rootfsOutput).toContain("[rootfs-account] path=/etc/passwd");
+		expect(rootfsOutput).toContain("[rootfs-service] path=etc/init.d/httpd");
+		expect(rootfsOutput).toContain("[rootfs-binary] path=bin/busybox");
+		expect(rootfsOutput).toContain("[rootfs-config-secret]");
 		expect(rootfsSummary.missingProofExitSignals).toEqual([]);
 
 		const html = [
@@ -439,10 +443,20 @@ describe("REPI runtime adapter pure contracts", () => {
 			mobileAdapter,
 			parseRuntimeAdapterSignals(mobileAdapter, mobileOutput),
 		);
+		expect(mobileOutput).toContain("[mobile-archive-entry] name=AndroidManifest.xml");
+		expect(mobileOutput).toContain("[mobile-manifest] name=AndroidManifest.xml package=com.repi.fixture");
+		expect(mobileOutput).toContain("[mobile-dex] name=classes.dex");
+		expect(mobileOutput).toContain("[mobile-dex-string] name=classes.dex");
+		expect(mobileOutput).toContain("[mobile-cert-pinning] name=classes.dex");
 		expect(mobileOutput).toMatch(/classes\.dex|OkHttp|CertificatePinner/);
 		expect(mobileSummary.matchedProofExitSignals).toEqual(
-			expect.arrayContaining(["runtime attach env checkpoint", "hook output artifact contract"]),
+			expect.arrayContaining([
+				"Java/ObjC/Swift hook",
+				"runtime attach env checkpoint",
+				"hook output artifact contract",
+			]),
 		);
+		expect(mobileSummary.missingProofExitSignals).toEqual([]);
 
 		const pwnTarget = join(tempDir, "pwn-fixture.sh");
 		writeFileSync(pwnTarget, "#!/usr/bin/env bash\nprintf 'read write puts system /bin/sh flag token\\n'\n", "utf8");
