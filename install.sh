@@ -31,6 +31,10 @@ REPI installer. See https://github.com/multi-zhangyang/pi-recon-agent#install
 MSG
 }
 
+print_done_bar() {
+  printf '■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 100%%\n'
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --prefix) PREFIX="${2:-}"; [ -n "$PREFIX" ] || { echo "--prefix requires a value" >&2; exit 2; }; shift 2 ;;
@@ -87,10 +91,12 @@ if [ "$LOCAL_MODE" -ne 1 ]; then
     git -C "$PREFIX" fetch --quiet origin
     git -C "$PREFIX" checkout "$BRANCH" -- 2>/dev/null || git -C "$PREFIX" checkout "$BRANCH"
     git -C "$PREFIX" pull --ff-only --quiet origin "$BRANCH" || git -C "$PREFIX" reset --hard "origin/$BRANCH"
+    print_done_bar
   else
     echo "INFO: Downloading REPI into $PREFIX"
     mkdir -p "$(dirname "$PREFIX")"
     git clone --quiet --branch "$BRANCH" "$REPO" "$PREFIX"
+    print_done_bar
   fi
   ROOT="$(cd "$PREFIX" && pwd)"
   if [ ! -x "$ROOT/repi" ]; then
@@ -99,12 +105,14 @@ if [ "$LOCAL_MODE" -ne 1 ]; then
   fi
 else
   echo "INFO: Refreshing REPI from $ROOT"
+  print_done_bar
 fi
 
 # --- deps -----------------------------------------------------------------
 if [ "$SKIP_NPM" -eq 0 ]; then
   echo "INFO: Installing Node dependencies (this can take a few minutes)"
   (cd "$ROOT" && npm install --ignore-scripts --no-audit --no-fund)
+  print_done_bar
 else
   echo "INFO: Skipping npm install (--skip-npm)"
 fi

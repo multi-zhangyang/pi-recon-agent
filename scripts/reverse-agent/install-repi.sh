@@ -73,6 +73,10 @@ path_contains_dir() {
   esac
 }
 
+print_done_bar() {
+  printf '■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 100%%\n'
+}
+
 shell_name() {
   basename "${SHELL:-}" 2>/dev/null || true
 }
@@ -280,6 +284,9 @@ fi
 REPI_VERSION="$(ROOT_PACKAGE_JSON="$ROOT/package.json" node -e 'try { console.log(require(process.env.ROOT_PACKAGE_JSON).version) } catch { console.log("unknown") }' 2>/dev/null || echo unknown)"
 if [ "${REPI_INSTALL_EMBEDDED:-0}" = "1" ]; then
   cat <<MSG
+INFO: Installing REPI launcher
+$(print_done_bar)
+
 REPI launcher ready:
   launcher: $BIN_DIR/repi -> $ROOT/repi
   runtime : ${REPI_CODING_AGENT_DIR:-${REPI_AGENT_DIR:-$HOME/.repi/agent}}
@@ -289,6 +296,9 @@ MSG
   exit 0
 fi
 cat <<MSG
+INFO: Installing REPI launcher
+$(print_done_bar)
+
 Installed REPI:
   launcher: $BIN_DIR/repi -> $ROOT/repi
   runtime : ${REPI_CODING_AGENT_DIR:-${REPI_AGENT_DIR:-$HOME/.repi/agent}}

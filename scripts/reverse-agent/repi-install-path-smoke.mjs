@@ -88,6 +88,8 @@ try {
 			REPI_TELEMETRY: "0",
 		},
 		expectOutput: [
+			"INFO: Installing REPI launcher",
+			"■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 100%",
 			"Installed REPI",
 			`launcher: ${directBin}/repi -> ${root}/repi`,
 			"repi doctor",
@@ -139,6 +141,8 @@ try {
 			REPI_TELEMETRY: "0",
 		},
 		expectOutput: [
+			"INFO: Installing REPI launcher",
+			"■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 100%",
 			"Installed REPI",
 			`launcher: ${userBin}/repi -> ${root}/repi`,
 			"Added PATH export to: ~/.bashrc",
@@ -192,6 +196,8 @@ try {
 		},
 		expectOutput: [
 			"INFO: Refreshing REPI",
+			"■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 100%",
+			"INFO: Installing REPI launcher",
 			"REPI launcher ready:",
 			"INFO: Verifying offline startup",
 			"Successfully linked repi",
