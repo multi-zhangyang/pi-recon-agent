@@ -88,6 +88,47 @@ function ethernetIpv4UdpFrame(payload: Buffer, sourcePort: number, destPort: num
 	return Buffer.concat([ethernet, ip, udp, payload]);
 }
 
+function ipv6FixtureAddress(lastByte: number): Buffer {
+	const address = Buffer.from("20010db8000000000000000000000000", "hex");
+	address[15] = lastByte;
+	return address;
+}
+
+function ethernetIpv6TcpFrame(payload: Buffer, sourcePort: number, destPort: number, sequence = 1): Buffer {
+	const ethernet = Buffer.concat([Buffer.alloc(6, 0xee), Buffer.alloc(6, 0xff), Buffer.from([0x86, 0xdd])]);
+	const ip = Buffer.alloc(40);
+	ip[0] = 0x60;
+	ip.writeUInt16BE(20 + payload.length, 4);
+	ip[6] = 6;
+	ip[7] = 64;
+	ipv6FixtureAddress(1).copy(ip, 8);
+	ipv6FixtureAddress(2).copy(ip, 24);
+	const tcp = Buffer.alloc(20);
+	tcp.writeUInt16BE(sourcePort, 0);
+	tcp.writeUInt16BE(destPort, 2);
+	tcp.writeUInt32BE(sequence, 4);
+	tcp[12] = 0x50;
+	tcp[13] = 0x18;
+	tcp.writeUInt16BE(8192, 14);
+	return Buffer.concat([ethernet, ip, tcp, payload]);
+}
+
+function ethernetIpv6UdpFrame(payload: Buffer, sourcePort: number, destPort: number): Buffer {
+	const ethernet = Buffer.concat([Buffer.alloc(6, 0xab), Buffer.alloc(6, 0xcd), Buffer.from([0x86, 0xdd])]);
+	const ip = Buffer.alloc(40);
+	ip[0] = 0x60;
+	ip.writeUInt16BE(8 + payload.length, 4);
+	ip[6] = 17;
+	ip[7] = 64;
+	ipv6FixtureAddress(1).copy(ip, 8);
+	ipv6FixtureAddress(2).copy(ip, 24);
+	const udp = Buffer.alloc(8);
+	udp.writeUInt16BE(sourcePort, 0);
+	udp.writeUInt16BE(destPort, 2);
+	udp.writeUInt16BE(8 + payload.length, 4);
+	return Buffer.concat([ethernet, ip, udp, payload]);
+}
+
 function pcapngBlock(type: number, body: Buffer): Buffer {
 	const padding = Buffer.alloc((4 - (body.length % 4)) % 4);
 	const totalLength = 12 + body.length + padding.length;
@@ -539,6 +580,51 @@ describe("REPI runtime adapter pure contracts", () => {
 		expect(output).toContain("[flow-conversation]");
 		expect(summary.matchedProofExitSignals).toEqual(
 			expect.arrayContaining(["flow conversation", "dns timeline", "tls sni proof"]),
+		);
+	});
+
+	test("executes the PCAP fallback against IPv6 DNS and HTTP fixtures", () => {
+		const pcapng = join(tempDir, "ipv6-dns-http.fixture");
+		const hostname = "v6.target.local";
+		const http = Buffer.from("GET /v6 HTTP/1.1\r\nHost: v6.target.local\r\nCookie: sid=v6\r\n\r\n", "latin1");
+		writeFileSync(
+			pcapng,
+			Buffer.concat([
+				pcapngSectionHeader(),
+				pcapngInterfaceDescription(),
+				pcapngEnhancedPacket(ethernetIpv6UdpFrame(dnsQueryPayload(hostname), 53001, 53)),
+				pcapngEnhancedPacket(ethernetIpv6TcpFrame(http, 44445, 80, 10)),
+			]),
+		);
+
+		const pcapReport = buildRuntimeAdapterExecutionGate("tshark-pcap-flow-adapter", {
+			toolIndexPath: "/tmp/tool-index.md",
+			isToolPresent: (tool) => tool === "python3",
+		});
+		const pcapAdapter = pcapReport.adapters.find((row) => row.adapterId === "tshark-pcap-flow-adapter")!;
+		const output = execFileSync(
+			"bash",
+			["-lc", materializeRuntimeAdapterCommand(pcapAdapter.fallbackCommandTemplate, pcapng)],
+			{ encoding: "utf8", timeout: 10_000 },
+		);
+		const summary = summarizeRuntimeAdapterSignals(pcapAdapter, parseRuntimeAdapterSignals(pcapAdapter, output));
+
+		expect(output).toContain("[ipv6-flow]");
+		expect(output).toContain("src=2001:db8::1");
+		expect(output).toContain("[dns-query]");
+		expect(output).toContain(`qname=${hostname}`);
+		expect(output).toContain("[http-object]");
+		expect(output).toContain("GET /v6 HTTP/1.1");
+		expect(output).toContain("Cookie: sid=v6");
+		expect(output).toContain("[tcp-reassembly]");
+		expect(summary.matchedProofExitSignals).toEqual(
+			expect.arrayContaining([
+				"flow conversation",
+				"follow-stream",
+				"tcp stream reassembly",
+				"dns timeline",
+				"timeline evidence",
+			]),
 		);
 	});
 

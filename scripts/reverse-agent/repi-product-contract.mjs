@@ -1377,6 +1377,7 @@ rows.push(
 				"[pwn-multirun-summary]",
 				"[pcap-file]",
 				"[flow-conversation]",
+				"[ipv6-flow]",
 				"[tcp-reassembly]",
 				"[adapter-rootfs-target]",
 				"stdout_sha256",
