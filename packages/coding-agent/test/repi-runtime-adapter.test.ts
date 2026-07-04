@@ -191,6 +191,28 @@ describe("REPI runtime adapter pure contracts", () => {
 		writeFileSync(apk, Buffer.from("PK\x03\x04 AndroidManifest.xml classes.dex", "latin1"));
 		expect(detectRuntimeAdapterIds(apk)).toContain("frida-mobile-hook-adapter");
 
+		const renamedLargeApk = join(tempDir, "large-mobile.payload");
+		execFileSync(
+			"python3",
+			[
+				"-c",
+				[
+					"import sys, zipfile",
+					"path = sys.argv[1]",
+					"with zipfile.ZipFile(path, 'w') as z:",
+					"    z.writestr('padding.bin', b'A' * 20000)",
+					"    z.writestr('AndroidManifest.xml', '<manifest package=\"com.repi.tail\"/>')",
+					"    z.writestr('classes.dex', b'dex\\n035\\0')",
+				].join("\n"),
+				renamedLargeApk,
+			],
+			{ encoding: "utf8", timeout: 10_000 },
+		);
+		const renamedLargeApkProfile = inspectRuntimeAdapterTarget(renamedLargeApk);
+		expect(renamedLargeApkProfile.magic).toBe("zip");
+		expect(renamedLargeApkProfile.reasons.join("\n")).toContain("zip mobile manifest");
+		expect(renamedLargeApkProfile.adapterIds).toContain("frida-mobile-hook-adapter");
+
 		const firmware = join(tempDir, "firmware.payload");
 		writeFileSync(firmware, Buffer.from("hsqs\x00\x00OpenWrt BusyBox", "latin1"));
 		expect(detectRuntimeAdapterIds(firmware)).toContain("binwalk-firmware-extract-adapter");

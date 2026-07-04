@@ -324,6 +324,8 @@ describe("REPI built-in goal mode", () => {
 
 		expect(harness.statuses.get("goal")).toBe("🎯 active 0/1k");
 		expect(harness.notifications.map((item) => item.message).join("\n")).toContain("Goal: rpc objective");
+		expect(harness.notifications.map((item) => item.message).join("\n")).toContain("Footer: 🎯 active 0/1k");
+		expect(harness.notifications.map((item) => item.message).join("\n")).toContain("Next: /goal edit");
 	});
 
 	it("stops auto-continuation at the token budget and keeps resume bounded", async () => {
@@ -446,8 +448,10 @@ describe("REPI built-in goal mode", () => {
 		await harness.commands.get("goal").handler("help", harness.ctx);
 
 		const help = harness.notifications.at(-1)?.message ?? "";
+		expect(help).toContain("Status panel:");
 		expect(help).toContain("Current:");
 		expect(help).toContain("Goal: help objective");
+		expect(help).toContain("Footer: 🎯 active 0/2k");
 		expect(help).toContain("Tokens: 0/2k");
 	});
 

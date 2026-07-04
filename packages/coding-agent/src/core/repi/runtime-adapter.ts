@@ -1112,6 +1112,20 @@ function readFileHead(path: string, maxBytes = 4096): Buffer {
 	}
 }
 
+function readFileTail(path: string, maxBytes = 131072): Buffer {
+	const stat = statSync(path);
+	const fd = openSync(path, "r");
+	try {
+		const length = Math.min(maxBytes, stat.size);
+		const offset = Math.max(0, stat.size - length);
+		const buffer = Buffer.alloc(length);
+		const bytesRead = readSync(fd, buffer, 0, buffer.length, offset);
+		return buffer.subarray(0, bytesRead);
+	} finally {
+		closeSync(fd);
+	}
+}
+
 function hasMagic(buffer: Buffer, bytes: number[]): boolean {
 	return bytes.every((byte, index) => buffer[index] === byte);
 }
@@ -1286,6 +1300,8 @@ export function inspectRuntimeAdapterTarget(target?: string): RuntimeAdapterTarg
 		try {
 			const head = readFileHead(text);
 			const ascii = head.toString("latin1");
+			const zipDirectoryText = hasMagic(head, [0x50, 0x4b, 0x03, 0x04]) ? readFileTail(text).toString("latin1") : "";
+			const archiveSurface = `${ascii}\n${zipDirectoryText}`;
 			magic = magicLabel(head, ascii);
 			if (
 				hasMagic(head, [0x7f, 0x45, 0x4c, 0x46]) ||
@@ -1323,7 +1339,8 @@ export function inspectRuntimeAdapterTarget(target?: string): RuntimeAdapterTarg
 				add("frida-mobile-hook-adapter", "mobile-package", "android dex magic", "runtime_artifact");
 			if (
 				hasMagic(head, [0x50, 0x4b, 0x03, 0x04]) &&
-				(/\.(?:apk|ipa)$/i.test(text) || /AndroidManifest\.xml|classes\.dex|Payload\/|Info\.plist/i.test(ascii))
+				(/\.(?:apk|ipa)$/i.test(text) ||
+					/AndroidManifest\.xml|classes.*\.dex|Payload\/|Info\.plist/i.test(archiveSurface))
 			) {
 				add(
 					"frida-mobile-hook-adapter",

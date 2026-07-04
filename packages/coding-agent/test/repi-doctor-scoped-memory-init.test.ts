@@ -125,9 +125,21 @@ process.exit(0);
 		expect(doctor.status, `${doctor.stderr}\n${doctor.stdout}`).toBe(0);
 		const report = JSON.parse(doctor.stdout) as {
 			ok: boolean;
+			readiness?: {
+				kind: string;
+				status: string;
+				goal: { builtIn: string; footer: string; rpcGoalCommands: number; rpcGoalTools: number };
+				envModel: { runtimeProvider: string; runtimeModel: string; contextWindow: number };
+			};
 			checks: Array<{ id: string; status: string; evidence: string }>;
 		};
 		expect(report.ok).toBe(true);
+		expect(report.readiness).toMatchObject({
+			kind: "RepiLaunchReadinessSummaryV1",
+			status: "pass",
+			goal: { builtIn: "pass", footer: "pass", rpcGoalCommands: 1, rpcGoalTools: 1 },
+			envModel: { runtimeProvider: "fake-provider", runtimeModel: "fake-model", contextWindow: 262144 },
+		});
 		for (const id of ["memory:core-file", "memory:project-file", "memory:procedural-file", "memory:event-store"]) {
 			expect(report.checks.find((check) => check.id === id)).toMatchObject({
 				status: "pass",

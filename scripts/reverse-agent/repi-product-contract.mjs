@@ -236,6 +236,9 @@ rows.push(
 		"doctor:launch-readiness-contract",
 		includesAll(read("scripts/reverse-agent/repi-doctor.mjs"), [
 			"repi:launch-readiness",
+			"RepiLaunchReadinessSummaryV1",
+			"readiness:",
+			"env-model:",
 			"launchReadinessOk",
 			"goalModeBuiltInOk",
 			"goalFooterStatusOk",
@@ -1274,6 +1277,8 @@ rows.push(
 			"REPI_GOAL_STATE_ENTRY_TYPE",
 			"buildGoalSystemPrompt",
 			"formatGoalFooterStatus",
+			"Status panel:",
+			"Footer: ${footer}",
 			"repi-goal-continuation",
 		]) &&
 			includesAll(reconProfile, ["./repi/goal.ts", "installRepiGoalMode(pi)", "./repi/resources.ts"]) &&
@@ -1294,6 +1299,8 @@ rows.push(
 			"replaces an existing goal without waiting for RPC/non-TUI confirmation dialogs",
 			"retries recoverable provider interruptions in print/RPC/json modes without pausing the goal",
 			"compacts then resumes active goals after context overflow instead of clearing state",
+			"Footer: 🎯 active 0/1k",
+			"Status panel:",
 		]) &&
 			includesAll(goalRpcTests, [
 				"REPI goal mode over RPC",
@@ -1352,6 +1359,8 @@ rows.push(
 			"target_auto_detection_contract",
 			"runtime_adapter_target_profile_contract",
 			"parser_signal_summary_contract",
+			"readFileTail",
+			"zip mobile manifest",
 			"gdb-native-trace-adapter",
 			"r2-native-xref-adapter",
 			"frida-mobile-hook-adapter",

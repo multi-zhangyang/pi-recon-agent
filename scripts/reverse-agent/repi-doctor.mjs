@@ -808,6 +808,48 @@ const checks = [
 	check("network:update-suppressed", /--offline/.test(helpText) && /REPI_SKIP_VERSION_CHECK/.test(helpText), "offline/version-check controls available"),
 ];
 
+function statusOf(id) {
+	return checks.find((item) => item.id === id)?.status ?? "fail";
+}
+
+const failedChecks = checks.filter((item) => item.status !== "pass");
+const readiness = {
+	kind: "RepiLaunchReadinessSummaryV1",
+	schemaVersion: 1,
+	status: launchReadinessOk ? "pass" : "fail",
+	goal: {
+		builtIn: statusOf("goal:built-in-mode"),
+		footer: statusOf("goal:footer-status-contract"),
+		nonTui: statusOf("goal:print-non-tui-ui-context"),
+		rpc: statusOf("goal:rpc-runtime-registration"),
+		rpcGoalCommands: rpcRuntime.goalCommandCount,
+		rpcGoalTools: rpcRuntime.goalToolCount,
+		inlineCommand: rpcRuntime.goalCommandInline,
+		inlineTool: rpcRuntime.goalToolInline,
+	},
+	extensions: {
+		conflictSuppression: statusOf("goal:extension-conflict-suppression"),
+	},
+	envModel: {
+		contract: statusOf("models:env-only-contract"),
+		runtime: statusOf("models:env-runtime-config"),
+		rpc: statusOf("models:env-rpc-runtime"),
+		enabled: envModelRuntime.enabled,
+		provider: envModelRuntime.provider,
+		model: envModelRuntime.model,
+		api: envModelRuntime.api,
+		auth: `${envModelRuntime.authEnv}:${envModelRuntime.authPresent ? "set" : "missing"}`,
+		missing: envModelRuntime.missing,
+		invalidApi: envModelRuntime.invalidApi ?? null,
+		runtimeProvider: rpcRuntime.modelProvider ?? null,
+		runtimeModel: redactText(rpcRuntime.modelId ?? "<none>"),
+		contextWindow: rpcRuntime.contextWindow ?? null,
+	},
+	next: failedChecks.length
+		? Array.from(new Set(failedChecks.map((item) => item.fix).filter(Boolean))).slice(0, 6)
+		: ["repi", "/goal status", "repi model status"],
+};
+
 const result = {
 	kind: "repi-doctor-report",
 	schemaVersion: 1,
@@ -818,6 +860,7 @@ const result = {
 	installedRepi,
 	fix,
 	fixActions,
+	readiness,
 	checks,
 	ok: checks.every((item) => item.status === "pass") && fixActions.every((item) => item.exit === 0),
 };
@@ -828,6 +871,13 @@ if (json) {
 	console.log("REPI Doctor");
 	console.log(`root: ${root}`);
 	console.log(`agentDir: ${agentDir}`);
+	console.log(`readiness: ${readiness.status}`);
+	console.log(
+		`goal: built-in=${readiness.goal.builtIn} footer=${readiness.goal.footer} nonTui=${readiness.goal.nonTui} rpc=${readiness.goal.rpc} commands/tools=${readiness.goal.rpcGoalCommands}/${readiness.goal.rpcGoalTools}`,
+	);
+	console.log(
+		`env-model: enabled=${readiness.envModel.enabled} provider=${readiness.envModel.provider} model=${readiness.envModel.model} api=${readiness.envModel.api} auth=${readiness.envModel.auth} context=${readiness.envModel.contextWindow ?? "<none>"}`,
+	);
 	for (const action of fixActions) {
 		console.log(`${action.exit === 0 ? "FIXED" : "FIX-FAIL"} ${action.id} exit=${action.exit}`);
 		if (action.exit !== 0 && action.stderrTail) console.log(action.stderrTail);

@@ -521,6 +521,9 @@ function showGoalHelp(runtime: RepiGoalRuntime, ctx: RepiGoalContext): void {
 			"Completion:",
 			"  The footer shows 🎯 active/paused/budget/complete.",
 			"  The agent must call goal_complete only after requirement-by-requirement verification.",
+			"",
+			"Status panel:",
+			"  /goal status shows footer preview, elapsed/token budget, and the safest next command.",
 		].join("\n") + active,
 		"info",
 	);
@@ -728,13 +731,15 @@ function formatBudget(goal: RepiGoalState): string {
 }
 
 function goalSummary(goal: RepiGoalState): string {
+	const footer = formatGoalFooterStatus(goal) ?? "🎯 <clear>";
 	return [
-		`Goal: ${goal.text}`,
+		`🎯 Goal: ${goal.text}`,
 		`Status: ${goal.status}`,
+		`Footer: ${footer}`,
 		`Iteration: ${goal.iteration}`,
 		`Elapsed: ${formatDuration(goal.timeUsedSeconds)}`,
 		`Tokens: ${goal.tokenBudget === undefined ? formatTokenCount(goal.tokensUsed) : formatBudget(goal)}`,
-		`Commands: ${goalCommandHint(goal.status)}`,
+		`Next: ${goalCommandHint(goal.status)}`,
 	].join("\n");
 }
 
