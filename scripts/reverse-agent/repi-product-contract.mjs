@@ -217,6 +217,26 @@ rows.push(
 		"Keep an installer smoke proving fresh install writes a repi launcher into PATH or an rc-backed user path.",
 	),
 );
+rows.push(
+	check(
+		"doctor:launch-readiness-contract",
+		includesAll(read("scripts/reverse-agent/repi-doctor.mjs"), [
+			"repi:launch-readiness",
+			"launchReadinessOk",
+			"goalModeBuiltInOk",
+			"goalFooterStatusOk",
+			"goalPrintUiOk",
+			"goalConflictSuppressionOk",
+			"envModelContractOk",
+			"envModelRpcMatchesExpected",
+			"rpcRuntime.goalCommandCount",
+			"rpcRuntime.goalToolCount",
+			"fix REPI_* env exports",
+		]),
+		"doctor exposes one launch-readiness row covering goal mode, footer/non-TUI UI, extension conflict suppression, and env-model runtime",
+		"Keep repi doctor useful as a pre-release operator check, not only a list of low-level probes.",
+	),
+);
 
 const launcher = read("repi");
 const cliSource = read("packages/coding-agent/src/cli.ts");

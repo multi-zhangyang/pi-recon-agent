@@ -632,6 +632,19 @@ const envModelRpcMatchesExpected =
 		rpcRuntime.modelProvider === expectedEnvProvider &&
 		rpcRuntime.modelId === expectedEnvModel &&
 		(!Number.isFinite(expectedEnvContextWindow) || rpcRuntime.contextWindow === expectedEnvContextWindow));
+const launchReadinessOk =
+	goalModeBuiltInOk &&
+	goalFooterStatusOk &&
+	goalPrintUiOk &&
+	goalConflictSuppressionOk &&
+	envModelContractOk &&
+	envModelRuntime.missing.length === 0 &&
+	!envModelRuntime.invalidApi &&
+	envModelRpcMatchesExpected &&
+	rpcRuntime.commandResponseOk &&
+	rpcRuntime.toolResponseOk &&
+	rpcRuntime.goalCommandCount === 1 &&
+	rpcRuntime.goalToolCount === 1;
 const savedDefaultProvider = typeof settings?.defaultProvider === "string" ? settings.defaultProvider : undefined;
 const savedDefaultModel = typeof settings?.defaultModel === "string" ? settings.defaultModel : undefined;
 const legacyExtensions = legacyExtensionLayout();
@@ -785,6 +798,12 @@ const checks = [
 		envModelRpcMatchesExpected,
 		`envEnabled=${envModelRuntime.enabled} savedProvider=${redactText(savedDefaultProvider ?? "<none>")} savedModel=${redactText(savedDefaultModel ?? "<none>")} runtimeProvider=${rpcRuntime.modelProvider ?? "<none>"} runtimeModel=${redactText(rpcRuntime.modelId ?? "<none>")} expectedProvider=${expectedEnvProvider} expectedModel=${redactText(expectedEnvModel ?? "<none>")}`,
 		"when REPI_* is set it must win over stale ~/.repi/agent/settings.json defaults; clear saved defaults or fix env exports",
+	),
+	check(
+		"repi:launch-readiness",
+		launchReadinessOk,
+		`goalMode=${goalModeBuiltInOk} footer=${goalFooterStatusOk} nonTui=${goalPrintUiOk} goalConflictSuppression=${goalConflictSuppressionOk} rpcGoal=${rpcRuntime.goalCommandCount}/${rpcRuntime.goalToolCount} envContract=${envModelContractOk} envRuntimeMissing=${envModelRuntime.missing.join(",") || "<none>"} envInvalidApi=${envModelRuntime.invalidApi ?? "<none>"} envRpc=${envModelRpcMatchesExpected}`,
+		"run repi doctor --fix; remove conflicting external goal extensions; fix REPI_* env exports or clear stale saved model defaults",
 	),
 	check("network:update-suppressed", /--offline/.test(helpText) && /REPI_SKIP_VERSION_CHECK/.test(helpText), "offline/version-check controls available"),
 ];
