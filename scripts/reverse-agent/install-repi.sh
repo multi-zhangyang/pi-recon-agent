@@ -256,9 +256,14 @@ PATH_STATUS=""
 SOURCE_COMMAND=""
 if [ "$BIN_ON_PATH" -ne 1 ]; then
   if [ -n "$RC_UPDATED" ]; then
-    PATH_HINT="  Added PATH export to: ${RC_UPDATED% }
+    RC_UPDATED_DISPLAY=""
+    for rc_name in $RC_UPDATED; do
+      RC_UPDATED_DISPLAY="${RC_UPDATED_DISPLAY}~/${rc_name#./} "
+    done
+    RC_UPDATED_DISPLAY="${RC_UPDATED_DISPLAY% }"
+    PATH_HINT="  Added PATH export to: $RC_UPDATED_DISPLAY
   Open a new shell, or for this shell run: export PATH=\"$BIN_DIR:\$PATH\""
-    PATH_STATUS="Successfully added repi to \$PATH in ${RC_UPDATED% }"
+    PATH_STATUS="Successfully added repi to \$PATH in $RC_UPDATED_DISPLAY"
     case " $RC_UPDATED " in
       *" .bashrc "*) SOURCE_COMMAND="source ~/.bashrc  # Load new PATH (or open a new terminal)" ;;
       *" .zshrc "*) SOURCE_COMMAND="source ~/.zshrc   # Load new PATH (or open a new terminal)" ;;

@@ -141,8 +141,8 @@ try {
 		expectOutput: [
 			"Installed REPI",
 			`launcher: ${userBin}/repi -> ${root}/repi`,
-			"Added PATH export to:",
-			"Successfully added repi to $PATH in",
+			"Added PATH export to: ~/.bashrc",
+			"Successfully added repi to $PATH in ~/.bashrc",
 			`REPI ${expectedVersion} installed successfully, to start:`,
 			"source ~/.bashrc  # Load new PATH (or open a new terminal)",
 			`export PATH=\"${userBin}:$PATH\"`,

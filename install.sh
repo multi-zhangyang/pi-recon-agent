@@ -177,13 +177,25 @@ PATH_STATUS="Successfully linked repi in $DISPLAY_DIR (already on \$PATH)"
 case ":$PATH:" in
   *":$BIN_DIR:"*) : ;;
   *)
-    PATH_STATUS="Successfully added repi to \$PATH in shell startup files"
-    if [ -n "${BASH_VERSION:-}" ] || [ "$(basename "${SHELL:-}" 2>/dev/null || true)" = "bash" ]; then
-      SOURCE_COMMAND="source ~/.bashrc  # Load new PATH (or open a new terminal)"
-    elif [ -n "${ZSH_VERSION:-}" ] || [ "$(basename "${SHELL:-}" 2>/dev/null || true)" = "zsh" ]; then
-      SOURCE_COMMAND="source ~/.zshrc   # Load new PATH (or open a new terminal)"
+    RC_LINE="export PATH=\"$BIN_DIR:\$PATH\""
+    RC_UPDATED_DISPLAY=""
+    for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+      [ -f "$rc" ] || continue
+      if grep -qF "$RC_LINE" "$rc" 2>/dev/null; then
+        RC_UPDATED_DISPLAY="${RC_UPDATED_DISPLAY}~/${rc##*/} "
+      fi
+    done
+    RC_UPDATED_DISPLAY="${RC_UPDATED_DISPLAY% }"
+    if [ -n "$RC_UPDATED_DISPLAY" ]; then
+      PATH_STATUS="Successfully added repi to \$PATH in $RC_UPDATED_DISPLAY"
+      case " $RC_UPDATED_DISPLAY " in
+        *" ~/.bashrc "*) SOURCE_COMMAND="source ~/.bashrc  # Load new PATH (or open a new terminal)" ;;
+        *" ~/.zshrc "*) SOURCE_COMMAND="source ~/.zshrc   # Load new PATH (or open a new terminal)" ;;
+        *" ~/.profile "*) SOURCE_COMMAND="source ~/.profile # Load new PATH (or open a new terminal)" ;;
+      esac
     else
-      SOURCE_COMMAND="source ~/.profile # Load new PATH (or open a new terminal)"
+      PATH_STATUS="Installed repi to $DISPLAY_DIR; add it to \$PATH for direct command use"
+      SOURCE_COMMAND="export PATH=\"$BIN_DIR:\$PATH\"  # Load repi for this shell"
     fi
     PATH_HINT="  export PATH=\"$BIN_DIR:\$PATH\"   # for this shell; new shells are updated when possible"
     ;;
