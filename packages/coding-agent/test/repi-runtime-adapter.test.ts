@@ -277,6 +277,9 @@ describe("REPI runtime adapter pure contracts", () => {
 			},
 		);
 		expect(webOutput).toContain("[http-response] status=200");
+		expect(webOutput).toContain("[web-route-map] source=fetch index=1 method=GET status=200");
+		expect(webOutput).toContain("[web-route-map] source=served-asset");
+		expect(webOutput).toContain("[web-signed-field] source=served-asset");
 		expect(webOutput).not.toMatch(/replay diff pending|manual-confirm|fallback=portable/i);
 		const webSummary = summarizeRuntimeAdapterSignals(webAdapter, parseRuntimeAdapterSignals(webAdapter, webOutput));
 		expect(webSummary.matchedProofExitSignals).toEqual(
@@ -299,12 +302,25 @@ describe("REPI runtime adapter pure contracts", () => {
 							request: {
 								method: "POST",
 								url: "https://example.test/api/orders?nonce=123&timestamp=456",
-								headers: [{ name: "x-signature", value: "abc" }],
+								headers: [
+									{ name: "authorization", value: "Bearer signed-token" },
+									{ name: "cookie", value: "session=sess-123; csrf=csrf-456" },
+									{ name: "x-csrf-token", value: "csrf-456" },
+									{ name: "x-signature", value: "abc" },
+								],
+								cookies: [
+									{ name: "session", value: "sess-123" },
+									{ name: "csrf", value: "csrf-456" },
+								],
 								postData: { text: '{"signature":"abc","timestamp":456}' },
 							},
 							response: {
 								status: 200,
-								headers: [{ name: "etag", value: "signed-response" }],
+								headers: [
+									{ name: "etag", value: "signed-response" },
+									{ name: "set-cookie", value: "replay=ok; Path=/; HttpOnly" },
+								],
+								cookies: [{ name: "replay", value: "ok" }],
 								content: { mimeType: "application/json", text: '{"ok":true}' },
 							},
 						},
@@ -324,6 +340,12 @@ describe("REPI runtime adapter pure contracts", () => {
 		const harSummary = summarizeRuntimeAdapterSignals(webAdapter, parseRuntimeAdapterSignals(webAdapter, harOutput));
 		expect(harOutput).toContain("[har-file]");
 		expect(harOutput).toContain("[request-order] index=1");
+		expect(harOutput).toContain("[web-route-map] source=har index=1 method=POST status=200");
+		expect(harOutput).toContain("[web-request-body] source=har index=1 method=POST");
+		expect(harOutput).toContain("[web-header-signal] source=har direction=request key=x-signature");
+		expect(harOutput).toContain("[web-cookie-signal] source=har direction=request name=session");
+		expect(harOutput).toContain("[web-cookie-signal] source=har direction=response name=replay");
+		expect(harOutput).toContain("[web-signed-field] source=har");
 		expect(harSummary.matchedProofExitSignals).toEqual(
 			expect.arrayContaining([
 				"HTTP/CDP response capture",
