@@ -569,6 +569,69 @@ describe("REPI runtime adapter pure contracts", () => {
 		expect(pwnOutput).not.toMatch(/manual-confirm|replay diff pending|fallback=portable/i);
 	});
 
+	test("detects and inspects renamed iOS IPA archives with executable hook anchors", () => {
+		const ipa = join(tempDir, "renamed-ios.payload");
+		execFileSync(
+			"python3",
+			[
+				"-c",
+				[
+					"import sys, zipfile",
+					"path = sys.argv[1]",
+					'info = \'\'\'<?xml version="1.0" encoding="UTF-8"?>',
+					'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+					'<plist version="1.0"><dict>',
+					"<key>CFBundleIdentifier</key><string>com.repi.ios.fixture</string>",
+					"<key>CFBundleExecutable</key><string>RepiFixture</string>",
+					"</dict></plist>'''",
+					"binary = b'\\xcf\\xfa\\xed\\xfe' + b'NSURLSession SecTrustEvaluate Keychain CryptoKit pinning X509 '",
+					"framework = b'\\xcf\\xfa\\xed\\xfe' + b'NSURLSession SecTrust Keychain pinning '",
+					"with zipfile.ZipFile(path, 'w') as z:",
+					"    z.writestr('Payload/RepiFixture.app/Info.plist', info)",
+					"    z.writestr('Payload/RepiFixture.app/RepiFixture', binary)",
+					"    z.writestr('Payload/RepiFixture.app/Frameworks/Net.framework/Net', framework)",
+				].join("\n"),
+				ipa,
+			],
+			{ encoding: "utf8", timeout: 10_000 },
+		);
+
+		const profile = inspectRuntimeAdapterTarget(ipa);
+		expect(profile.magic).toBe("zip");
+		expect(profile.reasons.join("\n")).toContain("zip mobile manifest");
+		expect(profile.adapterIds).toContain("frida-mobile-hook-adapter");
+
+		const mobileReport = buildRuntimeAdapterExecutionGate("frida-mobile-hook-adapter", {
+			toolIndexPath: "/tmp/tool-index.md",
+			isToolPresent: (tool) => tool === "bash",
+		});
+		const mobileAdapter = mobileReport.adapters.find((row) => row.adapterId === "frida-mobile-hook-adapter")!;
+		const output = execFileSync(
+			"bash",
+			["-lc", materializeRuntimeAdapterCommand(mobileAdapter.fallbackCommandTemplate, ipa)],
+			{ encoding: "utf8", timeout: 10_000 },
+		);
+		const summary = summarizeRuntimeAdapterSignals(mobileAdapter, parseRuntimeAdapterSignals(mobileAdapter, output));
+
+		expect(output).toContain("[mobile-archive-entry] name=Payload/RepiFixture.app/Info.plist");
+		expect(output).toContain("[mobile-ios-info] name=Payload/RepiFixture.app/Info.plist");
+		expect(output).toContain("bundle=com.repi.ios.fixture");
+		expect(output).toContain("[mobile-ios-binary] kind=ios-app-binary name=Payload/RepiFixture.app/RepiFixture");
+		expect(output).toContain("[mobile-ios-binary] kind=ios-framework-binary");
+		expect(output).toContain("[mobile-artifact-string] kind=ios-app-binary");
+		expect(output).toContain("[mobile-cert-pinning] name=Payload/RepiFixture.app/RepiFixture");
+		expect(output).toMatch(/NSURLSession|SecTrust|Keychain/);
+		expect(summary.matchedProofExitSignals).toEqual(
+			expect.arrayContaining([
+				"Java/ObjC/Swift hook",
+				"runtime attach env checkpoint",
+				"hook output artifact contract",
+			]),
+		);
+		expect(summary.missingProofExitSignals).toEqual([]);
+		expect(output).not.toMatch(/manual-confirm|replay diff pending|fallback=portable/i);
+	});
+
 	test("executes the PCAP fallback against pcapng DNS and TLS-SNI fixtures", () => {
 		const pcapng = join(tempDir, "dns-tls.fixture");
 		const hostname = "api.target.local";
