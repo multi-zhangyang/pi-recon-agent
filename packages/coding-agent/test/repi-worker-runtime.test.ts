@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	buildWorkerRetryHandoffMergeSummaryV1,
 	type RepiSwarmClaimLedgerEventV1,
 	type RepiWorkerChildSessionRuntimeBatchV1,
 	type RepiWorkerLeaseSchedulerEventV1,
@@ -9,6 +10,7 @@ import {
 	verifyWorkerChildSessionRuntimeBatch,
 	verifyWorkerLeaseSchedulerV1,
 	verifyWorkerRetryHandoffClosureV1,
+	verifyWorkerRetryHandoffMergeSummaryV1,
 	verifyWorkerRuntimePool,
 	workerChildSessionLaunchPolicy,
 	workerChildSessionRuntimeBridgeEvidenceContract,
@@ -459,6 +461,102 @@ describe("REPI worker runtime pure contracts", () => {
 				"retry_handoff_merge_winner_not_in_collision:claim-a",
 				"retry_handoff_merge_resolution_reason_missing:claim-a",
 				"retry_handoff_merge_evidence_unbound:claim-a",
+			]),
+		);
+	});
+
+	it("summarizes retry handoff merge decisions without fake promotion", () => {
+		const passSummary = buildWorkerRetryHandoffMergeSummaryV1(validRetryHandoffClosure());
+		expect(passSummary.status).toBe("pass");
+		expect(passSummary.nextActions).toContain("re_swarm merge && re_supervisor review");
+		expect(verifyWorkerRetryHandoffMergeSummaryV1(passSummary)).toEqual({
+			ok: true,
+			errors: [],
+			evidenceContract: expect.arrayContaining(["runtime:retry-handoff-merge-summary-validation"]),
+		});
+
+		const failedWithoutClosure = validRetryHandoffClosure({
+			workers: [
+				{
+					...validRetryHandoffClosure().workers[0],
+					status: "failed",
+					retryState: "blocked_without_closure",
+					retryQueueRefs: [],
+					handoffRefs: [],
+					repairRefs: [],
+					assertions: {
+						...validRetryHandoffClosure().workers[0].assertions,
+						failureHasRetryOrHandoff: false,
+					},
+				},
+			],
+			merge: { ...validRetryHandoffClosure().merge, unresolvedWorkers: ["w1"] },
+			assertions: {
+				...validRetryHandoffClosure().assertions,
+				failedWorkersHaveRetryOrHandoff: false,
+			},
+		});
+		const blockedSummary = buildWorkerRetryHandoffMergeSummaryV1(failedWithoutClosure);
+		expect(blockedSummary.status).toBe("blocked");
+		expect(blockedSummary.unresolvedWorkers).toContain("w1");
+		expect(blockedSummary.nextActions).toEqual(
+			expect.arrayContaining(["re_supervisor repair worker=w1", "re_swarm retry worker=w1"]),
+		);
+		expect(verifyWorkerRetryHandoffMergeSummaryV1(blockedSummary).errors).toEqual(
+			expect.arrayContaining([
+				"retry_handoff_merge_summary_unresolved_workers",
+				"retry_handoff_merge_summary_failures_unclosed",
+			]),
+		);
+
+		const unresolvedCollision = validRetryHandoffClosure({
+			merge: {
+				...validRetryHandoffClosure().merge,
+				collisions: [{ mergeKey: "claim-a", workers: ["w1", "w2"], status: "unresolved", evidenceRefs: [] }],
+			},
+			assertions: { ...validRetryHandoffClosure().assertions, mergeCollisionsResolved: false },
+		});
+		const collisionSummary = buildWorkerRetryHandoffMergeSummaryV1(unresolvedCollision);
+		expect(collisionSummary.status).toBe("blocked");
+		expect(collisionSummary.nextActions).toContain("re_supervisor repair mergeKey=claim-a");
+		expect(verifyWorkerRetryHandoffMergeSummaryV1(collisionSummary).errors).toContain(
+			"retry_handoff_merge_summary_collisions_unresolved",
+		);
+
+		const exhaustedClosure = validRetryHandoffClosure({
+			workers: [
+				{
+					...validRetryHandoffClosure().workers[0],
+					status: "exhausted",
+					attempt: 3,
+					retryRemaining: 0,
+					retryState: "exhausted_escalated",
+					repairRefs: ["/tmp/repi/failure-ledger.jsonl", "/tmp/repi/repair-queue.jsonl"],
+					sourceArtifacts: [
+						"/tmp/repi/w1/runtime-manifest.json",
+						"/tmp/repi/w1/stdout.log",
+						"/tmp/repi/failure-ledger.jsonl",
+						"/tmp/repi/repair-queue.jsonl",
+					],
+				},
+			],
+		});
+		const exhaustedSummary = buildWorkerRetryHandoffMergeSummaryV1(exhaustedClosure);
+		expect(exhaustedSummary.status).toBe("pass");
+		expect(exhaustedSummary.exhaustedEscalatedWorkers).toContain("w1");
+		expect(exhaustedSummary.nextActions).toEqual(
+			expect.arrayContaining(["re_autofix plan worker=w1 && re_supervisor repair"]),
+		);
+
+		const fakePass = {
+			...blockedSummary,
+			status: "pass" as const,
+			assertions: { ...blockedSummary.assertions, noUnresolvedWorkers: true, allFailuresClosed: true },
+		};
+		expect(verifyWorkerRetryHandoffMergeSummaryV1(fakePass).errors).toEqual(
+			expect.arrayContaining([
+				"retry_handoff_merge_summary_fake_pass_unresolved_workers",
+				"retry_handoff_merge_summary_pass_with_blockers",
 			]),
 		);
 	});

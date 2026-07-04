@@ -172,6 +172,31 @@ export type RepiWorkerRetryHandoffClosureV1 = {
 	errors: string[];
 };
 
+export type RepiWorkerRetryHandoffMergeSummaryV1 = {
+	kind: "WorkerRetryHandoffMergeSummaryV1";
+	schemaVersion: 1;
+	closureId: string;
+	poolId: string;
+	status: "pass" | "blocked";
+	retryQueuedWorkers: string[];
+	handoffRecoveredWorkers: string[];
+	exhaustedEscalatedWorkers: string[];
+	unresolvedWorkers: string[];
+	resolvedCollisions: string[];
+	unresolvedCollisions: string[];
+	nextActions: string[];
+	claimRefs: string[];
+	sourceArtifacts: string[];
+	assertions: {
+		noUnresolvedWorkers: boolean;
+		collisionsResolved: boolean;
+		allFailuresClosed: boolean;
+		handoffEvidenceBound: boolean;
+		retryBudgetVisible: boolean;
+		sourceArtifactsPreserved: boolean;
+	};
+};
+
 export type RepiWorkerLeaseSchedulerTaskV1 = {
 	taskId: string;
 	shardKey: string;
@@ -1160,6 +1185,203 @@ export function verifyWorkerRetryHandoffClosureV1(report: RepiWorkerRetryHandoff
 		ok: errors.length === 0,
 		errors: uniqueNonEmpty(errors, 120),
 		evidenceContract: workerRetryHandoffClosureEvidenceContract(),
+	};
+}
+
+export function workerRetryHandoffMergeSummaryEvidenceContract(): string[] {
+	return [
+		"WorkerRetryHandoffMergeSummaryV1",
+		"runtime:retry-handoff-merge-summary-validation",
+		"retry queued workers must remain retry-budget visible before supervisor merge",
+		"handoff recovered workers must keep handoff refs claim-bound and source-artifact preserved",
+		"exhausted workers must surface an explicit re_autofix/re_supervisor escalation next action",
+		"unresolved workers or unresolved merge collisions must block promotion",
+		"pass status requires no unresolved workers, resolved collisions, closed failures, and preserved artifacts",
+	];
+}
+
+export function buildWorkerRetryHandoffMergeSummaryV1(
+	report: RepiWorkerRetryHandoffClosureV1,
+): RepiWorkerRetryHandoffMergeSummaryV1 {
+	const retryQueuedWorkers = uniqueNonEmpty(
+		report.workers.filter((worker) => worker.retryState === "retry_queued").map((worker) => worker.workerId),
+		80,
+	);
+	const handoffRecoveredWorkers = uniqueNonEmpty(
+		report.workers.filter((worker) => worker.retryState === "handoff_recovered").map((worker) => worker.workerId),
+		80,
+	);
+	const exhaustedEscalatedWorkers = uniqueNonEmpty(
+		report.workers.filter((worker) => worker.retryState === "exhausted_escalated").map((worker) => worker.workerId),
+		80,
+	);
+	const unresolvedWorkers = uniqueNonEmpty(
+		[
+			...report.merge.unresolvedWorkers,
+			...report.workers
+				.filter((worker) => worker.retryState === "blocked_without_closure")
+				.map((worker) => worker.workerId),
+		],
+		80,
+	);
+	const resolvedCollisions = uniqueNonEmpty(
+		report.merge.collisions
+			.filter((collision) => collision.status === "resolved")
+			.map((collision) => collision.mergeKey),
+		80,
+	);
+	const unresolvedCollisions = uniqueNonEmpty(
+		report.merge.collisions
+			.filter((collision) => collision.status !== "resolved")
+			.map((collision) => collision.mergeKey),
+		80,
+	);
+	const claimRefs = uniqueNonEmpty(
+		report.workers.flatMap((worker) => worker.claimRefs),
+		120,
+	);
+	const sourceArtifacts = uniqueNonEmpty(
+		report.workers.flatMap((worker) => [
+			...worker.sourceArtifacts,
+			...worker.retryQueueRefs,
+			...worker.handoffRefs,
+			...worker.repairRefs,
+			...worker.claimRefs,
+			...worker.mergeKeys,
+		]),
+		160,
+	);
+	const allWorkerRefsPreserved = report.workers.every((worker) => {
+		const artifacts = new Set(worker.sourceArtifacts);
+		return [...worker.retryQueueRefs, ...worker.handoffRefs, ...worker.repairRefs].every((ref) => artifacts.has(ref));
+	});
+	const handoffEvidenceBound =
+		report.assertions.handoffRefsBoundToClaims &&
+		report.workers.every((worker) => {
+			if (!worker.handoffRefs.length) return true;
+			return worker.claimRefs.length > 0 && worker.mergeKeys.some((key) => worker.claimRefs.includes(key));
+		});
+	const retryBudgetVisible =
+		report.assertions.retryBudgetsConsistent &&
+		report.workers.every(
+			(worker) =>
+				Number.isFinite(worker.attempt) &&
+				Number.isFinite(worker.maxAttempts) &&
+				Number.isFinite(worker.retryRemaining) &&
+				worker.attempt <= worker.maxAttempts &&
+				worker.retryRemaining === Math.max(0, worker.maxAttempts - worker.attempt),
+		);
+	const assertions = {
+		noUnresolvedWorkers: unresolvedWorkers.length === 0,
+		collisionsResolved: unresolvedCollisions.length === 0 && report.assertions.mergeCollisionsResolved,
+		allFailuresClosed:
+			report.errors.length === 0 &&
+			report.assertions.failedWorkersHaveRetryOrHandoff &&
+			report.workers.every((worker) => worker.retryState !== "blocked_without_closure"),
+		handoffEvidenceBound,
+		retryBudgetVisible,
+		sourceArtifactsPreserved:
+			report.assertions.sourceArtifactsPreserved &&
+			sourceArtifacts.length > 0 &&
+			report.workers.every((worker) => worker.sourceArtifacts.length > 0) &&
+			allWorkerRefsPreserved,
+	};
+	const nextActions = uniqueNonEmpty(
+		[
+			...retryQueuedWorkers.map((workerId) => `re_swarm retry worker=${workerId}`),
+			...handoffRecoveredWorkers.map((workerId) => `re_swarm merge worker=${workerId} && re_supervisor review`),
+			...exhaustedEscalatedWorkers.map((workerId) => `re_autofix plan worker=${workerId} && re_supervisor repair`),
+			...unresolvedWorkers.flatMap((workerId) => [
+				`re_supervisor repair worker=${workerId}`,
+				`re_swarm retry worker=${workerId}`,
+			]),
+			...unresolvedCollisions.map((mergeKey) => `re_supervisor repair mergeKey=${mergeKey}`),
+			...(report.errors.length ? ["re_supervisor review retry_handoff_errors"] : []),
+			...(!assertions.retryBudgetVisible ? ["re_swarm inspect retry-budget"] : []),
+			...(!assertions.handoffEvidenceBound ? ["re_evidence bind handoff-refs-to-claims"] : []),
+			...(!assertions.sourceArtifactsPreserved ? ["re_evidence collect source-artifacts"] : []),
+			...(Object.values(assertions).every(Boolean) ? ["re_swarm merge && re_supervisor review"] : []),
+		],
+		80,
+	);
+	return {
+		kind: "WorkerRetryHandoffMergeSummaryV1",
+		schemaVersion: 1,
+		closureId: report.closureId,
+		poolId: report.poolId,
+		status: Object.values(assertions).every(Boolean) ? "pass" : "blocked",
+		retryQueuedWorkers,
+		handoffRecoveredWorkers,
+		exhaustedEscalatedWorkers,
+		unresolvedWorkers,
+		resolvedCollisions,
+		unresolvedCollisions,
+		nextActions,
+		claimRefs,
+		sourceArtifacts,
+		assertions,
+	};
+}
+
+export function verifyWorkerRetryHandoffMergeSummaryV1(summary: RepiWorkerRetryHandoffMergeSummaryV1): {
+	ok: boolean;
+	errors: string[];
+	evidenceContract: string[];
+} {
+	const errors: string[] = [];
+	if (summary.kind !== "WorkerRetryHandoffMergeSummaryV1") errors.push("retry_handoff_merge_summary_kind_invalid");
+	if (summary.schemaVersion !== 1) errors.push("retry_handoff_merge_summary_schema_version_invalid");
+	if (!summary.closureId) errors.push("retry_handoff_merge_summary_closure_missing");
+	if (!summary.poolId) errors.push("retry_handoff_merge_summary_pool_missing");
+	if (!summary.nextActions.length) errors.push("retry_handoff_merge_summary_next_actions_missing");
+	if (summary.unresolvedWorkers.length && summary.status === "pass")
+		errors.push("retry_handoff_merge_summary_fake_pass_unresolved_workers");
+	if (summary.unresolvedCollisions.length && summary.status === "pass")
+		errors.push("retry_handoff_merge_summary_fake_pass_unresolved_collisions");
+	if (!summary.assertions.noUnresolvedWorkers) errors.push("retry_handoff_merge_summary_unresolved_workers");
+	if (!summary.assertions.collisionsResolved) errors.push("retry_handoff_merge_summary_collisions_unresolved");
+	if (!summary.assertions.allFailuresClosed) errors.push("retry_handoff_merge_summary_failures_unclosed");
+	if (!summary.assertions.handoffEvidenceBound) errors.push("retry_handoff_merge_summary_handoff_unbound");
+	if (!summary.assertions.retryBudgetVisible) errors.push("retry_handoff_merge_summary_retry_budget_hidden");
+	if (!summary.assertions.sourceArtifactsPreserved)
+		errors.push("retry_handoff_merge_summary_source_artifacts_missing");
+	if (summary.claimRefs.length && !summary.sourceArtifacts.length)
+		errors.push("retry_handoff_merge_summary_claims_without_artifacts");
+	for (const workerId of summary.retryQueuedWorkers) {
+		if (!summary.nextActions.some((action) => action.includes(workerId) && /re_swarm retry/.test(action))) {
+			errors.push(`retry_handoff_merge_summary_retry_action_missing:${workerId}`);
+		}
+	}
+	for (const workerId of summary.exhaustedEscalatedWorkers) {
+		if (!summary.nextActions.some((action) => action.includes(workerId) && /re_autofix|re_supervisor/.test(action))) {
+			errors.push(`retry_handoff_merge_summary_escalation_action_missing:${workerId}`);
+		}
+	}
+	for (const workerId of summary.unresolvedWorkers) {
+		if (
+			!summary.nextActions.some(
+				(action) => action.includes(workerId) && /re_supervisor repair|re_swarm retry/.test(action),
+			)
+		) {
+			errors.push(`retry_handoff_merge_summary_unresolved_action_missing:${workerId}`);
+		}
+	}
+	for (const mergeKey of summary.unresolvedCollisions) {
+		if (!summary.nextActions.some((action) => action.includes(`mergeKey=${mergeKey}`))) {
+			errors.push(`retry_handoff_merge_summary_collision_action_missing:${mergeKey}`);
+		}
+	}
+	const allAssertionsPass = Object.values(summary.assertions).every(Boolean);
+	const hasBlockers =
+		!allAssertionsPass || summary.unresolvedWorkers.length > 0 || summary.unresolvedCollisions.length > 0;
+	if (summary.status === "pass" && hasBlockers) errors.push("retry_handoff_merge_summary_pass_with_blockers");
+	if (summary.status === "blocked" && !hasBlockers) errors.push("retry_handoff_merge_summary_blocked_without_blocker");
+	if (summary.status === "pass" && !summary.nextActions.some((action) => action.includes("re_swarm merge")))
+		errors.push("retry_handoff_merge_summary_pass_without_merge_action");
+	return {
+		ok: errors.length === 0,
+		errors: uniqueNonEmpty(errors, 120),
+		evidenceContract: workerRetryHandoffMergeSummaryEvidenceContract(),
 	};
 }
 

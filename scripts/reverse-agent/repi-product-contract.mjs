@@ -1516,7 +1516,18 @@ rows.push(
 			"WorkerRuntimePoolV1",
 			"workerRetryHandoffClosure",
 			"worker_retry_handoff_closure",
+			"workerRetryHandoffMergeSummary",
+			"worker_retry_handoff_merge_summary",
 		]) &&
+			includesAll(read("packages/coding-agent/src/core/repi/worker-runtime.ts"), [
+				"WorkerRetryHandoffMergeSummaryV1",
+				"buildWorkerRetryHandoffMergeSummaryV1",
+				"verifyWorkerRetryHandoffMergeSummaryV1",
+				"retryBudgetVisible",
+				"handoffEvidenceBound",
+				"sourceArtifactsPreserved",
+				"runtime:retry-handoff-merge-summary-validation",
+			]) &&
 			includesAll(read("packages/coding-agent/src/core/agent-thread-manager.ts"), [
 				"killWorkerProcessTree",
 				"detached: process.platform",

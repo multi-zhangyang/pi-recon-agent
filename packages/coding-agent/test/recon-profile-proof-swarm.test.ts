@@ -162,6 +162,9 @@ describe("REPI kernel profile proof-loop and swarm flows", () => {
 			expect(swarm.content[0]?.text).toContain("worker_retry_handoff_closure:");
 			expect(swarm.content[0]?.text).toContain("- status=pass");
 			expect(swarm.content[0]?.text).toContain("retry_attempts_bounded=pass");
+			expect(swarm.content[0]?.text).toContain("worker_retry_handoff_merge_summary:");
+			expect(swarm.content[0]?.text).toContain("retry_budget_visible=pass");
+			expect(swarm.content[0]?.text).toContain("source_artifacts_preserved=pass");
 		} finally {
 			if (previousTimeout === undefined) delete process.env.REPI_SWARM_WORKER_TIMEOUT_MS;
 			else process.env.REPI_SWARM_WORKER_TIMEOUT_MS = previousTimeout;
@@ -279,6 +282,8 @@ describe("REPI kernel profile proof-loop and swarm flows", () => {
 			expect(swarm.content[0]?.text).toContain("worker_retry_handoff_closure:");
 			expect(swarm.content[0]?.text).toContain("attempt=2/3");
 			expect(swarm.content[0]?.text).toContain("failed_workers_closed=pass");
+			expect(swarm.content[0]?.text).toContain("worker_retry_handoff_merge_summary:");
+			expect(swarm.content[0]?.text).toContain("next=re_swarm retry");
 		} finally {
 			if (previousRetryLimit === undefined) delete process.env.REPI_SWARM_RETRY_LIMIT;
 			else process.env.REPI_SWARM_RETRY_LIMIT = previousRetryLimit;

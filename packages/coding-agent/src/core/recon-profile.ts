@@ -581,11 +581,14 @@ import {
 	runtimeAdapterParserSummaryForGraph,
 } from "./repi/graph-artifacts.ts";
 import {
+	buildWorkerRetryHandoffMergeSummaryV1,
 	verifyRepairRollbackPolicyV1,
 	verifyWorkerChildSessionRuntimeBatch,
 	verifyWorkerLeaseSchedulerV1,
 	verifyWorkerRetryHandoffClosureV1,
+	verifyWorkerRetryHandoffMergeSummaryV1,
 	verifyWorkerRuntimePool,
+	type RepiWorkerRetryHandoffMergeSummaryV1,
 	type RepiWorkerRetryHandoffClosureV1,
 	workerChildSessionLaunchPolicy,
 	workerChildSessionToWorkerRuntimePoolBridge,
@@ -1937,6 +1940,10 @@ type SwarmArtifact = {
 	workerRetryHandoffClosure?: RepiWorkerRetryHandoffClosureV1;
 	workerRetryHandoffClosureStatus?: "pass" | "blocked" | "missing";
 	workerRetryHandoffClosureErrors: string[];
+	workerRetryHandoffMergeSummaryPath?: string;
+	workerRetryHandoffMergeSummary?: RepiWorkerRetryHandoffMergeSummaryV1;
+	workerRetryHandoffMergeSummaryStatus?: "pass" | "blocked" | "missing";
+	workerRetryHandoffMergeSummaryErrors: string[];
 	memoryWritebackEvents: string[];
 	memoryWritebackCount: number;
 	memoryWritebackStatus: "pending" | "pass" | "skipped" | "blocked";
@@ -16326,6 +16333,10 @@ function swarmWorkerRetryHandoffClosurePath(swarm: Pick<SwarmArtifact, "timestam
 	return swarmArtifactPath(swarm).replace(/\.md$/i, "-worker-retry-handoff-closure.json");
 }
 
+function swarmWorkerRetryHandoffMergeSummaryPath(swarm: Pick<SwarmArtifact, "timestamp" | "route" | "mode">): string {
+	return swarmArtifactPath(swarm).replace(/\.md$/i, "-worker-retry-handoff-merge-summary.json");
+}
+
 function swarmWorkerLeaseSchedulerPath(swarm: Pick<SwarmArtifact, "timestamp" | "route" | "mode">): string {
 	return swarmArtifactPath(swarm).replace(/\.md$/i, "-worker-lease-scheduler.json");
 }
@@ -17183,6 +17194,8 @@ function buildSwarm(options: { target?: string; task?: string; mode?: "plan" | "
 		workerRuntimePoolBridgeErrors: [],
 		workerRetryHandoffClosureStatus: "missing",
 		workerRetryHandoffClosureErrors: [],
+		workerRetryHandoffMergeSummaryStatus: "missing",
+		workerRetryHandoffMergeSummaryErrors: [],
 		memoryWritebackEvents: [],
 		memoryWritebackCount: 0,
 		memoryWritebackStatus: "pending",
@@ -18336,6 +18349,7 @@ function buildSwarmWorkerRetryHandoffClosure(
 
 function refreshSwarmWorkerRetryHandoffClosure(swarm: SwarmArtifact): SwarmArtifact {
 	const path = swarmWorkerRetryHandoffClosurePath(swarm);
+	const summaryPath = swarmWorkerRetryHandoffMergeSummaryPath(swarm);
 	const pool = swarm.workerRuntimePoolBridge;
 	if (!pool) {
 		return {
@@ -18343,22 +18357,33 @@ function refreshSwarmWorkerRetryHandoffClosure(swarm: SwarmArtifact): SwarmArtif
 			workerRetryHandoffClosurePath: path,
 			workerRetryHandoffClosureStatus: "missing",
 			workerRetryHandoffClosureErrors: ["worker_runtime_pool_bridge_missing"],
+			workerRetryHandoffMergeSummaryPath: summaryPath,
+			workerRetryHandoffMergeSummaryStatus: "missing",
+			workerRetryHandoffMergeSummaryErrors: ["worker_runtime_pool_bridge_missing"],
 		};
 	}
 	const report = buildSwarmWorkerRetryHandoffClosure(swarm, pool);
 	const validation = verifyWorkerRetryHandoffClosureV1(report);
+	const mergeSummary = buildWorkerRetryHandoffMergeSummaryV1(report);
+	const mergeSummaryValidation = verifyWorkerRetryHandoffMergeSummaryV1(mergeSummary);
 	const artifact = { closure: report, validation };
 	atomicWriteFileSync(path, `${JSON.stringify(artifact, null, 2)}\n`, 0o644);
+	atomicWriteFileSync(summaryPath, `${JSON.stringify({ summary: mergeSummary, validation: mergeSummaryValidation }, null, 2)}\n`, 0o644);
 	return {
 		...swarm,
 		workerRetryHandoffClosurePath: path,
 		workerRetryHandoffClosure: report,
 		workerRetryHandoffClosureStatus: validation.ok ? "pass" : "blocked",
 		workerRetryHandoffClosureErrors: validation.errors,
+		workerRetryHandoffMergeSummaryPath: summaryPath,
+		workerRetryHandoffMergeSummary: mergeSummary,
+		workerRetryHandoffMergeSummaryStatus: mergeSummaryValidation.ok ? "pass" : "blocked",
+		workerRetryHandoffMergeSummaryErrors: mergeSummaryValidation.errors,
 		sourceArtifacts: uniqueNonEmpty(
 			[
 				...swarm.sourceArtifacts,
 				path,
+				summaryPath,
 				...report.workers.flatMap((worker) => [
 					...worker.handoffRefs,
 					...worker.retryQueueRefs,
@@ -18936,6 +18961,25 @@ function formatSwarm(swarm: SwarmArtifact, path?: string): string {
 		...(swarm.workerRetryHandoffClosureErrors?.length
 			? swarm.workerRetryHandoffClosureErrors.slice(0, 8).map((error) => `- retry_handoff_error=${error}`)
 			: ["- retry_handoff_errors=none"]),
+		"worker_retry_handoff_merge_summary:",
+		`- path=${swarm.workerRetryHandoffMergeSummaryPath ?? "pending"}`,
+		`- status=${swarm.workerRetryHandoffMergeSummaryStatus ?? "missing"}`,
+		`- next_actions=${swarm.workerRetryHandoffMergeSummary?.nextActions.length ?? 0}`,
+		`- retry_queued=${swarm.workerRetryHandoffMergeSummary?.retryQueuedWorkers.length ?? 0}`,
+		`- handoff_recovered=${swarm.workerRetryHandoffMergeSummary?.handoffRecoveredWorkers.length ?? 0}`,
+		`- exhausted_escalated=${swarm.workerRetryHandoffMergeSummary?.exhaustedEscalatedWorkers.length ?? 0}`,
+		`- unresolved_workers=${swarm.workerRetryHandoffMergeSummary?.unresolvedWorkers.length ?? 0}`,
+		`- unresolved_collisions=${swarm.workerRetryHandoffMergeSummary?.unresolvedCollisions.length ?? 0}`,
+		`- retry_budget_visible=${swarm.workerRetryHandoffMergeSummary?.assertions.retryBudgetVisible ? "pass" : "fail"}`,
+		`- source_artifacts_preserved=${swarm.workerRetryHandoffMergeSummary?.assertions.sourceArtifactsPreserved ? "pass" : "fail"}`,
+		...((swarm.workerRetryHandoffMergeSummary?.nextActions ?? []).length
+			? (swarm.workerRetryHandoffMergeSummary?.nextActions ?? [])
+					.slice(0, 8)
+					.map((action) => `- next=${action}`)
+			: ["- next=none"]),
+		...(swarm.workerRetryHandoffMergeSummaryErrors?.length
+			? swarm.workerRetryHandoffMergeSummaryErrors.slice(0, 8).map((error) => `- merge_summary_error=${error}`)
+			: ["- merge_summary_errors=none"]),
 		"worker_lease_scheduler:",
 		`- path=${swarm.workerLeaseSchedulerPath ?? "pending"}`,
 		`- status=${swarm.workerLeaseSchedulerStatus ?? "missing"}`,
@@ -18978,6 +19022,7 @@ function writeSwarmArtifact(swarm: SwarmArtifact): string {
 	swarm.subagentRuntimeManifestPath = swarmSubagentRuntimeManifestIndexPath(swarm);
 	swarm.workerLeaseSchedulerPath = swarmWorkerLeaseSchedulerPath(swarm);
 	swarm.workerRetryHandoffClosurePath = swarmWorkerRetryHandoffClosurePath(swarm);
+	swarm.workerRetryHandoffMergeSummaryPath = swarmWorkerRetryHandoffMergeSummaryPath(swarm);
 	Object.assign(swarm, refreshSwarmSubagentRuntimeManifestCapture(swarm));
 	Object.assign(swarm, refreshSwarmRuntimeClaimLedger(swarm));
 	Object.assign(swarm, refreshSwarmWorkerChildSessionRuntime(swarm));
@@ -19075,7 +19120,7 @@ function writeSwarmArtifact(swarm: SwarmArtifact): string {
 	appendEvidence({
 		kind: swarm.mode === "run" ? "runtime" : "artifact",
 		title: `swarm-${swarm.mode} ${swarm.missionId ?? "no-mission"}`,
-		fact: `Built swarm ${swarm.mode} with ${swarm.workers.length} worker runtime packet(s), ${swarm.executions.length} execution(s), ${swarm.parallelGroups.length} parallel group(s), ${swarm.collisionMatrix.length} collision(s), ${swarm.blocked.length} blocked, audit=${swarm.executionAudit.length}, retries=${swarm.retryQueue.length}, parallel_plan=${swarm.parallelPlan?.planId ?? "missing"}, plan_coverage=${swarm.planCoverage.length}, release_check_metadata=${swarm.releaseCheckMetadata.length}, subagent_runtime_manifests=${swarm.subagentRuntimeManifestCount} captured=${swarm.subagentRuntimeManifestsCaptured ? "pass" : "fail"}, runtime_claim_ledger=${swarm.claimLedgerEventCount} hash_chain=${swarm.runtimeClaimLedgerCaptured ? "pass" : "fail"}, structured_claim_merge=${swarm.structuredClaimMergeStatus ?? "missing"}, retry_handoff_closure=${swarm.workerRetryHandoffClosureStatus ?? "missing"}`,
+		fact: `Built swarm ${swarm.mode} with ${swarm.workers.length} worker runtime packet(s), ${swarm.executions.length} execution(s), ${swarm.parallelGroups.length} parallel group(s), ${swarm.collisionMatrix.length} collision(s), ${swarm.blocked.length} blocked, audit=${swarm.executionAudit.length}, retries=${swarm.retryQueue.length}, parallel_plan=${swarm.parallelPlan?.planId ?? "missing"}, plan_coverage=${swarm.planCoverage.length}, release_check_metadata=${swarm.releaseCheckMetadata.length}, subagent_runtime_manifests=${swarm.subagentRuntimeManifestCount} captured=${swarm.subagentRuntimeManifestsCaptured ? "pass" : "fail"}, runtime_claim_ledger=${swarm.claimLedgerEventCount} hash_chain=${swarm.runtimeClaimLedgerCaptured ? "pass" : "fail"}, structured_claim_merge=${swarm.structuredClaimMergeStatus ?? "missing"}, retry_handoff_closure=${swarm.workerRetryHandoffClosureStatus ?? "missing"}, retry_handoff_merge_summary=${swarm.workerRetryHandoffMergeSummaryStatus ?? "missing"}`,
 		command: `re_swarm ${swarm.mode}`,
 		path,
 		verify: `cat ${path}`,
