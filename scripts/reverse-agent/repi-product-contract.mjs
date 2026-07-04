@@ -1279,6 +1279,7 @@ rows.push(
 );
 
 const graphSource = read("packages/coding-agent/src/core/repi/graph.ts");
+const graphArtifactsSource = read("packages/coding-agent/src/core/repi/graph-artifacts.ts");
 rows.push(
 	check(
 		"evidence:task-tree-graph-contract",
@@ -1291,12 +1292,14 @@ rows.push(
 			"parser_summary",
 			"gap",
 		]) &&
-			includesAll(reconProfile, [
-				"parseEvidenceLedgerTaskRecords",
+			includesAll(graphArtifactsSource, [
 				"parseProofLoopArtifact",
 				"recentProofLoopArtifacts",
 				"recentRuntimeAdapterExecutionArtifacts",
 				"runtimeAdapterParserSummaryForGraph",
+			]) &&
+			includesAll(reconProfile, [
+				"parseEvidenceLedgerTaskRecords",
 				"runtime-adapter-json",
 				"proof-loop quick path",
 				"gap_classifier",

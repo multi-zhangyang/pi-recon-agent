@@ -571,6 +571,11 @@ import {
 	type RuntimeAdapterExecutionCheckV1,
 } from "./repi/runtime-adapter.ts";
 import {
+	recentProofLoopArtifacts,
+	recentRuntimeAdapterExecutionArtifacts,
+	runtimeAdapterParserSummaryForGraph,
+} from "./repi/graph-artifacts.ts";
+import {
 	verifyRepairRollbackPolicyV1,
 	verifyWorkerChildSessionRuntimeBatch,
 	verifyWorkerLeaseSchedulerV1,
@@ -13265,124 +13270,6 @@ async function dispatchLaneSpecialist(options: {
 	const mergeText = merge?.text ?? "";
 	const decision = parsePlannerDecision(mergeText);
 	return { text: mergeText, decision, spec, note: `specialist_dispatch: spec=${spec} status=${merge?.manifest.status ?? "unknown"}` };
-}
-
-type RuntimeAdapterExecutionGraphArtifact = RuntimeAdapterExecutionArtifactV1 & {
-	stdoutHead?: string;
-	stderrHead?: string;
-};
-
-type RuntimeAdapterGraphParserSummary = NonNullable<RuntimeAdapterExecutionArtifactV1["parserSignalSummary"]>;
-type RuntimeAdapterGraphEvidenceRank = RuntimeAdapterGraphParserSummary["evidenceRanks"][number];
-
-function runtimeAdapterParserSummaryForGraph(
-	artifact: RuntimeAdapterExecutionGraphArtifact,
-): RuntimeAdapterGraphParserSummary {
-	if (artifact.parserSignalSummary) return artifact.parserSignalSummary;
-	const matchedSignals = artifact.parserSignals.filter((signal) => Array.isArray(signal.matches) && signal.matches.length > 0);
-	const matchedProofExitSignals = Array.from(
-		new Set(matchedSignals.map((signal) => signal.proofExitSignal).filter((signal): signal is string => Boolean(signal))),
-	);
-	const missingProofExitSignals = artifact.proofExitSignals.filter(
-		(signal) => !matchedProofExitSignals.includes(signal),
-	);
-	const evidenceRanks = Array.from(
-		new Set(
-			matchedSignals
-				.map((signal) => signal.evidenceRank)
-				.filter((rank): rank is RuntimeAdapterGraphEvidenceRank => Boolean(rank)),
-		),
-	);
-	return {
-		matchedRules: matchedSignals.length,
-		totalRules: artifact.parserSignals.length,
-		matchCount: matchedSignals.reduce((sum, signal) => sum + signal.matches.length, 0),
-		evidenceRanks,
-		matchedProofExitSignals,
-		missingProofExitSignals,
-	};
-}
-
-function isRuntimeAdapterExecutionGraphArtifact(row: unknown): row is RuntimeAdapterExecutionGraphArtifact {
-	if (typeof row !== "object" || row === null) return false;
-	const record = row as Record<string, unknown>;
-	return (
-		record.kind === "RuntimeAdapterExecutionArtifactV1" &&
-		record.schemaVersion === 1 &&
-		typeof record.adapterId === "string" &&
-		typeof record.domainId === "string" &&
-		typeof record.bridgeId === "string" &&
-		typeof record.startedAt === "string" &&
-		typeof record.finishedAt === "string" &&
-		typeof record.command === "string" &&
-		typeof record.stdoutSha256 === "string" &&
-		typeof record.stderrSha256 === "string" &&
-		Array.isArray(record.parserSignals) &&
-		Array.isArray(record.artifactKinds) &&
-		Array.isArray(record.ingestTargets) &&
-		Array.isArray(record.proofExitSignals)
-	);
-}
-
-function recentRuntimeAdapterExecutionArtifacts(
-	limit = 8,
-): Array<{ path: string; artifact: RuntimeAdapterExecutionGraphArtifact }> {
-	const root = join(evidenceToolchainDir(), "runtime-adapters");
-	try {
-		return readdirSync(root, { withFileTypes: true })
-			.filter((entry) => entry.isDirectory())
-			.flatMap((entry) => {
-				const dir = join(root, entry.name);
-				return readdirSync(dir, { withFileTypes: true })
-					.filter((file) => file.isFile() && file.name.endsWith(".json"))
-					.map((file) => {
-						const path = join(dir, file.name);
-						let mtimeMs = 0;
-						try {
-							mtimeMs = statSync(path).mtimeMs;
-						} catch {
-							mtimeMs = 0;
-						}
-						return { path, mtimeMs };
-					});
-			})
-			.sort((left, right) => right.mtimeMs - left.mtimeMs || right.path.localeCompare(left.path))
-			.slice(0, limit)
-			.map(({ path }) => {
-				const artifact = readJsonObjectFile<unknown>(path);
-				return isRuntimeAdapterExecutionGraphArtifact(artifact) ? { path, artifact } : undefined;
-			})
-			.filter((item): item is { path: string; artifact: RuntimeAdapterExecutionGraphArtifact } => Boolean(item));
-	} catch {
-		return [];
-	}
-}
-
-function parseProofLoopArtifact(path: string): ProofLoopArtifact | undefined {
-	const match = /```json\s*([\s\S]*?)\s*```/m.exec(readText(path));
-	if (!match?.[1]) return undefined;
-	try {
-		const parsed = JSON.parse(match[1]) as Partial<ProofLoopArtifact>;
-		return parsed &&
-			(parsed.mode === "plan" || parsed.mode === "run") &&
-			Array.isArray(parsed.steps) &&
-			Array.isArray(parsed.executed) &&
-			Array.isArray(parsed.quickPath) &&
-			Array.isArray(parsed.gapClassifier)
-			? (parsed as ProofLoopArtifact)
-			: undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-function recentProofLoopArtifacts(limit = 4): Array<{ path: string; proof: ProofLoopArtifact }> {
-	return recentMarkdownArtifacts(evidenceProofLoopsDir(), limit)
-		.map((path) => {
-			const proof = parseProofLoopArtifact(path);
-			return proof ? { path, proof } : undefined;
-		})
-		.filter((item): item is { path: string; proof: ProofLoopArtifact } => Boolean(item));
 }
 
 function buildAttackGraph(): AttackGraphArtifact {
