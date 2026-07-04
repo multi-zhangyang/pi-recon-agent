@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -94,6 +94,8 @@ describe("REPI kernel profile proof-loop and swarm flows", () => {
 		expect(proof.content[0]?.text).toContain("re_replayer run https://target.local/app 1");
 		expect(proof.content[0]?.text).toContain("re_autofix plan https://target.local/app");
 		expect(proof.content[0]?.text).toContain("source=attack_graph_gap");
+		const caseMemoryPath = join(agentDir, "recon", "memory", "case-memory.jsonl");
+		expect(existsSync(caseMemoryPath) ? readFileSync(caseMemoryPath, "utf-8") : "").not.toContain("proof_loop plan");
 
 		const proofRun = await proofLoopTool.execute("tool-call-id", {
 			action: "run",
@@ -107,6 +109,7 @@ describe("REPI kernel profile proof-loop and swarm flows", () => {
 		expect(proofRunText).toContain(
 			"quick_path_execution: index=1 phase=runtime-adapter command=re_runtime_adapter run web-cdp-network-adapter https://target.local/app",
 		);
+		expect(readFileSync(caseMemoryPath, "utf-8")).toContain("proof_loop run");
 		const nextProofActions = /next_proof_actions:([\s\S]*?)source_artifacts:/m.exec(proofRunText)?.[1] ?? "";
 		expect(nextProofActions).not.toContain("re_runtime_adapter run web-cdp-network-adapter https://target.local/app");
 

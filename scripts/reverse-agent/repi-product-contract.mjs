@@ -1494,6 +1494,7 @@ rows.push(
 				"quick_path_execution",
 				"gap_classifier",
 				"quick_path",
+				"if (proof.mode === \"run\") appendProofLoopMemoryEvent(proof, path)",
 			]),
 		"proof loop classifies gaps in a split pure module and executes a quick verifier/compiler/replayer/autofix path",
 		"Keep re_proof_loop focused on fast executable gap classification and bounded proof repair, not only static queue dumps.",

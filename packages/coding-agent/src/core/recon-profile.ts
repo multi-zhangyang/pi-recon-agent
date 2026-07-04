@@ -25438,6 +25438,10 @@ function refreshProofLoop(proof: ProofLoopArtifact): ProofLoopArtifact {
 	};
 }
 
+function refreshProofLoopCached(proof: ProofLoopArtifact): ProofLoopArtifact {
+	return withScopedMarkdownArtifactSelectionCache(() => refreshProofLoop(proof));
+}
+
 function buildProofLoop(
 	options: { target?: string; mode?: "plan" | "run"; maxSteps?: number; replaySteps?: number } = {},
 ): ProofLoopArtifact {
@@ -25445,7 +25449,7 @@ function buildProofLoop(
 	const mission = readCurrentMission();
 	const maxSteps = Math.max(1, Math.min(12, Math.floor(options.maxSteps ?? 4)));
 	const replaySteps = Math.max(1, Math.min(10, Math.floor(options.replaySteps ?? 2)));
-	return refreshProofLoop({
+	return refreshProofLoopCached({
 		timestamp: new Date().toISOString(),
 		missionId: mission?.id,
 		route: mission?.route.domain,
@@ -25602,7 +25606,7 @@ function writeProofLoopArtifact(proof: ProofLoopArtifact): string {
 	});
 	updateMissionCheckpoint("proof_loop_ready", proof.verdict === "blocked" ? "blocked" : "done", path);
 	appendRuntimeFailureRepairFromProofLoop(proof, path);
-	appendProofLoopMemoryEvent(proof, path);
+	if (proof.mode === "run") appendProofLoopMemoryEvent(proof, path);
 	return path;
 }
 
@@ -25829,7 +25833,7 @@ async function runProofLoop(
 		step.status = result.status === "blocked" ? "blocked" : "done";
 		step.reason = result.status === "blocked" ? result.output : step.reason;
 		remaining -= 1;
-		proof = refreshProofLoop(proof);
+		proof = refreshProofLoopCached(proof);
 		proofDirty = false;
 	};
 	const runQuickPath = async () => {
@@ -25848,7 +25852,7 @@ async function runProofLoop(
 		}
 		if (touched) pruneExecutedQuickCommands();
 		if (touched && remaining > 0) {
-			proof = refreshProofLoop(proof);
+			proof = refreshProofLoopCached(proof);
 			proofDirty = false;
 		} else if (touched) {
 			proofDirty = true;
@@ -25861,7 +25865,7 @@ async function runProofLoop(
 	}
 	if (proof.executed.some((item) => /compact resume proof loop entered/i.test(item.output))) {
 		updateReconCompactionTelemetryFromExecutions(proof.executed, proof.sourceArtifacts);
-		proof = refreshProofLoop(proof);
+		proof = refreshProofLoopCached(proof);
 		const path = writeProofLoopArtifact(proof);
 		return formatProofLoop(proof, path);
 	}
@@ -25910,7 +25914,7 @@ async function runProofLoop(
 			const result = await executeProofLoopBridgeStep(pi, kind, proof.target, proof.verdict === "needs_repair");
 			proof.executed.push(result);
 			remaining -= 1;
-			proof = refreshProofLoop(proof);
+			proof = refreshProofLoopCached(proof);
 			proofDirty = false;
 		}
 	}
@@ -25928,7 +25932,7 @@ async function runProofLoop(
 	}
 	const compactResumeExecution = proof.executed.some((execution) => /compact resume/i.test(execution.output));
 	updateReconCompactionTelemetryFromExecutions(proof.executed, proof.sourceArtifacts);
-	if (compactResumeExecution) proof = refreshProofLoop(proof);
+	if (compactResumeExecution) proof = refreshProofLoopCached(proof);
 	else if (proofDirty) pruneExecutedQuickCommands();
 	const path = writeProofLoopArtifact(proof);
 	return formatProofLoop(proof, path);
@@ -31356,7 +31360,19 @@ function scopedMarkdownArtifacts(
 ): string[] {
 	const scope = artifactScopeDefaultOptions(options);
 	const scanLimit = Math.max(limit, scope.scanLimit ?? Math.max(8, limit * 4));
-	return selectRepiScopedMarkdownArtifacts({
+	const cacheKey = JSON.stringify([
+		kind,
+		dir,
+		limit,
+		scope.route ?? "",
+		scope.target ?? "",
+		scope.scanLimit ?? "",
+		scanLimit,
+	]);
+	if (scope.write !== true && scopedMarkdownArtifactSelectionCache?.has(cacheKey)) {
+		return scopedMarkdownArtifactSelectionCache.get(cacheKey) ?? [];
+	}
+	const selected = selectRepiScopedMarkdownArtifacts({
 		kind,
 		limit,
 		candidatePaths: recentMarkdownArtifacts(dir, scanLimit),
@@ -31371,6 +31387,8 @@ function scopedMarkdownArtifacts(
 				write: scope.write,
 			}),
 	});
+	if (scope.write !== true) scopedMarkdownArtifactSelectionCache?.set(cacheKey, selected);
+	return selected;
 }
 
 function latestScopedMarkdownArtifact(
@@ -31385,6 +31403,18 @@ function latestScopedMarkdownArtifact(
 	})[0];
 }
 
+let scopedMarkdownArtifactSelectionCache: Map<string, string[]> | undefined;
+
+function withScopedMarkdownArtifactSelectionCache<T>(fn: () => T): T {
+	if (scopedMarkdownArtifactSelectionCache) return fn();
+	const cache = new Map<string, string[]>();
+	scopedMarkdownArtifactSelectionCache = cache;
+	try {
+		return fn();
+	} finally {
+		scopedMarkdownArtifactSelectionCache = undefined;
+	}
+}
 
 function buildMemoryOrchestratorReport(options: MemoryOrchestratorOptions = {}): MemoryOrchestratorReportV6 {
 	ensureReconStorage();
