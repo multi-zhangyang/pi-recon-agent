@@ -1,4 +1,4 @@
-import { truncateMiddle } from "./text.ts";
+import { truncateMiddle, uniqueNonEmpty } from "./text.ts";
 
 export type RepiProofLoopDelegateWorker =
 	| "web-authz"
@@ -48,6 +48,48 @@ export type RepiProofLoopGapClassification = {
 	klass: RepiProofLoopGapClass;
 	priority: number;
 	action: string;
+};
+
+export type RepiProofLoopQuickPlanPhaseV1 = {
+	phase:
+		| "attack_graph_refresh"
+		| "compact_resume_reentry"
+		| "toolchain_repair"
+		| "target_state_refresh"
+		| "runtime_adapter_frontload"
+		| "proof_spine"
+		| "replay_repair"
+		| "contradiction_repair"
+		| "delegate_unknown"
+		| "final_loop";
+	reason: string;
+	classes: RepiProofLoopGapClass[];
+	commands: string[];
+	evidenceRefs: string[];
+};
+
+export type RepiProofLoopQuickPlanV1 = {
+	kind: "ProofLoopQuickPlanV1";
+	schemaVersion: 1;
+	target: string;
+	classOrder: Array<{
+		klass: RepiProofLoopGapClass;
+		priority: number;
+		count: number;
+		workers: RepiProofLoopDelegateWorker[];
+		sources: RepiProofLoopGapSource[];
+	}>;
+	phases: RepiProofLoopQuickPlanPhaseV1[];
+	commands: string[];
+	omittedCommands: string[];
+	finalLoopCommand: string;
+	assertions: {
+		bounded: boolean;
+		deduplicated: boolean;
+		runtimeAdapterBeforeReplay: boolean;
+		autofixApplyBeforeFinalReplay: boolean;
+		finalLoopLast: boolean;
+	};
 };
 
 type RepiProofLoopMissionContext = {
@@ -179,6 +221,45 @@ export function repiProofLoopRuntimeAdapterCommands(adapterIds: string[], target
 		.map((adapterId) => `re_runtime_adapter run ${adapterId} ${targetRef}`);
 }
 
+export function repiProofLoopClassOrderFromItems(
+	items: RepiProofLoopGapItem[],
+): RepiProofLoopQuickPlanV1["classOrder"] {
+	const rows = new Map<
+		RepiProofLoopGapClass,
+		{
+			klass: RepiProofLoopGapClass;
+			priority: number;
+			count: number;
+			workers: Set<RepiProofLoopDelegateWorker>;
+			sources: Set<RepiProofLoopGapSource>;
+		}
+	>();
+	for (const item of items) {
+		const classified = classifyRepiProofLoopGap(item);
+		const row = rows.get(classified.klass) ?? {
+			klass: classified.klass,
+			priority: classified.priority,
+			count: 0,
+			workers: new Set<RepiProofLoopDelegateWorker>(),
+			sources: new Set<RepiProofLoopGapSource>(),
+		};
+		row.count += 1;
+		row.priority = Math.min(row.priority, classified.priority);
+		row.workers.add(item.worker);
+		row.sources.add(item.source);
+		rows.set(classified.klass, row);
+	}
+	return Array.from(rows.values())
+		.map((row) => ({
+			klass: row.klass,
+			priority: row.priority,
+			count: row.count,
+			workers: Array.from(row.workers).sort(),
+			sources: Array.from(row.sources).sort(),
+		}))
+		.sort((left, right) => left.priority - right.priority || left.klass.localeCompare(right.klass));
+}
+
 function appendProofSpine(commands: string[], targetRef: string, options: { includeAutofixPlan?: boolean } = {}): void {
 	commands.push(`re_verifier matrix ${targetRef}`, `re_compiler draft ${targetRef}`, `re_replayer run ${targetRef} 1`);
 	if (options.includeAutofixPlan) commands.push(`re_autofix plan ${targetRef}`);
@@ -194,39 +275,123 @@ function runtimeAdapterIdFromGapText(text: string): string | undefined {
 	);
 }
 
-export function repiProofLoopQuickPathFromItems(items: RepiProofLoopGapItem[], target?: string): string[] {
+export function repiProofLoopQuickPlanFromItems(
+	items: RepiProofLoopGapItem[],
+	target?: string,
+): RepiProofLoopQuickPlanV1 {
 	const targetRef = target?.trim() || "<target>";
-	const classes = new Set(items.map((item) => classifyRepiProofLoopGap(item).klass));
+	const classOrder = repiProofLoopClassOrderFromItems(items);
+	const classes = new Set(classOrder.map((row) => row.klass));
 	const commands: string[] = [];
-	if (items.some((item) => item.source === "attack_graph")) commands.push("re_graph build");
-	if (classes.has("compact_resume")) {
-		commands.push("re_context resume", `re_operator plan ${targetRef}`);
+	const phases: RepiProofLoopQuickPlanPhaseV1[] = [];
+	const addPhase = (
+		phase: RepiProofLoopQuickPlanPhaseV1["phase"],
+		reason: string,
+		phaseClasses: RepiProofLoopGapClass[],
+		phaseCommands: string[],
+	): void => {
+		const accepted: string[] = [];
+		for (const command of phaseCommands) {
+			if (commands.includes(command)) continue;
+			commands.push(command);
+			accepted.push(command);
+		}
+		if (!accepted.length) return;
+		const evidenceRefs = uniqueNonEmpty(
+			items
+				.filter((item) => phaseClasses.length === 0 || phaseClasses.includes(classifyRepiProofLoopGap(item).klass))
+				.flatMap((item) => item.sourceArtifacts),
+			8,
+		);
+		phases.push({ phase, reason, classes: phaseClasses, commands: accepted, evidenceRefs });
+	};
+	if (items.some((item) => item.source === "attack_graph")) {
+		addPhase("attack_graph_refresh", "refresh task tree before closing attack-graph gaps", [], ["re_graph build"]);
 	}
-	if (classes.has("tool_or_dependency")) commands.push("re_bootstrap plan", `re_operator dispatch ${targetRef} 1`);
+	if (classes.has("compact_resume")) {
+		addPhase(
+			"compact_resume_reentry",
+			"resume the packed proof state before dispatching more tools",
+			["compact_resume"],
+			["re_context resume", `re_operator plan ${targetRef}`],
+		);
+	}
+	if (classes.has("tool_or_dependency")) {
+		addPhase(
+			"toolchain_repair",
+			"repair missing tools/dependencies before replaying proof commands",
+			["tool_or_dependency"],
+			["re_bootstrap plan", `re_operator dispatch ${targetRef} 1`],
+		);
+	}
 	if (classes.has("target_or_state")) {
-		commands.push(`re_map ${targetRef}`, `re_live_browser plan ${targetRef}`, `re_web_authz_state plan ${targetRef}`);
+		addPhase(
+			"target_state_refresh",
+			"refresh volatile target/session state before proof replay",
+			["target_or_state"],
+			[`re_map ${targetRef}`, `re_live_browser plan ${targetRef}`, `re_web_authz_state plan ${targetRef}`],
+		);
 	}
 	if (classes.has("runtime_adapter_gap")) {
 		const adapterIds = Array.from(
 			new Set(items.map((item) => runtimeAdapterIdFromGapText(item.text)).filter((id): id is string => Boolean(id))),
 		);
-		if (adapterIds.length === 0) commands.push(`re_runtime_adapter plan ${targetRef}`);
-		for (const adapterId of adapterIds.slice(0, 4)) commands.push(`re_runtime_adapter run ${adapterId} ${targetRef}`);
-		appendProofSpine(commands, targetRef, { includeAutofixPlan: true });
+		addPhase(
+			"runtime_adapter_frontload",
+			"collect live/runtime artifacts before verifier/compiler/replayer consumes stale evidence",
+			["runtime_adapter_gap"],
+			adapterIds.length === 0
+				? [`re_runtime_adapter plan ${targetRef}`]
+				: adapterIds.slice(0, 4).map((adapterId) => `re_runtime_adapter run ${adapterId} ${targetRef}`),
+		);
+		const proofSpine: string[] = [];
+		appendProofSpine(proofSpine, targetRef, { includeAutofixPlan: true });
+		addPhase(
+			"proof_spine",
+			"verify, compile, and replay the adapter artifacts once before patching",
+			["runtime_adapter_gap"],
+			proofSpine,
+		);
 	}
 	if (classes.has("missing_artifact") || classes.has("weak_evidence") || classes.size === 0) {
-		appendProofSpine(commands, targetRef, { includeAutofixPlan: true });
+		const proofSpine: string[] = [];
+		appendProofSpine(proofSpine, targetRef, { includeAutofixPlan: true });
+		addPhase(
+			"proof_spine",
+			"materialize missing/weak proof artifacts through verifier/compiler/replayer",
+			["missing_artifact", "weak_evidence"],
+			proofSpine,
+		);
 	}
 	if (classes.has("replay_failure") || classes.has("timeout_or_flake")) {
-		appendProofSpine(commands, targetRef, { includeAutofixPlan: true });
-		commands.push(`re_autofix apply ${targetRef}`, `re_replayer run ${targetRef} 2`);
+		const replayRepair: string[] = [];
+		appendProofSpine(replayRepair, targetRef, { includeAutofixPlan: true });
+		replayRepair.push(`re_autofix apply ${targetRef}`, `re_replayer run ${targetRef} 2`);
+		addPhase(
+			"replay_repair",
+			"convert replay/flake failure into autofix and a second deterministic replay",
+			["replay_failure", "timeout_or_flake"],
+			replayRepair,
+		);
 	}
 	if (classes.has("contradiction")) {
-		commands.push(`re_supervisor repair ${targetRef}`);
-		appendProofSpine(commands, targetRef);
+		const contradictionRepair = [`re_supervisor repair ${targetRef}`];
+		appendProofSpine(contradictionRepair, targetRef);
+		addPhase(
+			"contradiction_repair",
+			"send counter-evidence through supervisor repair before promotion",
+			["contradiction"],
+			contradictionRepair,
+		);
 	}
-	if (classes.has("unknown"))
-		commands.push(`re_delegate plan ${targetRef}`, `re_swarm run ${targetRef} 2 1`, "re_swarm merge");
+	if (classes.has("unknown")) {
+		addPhase(
+			"delegate_unknown",
+			"escalate unknown gaps to a bounded swarm and merge handoff evidence",
+			["unknown"],
+			[`re_delegate plan ${targetRef}`, `re_swarm run ${targetRef} 2 1`, "re_swarm merge"],
+		);
+	}
 	if (
 		classes.size > 0 &&
 		!classes.has("missing_artifact") &&
@@ -236,12 +401,51 @@ export function repiProofLoopQuickPathFromItems(items: RepiProofLoopGapItem[], t
 		!classes.has("replay_failure") &&
 		!classes.has("timeout_or_flake")
 	) {
-		appendProofSpine(commands, targetRef);
+		const proofSpine: string[] = [];
+		appendProofSpine(proofSpine, targetRef);
+		addPhase(
+			"proof_spine",
+			"close non-proof-spine gaps with verifier/compiler/replayer before final loop",
+			[],
+			proofSpine,
+		);
 	}
 	const loopCommand = `re_proof_loop run ${targetRef} 4 2`;
-	commands.push(loopCommand);
+	addPhase("final_loop", "rerun the proof loop after repairs to force gap closure or escalation", [], [loopCommand]);
 	const unique = Array.from(new Set(commands));
-	return [...unique.filter((command) => command !== loopCommand).slice(0, 13), loopCommand];
+	const boundedCommands = [...unique.filter((command) => command !== loopCommand).slice(0, 13), loopCommand];
+	const omittedCommands = unique.filter((command) => !boundedCommands.includes(command));
+	const runtimeAdapterIndex = boundedCommands.findIndex((command) => command.startsWith("re_runtime_adapter "));
+	const firstReplayIndex = boundedCommands.findIndex((command) => command.startsWith("re_replayer run "));
+	const autofixApplyIndex = boundedCommands.findIndex((command) => command.startsWith("re_autofix apply "));
+	let finalReplayIndex = -1;
+	for (let index = 0; index < boundedCommands.length; index += 1) {
+		if (boundedCommands[index]?.startsWith("re_replayer run ")) finalReplayIndex = index;
+	}
+	return {
+		kind: "ProofLoopQuickPlanV1",
+		schemaVersion: 1,
+		target: targetRef,
+		classOrder,
+		phases,
+		commands: boundedCommands,
+		omittedCommands,
+		finalLoopCommand: loopCommand,
+		assertions: {
+			bounded: boundedCommands.length <= 14,
+			deduplicated: boundedCommands.length === new Set(boundedCommands).size,
+			runtimeAdapterBeforeReplay:
+				!classes.has("runtime_adapter_gap") || firstReplayIndex < 0 || runtimeAdapterIndex < firstReplayIndex,
+			autofixApplyBeforeFinalReplay:
+				!(classes.has("replay_failure") || classes.has("timeout_or_flake")) ||
+				(autofixApplyIndex >= 0 && finalReplayIndex > autofixApplyIndex),
+			finalLoopLast: boundedCommands.at(-1) === loopCommand,
+		},
+	};
+}
+
+export function repiProofLoopQuickPathFromItems(items: RepiProofLoopGapItem[], target?: string): string[] {
+	return repiProofLoopQuickPlanFromItems(items, target).commands;
 }
 
 export function repiProofLoopSpecialistQueueFromItems(items: RepiProofLoopGapItem[], target?: string): string[] {

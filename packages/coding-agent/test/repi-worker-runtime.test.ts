@@ -159,7 +159,11 @@ function validRetryHandoffClosure(
 				handoffRefs: ["/tmp/repi/w1/runtime-manifest.json"],
 				repairRefs: ["/tmp/repi/failure-ledger.jsonl"],
 				claimRefs: ["claim-a"],
-				sourceArtifacts: ["/tmp/repi/w1/runtime-manifest.json", "/tmp/repi/w1/stdout.log"],
+				sourceArtifacts: [
+					"/tmp/repi/w1/runtime-manifest.json",
+					"/tmp/repi/w1/stdout.log",
+					"/tmp/repi/failure-ledger.jsonl",
+				],
 				mergeKeys: ["claim-a"],
 				assertions: {
 					attemptBounded: true,
@@ -213,6 +217,31 @@ describe("REPI worker runtime pure contracts", () => {
 			workers: [validPool().workers[0], { ...validPool().workers[0], workerId: "w2", sessionDir: "/tmp/repi/w2" }],
 		});
 		expect(verifyWorkerRuntimePool(duplicatePool).errors).toContain("duplicate_mergeKey_unresolved");
+
+		const fakeResolvedDuplicatePool = validPool({
+			workers: [validPool().workers[0], { ...validPool().workers[0], workerId: "w2", sessionDir: "/tmp/repi/w2" }],
+			mergeProtocol: {
+				strategy: "claim-aware merge",
+				evidenceContract: [],
+				conflicts: [
+					{
+						mergeKey: "claim-a",
+						workers: ["w1"],
+						status: "resolved",
+						winner: "w9",
+						evidenceRefs: [],
+					},
+				],
+			},
+		});
+		expect(verifyWorkerRuntimePool(fakeResolvedDuplicatePool).errors).toEqual(
+			expect.arrayContaining([
+				"merge_conflict_workers_mismatch:claim-a",
+				"merge_conflict_winner_invalid:claim-a",
+				"merge_conflict_evidence_missing:claim-a",
+				"merge_conflict_resolution_reason_missing:claim-a",
+			]),
+		);
 
 		const incompleteClaimPool = validPool({
 			claimLedgerEvents: [claimEvent("artifact_handoff"), claimEvent("claim")],
@@ -369,6 +398,65 @@ describe("REPI worker runtime pure contracts", () => {
 			expect.arrayContaining([
 				"retry_handoff_merge_collision_unresolved:claim-a",
 				"retry_handoff_merge_collisions_unresolved",
+			]),
+		);
+
+		const validCollision = validRetryHandoffClosure({
+			workers: [
+				validRetryHandoffClosure().workers[0],
+				{
+					...validRetryHandoffClosure().workers[0],
+					workerId: "w2",
+					claimRefs: ["claim-a"],
+					handoffRefs: ["/tmp/repi/w2/runtime-manifest.json"],
+					mergeKeys: ["claim-a"],
+					sourceArtifacts: [
+						"/tmp/repi/w2/runtime-manifest.json",
+						"/tmp/repi/w2/stdout.log",
+						"/tmp/repi/failure-ledger.jsonl",
+						"artifact://validation",
+					],
+				},
+			],
+			merge: {
+				strategy: "claim-bound handoff merge",
+				recoveredWorkers: [],
+				unresolvedWorkers: [],
+				collisions: [
+					{
+						mergeKey: "claim-a",
+						workers: ["w1", "w2"],
+						status: "resolved",
+						winner: "w1",
+						evidenceRefs: ["artifact://validation"],
+						resolutionReason:
+							"w1 carries the verifier-accepted artifact hash and w2 is retained as corroboration",
+					},
+				],
+			},
+		});
+		expect(verifyWorkerRetryHandoffClosureV1(validCollision).ok).toBe(true);
+
+		const fakeResolvedCollision = validRetryHandoffClosure({
+			merge: {
+				...validRetryHandoffClosure().merge,
+				collisions: [
+					{
+						mergeKey: "claim-a",
+						workers: ["w1", "w2"],
+						status: "resolved",
+						winner: "w9",
+						evidenceRefs: ["artifact://validation"],
+					},
+				],
+			},
+		});
+		expect(verifyWorkerRetryHandoffClosureV1(fakeResolvedCollision).errors).toEqual(
+			expect.arrayContaining([
+				"retry_handoff_merge_collision_worker_unknown:claim-a:w2",
+				"retry_handoff_merge_winner_not_in_collision:claim-a",
+				"retry_handoff_merge_resolution_reason_missing:claim-a",
+				"retry_handoff_merge_evidence_unbound:claim-a",
 			]),
 		);
 	});

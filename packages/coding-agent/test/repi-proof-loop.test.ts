@@ -3,8 +3,10 @@ import {
 	classifyRepiProofLoopGap,
 	formatRepiProofLoopGapClassifier,
 	type RepiProofLoopGapItem,
+	repiProofLoopClassOrderFromItems,
 	repiProofLoopCommandTarget,
 	repiProofLoopQuickPathFromItems,
+	repiProofLoopQuickPlanFromItems,
 	repiProofLoopRuntimeAdapterCommands,
 	repiProofLoopSpecialistQueueFromItems,
 	repiProofLoopWorkerForText,
@@ -84,6 +86,54 @@ describe("REPI proof-loop pure planner", () => {
 			"re_autofix plan https://target.local/app",
 			"re_proof_loop run https://target.local/app 4 2",
 		]);
+	});
+
+	it("explains and asserts runtime-adapter plus replay-failure closure order", () => {
+		const items = [
+			gap("attack_graph gap: runtime adapter missing proof: gdb-native-trace-adapter: breakpoint trace", {
+				source: "attack_graph",
+				worker: "native-runtime",
+				sourceArtifacts: ["/tmp/repi/graph.json"],
+			}),
+			gap("failed: replay exit=1 stderr=offset drift", {
+				source: "replayer",
+				worker: "pwn-exploit",
+				sourceArtifacts: ["/tmp/repi/replay.json"],
+			}),
+		];
+		const plan = repiProofLoopQuickPlanFromItems(items, "./vuln");
+		expect(repiProofLoopClassOrderFromItems(items).map((row) => row.klass)).toEqual([
+			"runtime_adapter_gap",
+			"replay_failure",
+		]);
+		expect(plan.commands).toEqual([
+			"re_graph build",
+			"re_runtime_adapter run gdb-native-trace-adapter ./vuln",
+			"re_verifier matrix ./vuln",
+			"re_compiler draft ./vuln",
+			"re_replayer run ./vuln 1",
+			"re_autofix plan ./vuln",
+			"re_autofix apply ./vuln",
+			"re_replayer run ./vuln 2",
+			"re_proof_loop run ./vuln 4 2",
+		]);
+		expect(plan.phases.map((phase) => phase.phase)).toEqual([
+			"attack_graph_refresh",
+			"runtime_adapter_frontload",
+			"proof_spine",
+			"replay_repair",
+			"final_loop",
+		]);
+		expect(plan.phases.find((phase) => phase.phase === "runtime_adapter_frontload")?.evidenceRefs).toContain(
+			"/tmp/repi/graph.json",
+		);
+		expect(plan.assertions).toEqual({
+			bounded: true,
+			deduplicated: true,
+			runtimeAdapterBeforeReplay: true,
+			autofixApplyBeforeFinalReplay: true,
+			finalLoopLast: true,
+		});
 	});
 
 	it("formats sorted classifier and delegate queue rows with target-safe suffixes", () => {

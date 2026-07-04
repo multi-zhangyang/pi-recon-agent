@@ -18110,10 +18110,14 @@ function buildSwarmWorkerRetryHandoffClosure(
 		const handoffRefs = workerHandoffRefsForSwarmWorker(swarm, worker.workerId);
 		const repairRefs = workerRepairRefsForSwarmWorker(swarm, worker.workerId);
 		const mergeKeys = Array.isArray(worker.mergeKey) ? worker.mergeKey : [worker.mergeKey];
+		const collisionEvidenceRefs = pool.mergeProtocol.conflicts
+			.filter((conflict) => conflict.workers.includes(worker.workerId) || mergeKeys.includes(conflict.mergeKey))
+			.flatMap((conflict) => conflict.evidenceRefs);
 		const sourceArtifacts = uniqueNonEmpty(
 			[
 				...worker.claimRefs,
 				...mergeKeys,
+				...collisionEvidenceRefs,
 				...retryQueueRefs,
 				...handoffRefs,
 				...repairRefs,
