@@ -546,6 +546,10 @@ import {
 } from "./repi/techniques.ts";
 import { formatCweTags, formatMitreTag } from "./repi/taxonomy.ts";
 import {
+	repiIndexedToolPresent as indexedToolPresent,
+	repiResolvedToolPresent as resolvedToolPresent,
+} from "./repi/tool-presence.ts";
+import {
 	REPI_POISON_PATTERNS,
 	classifyRepiTarget,
 	commandContainsPoison,
@@ -29182,53 +29186,6 @@ function knownReconTool(tool: string): boolean {
 		TOOL_BOOTSTRAP_CATALOG.some((entry) => entry.tool.toLowerCase() === lower) ||
 		["aapt", "unzip", "ldd", "curl", "rg", "python", "python3"].includes(lower)
 	);
-}
-
-function toolIndexEntry(
-	index: Map<string, { present: boolean; path?: string }>,
-	tool: string,
-): { present: boolean; path?: string } | undefined {
-	const lower = tool.toLowerCase();
-	for (const [name, value] of index.entries()) {
-		if (name.toLowerCase() === lower) return value;
-	}
-	const aliases = lower === "radare2" ? ["r2"] : lower === "r2" ? ["radare2"] : lower === "python" ? ["python3"] : [];
-	for (const alias of aliases) {
-		for (const [name, value] of index.entries()) {
-			if (name.toLowerCase() === alias) return value;
-		}
-	}
-	return undefined;
-}
-
-function indexedToolPresent(
-	index: Map<string, { present: boolean; path?: string }>,
-	tool: string,
-): boolean | undefined {
-	const entry = toolIndexEntry(index, tool);
-	return entry?.present;
-}
-
-const hostToolPresenceCache = new Map<string, boolean>();
-
-function hostToolPresent(tool: string): boolean | undefined {
-	const name = tool.trim();
-	if (!/^[A-Za-z0-9_.:+-]+$/.test(name)) return undefined;
-	const lower = name.toLowerCase();
-	const cacheKey = `${lower}\0${process.env.PATH ?? ""}`;
-	const cached = hostToolPresenceCache.get(cacheKey);
-	if (cached !== undefined) return cached;
-	const result = spawnSync("bash", ["-lc", `command -v ${shellQuote(name)} >/dev/null 2>&1`], {
-		timeout: 2000,
-		stdio: "ignore",
-	});
-	const present = result.status === 0;
-	hostToolPresenceCache.set(cacheKey, present);
-	return present;
-}
-
-function resolvedToolPresent(index: Map<string, { present: boolean; path?: string }>, tool: string): boolean | undefined {
-	return indexedToolPresent(index, tool) ?? hostToolPresent(tool);
 }
 
 function commandKnownTools(command: string): string[] {

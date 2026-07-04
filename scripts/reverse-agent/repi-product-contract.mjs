@@ -1228,6 +1228,7 @@ rows.push(
 );
 
 const runtimeAdapterSource = read("packages/coding-agent/src/core/repi/runtime-adapter.ts");
+const toolPresenceSource = read("packages/coding-agent/src/core/repi/tool-presence.ts");
 rows.push(
 	check(
 		"runtime:adapter-auto-detect-contract",
@@ -1271,8 +1272,8 @@ rows.push(
 				"stdout_sha256",
 				"stderr_sha256",
 			]) &&
+			includesAll(toolPresenceSource, ["repiHostToolPresent", "repiResolvedToolPresent"]) &&
 			includesAll(reconProfile, [
-				"hostToolPresent",
 				"resolvedToolPresent",
 				"runner_preflight_blocked_no_synthetic_success",
 				"command_preflight_blocked_no_synthetic_success",
