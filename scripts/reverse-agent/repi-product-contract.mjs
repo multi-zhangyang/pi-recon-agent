@@ -135,6 +135,8 @@ rows.push(
 				"package-bin:model-status-env",
 				"REPI_* environment",
 				"package-bin:rpc-fresh-env-footer",
+				"package-bin:rpc-goal-status-env",
+				"REPI Goal Status",
 				"REPI kernel profile ready",
 				"package-bin:rpc-env-overrides-saved-default",
 				"package-bin:rpc-goal",

@@ -278,4 +278,80 @@ describe("REPI goal mode over RPC", () => {
 			await harness.cleanup();
 		}
 	});
+
+	it("edits a budget-limited RPC goal with a new token budget and no confirm round-trip", async () => {
+		const harness = await startGoalRpcHarness([
+			{ text: "still working", usage: { input: 100, output: 50 } },
+			{
+				toolCalls: [
+					{
+						name: "goal_complete",
+						args: { summary: "Edited RPC goal implemented and verified by the harness." },
+					},
+				],
+				usage: { input: 10, output: 5 },
+			},
+		]);
+		try {
+			harness.lineHandler(
+				JSON.stringify({ id: "goal-start", type: "prompt", message: "/goal --tokens 1 rpc edit lifecycle" }),
+			);
+
+			await vi.waitFor(
+				() => {
+					expect(responseById("goal-start")).toMatchObject({ success: true, command: "prompt" });
+					expect(
+						extensionRequests("setStatus").some(
+							(request) => request.statusKey === "goal" && request.statusText === "🎯 budget 150/1",
+						),
+					).toBe(true);
+				},
+				{ timeout: 8_000 },
+			);
+			expect(harness.faux.callCount).toBe(1);
+
+			harness.lineHandler(
+				JSON.stringify({
+					id: "goal-edit",
+					type: "prompt",
+					message: "/goal edit --tokens 10k rpc edited lifecycle",
+				}),
+			);
+
+			await vi.waitFor(
+				() => {
+					expect(responseById("goal-edit")).toMatchObject({ success: true, command: "prompt" });
+					expect(
+						extensionRequests("setStatus").some(
+							(request) => request.statusKey === "goal" && request.statusText === "🎯 active 150/10k",
+						),
+					).toBe(true);
+					expect(
+						extensionRequests("setStatus").some(
+							(request) => request.statusKey === "goal" && request.statusText === "🎯 complete",
+						),
+					).toBe(true);
+				},
+				{ timeout: 8_000 },
+			);
+
+			expect(extensionRequests("confirm")).toHaveLength(0);
+			expect(harness.faux.callCount).toBe(2);
+			const notificationText = extensionRequests("notify")
+				.map((request) => String(request.message))
+				.join("\n");
+			expect(notificationText).toContain("Goal updated: rpc edited lifecycle");
+			expect(notificationText).toContain("Goal complete: rpc edited lifecycle");
+			expect(JSON.stringify(harness.faux.contexts[1] ?? {})).toContain("rpc edited lifecycle");
+			expect(JSON.stringify(harness.faux.contexts[1] ?? {})).toContain("Token budget: 150/10k used.");
+			expect(
+				harness.sessionManager
+					.getEntries()
+					.filter((entry) => entry.type === "custom" && entry.customType === REPI_GOAL_STATE_ENTRY_TYPE)
+					.at(-1),
+			).toMatchObject({ type: "custom", customType: REPI_GOAL_STATE_ENTRY_TYPE, data: { goal: null } });
+		} finally {
+			await harness.cleanup();
+		}
+	});
 });

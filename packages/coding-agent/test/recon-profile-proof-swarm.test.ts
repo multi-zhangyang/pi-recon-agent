@@ -36,6 +36,9 @@ describe("REPI kernel profile swarm flows", () => {
 			expect(swarm.content[0]?.text).toContain("worker_retry_handoff_merge_summary:");
 			expect(swarm.content[0]?.text).toContain("retry_budget_visible=pass");
 			expect(swarm.content[0]?.text).toContain("source_artifacts_preserved=pass");
+			expect(swarm.content[0]?.text).toContain("worker_closures=3");
+			expect(swarm.content[0]?.text).toContain("closure=worker=");
+			expect(swarm.content[0]?.text).toContain("closure=passed");
 		} finally {
 			harness.restore();
 			if (previousTimeout === undefined) delete process.env.REPI_SWARM_WORKER_TIMEOUT_MS;
@@ -144,6 +147,8 @@ describe("REPI kernel profile swarm flows", () => {
 			expect(swarm.content[0]?.text).toContain("attempt=2/3");
 			expect(swarm.content[0]?.text).toContain("failed_workers_closed=pass");
 			expect(swarm.content[0]?.text).toContain("worker_retry_handoff_merge_summary:");
+			expect(swarm.content[0]?.text).toContain("worker_closures=1");
+			expect(swarm.content[0]?.text).toContain("closure=retry_queued");
 			expect(swarm.content[0]?.text).toContain("next=re_swarm retry");
 		} finally {
 			harness.restore();

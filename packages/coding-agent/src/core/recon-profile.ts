@@ -19010,6 +19010,15 @@ function formatSwarm(swarm: SwarmArtifact, path?: string): string {
 		`- unresolved_collisions=${swarm.workerRetryHandoffMergeSummary?.unresolvedCollisions.length ?? 0}`,
 		`- retry_budget_visible=${swarm.workerRetryHandoffMergeSummary?.assertions.retryBudgetVisible ? "pass" : "fail"}`,
 		`- source_artifacts_preserved=${swarm.workerRetryHandoffMergeSummary?.assertions.sourceArtifactsPreserved ? "pass" : "fail"}`,
+		`- worker_closures=${swarm.workerRetryHandoffMergeSummary?.workerClosures.length ?? 0}`,
+		...((swarm.workerRetryHandoffMergeSummary?.workerClosures ?? []).length
+			? (swarm.workerRetryHandoffMergeSummary?.workerClosures ?? [])
+					.slice(0, 12)
+					.map(
+						(worker) =>
+							`- closure=${worker.summary} handoffRefs=${worker.handoffRefs.length} retryQueueRefs=${worker.retryQueueRefs.length} repairRefs=${worker.repairRefs.length} claimRefs=${worker.claimRefs.length}`,
+					)
+			: ["- closure=none"]),
 		...((swarm.workerRetryHandoffMergeSummary?.nextActions ?? []).length
 			? (swarm.workerRetryHandoffMergeSummary?.nextActions ?? [])
 					.slice(0, 8)

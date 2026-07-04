@@ -153,6 +153,24 @@ try {
 			rejectOutput: ['"provider":"kimchi"', '"id":"kimi-k2.7"'],
 		}),
 	);
+	rows.push(
+		run("package-bin:rpc-goal-status-env", repiBin, ["--offline", "--mode", "rpc", "--no-session"], {
+			cwd: installDir,
+			env: { ...envModel, REPI_CODING_AGENT_DIR: join(outDir, "rpc-goal-status-env-agent") },
+			input: `${JSON.stringify({ id: "state", type: "get_state" })}\n${JSON.stringify({ id: "goal-status", type: "prompt", message: "/goal status" })}\n`,
+			expectOutput: [
+				'"provider":"repi-env"',
+				'"id":"release-smoke-env-model"',
+				'"contextWindow":262144',
+				'"method":"notify"',
+				"🎯 REPI Goal Status",
+				"Status: clear",
+				"Footer: 🎯 <clear>",
+				'"statusKey":"goal"',
+			],
+			rejectOutput: ['"provider":"kimchi"', '"id":"kimi-k2.7"'],
+		}),
+	);
 	const staleDefaultAgentDir = join(outDir, "stale-default-agent");
 	mkdirSync(staleDefaultAgentDir, { recursive: true });
 	writeFileSync(join(staleDefaultAgentDir, "settings.json"), `${JSON.stringify({ defaultProvider: "kimchi", defaultModel: "kimi-k2.7" }, null, "\t")}\n`);

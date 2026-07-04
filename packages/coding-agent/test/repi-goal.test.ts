@@ -348,6 +348,42 @@ describe("REPI built-in goal mode", () => {
 		expect(harness.notifications.map((item) => item.message).join("\n")).toContain("Next: /goal edit");
 	});
 
+	it("edits objectives and token budgets in print/RPC/json without blocking UI or losing footer state", async () => {
+		for (const mode of ["print", "rpc", "json"] as const) {
+			const harness = createHarness();
+			harness.ctx.hasUI = false;
+			harness.ctx.mode = mode;
+			harness.ctx.ui.confirm = vi.fn(async () => false);
+
+			await harness.commands.get("goal").handler("--tokens 1k original objective", harness.ctx);
+			harness.entries.push({
+				type: "message",
+				message: { role: "assistant", usage: { input: 400, output: 100 } },
+			});
+			await harness.commands.get("goal").handler("edit --tokens 2k edited objective", harness.ctx);
+
+			expect(harness.ctx.ui.confirm).not.toHaveBeenCalled();
+			expect(harness.statuses.get("goal")).toBe("🎯 active 500/2k");
+			expect(harness.notifications.at(-1)?.message).toBe("Goal updated: edited objective");
+			expect(harness.sent).toHaveLength(2);
+			expect(harness.sent[1].content).toContain("The active REPI /goal objective was updated.");
+			expect(harness.sent[1].content).toContain("edited objective");
+			expect(harness.sent[1].content).toContain("Token budget: 500/2k used.");
+			expect(harness.entries.at(-1)).toMatchObject({
+				type: "custom",
+				customType: REPI_GOAL_STATE_ENTRY_TYPE,
+				data: {
+					version: 1,
+					goal: { text: "edited objective", status: "active", tokenBudget: 2_000, tokensUsed: 500 },
+				},
+			});
+
+			await harness.commands.get("goal").handler("status", harness.ctx);
+			expect(harness.sent).toHaveLength(2);
+			expect(harness.notifications.at(-1)?.message).toContain("Footer: 🎯 active 500/2k");
+		}
+	});
+
 	it("stops auto-continuation at the token budget and keeps resume bounded", async () => {
 		const harness = createHarness();
 		await harness.commands.get("goal").handler("--tokens 1k budget objective", harness.ctx);
