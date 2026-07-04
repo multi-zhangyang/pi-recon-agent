@@ -475,7 +475,9 @@ const goalPrintUiOk =
 	printModeSource.includes("extension_ui_request") &&
 	printModeSource.includes("REPI_PRINT_STATUS") &&
 	releaseSmokeSource.includes("package-bin:goal-help-print") &&
-	releaseSmokeSource.includes("package-bin:goal-help-json");
+	releaseSmokeSource.includes("package-bin:goal-help-json") &&
+	releaseSmokeSource.includes("package-bin:goal-status-fresh-print") &&
+	releaseSmokeSource.includes("package-bin:goal-status-fresh-json");
 const goalConflictSuppressionOk =
 	resourceSource.includes("hasGoalModeSignature") &&
 	resourceSource.includes("isExternalGoalModeExtension") &&
@@ -589,7 +591,7 @@ const checks = [
 	check(
 		"goal:print-non-tui-ui-context",
 		goalPrintUiOk,
-		`printUiContext=${printModeSource.includes("createPrintExtensionUIContext")} notify=${printModeSource.includes("formatPrintNotify")} jsonUi=${printModeSource.includes("extension_ui_request")} statusOptIn=${printModeSource.includes("REPI_PRINT_STATUS")} releaseSmokePrint=${releaseSmokeSource.includes("package-bin:goal-help-print")} releaseSmokeJson=${releaseSmokeSource.includes("package-bin:goal-help-json")}`,
+		`printUiContext=${printModeSource.includes("createPrintExtensionUIContext")} notify=${printModeSource.includes("formatPrintNotify")} jsonUi=${printModeSource.includes("extension_ui_request")} statusOptIn=${printModeSource.includes("REPI_PRINT_STATUS")} releaseSmokePrint=${releaseSmokeSource.includes("package-bin:goal-help-print")} releaseSmokeJson=${releaseSmokeSource.includes("package-bin:goal-help-json")} releaseSmokeFreshPrint=${releaseSmokeSource.includes("package-bin:goal-status-fresh-print")} releaseSmokeFreshJson=${releaseSmokeSource.includes("package-bin:goal-status-fresh-json")}`,
 		"keep /goal help/status visible in print/json non-TUI mode and covered by release tarball smoke",
 	),
 	check(

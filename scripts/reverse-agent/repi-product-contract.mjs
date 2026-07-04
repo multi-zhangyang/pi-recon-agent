@@ -123,6 +123,8 @@ rows.push(
 				"package-bin:fresh-list-models",
 				"package-bin:goal-help-print",
 				"package-bin:goal-help-json",
+				"package-bin:goal-status-fresh-print",
+				"package-bin:goal-status-fresh-json",
 				"package-bin:env-incomplete-guard",
 				"package-bin:model-status-env",
 				"REPI_* environment",
@@ -1204,6 +1206,11 @@ rows.push(
 			includesAll(printModeTests, [
 				"prints extension notifications in text mode so slash-command help is visible without a TUI",
 				"emits extension UI requests in json print mode for headless clients",
+			]) &&
+			includesAll(read("scripts/reverse-agent/repi-release-tarball-smoke.mjs"), [
+				"package-bin:goal-status-fresh-print",
+				"package-bin:goal-status-fresh-json",
+				"No goal is currently set.",
 			]),
 		"/goal has explicit print/json/RPC/fresh-profile coverage plus an RPC wire test for status/footer events",
 		"Keep /goal usable outside TUI: no blocking confirm dialogs, follow-up queuing when busy, fresh profile silence, print-visible help, and RPC/JSON-visible status events.",

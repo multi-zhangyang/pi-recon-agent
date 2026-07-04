@@ -123,6 +123,7 @@ try {
 	rows.push(run("package-bin:path-command", "repi", ["--version"], { cwd: installDir, env: { PATH: `${dirname(repiBin)}:${process.env.PATH ?? ""}` }, expectOutput: [rootPackageJson.version] }));
 	rows.push(run("package-bin:fresh-list-models", repiBin, ["--offline", "--list-models"], { cwd: installDir, env: { REPI_CODING_AGENT_DIR: freshAgentDir, REPI_LOAD_BUILTIN_MODELS: "0" }, expectOutput: ["No models available"], rejectOutput: ["kimchi", "aigateway"] }));
 	rows.push(run("package-bin:goal-help-print", repiBin, ["--offline", "-p", "/goal help"], { cwd: installDir, env: { REPI_CODING_AGENT_DIR: join(outDir, "goal-help-agent"), REPI_LOAD_BUILTIN_MODELS: "0", REPI_PRINT_PROGRESS: "0" }, expectOutput: ["REPI /goal runs a task until verified completion.", "Completion:"], rejectOutput: ["kimchi", "aigateway"] }));
+	rows.push(run("package-bin:goal-status-fresh-print", repiBin, ["--offline", "-p", "/goal status"], { cwd: installDir, env: { REPI_CODING_AGENT_DIR: join(outDir, "goal-status-agent"), REPI_LOAD_BUILTIN_MODELS: "0", REPI_PRINT_PROGRESS: "0", REPI_PRINT_STATUS: "1" }, expectOutput: ["Usage: /goal <objective>", "No goal is currently set.", "[repi:status] goal=<clear>"], rejectOutput: ["kimchi", "aigateway"] }));
 	rows.push(
 		run("package-bin:goal-help-json", repiBin, ["--offline", "--mode", "json", "-p", "/goal help"], {
 			cwd: installDir,
@@ -131,6 +132,7 @@ try {
 			rejectOutput: ["kimchi", "aigateway"],
 		}),
 	);
+	rows.push(run("package-bin:goal-status-fresh-json", repiBin, ["--offline", "--mode", "json", "-p", "/goal status"], { cwd: installDir, env: { REPI_CODING_AGENT_DIR: join(outDir, "goal-status-json-agent"), REPI_LOAD_BUILTIN_MODELS: "0", REPI_PRINT_PROGRESS: "0" }, expectOutput: ['"type":"extension_ui_request"', '"method":"notify"', "No goal is currently set.", '"statusKey":"goal"'], rejectOutput: ["kimchi", "aigateway"] }));
 	rows.push(run("package-bin:env-incomplete-guard", repiBin, ["--offline", "--list-models"], { cwd: installDir, env: { REPI_CODING_AGENT_DIR: join(outDir, "bad-env-agent"), REPI_LOAD_BUILTIN_MODELS: "0", REPI_MODEL: "release-smoke-env-model", REPI_MODEL_API: "openai-compatible" }, expectExit: 2, expectOutput: ["REPI env model config is incomplete", "missing: REPI_BASE_URL"], rejectOutput: ["kimchi", "aigateway"] }));
 	rows.push(run("package-bin:env-model", repiBin, ["--offline", "--list-models"], { cwd: installDir, env: { ...envModel, REPI_CODING_AGENT_DIR: envAgentDir }, expectOutput: ["repi-env", "release-smoke-env-model", "262.1K"], rejectOutput: ["kimchi", "aigateway"] }));
 	rows.push(run("package-bin:model-status-env", repiBin, ["model", "status", "--json"], { cwd: installDir, env: { ...envModel, REPI_CODING_AGENT_DIR: join(outDir, "model-status-agent") }, expectOutput: ['"source": "REPI_* environment"', '"provider": "repi-env"', '"model": "release-smoke-env-model"'], rejectOutput: ["https://release-smoke.invalid"] }));
