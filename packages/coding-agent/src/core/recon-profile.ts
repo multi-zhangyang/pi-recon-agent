@@ -13298,6 +13298,7 @@ function buildAttackGraph(): AttackGraphArtifact {
 	const map = latestPassiveMapContext();
 	const runtimeAdapterArtifacts = recentRuntimeAdapterExecutionArtifacts();
 	const proofLoopArtifacts = recentProofLoopArtifacts();
+	const swarmArtifacts = recentSwarmArtifactsForGraph();
 	const nodes = new Map<string, AttackGraphNode>();
 	const edges: AttackGraphEdge[] = [];
 	const taskTree: AttackGraphTaskTreeNode[] = [];
@@ -13921,6 +13922,109 @@ function buildAttackGraph(): AttackGraphArtifact {
 		if (proof.verdict !== "ready") gaps.push(`proof loop verdict ${proof.verdict}: ${path}`);
 	}
 
+	for (const { path, swarm } of swarmArtifacts) {
+		sourceArtifacts.push(
+			path,
+			...swarm.sourceArtifacts.filter((artifactPath) => existsSync(artifactPath)).slice(0, 8),
+			...[swarm.workerRetryHandoffClosurePath, swarm.workerRetryHandoffMergeSummaryPath]
+				.filter((artifactPath): artifactPath is string => Boolean(artifactPath && existsSync(artifactPath)))
+				.slice(0, 2),
+		);
+		const swarmBase = artifactBasename(path);
+		const swarmId = `swarm:${slug(swarmBase)}`;
+		const workerClosures = swarm.workerRetryHandoffMergeSummary?.workerClosures ?? [];
+		addNode({
+			id: swarmId,
+			kind: "verification",
+			label: `re_swarm ${swarm.mode}`,
+			status: `workers=${swarm.workers.length} closures=${workerClosures.length} retry=${swarm.workerRetryHandoffMergeSummaryStatus ?? "missing"}`,
+			path,
+			note: `target=${swarm.target ?? "<none>"} retry_queue=${swarm.retryQueue.length} blocked=${swarm.blocked.length}`,
+		});
+		addTask({
+			id: swarmId,
+			parentId: swarm.missionId ? `mission:${swarm.missionId}` : mission ? `mission:${mission.id}` : undefined,
+			kind: "verification",
+			label: `re_swarm ${swarm.mode}`,
+			status: `workers=${swarm.workers.length} closures=${workerClosures.length}`,
+			path,
+			evidence: [
+				`retry_handoff_closure=${swarm.workerRetryHandoffClosureStatus ?? "missing"}`,
+				`retry_handoff_merge_summary=${swarm.workerRetryHandoffMergeSummaryStatus ?? "missing"}`,
+				`retry_budget_visible=${swarm.workerRetryHandoffMergeSummary?.assertions.retryBudgetVisible ? "pass" : "fail"}`,
+				`source_artifacts_preserved=${swarm.workerRetryHandoffMergeSummary?.assertions.sourceArtifactsPreserved ? "pass" : "fail"}`,
+				`next_actions=${swarm.workerRetryHandoffMergeSummary?.nextActions.length ?? 0}`,
+			],
+		});
+		if (mission) addEdge({ from: `mission:${mission.id}`, to: swarmId, kind: "verifies", label: "swarm-worker-closure" });
+		for (const [index, closure] of workerClosures.slice(0, 18).entries()) {
+			const closureId = `verify:swarm-worker-closure:${slug(swarmBase)}:${slug(closure.workerId)}:${index + 1}`;
+			const nextId = `command:swarm-worker-closure:${slug(swarmBase)}:${slug(closure.workerId)}:${index + 1}`;
+			const closing =
+				closure.closure === "passed" || closure.closure === "handoff_recovered" || closure.closure === "exhausted_escalated";
+			addNode({
+				id: closureId,
+				kind: "verification",
+				label: `worker_retry_handoff_closure ${closure.workerId}`,
+				status: closure.closure,
+				path,
+				note: closure.summary,
+			});
+			addTask({
+				id: closureId,
+				parentId: swarmId,
+				kind: "verification",
+				label: `worker_retry_handoff_closure ${closure.workerId}`,
+				status: closure.closure,
+				command: closure.nextAction,
+				path,
+				evidence: [
+					closure.summary,
+					`attempt=${closure.attempt}/${closure.maxAttempts}`,
+					`retry_remaining=${closure.retryRemaining}`,
+					`timed_out=${closure.timedOut}`,
+					`next=${closure.nextAction}`,
+					...closure.evidenceRefs.slice(0, 5),
+				],
+			});
+			addNode({
+				id: nextId,
+				kind: "command",
+				label: truncateMiddle(closure.nextAction, 160),
+				status: "worker-closure-next",
+				note: `worker=${closure.workerId} closure=${closure.closure}`,
+			});
+			addTask({
+				id: nextId,
+				parentId: closureId,
+				kind: "command",
+				label: truncateMiddle(closure.nextAction, 180),
+				status: "worker-closure-next",
+				command: closure.nextAction,
+				evidence: closure.evidenceRefs.slice(0, 4),
+			});
+			addEdge({
+				from: closureId,
+				to: swarmId,
+				kind: closing ? "verifies" : "blocks",
+				label: "worker-retry-handoff-closure",
+			});
+			addEdge({ from: swarmId, to: nextId, kind: "suggests", label: "worker-closure-next" });
+			addEdge({ from: nextId, to: closureId, kind: "supports", label: "closure-action" });
+			if (!closing) {
+				gaps.push(
+					`swarm worker closure ${closure.closure}: worker=${closure.workerId} retry_state=${closure.retryState} next=${closure.nextAction}`,
+				);
+			}
+		}
+		for (const error of [
+			...(swarm.workerRetryHandoffClosureErrors ?? []),
+			...(swarm.workerRetryHandoffMergeSummaryErrors ?? []),
+		].slice(0, 10)) {
+			gaps.push(`swarm retry handoff error: ${error}`);
+		}
+	}
+
 	for (const node of evidenceLedgerGraphNodes()) {
 		addNode(node);
 		if (mission)
@@ -14119,7 +14223,10 @@ function buildAttackGraph(): AttackGraphArtifact {
 		timestamp,
 		missionId: mission?.id,
 		route: mission?.route.domain,
-		target: map?.target ?? runtimeAdapterArtifacts.find((item) => item.artifact.target)?.artifact.target,
+		target:
+			map?.target ??
+			runtimeAdapterArtifacts.find((item) => item.artifact.target)?.artifact.target ??
+			swarmArtifacts.find((item) => item.swarm.target)?.swarm.target,
 		nodes: [...nodes.values()],
 		edges,
 		taskTree: prioritizeAttackGraphTaskTree(taskTree, 160),
@@ -16426,6 +16533,15 @@ function parseSwarmArtifact(path: string): SwarmArtifact | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+function recentSwarmArtifactsForGraph(limit = 4): Array<{ path: string; swarm: SwarmArtifact }> {
+	return recentMarkdownArtifacts(evidenceSwarmsDir(), limit)
+		.map((path) => {
+			const swarm = parseSwarmArtifact(path);
+			return swarm ? { path, swarm } : undefined;
+		})
+		.filter((item): item is { path: string; swarm: SwarmArtifact } => Boolean(item));
 }
 
 function splitRetryNextCommands(next: string): string[] {

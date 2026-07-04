@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createRegisteredReconHarness } from "./recon-profile-harness.ts";
@@ -15,6 +15,12 @@ describe("REPI kernel profile swarm flows", () => {
 
 		try {
 			const swarmTool = harness.tools.get("re_swarm") as {
+				execute: (
+					toolCallId: string,
+					params: Record<string, unknown>,
+				) => Promise<{ content: Array<{ text: string }> }>;
+			};
+			const graphTool = harness.tools.get("re_graph") as {
 				execute: (
 					toolCallId: string,
 					params: Record<string, unknown>,
@@ -39,6 +45,15 @@ describe("REPI kernel profile swarm flows", () => {
 			expect(swarm.content[0]?.text).toContain("worker_closures=3");
 			expect(swarm.content[0]?.text).toContain("closure=worker=");
 			expect(swarm.content[0]?.text).toContain("closure=passed");
+
+			const graph = await graphTool.execute("tool-call-id", { action: "build" });
+			const graphPath = /graph_artifact: (.+)/.exec(graph.content[0]?.text ?? "")?.[1]?.trim();
+			expect(graphPath).toBeDefined();
+			const graphText = readFileSync(graphPath!, "utf-8");
+			expect(graphText).toContain("swarm-worker-closure");
+			expect(graphText).toContain("worker_retry_handoff_closure");
+			expect(graphText).toContain("worker-closure-next");
+			expect(graphText).toContain("retry_budget_visible=pass");
 		} finally {
 			harness.restore();
 			if (previousTimeout === undefined) delete process.env.REPI_SWARM_WORKER_TIMEOUT_MS;
