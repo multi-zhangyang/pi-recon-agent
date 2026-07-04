@@ -170,6 +170,7 @@ REPI_INSTALL_EMBEDDED=1 bash "$ROOT/scripts/reverse-agent/install-repi.sh" --roo
 echo "INFO: Verifying offline startup"
 "$ROOT/repi" --offline --help >/dev/null 2>&1
 "$ROOT/repi" --offline --list-models >/dev/null 2>&1
+print_done_bar
 
 # --- PATH hint ------------------------------------------------------------
 BIN_DIR=""

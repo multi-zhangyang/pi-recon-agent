@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	buildWorkerRetryHandoffClosureRowsV1,
 	buildWorkerRetryHandoffMergeSummaryV1,
 	type RepiSwarmClaimLedgerEventV1,
 	type RepiWorkerChildSessionRuntimeBatchV1,
@@ -469,6 +470,15 @@ describe("REPI worker runtime pure contracts", () => {
 		const passSummary = buildWorkerRetryHandoffMergeSummaryV1(validRetryHandoffClosure());
 		expect(passSummary.status).toBe("pass");
 		expect(passSummary.nextActions).toContain("re_swarm merge && re_supervisor review");
+		expect(passSummary.workerClosures[0]).toMatchObject({
+			workerId: "w1",
+			closure: "passed",
+			attempt: 1,
+			maxAttempts: 3,
+			retryRemaining: 2,
+		});
+		expect(passSummary.workerClosures[0]?.summary).toContain("attempt=1/3");
+		expect(passSummary.workerClosures[0]?.evidenceRefs).toContain("/tmp/repi/w1/runtime-manifest.json");
 		expect(verifyWorkerRetryHandoffMergeSummaryV1(passSummary)).toEqual({
 			ok: true,
 			errors: [],
@@ -544,9 +554,38 @@ describe("REPI worker runtime pure contracts", () => {
 		const exhaustedSummary = buildWorkerRetryHandoffMergeSummaryV1(exhaustedClosure);
 		expect(exhaustedSummary.status).toBe("pass");
 		expect(exhaustedSummary.exhaustedEscalatedWorkers).toContain("w1");
+		expect(exhaustedSummary.workerClosures[0]).toMatchObject({
+			workerId: "w1",
+			closure: "exhausted_escalated",
+			retryRemaining: 0,
+		});
 		expect(exhaustedSummary.nextActions).toEqual(
 			expect.arrayContaining(["re_autofix plan worker=w1 && re_supervisor repair"]),
 		);
+
+		const timeoutRecoveredClosure = validRetryHandoffClosure({
+			workers: [
+				{
+					...validRetryHandoffClosure().workers[0],
+					status: "timeout",
+					timedOut: true,
+					cancelledAt: "2026-07-03T00:00:01.250Z",
+					retryState: "handoff_recovered",
+				},
+			],
+			merge: { ...validRetryHandoffClosure().merge, recoveredWorkers: ["w1"] },
+		});
+		const timeoutRows = buildWorkerRetryHandoffClosureRowsV1(timeoutRecoveredClosure);
+		expect(timeoutRows[0]).toMatchObject({
+			workerId: "w1",
+			closure: "handoff_recovered",
+			timedOut: true,
+			cancelledAt: "2026-07-03T00:00:01.250Z",
+		});
+		expect(timeoutRows[0]?.nextAction).toBe("re_swarm merge worker=w1 && re_supervisor review");
+		expect(
+			verifyWorkerRetryHandoffMergeSummaryV1(buildWorkerRetryHandoffMergeSummaryV1(timeoutRecoveredClosure)).ok,
+		).toBe(true);
 
 		const fakePass = {
 			...blockedSummary,
@@ -557,6 +596,19 @@ describe("REPI worker runtime pure contracts", () => {
 			expect.arrayContaining([
 				"retry_handoff_merge_summary_fake_pass_unresolved_workers",
 				"retry_handoff_merge_summary_pass_with_blockers",
+			]),
+		);
+
+		expect(
+			verifyWorkerRetryHandoffMergeSummaryV1({
+				...passSummary,
+				workerClosures: [],
+				sourceArtifacts: [],
+			}).errors,
+		).toEqual(
+			expect.arrayContaining([
+				"retry_handoff_merge_summary_worker_closures_missing",
+				"retry_handoff_merge_summary_source_artifacts_missing",
 			]),
 		);
 	});

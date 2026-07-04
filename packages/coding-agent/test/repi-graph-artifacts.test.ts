@@ -2,7 +2,11 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseProofLoopArtifact, runtimeAdapterParserSummaryForGraph } from "../src/core/repi/graph-artifacts.ts";
+import {
+	parseProofLoopArtifact,
+	runtimeAdapterMitigationEvidenceForGraph,
+	runtimeAdapterParserSummaryForGraph,
+} from "../src/core/repi/graph-artifacts.ts";
 
 describe("REPI graph artifact readers", () => {
 	let tempDir: string;
@@ -101,5 +105,73 @@ describe("REPI graph artifact readers", () => {
 		expect(summary.matchCount).toBe(1);
 		expect(summary.matchedProofExitSignals).toEqual(["request order proof"]);
 		expect(summary.missingProofExitSignals).toEqual(["crypto request fields"]);
+	});
+
+	it("extracts binary mitigation map evidence without relying on synthetic proof markers", () => {
+		const evidence = runtimeAdapterMitigationEvidenceForGraph({
+			kind: "RuntimeAdapterExecutionArtifactV1",
+			schemaVersion: 1,
+			adapterId: "gdb-native-trace-adapter",
+			domainId: "rev-native",
+			bridgeId: "tool-bridge-runtime",
+			startedAt: new Date(0).toISOString(),
+			finishedAt: new Date(0).toISOString(),
+			selectedRunner: "fallback",
+			command: "re_runtime_adapter run gdb-native-trace-adapter ./vuln",
+			exitCode: 0,
+			killed: false,
+			stdoutSha256: "a".repeat(64),
+			stderrSha256: "b".repeat(64),
+			stdoutHead: "[native-mitigation] pie=yes nx=enabled relro=partial canary=no fortify=no type=DYN\n",
+			artifactKinds: ["binary-mitigation-map", "runtime-adapter-transcript"],
+			ingestTargets: ["evidence-ledger"],
+			proofExitSignals: ["debugger runtime trace", "binary mitigation map"],
+			parserSignals: [
+				{
+					ruleId: "parser-native-mitigation-map",
+					evidenceRank: "runtime_artifact",
+					proofExitSignal: "binary mitigation map",
+					matches: ["[native-mitigation]", "PIE"],
+				},
+			],
+		});
+
+		expect(evidence?.status).toBe("matched");
+		expect(evidence?.evidence).toContain("[native-mitigation]");
+		expect(evidence?.evidence.join("\n")).toContain("pie=yes");
+		expect(evidence?.missing).toEqual([]);
+	});
+
+	it("turns declared-but-unmatched mitigation maps into explicit graph gaps", () => {
+		const evidence = runtimeAdapterMitigationEvidenceForGraph({
+			kind: "RuntimeAdapterExecutionArtifactV1",
+			schemaVersion: 1,
+			adapterId: "pwn-exploit-harness-adapter",
+			domainId: "pwn",
+			bridgeId: "exploit-verifier-runtime",
+			startedAt: new Date(0).toISOString(),
+			finishedAt: new Date(0).toISOString(),
+			selectedRunner: "fallback",
+			command: "re_runtime_adapter run pwn-exploit-harness-adapter ./vuln",
+			exitCode: 0,
+			killed: false,
+			stdoutSha256: "a".repeat(64),
+			stderrSha256: "b".repeat(64),
+			artifactKinds: ["binary-mitigation-map", "runtime-adapter-transcript"],
+			ingestTargets: ["evidence-ledger"],
+			proofExitSignals: ["binary mitigation map"],
+			parserSignals: [
+				{
+					ruleId: "parser-pwn-mitigation-map",
+					evidenceRank: "runtime_artifact",
+					proofExitSignal: "binary mitigation map",
+					matches: [],
+				},
+			],
+		});
+
+		expect(evidence?.status).toBe("missing-proof");
+		expect(evidence?.matched).toBe(false);
+		expect(evidence?.missing).toEqual(["binary mitigation map"]);
 	});
 });

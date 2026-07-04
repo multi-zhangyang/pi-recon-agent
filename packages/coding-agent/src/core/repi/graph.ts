@@ -135,6 +135,12 @@ function taskTreeRetentionScore(node: AttackGraphTaskTreeNode): number {
 	if (/blocked|missing|failed|failure|killed|no-match|counter|refut|contradict|gap/i.test(text)) score += 240;
 	if (/sha256|hash|runtime-output|proof-loop-output|parser_signal_summary|proof_exit|missing_proof/i.test(text))
 		score += 160;
+	if (
+		/binary[- ]mitigation|native-mitigation|pwn-mitigation|GNU_STACK|GNU_RELRO|BIND_NOW|RELRO|NX|PIE|canary|fortify/i.test(
+			text,
+		)
+	)
+		score += 180;
 	if (/quick_path|re_proof_loop|re_verifier|re_compiler|re_replayer|re_autofix/i.test(text)) score += 90;
 	if (node.path) score += 50;
 	if (node.command) score += 40;

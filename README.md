@@ -69,6 +69,7 @@ INFO: Downloading REPI source into ~/.repi-src
 INFO: Installing REPI launcher
 ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 100%
 INFO: Verifying offline startup
+■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 100%
 
 Successfully added repi to $PATH in ~/.bashrc
 

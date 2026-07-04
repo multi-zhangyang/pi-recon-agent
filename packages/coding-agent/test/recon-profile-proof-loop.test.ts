@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createRegisteredReconHarness } from "./recon-profile-harness.ts";
@@ -86,6 +86,93 @@ describe("REPI kernel profile proof-loop flow", () => {
 			expect(graphText).toContain("re_runtime_adapter run web-cdp-network-adapter https://target.local/app");
 			expect(graphText).toContain("runtime-adapter-lineage");
 			expect(graphText).toContain("runtime-adapter-artifact");
+		} finally {
+			harness.restore();
+		}
+	});
+
+	it("promotes attack-graph binary mitigation maps into the proof spine", async () => {
+		const harness = createRegisteredReconHarness("repi-profile-proof-loop-mitigation");
+		try {
+			const proofLoopTool = harness.tools.get("re_proof_loop") as {
+				execute: (
+					toolCallId: string,
+					params: Record<string, unknown>,
+				) => Promise<{ content: Array<{ text: string }> }>;
+			};
+			const graphTool = harness.tools.get("re_graph") as {
+				execute: (
+					toolCallId: string,
+					params: Record<string, unknown>,
+				) => Promise<{ content: Array<{ text: string }> }>;
+			};
+			const runtimeAdapterDir = join(
+				harness.agentDir,
+				"recon",
+				"evidence",
+				"toolchain",
+				"runtime-adapters",
+				"gdb-native-trace-adapter",
+			);
+			mkdirSync(runtimeAdapterDir, { recursive: true });
+			writeFileSync(
+				join(runtimeAdapterDir, "2026-01-01T00-00-00-000Z.json"),
+				`${JSON.stringify(
+					{
+						kind: "RuntimeAdapterExecutionArtifactV1",
+						schemaVersion: 1,
+						adapterId: "gdb-native-trace-adapter",
+						domainId: "rev-native",
+						bridgeId: "tool-bridge-runtime",
+						target: "./vuln",
+						startedAt: new Date(0).toISOString(),
+						finishedAt: new Date(0).toISOString(),
+						selectedRunner: "fallback",
+						command: "re_runtime_adapter run gdb-native-trace-adapter ./vuln",
+						exitCode: 0,
+						killed: false,
+						stdoutSha256: "a".repeat(64),
+						stderrSha256: "b".repeat(64),
+						stdoutHead: "[native-mitigation] pie=yes nx=enabled relro=partial canary=no fortify=no type=DYN\n",
+						stderrHead: "",
+						parserSignals: [
+							{
+								ruleId: "parser-native-mitigation-map",
+								evidenceRank: "runtime_artifact",
+								proofExitSignal: "binary mitigation map",
+								matches: ["[native-mitigation]", "PIE", "NX", "RELRO"],
+							},
+						],
+						parserSignalSummary: {
+							matchedRules: 1,
+							totalRules: 1,
+							matchCount: 4,
+							evidenceRanks: ["runtime_artifact"],
+							matchedProofExitSignals: ["binary mitigation map"],
+							missingProofExitSignals: [],
+						},
+						artifactKinds: ["native-symbol-map", "binary-mitigation-map", "runtime-adapter-transcript"],
+						ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
+						proofExitSignals: ["binary mitigation map"],
+					},
+					null,
+					2,
+				)}\n`,
+				"utf-8",
+			);
+
+			await graphTool.execute("tool-call-id", { action: "build" });
+			const proof = await proofLoopTool.execute("tool-call-id", {
+				action: "plan",
+				target: "./vuln",
+			});
+			const text = proof.content[0]?.text ?? "";
+			expect(text).toContain("class=proof_spine_seed");
+			expect(text).toContain("binary mitigation map matched");
+			expect(text).toContain("phase=2:proof_spine");
+			expect(text).toContain("re_verifier matrix ./vuln");
+			expect(text).toContain("re_compiler draft ./vuln");
+			expect(text).toContain("re_replayer run ./vuln 1");
 		} finally {
 			harness.restore();
 		}

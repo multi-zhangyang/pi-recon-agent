@@ -21,6 +21,16 @@ export type RuntimeAdapterExecutionGraphArtifact = RuntimeAdapterExecutionArtifa
 export type RuntimeAdapterGraphParserSummary = RuntimeAdapterParserSignalSummaryV1;
 type RuntimeAdapterGraphEvidenceRank = RuntimeAdapterParserRuleV1["evidenceRank"];
 
+export type RuntimeAdapterMitigationGraphEvidence = {
+	kind: "binary-mitigation-map";
+	expected: boolean;
+	matched: boolean;
+	status: "matched" | "declared" | "missing-proof";
+	proofExitSignal: "binary mitigation map";
+	evidence: string[];
+	missing: string[];
+};
+
 export type RepiProofLoopGraphStep = {
 	id: string;
 	phase: string;
@@ -121,6 +131,59 @@ export function runtimeAdapterParserSummaryForGraph(
 		evidenceRanks,
 		matchedProofExitSignals,
 		missingProofExitSignals,
+	};
+}
+
+const BINARY_MITIGATION_PROOF_SIGNAL = "binary mitigation map";
+const MITIGATION_LINE_PATTERN =
+	/\[(?:native|pwn)-mitigation\]|binary[- ]mitigation|GNU_STACK|GNU_RELRO|BIND_NOW|RELRO|NX|PIE|canary|fortify/i;
+
+function uniqueStrings(values: string[]): string[] {
+	return Array.from(new Set(values.filter((item) => item.trim().length > 0)));
+}
+
+function mitigationStreamLines(artifact: RuntimeAdapterExecutionGraphArtifact): string[] {
+	return uniqueStrings(
+		[artifact.stdoutHead ?? "", artifact.stderrHead ?? ""]
+			.join("\n")
+			.split(/\r?\n/)
+			.map((line) => line.trim())
+			.filter((line) => MITIGATION_LINE_PATTERN.test(line))
+			.slice(0, 12),
+	);
+}
+
+export function runtimeAdapterMitigationEvidenceForGraph(
+	artifact: RuntimeAdapterExecutionGraphArtifact,
+): RuntimeAdapterMitigationGraphEvidence | undefined {
+	const proofSignals = artifact.proofExitSignals ?? [];
+	const artifactKinds = artifact.artifactKinds ?? [];
+	const expected =
+		artifactKinds.includes("binary-mitigation-map") ||
+		proofSignals.some((signal) => signal.toLowerCase() === BINARY_MITIGATION_PROOF_SIGNAL);
+	const mitigationSignals = artifact.parserSignals.filter(
+		(signal) =>
+			signal.proofExitSignal.toLowerCase() === BINARY_MITIGATION_PROOF_SIGNAL || /mitigation/i.test(signal.ruleId),
+	);
+	const matchedParserEvidence = mitigationSignals.flatMap((signal) => signal.matches ?? []);
+	const streamEvidence = mitigationStreamLines(artifact);
+	const evidence = uniqueStrings([
+		...matchedParserEvidence,
+		...streamEvidence,
+		artifactKinds.includes("binary-mitigation-map") ? "artifact_kind=binary-mitigation-map" : "",
+		proofSignals.includes(BINARY_MITIGATION_PROOF_SIGNAL) ? `proof_exit=${BINARY_MITIGATION_PROOF_SIGNAL}` : "",
+	]).slice(0, 16);
+	const matched = matchedParserEvidence.length > 0 || streamEvidence.length > 0;
+	if (!expected && !matched) return undefined;
+	const missing = expected && !matched ? [BINARY_MITIGATION_PROOF_SIGNAL] : [];
+	return {
+		kind: "binary-mitigation-map",
+		expected,
+		matched,
+		status: matched ? "matched" : expected ? "missing-proof" : "declared",
+		proofExitSignal: BINARY_MITIGATION_PROOF_SIGNAL,
+		evidence,
+		missing,
 	};
 }
 

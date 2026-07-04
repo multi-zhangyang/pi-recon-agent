@@ -45,6 +45,13 @@ describe("REPI proof-loop pure planner", () => {
 				}),
 			).klass,
 		).toBe("runtime_adapter_gap");
+		expect(
+			classifyRepiProofLoopGap(
+				gap("attack_graph proof_spine_seed: binary mitigation map matched: gdb-native-trace-adapter", {
+					source: "attack_graph",
+				}),
+			).klass,
+		).toBe("proof_spine_seed");
 		expect(classifyRepiProofLoopGap(gap("weak=2 missing=1 low confidence transcript")).klass).toBe("weak_evidence");
 	});
 
@@ -86,6 +93,34 @@ describe("REPI proof-loop pure planner", () => {
 			"re_autofix plan https://target.local/app",
 			"re_proof_loop run https://target.local/app 4 2",
 		]);
+	});
+
+	it("turns attack-graph mitigation proof seeds into a direct proof spine", () => {
+		const plan = repiProofLoopQuickPlanFromItems(
+			[
+				gap(
+					"attack_graph proof_spine_seed: binary mitigation map matched: gdb-native-trace-adapter: [native-mitigation] pie=yes nx=enabled relro=partial",
+					{
+						source: "attack_graph",
+						worker: "pwn-exploit",
+						sourceArtifacts: ["/tmp/repi/runtime.json"],
+					},
+				),
+			],
+			"./vuln",
+		);
+		expect(plan.classOrder.map((row) => row.klass)).toEqual(["proof_spine_seed"]);
+		expect(plan.commands).toEqual([
+			"re_graph build",
+			"re_verifier matrix ./vuln",
+			"re_compiler draft ./vuln",
+			"re_replayer run ./vuln 1",
+			"re_proof_loop run ./vuln 4 2",
+		]);
+		expect(plan.phases.map((phase) => phase.phase)).toEqual(["attack_graph_refresh", "proof_spine", "final_loop"]);
+		expect(plan.phases.find((phase) => phase.phase === "proof_spine")?.evidenceRefs).toContain(
+			"/tmp/repi/runtime.json",
+		);
 	});
 
 	it("explains and asserts runtime-adapter plus replay-failure closure order", () => {

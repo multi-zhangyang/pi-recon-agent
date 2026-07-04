@@ -152,6 +152,61 @@ describe("REPI kernel profile runtime adapter and evidence graph flows", () => {
 		expect(webRun.content[0]?.text).toContain("parser_signal_summary:");
 		expect(webRun.content[0]?.text).toContain("request order proof");
 
+		const nativeAdapterDir = join(
+			agentDir,
+			"recon",
+			"evidence",
+			"toolchain",
+			"runtime-adapters",
+			"gdb-native-trace-adapter",
+		);
+		mkdirSync(nativeAdapterDir, { recursive: true });
+		writeFileSync(
+			join(nativeAdapterDir, "2026-01-01T00-00-00-000Z.json"),
+			`${JSON.stringify(
+				{
+					kind: "RuntimeAdapterExecutionArtifactV1",
+					schemaVersion: 1,
+					adapterId: "gdb-native-trace-adapter",
+					domainId: "rev-native",
+					bridgeId: "tool-bridge-runtime",
+					target: "./vuln",
+					startedAt: new Date(0).toISOString(),
+					finishedAt: new Date(0).toISOString(),
+					selectedRunner: "fallback",
+					command: "re_runtime_adapter run gdb-native-trace-adapter ./vuln",
+					exitCode: 0,
+					killed: false,
+					stdoutSha256: "a".repeat(64),
+					stderrSha256: "b".repeat(64),
+					stdoutHead: "[native-mitigation] pie=yes nx=enabled relro=partial canary=no fortify=no type=DYN\n",
+					stderrHead: "",
+					parserSignals: [
+						{
+							ruleId: "parser-native-mitigation-map",
+							evidenceRank: "runtime_artifact",
+							proofExitSignal: "binary mitigation map",
+							matches: ["[native-mitigation]", "PIE", "RELRO"],
+						},
+					],
+					parserSignalSummary: {
+						matchedRules: 1,
+						totalRules: 1,
+						matchCount: 3,
+						evidenceRanks: ["runtime_artifact"],
+						matchedProofExitSignals: ["binary mitigation map"],
+						missingProofExitSignals: [],
+					},
+					artifactKinds: ["native-symbol-map", "binary-mitigation-map", "runtime-adapter-transcript"],
+					ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
+					proofExitSignals: ["binary mitigation map"],
+				},
+				null,
+				2,
+			)}\n`,
+			"utf-8",
+		);
+
 		const graph = await graphTool.execute("tool-call-id", { action: "build" });
 		const graphPath = /graph_artifact: (.+)/.exec(graph.content[0]?.text ?? "")?.[1]?.trim();
 		expect(graphPath).toBeDefined();
@@ -167,6 +222,9 @@ describe("REPI kernel profile runtime adapter and evidence graph flows", () => {
 		expect(graphText).toContain("[command]");
 		expect(graphText).toContain("runtime-adapter-json");
 		expect(graphText).toContain("runtime-output-hash");
+		expect(graphText).toContain("artifact:binary-mitigation-map:gdb-native-trace-adapter");
+		expect(graphText).toContain("binary mitigation map gdb-native-trace-adapter");
+		expect(graphText).toContain("pie=yes nx=enabled");
 		expect(graphText).toContain("stdout_hash");
 		expect(graphText).toContain("parser-tshark-conversation");
 		expect(graphText).toContain("parser-rootfs-passwd");

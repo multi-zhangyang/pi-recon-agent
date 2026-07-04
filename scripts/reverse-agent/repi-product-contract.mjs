@@ -246,6 +246,7 @@ rows.push(
 				"install:root-friendly-summary",
 				"path:explicit-bin-current-shell",
 				"INFO: Installing REPI launcher",
+				"INFO: Verifying offline startup",
 				"■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 100%",
 				"Successfully added repi to $PATH in ~/.bashrc",
 				"installed successfully, to start:",
@@ -1482,9 +1483,12 @@ rows.push(
 				"parseProofLoopArtifact",
 				"recentProofLoopArtifacts",
 				"recentRuntimeAdapterExecutionArtifacts",
+				"runtimeAdapterMitigationEvidenceForGraph",
 				"runtimeAdapterParserSummaryForGraph",
 			]) &&
 			includesAll(reconProfile, [
+				"artifact:binary-mitigation-map",
+				"runtime adapter missing mitigation map proof",
 				"parseEvidenceLedgerTaskRecords",
 				"runtime-adapter-json",
 				"runtime-adapter-lineage",
@@ -1520,6 +1524,7 @@ rows.push(
 		includesAll(read("packages/coding-agent/src/core/repi/proof-loop.ts"), [
 			"RepiProofLoopGapClass",
 			"runtime_adapter_gap",
+			"proof_spine_seed",
 			"classifyRepiProofLoopGap",
 			"repiProofLoopQuickPathFromItems",
 			"repiProofLoopRuntimeAdapterCommands",
@@ -1583,6 +1588,8 @@ rows.push(
 				"verifyWorkerRetryHandoffMergeSummaryV1",
 				"retryBudgetVisible",
 				"handoffEvidenceBound",
+				"workerClosures",
+				"buildWorkerRetryHandoffClosureRowsV1",
 				"sourceArtifactsPreserved",
 				"runtime:retry-handoff-merge-summary-validation",
 			]) &&

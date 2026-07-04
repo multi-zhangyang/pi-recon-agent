@@ -212,12 +212,20 @@ if [ -n "$NPM_PREFIX" ]; then
   cleanup_stale_recon_pi "$NPM_PREFIX/bin/pi"
 fi
 
+echo "INFO: Installing REPI launcher"
 REPI_LINK="$BIN_DIR/repi"
 if [ "$(absolute_path "$REPI_LINK")" != "$ROOT/repi" ]; then
   link_path "$ROOT/repi" "$REPI_LINK"
 fi
+print_done_bar
 node "$ROOT/scripts/reverse-agent/init-repi-profile.mjs" "$ROOT"
+if [ "${REPI_INSTALL_EMBEDDED:-0}" != "1" ]; then
+  echo "INFO: Verifying offline startup"
+fi
 REPI_INIT_VERBOSE=1 "$ROOT/repi" --offline --help >/dev/null 2>&1
+if [ "${REPI_INSTALL_EMBEDDED:-0}" != "1" ]; then
+  print_done_bar
+fi
 
 # If the launcher dir is not on PATH, add it to the user's shell rc files
 # idempotently so future shells have `repi` available with no manual export.
@@ -303,16 +311,9 @@ else
 fi
 REPI_VERSION="$(ROOT_PACKAGE_JSON="$ROOT/package.json" node -e 'try { console.log(require(process.env.ROOT_PACKAGE_JSON).version) } catch { console.log("unknown") }' 2>/dev/null || echo unknown)"
 if [ "${REPI_INSTALL_EMBEDDED:-0}" = "1" ]; then
-  cat <<MSG
-INFO: Installing REPI launcher
-$(print_done_bar)
-MSG
   exit 0
 fi
 cat <<MSG
-INFO: Installing REPI launcher
-$(print_done_bar)
-
 $PATH_STATUS
 
 REPI $REPI_VERSION installed successfully, to start:

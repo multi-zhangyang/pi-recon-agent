@@ -90,6 +90,7 @@ try {
 		expectOutput: [
 			"INFO: Installing REPI launcher",
 			"■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 100%",
+			"INFO: Verifying offline startup",
 			"Successfully linked repi",
 			`REPI ${expectedVersion} installed successfully, to start:`,
 			"For more information visit https://github.com/multi-zhangyang/pi-recon-agent",
@@ -140,6 +141,7 @@ try {
 		expectOutput: [
 			"INFO: Installing REPI launcher",
 			"■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 100%",
+			"INFO: Verifying offline startup",
 			"Successfully added repi to $PATH in ~/.bashrc",
 			`REPI ${expectedVersion} installed successfully, to start:`,
 			"source ~/.bashrc  # Load new PATH (or open a new terminal)",

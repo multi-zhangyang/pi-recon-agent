@@ -39,6 +39,7 @@ export type RepiProofLoopGapClass =
 	| "tool_or_dependency"
 	| "target_or_state"
 	| "runtime_adapter_gap"
+	| "proof_spine_seed"
 	| "weak_evidence"
 	| "timeout_or_flake"
 	| "compact_resume"
@@ -148,6 +149,17 @@ export function classifyRepiProofLoopGap(item: RepiProofLoopGapItem): RepiProofL
 			klass: "runtime_adapter_gap",
 			priority: 1,
 			action: "re_runtime_adapter run -> re_verifier matrix -> re_compiler draft -> re_replayer run",
+		};
+	}
+	if (
+		/proof_spine_seed|binary mitigation map|native-mitigation|pwn-mitigation|mitigation map matched|runtime proof spine/i.test(
+			text,
+		)
+	) {
+		return {
+			klass: "proof_spine_seed",
+			priority: 2,
+			action: "re_verifier matrix -> re_compiler draft -> re_replayer run",
 		};
 	}
 	if (
@@ -350,6 +362,16 @@ export function repiProofLoopQuickPlanFromItems(
 			"proof_spine",
 			"verify, compile, and replay the adapter artifacts once before patching",
 			["runtime_adapter_gap"],
+			proofSpine,
+		);
+	}
+	if (classes.has("proof_spine_seed")) {
+		const proofSpine: string[] = [];
+		appendProofSpine(proofSpine, targetRef);
+		addPhase(
+			"proof_spine",
+			"promote attack-graph proof-spine seeds through verifier/compiler/replayer",
+			["proof_spine_seed"],
 			proofSpine,
 		);
 	}

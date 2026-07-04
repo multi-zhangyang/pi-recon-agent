@@ -53,6 +53,15 @@ describe("REPI attack graph task-tree prioritization", () => {
 				status: "missing-proof-exit",
 				evidence: ["missing_proof=tls sni proof"],
 			}),
+			taskNode(225, {
+				id: "artifact:binary-mitigation-map",
+				parentId: "artifact:runtime-output",
+				kind: "artifact",
+				label: "binary mitigation map gdb-native-trace-adapter",
+				status: "matched",
+				path: "/tmp/runtime.json",
+				evidence: ["[native-mitigation] pie=yes nx=enabled relro=partial canary=no fortify=no"],
+			}),
 		];
 
 		const prioritized = prioritizeAttackGraphTaskTree(nodes, 40);
@@ -61,6 +70,7 @@ describe("REPI attack graph task-tree prioritization", () => {
 		expect(prioritized).toHaveLength(40);
 		expect(ids).toContain("mission:1");
 		expect(ids).toContain("artifact:runtime-output");
+		expect(ids).toContain("artifact:binary-mitigation-map");
 		expect(ids).toContain("verify:parser");
 		expect(ids).toContain("counter:stale-claim");
 		expect(ids).toContain("gap:missing-proof");

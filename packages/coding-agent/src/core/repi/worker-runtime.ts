@@ -178,6 +178,7 @@ export type RepiWorkerRetryHandoffMergeSummaryV1 = {
 	closureId: string;
 	poolId: string;
 	status: "pass" | "blocked";
+	workerClosures: RepiWorkerRetryHandoffClosureRowV1[];
 	retryQueuedWorkers: string[];
 	handoffRecoveredWorkers: string[];
 	exhaustedEscalatedWorkers: string[];
@@ -195,6 +196,26 @@ export type RepiWorkerRetryHandoffMergeSummaryV1 = {
 		retryBudgetVisible: boolean;
 		sourceArtifactsPreserved: boolean;
 	};
+};
+
+export type RepiWorkerRetryHandoffClosureRowV1 = {
+	workerId: string;
+	status: RepiWorkerRuntimePoolWorkerV1["status"];
+	retryState: RepiWorkerRetryHandoffClosureWorkerV1["retryState"];
+	attempt: number;
+	maxAttempts: number;
+	retryRemaining: number;
+	timedOut: boolean;
+	cancelledAt?: string;
+	closure: "passed" | "retry_queued" | "handoff_recovered" | "exhausted_escalated" | "unresolved";
+	retryQueueRefs: string[];
+	handoffRefs: string[];
+	repairRefs: string[];
+	claimRefs: string[];
+	mergeKeys: string[];
+	evidenceRefs: string[];
+	nextAction: string;
+	summary: string;
 };
 
 export type RepiWorkerLeaseSchedulerTaskV1 = {
@@ -1222,14 +1243,96 @@ export function workerRetryHandoffMergeSummaryEvidenceContract(): string[] {
 		"retry queued workers must remain retry-budget visible before supervisor merge",
 		"handoff recovered workers must keep handoff refs claim-bound and source-artifact preserved",
 		"exhausted workers must surface an explicit re_autofix/re_supervisor escalation next action",
+		"every worker must emit a workerClosures row with timeout/cancel, retry budget, handoff refs, repair refs, claim refs, and next action",
 		"unresolved workers or unresolved merge collisions must block promotion",
 		"pass status requires no unresolved workers, resolved collisions, closed failures, and preserved artifacts",
 	];
 }
 
+function workerRetryHandoffClosureState(
+	worker: RepiWorkerRetryHandoffClosureWorkerV1,
+): RepiWorkerRetryHandoffClosureRowV1["closure"] {
+	if (worker.retryState === "retry_queued") return "retry_queued";
+	if (worker.retryState === "handoff_recovered") return "handoff_recovered";
+	if (worker.retryState === "exhausted_escalated") return "exhausted_escalated";
+	if (worker.retryState === "blocked_without_closure") return "unresolved";
+	return worker.status === "failed" || worker.status === "timeout" || worker.status === "cancelled"
+		? "unresolved"
+		: "passed";
+}
+
+function workerRetryHandoffClosureNextAction(row: {
+	workerId: string;
+	closure: RepiWorkerRetryHandoffClosureRowV1["closure"];
+}): string {
+	switch (row.closure) {
+		case "retry_queued":
+			return `re_swarm retry worker=${row.workerId}`;
+		case "handoff_recovered":
+			return `re_swarm merge worker=${row.workerId} && re_supervisor review`;
+		case "exhausted_escalated":
+			return `re_autofix plan worker=${row.workerId} && re_supervisor repair`;
+		case "unresolved":
+			return `re_supervisor repair worker=${row.workerId}`;
+		default:
+			return `re_swarm merge worker=${row.workerId}`;
+	}
+}
+
+export function buildWorkerRetryHandoffClosureRowsV1(
+	report: RepiWorkerRetryHandoffClosureV1,
+): RepiWorkerRetryHandoffClosureRowV1[] {
+	return report.workers.map((worker) => {
+		const closure = workerRetryHandoffClosureState(worker);
+		const evidenceRefs = uniqueNonEmpty(
+			[
+				...worker.sourceArtifacts,
+				...worker.retryQueueRefs,
+				...worker.handoffRefs,
+				...worker.repairRefs,
+				...worker.claimRefs,
+				...worker.mergeKeys,
+			],
+			80,
+		);
+		const nextAction = workerRetryHandoffClosureNextAction({ workerId: worker.workerId, closure });
+		return {
+			workerId: worker.workerId,
+			status: worker.status,
+			retryState: worker.retryState,
+			attempt: worker.attempt,
+			maxAttempts: worker.maxAttempts,
+			retryRemaining: worker.retryRemaining,
+			timedOut: worker.timedOut,
+			cancelledAt: worker.cancelledAt,
+			closure,
+			retryQueueRefs: worker.retryQueueRefs,
+			handoffRefs: worker.handoffRefs,
+			repairRefs: worker.repairRefs,
+			claimRefs: worker.claimRefs,
+			mergeKeys: worker.mergeKeys,
+			evidenceRefs,
+			nextAction,
+			summary: [
+				`worker=${worker.workerId}`,
+				`status=${worker.status}`,
+				`retry_state=${worker.retryState}`,
+				`attempt=${worker.attempt}/${worker.maxAttempts}`,
+				`remaining=${worker.retryRemaining}`,
+				`timed_out=${worker.timedOut}`,
+				`cancelled=${worker.cancelledAt ?? "none"}`,
+				`closure=${closure}`,
+				`evidence_refs=${evidenceRefs.length}`,
+				`next=${nextAction}`,
+			].join(" "),
+		};
+	});
+}
+
 export function buildWorkerRetryHandoffMergeSummaryV1(
 	report: RepiWorkerRetryHandoffClosureV1,
 ): RepiWorkerRetryHandoffMergeSummaryV1 {
+	const workerClosures = buildWorkerRetryHandoffClosureRowsV1(report);
 	const retryQueuedWorkers = uniqueNonEmpty(
 		report.workers.filter((worker) => worker.retryState === "retry_queued").map((worker) => worker.workerId),
 		80,
@@ -1268,14 +1371,7 @@ export function buildWorkerRetryHandoffMergeSummaryV1(
 		120,
 	);
 	const sourceArtifacts = uniqueNonEmpty(
-		report.workers.flatMap((worker) => [
-			...worker.sourceArtifacts,
-			...worker.retryQueueRefs,
-			...worker.handoffRefs,
-			...worker.repairRefs,
-			...worker.claimRefs,
-			...worker.mergeKeys,
-		]),
+		workerClosures.flatMap((worker) => worker.evidenceRefs),
 		160,
 	);
 	const allWorkerRefsPreserved = report.workers.every((worker) => {
@@ -1315,9 +1411,7 @@ export function buildWorkerRetryHandoffMergeSummaryV1(
 	};
 	const nextActions = uniqueNonEmpty(
 		[
-			...retryQueuedWorkers.map((workerId) => `re_swarm retry worker=${workerId}`),
-			...handoffRecoveredWorkers.map((workerId) => `re_swarm merge worker=${workerId} && re_supervisor review`),
-			...exhaustedEscalatedWorkers.map((workerId) => `re_autofix plan worker=${workerId} && re_supervisor repair`),
+			...workerClosures.filter((worker) => worker.closure !== "passed").map((worker) => worker.nextAction),
 			...unresolvedWorkers.flatMap((workerId) => [
 				`re_supervisor repair worker=${workerId}`,
 				`re_swarm retry worker=${workerId}`,
@@ -1337,6 +1431,7 @@ export function buildWorkerRetryHandoffMergeSummaryV1(
 		closureId: report.closureId,
 		poolId: report.poolId,
 		status: Object.values(assertions).every(Boolean) ? "pass" : "blocked",
+		workerClosures,
 		retryQueuedWorkers,
 		handoffRecoveredWorkers,
 		exhaustedEscalatedWorkers,
@@ -1361,6 +1456,45 @@ export function verifyWorkerRetryHandoffMergeSummaryV1(summary: RepiWorkerRetryH
 	if (!summary.closureId) errors.push("retry_handoff_merge_summary_closure_missing");
 	if (!summary.poolId) errors.push("retry_handoff_merge_summary_pool_missing");
 	if (!summary.nextActions.length) errors.push("retry_handoff_merge_summary_next_actions_missing");
+	if (!summary.sourceArtifacts.length) errors.push("retry_handoff_merge_summary_source_artifacts_missing");
+	if (!summary.workerClosures?.length) errors.push("retry_handoff_merge_summary_worker_closures_missing");
+	const workerClosureIds = new Set<string>();
+	const sourceArtifactSet = new Set(summary.sourceArtifacts);
+	for (const row of summary.workerClosures ?? []) {
+		if (!row.workerId) errors.push("retry_handoff_merge_summary_worker_closure_id_missing");
+		if (workerClosureIds.has(row.workerId))
+			errors.push(`retry_handoff_merge_summary_worker_closure_duplicate:${row.workerId}`);
+		workerClosureIds.add(row.workerId);
+		if (row.attempt > row.maxAttempts)
+			errors.push(`retry_handoff_merge_summary_worker_closure_attempt_exceeded:${row.workerId}`);
+		if (row.retryRemaining !== Math.max(0, row.maxAttempts - row.attempt))
+			errors.push(`retry_handoff_merge_summary_worker_closure_budget_inconsistent:${row.workerId}`);
+		if (row.timedOut && !row.cancelledAt)
+			errors.push(`retry_handoff_merge_summary_timeout_without_cancel:${row.workerId}`);
+		if (!row.evidenceRefs.length)
+			errors.push(`retry_handoff_merge_summary_worker_closure_evidence_missing:${row.workerId}`);
+		for (const ref of [...row.retryQueueRefs, ...row.handoffRefs, ...row.repairRefs]) {
+			if (!row.evidenceRefs.includes(ref))
+				errors.push(`retry_handoff_merge_summary_worker_closure_ref_unbound:${row.workerId}:${ref}`);
+		}
+		if (!row.evidenceRefs.every((ref) => sourceArtifactSet.has(ref)))
+			errors.push(`retry_handoff_merge_summary_worker_closure_not_in_source_artifacts:${row.workerId}`);
+		if (row.closure === "retry_queued" && !/re_swarm retry/.test(row.nextAction))
+			errors.push(`retry_handoff_merge_summary_worker_closure_retry_action_missing:${row.workerId}`);
+		if (row.closure === "handoff_recovered" && (!row.handoffRefs.length || !/re_swarm merge/.test(row.nextAction)))
+			errors.push(`retry_handoff_merge_summary_worker_closure_handoff_action_missing:${row.workerId}`);
+		if (
+			row.closure === "exhausted_escalated" &&
+			(!row.repairRefs.length || !/re_autofix|re_supervisor/.test(row.nextAction))
+		)
+			errors.push(`retry_handoff_merge_summary_worker_closure_escalation_action_missing:${row.workerId}`);
+		if (row.closure === "unresolved" && !/re_supervisor repair/.test(row.nextAction))
+			errors.push(`retry_handoff_merge_summary_worker_closure_unresolved_action_missing:${row.workerId}`);
+		if (row.closure !== "passed" && !summary.nextActions.includes(row.nextAction))
+			errors.push(`retry_handoff_merge_summary_worker_closure_next_action_missing:${row.workerId}`);
+		if (!row.summary.includes(`worker=${row.workerId}`) || !row.summary.includes(`closure=${row.closure}`))
+			errors.push(`retry_handoff_merge_summary_worker_closure_summary_incomplete:${row.workerId}`);
+	}
 	if (summary.unresolvedWorkers.length && summary.status === "pass")
 		errors.push("retry_handoff_merge_summary_fake_pass_unresolved_workers");
 	if (summary.unresolvedCollisions.length && summary.status === "pass")
@@ -1401,6 +1535,8 @@ export function verifyWorkerRetryHandoffMergeSummaryV1(summary: RepiWorkerRetryH
 	const allAssertionsPass = Object.values(summary.assertions).every(Boolean);
 	const hasBlockers =
 		!allAssertionsPass || summary.unresolvedWorkers.length > 0 || summary.unresolvedCollisions.length > 0;
+	if (summary.status === "pass" && (summary.workerClosures ?? []).some((row) => row.closure === "unresolved"))
+		errors.push("retry_handoff_merge_summary_fake_pass_unresolved_worker_closure");
 	if (summary.status === "pass" && hasBlockers) errors.push("retry_handoff_merge_summary_pass_with_blockers");
 	if (summary.status === "blocked" && !hasBlockers) errors.push("retry_handoff_merge_summary_blocked_without_blocker");
 	if (summary.status === "pass" && !summary.nextActions.some((action) => action.includes("re_swarm merge")))

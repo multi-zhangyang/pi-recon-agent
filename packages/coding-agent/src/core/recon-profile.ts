@@ -579,6 +579,7 @@ import {
 import {
 	recentProofLoopArtifacts,
 	recentRuntimeAdapterExecutionArtifacts,
+	runtimeAdapterMitigationEvidenceForGraph,
 	runtimeAdapterParserSummaryForGraph,
 } from "./repi/graph-artifacts.ts";
 import {
@@ -13459,6 +13460,8 @@ function buildAttackGraph(): AttackGraphArtifact {
 		const parserMatchCount = artifact.parserSignals.reduce((sum, signal) => sum + signal.matches.length, 0);
 		const parserSummary = runtimeAdapterParserSummaryForGraph(artifact);
 		const parserSummaryId = `summary:runtime-adapter:${slug(artifact.adapterId)}:${slug(artifactBase)}`;
+		const mitigationEvidence = runtimeAdapterMitigationEvidenceForGraph(artifact);
+		const mitigationId = `artifact:binary-mitigation-map:${slug(artifact.adapterId)}:${slug(artifactBase)}`;
 		const targetProfile = artifact.targetProfile;
 		const targetProfileId = `target:runtime-adapter:${slug(artifact.adapterId)}:${slug(artifactBase)}`;
 
@@ -13575,6 +13578,36 @@ function buildAttackGraph(): AttackGraphArtifact {
 			addEdge({ from: outputId, to: artifactId, kind: "evidences", label: `${stream.name}_hash` });
 		}
 		if (targetProfile) addEdge({ from: targetProfileId, to: artifactId, kind: "evidences", label: "target-profile" });
+
+		if (mitigationEvidence) {
+			addNode({
+				id: mitigationId,
+				kind: "artifact",
+				label: `binary mitigation map ${artifact.adapterId}`,
+				status: mitigationEvidence.status,
+				path,
+				note: mitigationEvidence.evidence.slice(0, 6).join(" | ") || "binary mitigation proof missing",
+			});
+			addTask({
+				id: mitigationId,
+				parentId: artifactId,
+				kind: "artifact",
+				label: `binary mitigation map ${artifact.adapterId}`,
+				status: mitigationEvidence.status,
+				path,
+				evidence: [
+					`kind=${mitigationEvidence.kind}`,
+					`matched=${mitigationEvidence.matched}`,
+					...mitigationEvidence.evidence.slice(0, 10),
+					...mitigationEvidence.missing.map((missing) => `missing_proof=${missing}`),
+				],
+			});
+			addEdge({ from: artifactId, to: mitigationId, kind: "produces", label: "binary-mitigation-map" });
+			addEdge({ from: mitigationId, to: parserSummaryId, kind: mitigationEvidence.matched ? "supports" : "blocks", label: mitigationEvidence.proofExitSignal });
+			if (!mitigationEvidence.matched && mitigationEvidence.expected) {
+				gaps.push(`runtime adapter missing mitigation map proof: ${artifact.adapterId}`);
+			}
+		}
 
 		addNode({
 			id: parserSummaryId,
@@ -24802,6 +24835,22 @@ function proofLoopAttackGraphGapItems(target?: string): Array<Omit<ProofLoopGapI
 				rows.push(`attack_graph runtime_adapter_gap: runtime adapter missing proof: ${artifact.adapterId}: ${missing.join("; ")}`);
 			if ((summary?.matchedRules ?? 0) === 0)
 				rows.push(`attack_graph runtime_adapter_gap: runtime adapter parser no-match: ${artifact.adapterId}`);
+			if (
+				Array.isArray(artifact.parserSignals) &&
+				Array.isArray(artifact.artifactKinds) &&
+				Array.isArray(artifact.proofExitSignals)
+			) {
+				const mitigationEvidence = runtimeAdapterMitigationEvidenceForGraph(
+					artifact as RuntimeAdapterExecutionArtifactV1 & { stdoutHead?: string; stderrHead?: string },
+				);
+				if (mitigationEvidence?.matched) {
+					rows.push(
+						`attack_graph proof_spine_seed: binary mitigation map matched: ${artifact.adapterId}: ${mitigationEvidence.evidence.slice(0, 6).join(" | ")}`,
+					);
+				} else if (mitigationEvidence?.expected) {
+					rows.push(`attack_graph runtime_adapter_gap: runtime adapter missing mitigation map proof: ${artifact.adapterId}`);
+				}
+			}
 			return rows;
 		} catch {
 			return [];
@@ -24815,6 +24864,12 @@ function proofLoopAttackGraphGapItems(target?: string): Array<Omit<ProofLoopGapI
 			.map(
 				(node) =>
 					`attack_graph task_tree_gap: ${node.label} status=${node.status ?? "gap"} evidence=${(node.evidence ?? []).join(" | ") || "none"}`,
+			),
+		...(graph.taskTree ?? [])
+			.filter((node) => node.kind === "artifact" && /binary mitigation map/i.test(`${node.label} ${node.status ?? ""}`))
+			.map(
+				(node) =>
+					`attack_graph proof_spine_seed: ${node.label} status=${node.status ?? "unknown"} evidence=${(node.evidence ?? []).join(" | ") || "none"}`,
 			),
 		...(graph.taskTree ?? [])
 			.filter((node) => node.kind === "parser_summary" && /missing=(?!0\b)/i.test(node.status ?? ""))
@@ -24908,7 +24963,13 @@ function proofLoopVerdict(target?: string): ProofLoopVerdict {
 		)
 	)
 		return "needs_repair";
-	if (graph?.gaps.some((gap) => /runtime adapter missing proof|runtime adapter parser no-match|missing-proof-exit/i.test(gap)))
+	if (
+		graph?.gaps.some((gap) =>
+			/runtime adapter missing (?:mitigation map )?proof|runtime adapter parser no-match|missing-proof-exit/i.test(
+				gap,
+			),
+		)
+	)
 		return "needs_repair";
 	if (feedbackRows.length) return "partial";
 	if (!compiler || !replay) return "partial";
