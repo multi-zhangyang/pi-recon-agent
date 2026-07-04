@@ -1480,6 +1480,7 @@ rows.push(
 				"parseAttackGraphArtifact",
 				"proofLoopAttackGraphGapItems",
 				"proofLoopGapClassifier",
+				"proofLoopQuickPathFromGapItems",
 				"proofLoopQuickPath",
 				"proofLoopTargetRuntimeAdapterCommands",
 				"source=target_auto_detection",

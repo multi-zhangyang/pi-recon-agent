@@ -25023,10 +25023,14 @@ function proofLoopTargetRuntimeAdapterCommands(target?: string): string[] {
 	return proofLoopRuntimeAdapterCommands(profile.adapterIds, targetRef);
 }
 
-function proofLoopQuickPath(target?: string): string[] {
+function proofLoopQuickPathFromGapItems(items: ProofLoopGapItem[], target?: string): string[] {
 	return Array.from(
-		new Set([...proofLoopTargetRuntimeAdapterCommands(target), ...proofLoopQuickPathFromItems(proofLoopGapItems(target), target)]),
+		new Set([...proofLoopTargetRuntimeAdapterCommands(target), ...proofLoopQuickPathFromItems(items, target)]),
 	);
+}
+
+function proofLoopQuickPath(target?: string): string[] {
+	return proofLoopQuickPathFromGapItems(proofLoopGapItems(target), target);
 }
 
 function proofLoopSpecialistQueue(target?: string): string[] {
@@ -25282,7 +25286,7 @@ function refreshProofLoop(proof: ProofLoopArtifact): ProofLoopArtifact {
 	const caseMemoryBridge = caseMemoryProofBridge(caseMemoryLanePlan, proof.target);
 	const autonomousBudget = autonomousExecutionBudget(proof.target);
 	const gapClassifier = formatProofLoopGapClassifier(gapItems);
-	const quickPath = proofLoopQuickPath(proof.target);
+	const quickPath = proofLoopQuickPathFromGapItems(gapItems, proof.target);
 	return {
 		...proof,
 		steps,
