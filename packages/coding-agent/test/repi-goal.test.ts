@@ -353,6 +353,88 @@ describe("REPI built-in goal mode", () => {
 		expect(harness.notifications.at(-1)?.message).toBe("Goal token budget is still reached: 1.2k/1k");
 	});
 
+	it("retries recoverable provider interruptions in print/RPC/json modes without pausing the goal", async () => {
+		for (const mode of ["print", "rpc", "json"] as const) {
+			const harness = createHarness();
+			harness.ctx.hasUI = false;
+			harness.ctx.mode = mode;
+
+			await harness.commands.get("goal").handler(`${mode} retry objective`, harness.ctx);
+			await harness.handlers.get("agent_end")![0](
+				{
+					type: "agent_end",
+					messages: [
+						{
+							role: "assistant",
+							stopReason: "error",
+							errorMessage: "provider returned error 503 service unavailable",
+						},
+					] as AgentMessage[],
+				},
+				harness.ctx,
+			);
+
+			expect(harness.abort).not.toHaveBeenCalled();
+			expect(harness.statuses.get("goal")).toBe("🎯 active 0s");
+			expect(harness.sent).toHaveLength(2);
+			expect(harness.sent[1].content).toContain("Continue the active REPI /goal");
+			expect(harness.sent[1].content).toContain(`${mode} retry objective`);
+			expect(harness.notifications.at(-1)).toMatchObject({
+				message: "Goal provider interruption; retrying (1/3).",
+				level: "warning",
+			});
+			expect(harness.entries.at(-1)).toMatchObject({
+				type: "custom",
+				customType: REPI_GOAL_STATE_ENTRY_TYPE,
+				data: { version: 1, goal: { text: `${mode} retry objective`, status: "active", iteration: 1 } },
+			});
+		}
+	});
+
+	it("compacts then resumes active goals after context overflow instead of clearing state", async () => {
+		const harness = createHarness();
+		harness.ctx.hasUI = false;
+		harness.ctx.mode = "print";
+
+		await harness.commands.get("goal").handler("context overflow objective", harness.ctx);
+		await harness.handlers.get("agent_end")![0](
+			{
+				type: "agent_end",
+				messages: [
+					{
+						role: "assistant",
+						stopReason: "error",
+						errorMessage: "maximum context length exceeded; reduce the length",
+					},
+				] as AgentMessage[],
+			},
+			harness.ctx,
+		);
+
+		expect(harness.sent).toHaveLength(1);
+		expect(harness.statuses.get("goal")).toBe("🎯 active 0s");
+		expect(harness.notifications.at(-1)).toMatchObject({
+			message: "Goal hit context overflow; compacting then continuing.",
+			level: "warning",
+		});
+		expect(harness.compact).toHaveBeenCalledWith(
+			expect.objectContaining({
+				customInstructions: expect.stringContaining("Preserve the active REPI /goal objective"),
+			}),
+		);
+
+		await harness.handlers.get("session_compact")![0]({ type: "session_compact" }, harness.ctx);
+
+		expect(harness.sent).toHaveLength(2);
+		expect(harness.sent[1].content).toContain("Continue the active REPI /goal");
+		expect(harness.sent[1].content).toContain("context overflow objective");
+		expect(harness.entries.at(-1)).toMatchObject({
+			type: "custom",
+			customType: REPI_GOAL_STATE_ENTRY_TYPE,
+			data: { version: 1, goal: { text: "context overflow objective", status: "active" } },
+		});
+	});
+
 	it("shows /goal help with current status without starting a turn", async () => {
 		const harness = createHarness();
 

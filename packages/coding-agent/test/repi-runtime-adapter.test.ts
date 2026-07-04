@@ -53,7 +53,7 @@ function tlsClientHelloSniPayload(hostname: string): Buffer {
 	return Buffer.concat([Buffer.from([22, 3, 3]), be16(handshake.length), handshake]);
 }
 
-function ethernetIpv4TcpFrame(payload: Buffer, sourcePort: number, destPort: number): Buffer {
+function ethernetIpv4TcpFrame(payload: Buffer, sourcePort: number, destPort: number, sequence = 1): Buffer {
 	const ethernet = Buffer.concat([Buffer.alloc(6, 0xaa), Buffer.alloc(6, 0xbb), Buffer.from([0x08, 0x00])]);
 	const ip = Buffer.alloc(20);
 	ip[0] = 0x45;
@@ -65,7 +65,7 @@ function ethernetIpv4TcpFrame(payload: Buffer, sourcePort: number, destPort: num
 	const tcp = Buffer.alloc(20);
 	tcp.writeUInt16BE(sourcePort, 0);
 	tcp.writeUInt16BE(destPort, 2);
-	tcp.writeUInt32BE(1, 4);
+	tcp.writeUInt32BE(sequence, 4);
 	tcp[12] = 0x50;
 	tcp[13] = 0x18;
 	tcp.writeUInt16BE(8192, 14);
@@ -539,6 +539,43 @@ describe("REPI runtime adapter pure contracts", () => {
 		expect(output).toContain("[flow-conversation]");
 		expect(summary.matchedProofExitSignals).toEqual(
 			expect.arrayContaining(["flow conversation", "dns timeline", "tls sni proof"]),
+		);
+	});
+
+	test("reassembles out-of-order TCP segments in the PCAP fallback before HTTP/credential extraction", () => {
+		const pcapng = join(tempDir, "split-http-out-of-order.fixture");
+		const first = Buffer.from("GET /split HTTP/1.1\r\nHost: target.local\r\nCookie: sid=", "latin1");
+		const second = Buffer.from("abc\r\n\r\n", "latin1");
+		writeFileSync(
+			pcapng,
+			Buffer.concat([
+				pcapngSectionHeader(),
+				pcapngInterfaceDescription(),
+				pcapngEnhancedPacket(ethernetIpv4TcpFrame(second, 44444, 80, 1 + first.length)),
+				pcapngEnhancedPacket(ethernetIpv4TcpFrame(first, 44444, 80, 1)),
+			]),
+		);
+
+		const pcapReport = buildRuntimeAdapterExecutionGate("tshark-pcap-flow-adapter", {
+			toolIndexPath: "/tmp/tool-index.md",
+			isToolPresent: (tool) => tool === "python3",
+		});
+		const pcapAdapter = pcapReport.adapters.find((row) => row.adapterId === "tshark-pcap-flow-adapter")!;
+		const output = execFileSync(
+			"bash",
+			["-lc", materializeRuntimeAdapterCommand(pcapAdapter.fallbackCommandTemplate, pcapng)],
+			{ encoding: "utf8", timeout: 10_000 },
+		);
+		const summary = summarizeRuntimeAdapterSignals(pcapAdapter, parseRuntimeAdapterSignals(pcapAdapter, output));
+
+		expect(output).toContain("[tcp-reassembly]");
+		expect(output).toContain("segments=2");
+		expect(output).toContain("seq_order=1,");
+		expect(output).toContain("[http-stream]");
+		expect(output).toContain("GET /split HTTP/1.1");
+		expect(output).toContain("Cookie: sid=abc");
+		expect(summary.matchedProofExitSignals).toEqual(
+			expect.arrayContaining(["follow-stream", "tcp stream reassembly", "timeline evidence"]),
 		);
 	});
 

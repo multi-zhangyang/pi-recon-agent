@@ -1282,6 +1282,8 @@ rows.push(
 			"queues goal prompts as follow-up when print/RPC contexts are already busy",
 			"keeps a fresh profile without legacy goal state quiet in non-TUI startup/shutdown",
 			"replaces an existing goal without waiting for RPC/non-TUI confirmation dialogs",
+			"retries recoverable provider interruptions in print/RPC/json modes without pausing the goal",
+			"compacts then resumes active goals after context overflow instead of clearing state",
 		]) &&
 			includesAll(goalRpcTests, [
 				"REPI goal mode over RPC",
@@ -1371,6 +1373,7 @@ rows.push(
 				"[pwn-multirun-summary]",
 				"[pcap-file]",
 				"[flow-conversation]",
+				"[tcp-reassembly]",
 				"[adapter-rootfs-target]",
 				"stdout_sha256",
 				"stderr_sha256",
