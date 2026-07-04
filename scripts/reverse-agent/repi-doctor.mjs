@@ -12,7 +12,7 @@ import {
 	renameSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultReportWriteError } from "./lib/report-write-helpers.mjs";
 
@@ -252,6 +252,64 @@ function pathEntry(path) {
 	}
 }
 
+function pathDirs() {
+	return String(process.env.PATH || "")
+		.split(delimiter)
+		.map((item) => item.trim())
+		.filter(Boolean);
+}
+
+function sameResolvedPath(a, b) {
+	return Boolean(a && b && a === b);
+}
+
+function repiEntriesOnPath() {
+	const seen = new Set();
+	const entries = [];
+	for (const dir of pathDirs()) {
+		const path = join(dir, "repi");
+		if (seen.has(path)) continue;
+		seen.add(path);
+		const entry = pathEntry(path);
+		if (entry.exists) entries.push({ dir, path, ...entry });
+	}
+	return entries;
+}
+
+function shellRcPathStatus(expectedBinPath) {
+	const expectedDir = dirname(expectedBinPath || installedRepi);
+	const userLocalBin = join(homedir(), ".local", "bin");
+	const rcCandidates = [".bashrc", ".profile", ".bash_profile", ".zshrc"].map((name) => join(homedir(), name));
+	const rcHits = [];
+	for (const path of rcCandidates) {
+		try {
+			const text = readFileSync(path, "utf8");
+			if (text.includes(expectedDir) || text.includes("$HOME/.local/bin") || text.includes("~/.local/bin")) {
+				rcHits.push(path);
+			}
+		} catch {
+			// Missing shell rc files are normal in containers and CI.
+		}
+	}
+	const pathHasExpectedDir = pathDirs().some((dir) => {
+		try {
+			return realpathSync(dir) === realpathSync(expectedDir);
+		} catch {
+			return dir === expectedDir;
+		}
+	});
+	const userLocalInstall = expectedDir === userLocalBin || expectedDir.endsWith("/.local/bin");
+	const requireRc = process.env.REPI_DOCTOR_REQUIRE_PATH === "1" || (userLocalInstall && !pathHasExpectedDir);
+	return {
+		expectedDir,
+		pathHasExpectedDir,
+		userLocalInstall,
+		requireRc,
+		rcHits,
+		ok: !requireRc || pathHasExpectedDir || rcHits.length > 0,
+	};
+}
+
 function safeEntries(path) {
 	try {
 		return readdirSync(path);
@@ -477,6 +535,16 @@ const expectedEnvContextWindow = Number(
 const globalRepi = pathEntry(installedRepi);
 const localRepi = pathEntry(repiBin);
 const globalRepiOk = packageBinMode || (globalRepi.exists && globalRepi.resolved === localRepi.resolved);
+const expectedRepiResolved = localRepi.resolved || globalRepi.resolved;
+const pathRepiEntries = repiEntriesOnPath();
+const firstPathRepi = pathRepiEntries[0];
+const pathHasExpectedRepi = pathRepiEntries.some((entry) => sameResolvedPath(entry.resolved, expectedRepiResolved));
+const pathShadowed =
+	Boolean(firstPathRepi?.resolved && expectedRepiResolved) &&
+	!sameResolvedPath(firstPathRepi.resolved, expectedRepiResolved);
+const pathActivationRequired = process.env.REPI_DOCTOR_REQUIRE_PATH === "1" || Boolean(process.env.REPI_INSTALLED_BIN_PATH);
+const pathCommandOk = !pathActivationRequired || packageBinMode || (pathHasExpectedRepi && !pathShadowed);
+const shellRcPath = shellRcPathStatus(repiBin);
 const launcherSource = readFirstExistingText(["repi", "dist/cli.js", "dist/cli/repi-bootstrap.js"]);
 const bootstrapSource = readFirstExistingText([
 	"packages/coding-agent/src/cli/repi-bootstrap.ts",
@@ -558,6 +626,14 @@ const envModelContractOk =
 	modelRegistrySource.includes("openai-compatible") &&
 	modelInspectSource.includes("buildStatusReport") &&
 	modelInspectSource.includes("repi model status");
+const envModelRpcMatchesExpected =
+	!envModelRuntime.enabled ||
+	(rpcRuntime.stateResponseOk &&
+		rpcRuntime.modelProvider === expectedEnvProvider &&
+		rpcRuntime.modelId === expectedEnvModel &&
+		(!Number.isFinite(expectedEnvContextWindow) || rpcRuntime.contextWindow === expectedEnvContextWindow));
+const savedDefaultProvider = typeof settings?.defaultProvider === "string" ? settings.defaultProvider : undefined;
+const savedDefaultModel = typeof settings?.defaultModel === "string" ? settings.defaultModel : undefined;
 const legacyExtensions = legacyExtensionLayout();
 const scopedMemoryDefaultsOk =
 	memory.schemaVersion === 2 &&
@@ -578,6 +654,18 @@ const checks = [
 			? `package-bin-direct path=${repiBin}`
 			: `path=${installedRepi} exists=${globalRepi.exists} symlink=${globalRepi.isSymlink} target=${globalRepi.linkTarget ?? "<none>"} resolved=${globalRepi.resolved ?? "<none>"}`,
 		"run repi doctor --fix or npm run install:repi",
+	),
+	check(
+		"launcher:path-command-resolution",
+		pathCommandOk,
+		`required=${pathActivationRequired} entries=${pathRepiEntries.length} expected=${expectedRepiResolved ?? "<none>"} first=${firstPathRepi ? `${firstPathRepi.path}->${firstPathRepi.resolved ?? "<unresolved>"}` : "<none>"} hasExpected=${pathHasExpectedRepi} shadowed=${pathShadowed}`,
+		"put the installed repi bin directory first in PATH or rerun install-repi.sh/doctor --fix",
+	),
+	check(
+		"launcher:shell-rc-path-activation",
+		shellRcPath.ok,
+		`required=${shellRcPath.requireRc} expectedDir=${shellRcPath.expectedDir} pathHasDir=${shellRcPath.pathHasExpectedDir} userLocal=${shellRcPath.userLocalInstall} rcHits=${shellRcPath.rcHits.length}`,
+		"add export PATH=\"$HOME/.local/bin:$PATH\" to ~/.bashrc or source the installer-updated shell rc",
 	),
 	check("runtime:agent-dir", existsSync(agentDir), `agentDir=${agentDir}`, "run npm run install:repi"),
 	check("runtime:settings", Boolean(settings), `settings=${join(agentDir, "settings.json")}`, "run npm run install:repi"),
@@ -688,13 +776,15 @@ const checks = [
 	),
 	check(
 		"models:env-rpc-runtime",
-		!envModelRuntime.enabled ||
-			(rpcRuntime.stateResponseOk &&
-				rpcRuntime.modelProvider === expectedEnvProvider &&
-				rpcRuntime.modelId === expectedEnvModel &&
-				(!Number.isFinite(expectedEnvContextWindow) || rpcRuntime.contextWindow === expectedEnvContextWindow)),
+		envModelRpcMatchesExpected,
 		`envEnabled=${envModelRuntime.enabled} stateOk=${rpcRuntime.stateResponseOk} provider=${rpcRuntime.modelProvider ?? "<none>"} expectedProvider=${expectedEnvProvider} model=${redactText(rpcRuntime.modelId ?? "<none>")} expectedModel=${redactText(expectedEnvModel ?? "<none>")} api=${rpcRuntime.modelApi ?? "<none>"} context=${rpcRuntime.contextWindow ?? "<none>"} expectedContext=${Number.isFinite(expectedEnvContextWindow) ? expectedEnvContextWindow : "<unset>"}`,
 		"fix REPI_* exports or clear stale saved default provider/model",
+	),
+	check(
+		"models:env-overrides-saved-default",
+		envModelRpcMatchesExpected,
+		`envEnabled=${envModelRuntime.enabled} savedProvider=${redactText(savedDefaultProvider ?? "<none>")} savedModel=${redactText(savedDefaultModel ?? "<none>")} runtimeProvider=${rpcRuntime.modelProvider ?? "<none>"} runtimeModel=${redactText(rpcRuntime.modelId ?? "<none>")} expectedProvider=${expectedEnvProvider} expectedModel=${redactText(expectedEnvModel ?? "<none>")}`,
+		"when REPI_* is set it must win over stale ~/.repi/agent/settings.json defaults; clear saved defaults or fix env exports",
 	),
 	check("network:update-suppressed", /--offline/.test(helpText) && /REPI_SKIP_VERSION_CHECK/.test(helpText), "offline/version-check controls available"),
 ];

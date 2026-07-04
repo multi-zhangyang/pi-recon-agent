@@ -138,8 +138,52 @@ process.exit(0);
 			status: "pass",
 			evidence: expect.stringContaining("goalCommands=1"),
 		});
+		expect(report.checks.find((check) => check.id === "launcher:path-command-resolution")).toMatchObject({
+			status: "pass",
+		});
+		expect(report.checks.find((check) => check.id === "launcher:shell-rc-path-activation")).toMatchObject({
+			status: "pass",
+		});
 		expect(report.checks.find((check) => check.id === "models:env-rpc-runtime")).toMatchObject({
 			status: "pass",
+		});
+		expect(report.checks.find((check) => check.id === "models:env-overrides-saved-default")).toMatchObject({
+			status: "pass",
+		});
+	});
+
+	it("fails the PATH resolution check when an installed repi command is shadowed", () => {
+		const init = spawnSync(process.execPath, [INIT, repoRoot], {
+			encoding: "utf8",
+			env: { ...process.env, REPI_CODING_AGENT_DIR: agentDir, REPI_IMPORT_PI_PROFILE: "0" },
+			timeout: 10_000,
+		});
+		expect(init.status, `${init.stderr}\n${init.stdout}`).toBe(0);
+
+		const shadowDir = join(tempRoot, "shadow-bin");
+		mkdirSync(shadowDir, { recursive: true });
+		const shadowRepi = join(shadowDir, "repi");
+		writeFileSync(shadowRepi, "#!/usr/bin/env sh\necho shadow-repi\n");
+		chmodSync(shadowRepi, 0o755);
+
+		const doctor = spawnSync(process.execPath, [DOCTOR, repoRoot, "--json"], {
+			encoding: "utf8",
+			env: {
+				...process.env,
+				PATH: `${shadowDir}:${repoRoot}`,
+				REPI_CODING_AGENT_DIR: agentDir,
+				REPI_DOCTOR_REQUIRE_PATH: "1",
+				REPI_INSTALLED_BIN_PATH: join(repoRoot, "repi"),
+			},
+			timeout: 10_000,
+		});
+		expect(doctor.status).not.toBe(0);
+		const report = JSON.parse(doctor.stdout) as {
+			checks: Array<{ id: string; status: string; evidence: string }>;
+		};
+		expect(report.checks.find((check) => check.id === "launcher:path-command-resolution")).toMatchObject({
+			status: "fail",
+			evidence: expect.stringContaining("shadowed=true"),
 		});
 	});
 });
