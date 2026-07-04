@@ -720,6 +720,11 @@ function sameStringSet(left: readonly string[], right: readonly string[]): boole
 	return true;
 }
 
+function envRefName(ref: string): string | undefined {
+	const match = /^\$([A-Z_][A-Z0-9_]*)$/.exec(ref.trim());
+	return match?.[1];
+}
+
 // WorkerRuntimePoolV1 split contract: runtime:worker-runtime-pool-validation runtime:claim-aware-worker-merge runtime:child-session-runtime-bridge.
 export function workerRuntimePoolEvidenceContract(): string[] {
 	return [
@@ -946,6 +951,28 @@ export function workerChildSessionLaunchPolicy(options?: {
 			"REPI_PRODUCT",
 			"REPI_OFFLINE",
 			"REPI_SKIP_VERSION_CHECK",
+			"REPI_SKIP_PACKAGE_UPDATE_CHECK",
+			"REPI_TELEMETRY",
+			"REPI_AUTH_TOKEN",
+			"REPI_MODEL_API_KEY",
+			"REPI_BASE_URL",
+			"REPI_MODEL_BASE_URL",
+			"REPI_PROVIDER",
+			"REPI_MODEL_PROVIDER",
+			"REPI_PROVIDER_ID",
+			"REPI_MODEL",
+			"REPI_MODEL_ID",
+			"REPI_MODEL_API",
+			"REPI_API",
+			"REPI_SUBAGENT_MODEL",
+			"REPI_SUBAGENT_PROVIDER",
+			"REPI_CONTEXT_WINDOW",
+			"REPI_MODEL_CONTEXT_WINDOW",
+			"REPI_AUTO_COMPACT_WINDOW",
+			"REPI_MODEL_AUTO_COMPACT_WINDOW",
+			"REPI_MAX_TOKENS",
+			"REPI_MODEL_MAX_TOKENS",
+			"REPI_MAX_OUTPUT_TOKENS",
 			"OPENAI_COMPAT_BASE_URL",
 			"OPENAI_COMPAT_API_KEY",
 			"ANTHROPIC_COMPAT_BASE_URL",
@@ -1769,6 +1796,14 @@ export function verifyWorkerChildSessionRuntimeBatch(batch: RepiWorkerChildSessi
 			errors.push(`child_session_literal_api_key:${session.sessionId}`);
 		if (!session.provider.baseUrlRef.startsWith("$"))
 			errors.push(`child_session_literal_base_url:${session.sessionId}`);
+		for (const ref of [session.provider.apiKeyRef, session.provider.baseUrlRef]) {
+			const name = envRefName(ref);
+			if (!name) continue;
+			if (!batch.launchPolicy.envAllowlist.includes(name))
+				errors.push(`child_session_provider_env_not_allowlisted:${session.sessionId}:${name}`);
+			if (batch.launchPolicy.envDenylist.includes(name))
+				errors.push(`child_session_provider_env_denied:${session.sessionId}:${name}`);
+		}
 		if (sessionDirs.has(session.runtime.sessionDir))
 			errors.push(`child_session_duplicate_session_dir:${session.sessionId}`);
 		sessionDirs.add(session.runtime.sessionDir);

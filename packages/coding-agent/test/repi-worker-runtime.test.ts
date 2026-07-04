@@ -574,6 +574,17 @@ describe("REPI worker runtime pure contracts", () => {
 		expect(launchPolicy.importPiAuth).toBe(false);
 		expect(launchPolicy.updateChecksDisabled).toBe(true);
 		expect(launchPolicy.telemetryDisabled).toBe(true);
+		expect(launchPolicy.envAllowlist).toEqual(
+			expect.arrayContaining([
+				"REPI_AUTH_TOKEN",
+				"REPI_BASE_URL",
+				"REPI_MODEL",
+				"REPI_MODEL_API",
+				"REPI_SUBAGENT_MODEL",
+				"REPI_CONTEXT_WINDOW",
+				"REPI_AUTO_COMPACT_WINDOW",
+			]),
+		);
 		expect(launchPolicy.envDenylist).toEqual(
 			expect.arrayContaining(["GITHUB_TOKEN", "ANTHROPIC_AUTH_TOKEN", "NPM_TOKEN"]),
 		);
@@ -650,6 +661,24 @@ describe("REPI worker runtime pure contracts", () => {
 				],
 			}).errors,
 		).toContain("child_session_literal_api_key:child-w1-1");
+		expect(
+			verifyWorkerChildSessionRuntimeBatch({
+				...batch,
+				launchPolicy: {
+					...batch.launchPolicy,
+					envAllowlist: batch.launchPolicy.envAllowlist.filter((name) => name !== "REPI_AUTH_TOKEN"),
+				},
+			}).errors,
+		).toContain("child_session_provider_env_not_allowlisted:child-w1-1:REPI_AUTH_TOKEN");
+		expect(
+			verifyWorkerChildSessionRuntimeBatch({
+				...batch,
+				launchPolicy: {
+					...batch.launchPolicy,
+					envDenylist: [...batch.launchPolicy.envDenylist, "REPI_AUTH_TOKEN"],
+				},
+			}).errors,
+		).toContain("child_session_provider_env_denied:child-w1-1:REPI_AUTH_TOKEN");
 		expect(
 			verifyWorkerChildSessionRuntimeBatch({
 				...batch,
