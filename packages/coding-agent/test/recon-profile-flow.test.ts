@@ -133,7 +133,7 @@ describe("REPI kernel profile runtime/proof/swarm flows", () => {
 
 		const pcapRun = await runtimeAdapterTool.execute("tool-call-id", { action: "run", target: "capture.pcap" });
 		expect(execCalls[0]?.args.join("\n")).toContain("REPI_ADAPTER_TARGET");
-		expect(execCalls[0]?.args.join("\n")).toMatch(/(?:strings -a 'capture\.pcap'|tshark -r 'capture\.pcap')/);
+		expect(execCalls[0]?.args.join("\n")).toMatch(/(?:python3 - 'capture\.pcap'|tshark -r 'capture\.pcap')/);
 		expect(pcapRun.content[0]?.text).toContain("adapter: tshark-pcap-flow-adapter");
 		expect(pcapRun.content[0]?.text).toContain("parser-tshark-conversation");
 

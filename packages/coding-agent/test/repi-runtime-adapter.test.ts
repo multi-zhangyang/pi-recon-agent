@@ -248,16 +248,37 @@ describe("REPI runtime adapter pure contracts", () => {
 
 	test("executes real fallback commands for PCAP, mobile package, and pwn fixtures", () => {
 		const pcap = join(tempDir, "capture.pcap");
+		const pcapPayload = Buffer.from(
+			"GET /login HTTP/1.1\r\nHost: target.local\r\nCookie: sid=abc\r\npassword=demo\r\n\r\n",
+			"latin1",
+		);
+		const ethernet = Buffer.concat([Buffer.alloc(6, 0x00), Buffer.alloc(6, 0x11), Buffer.from([0x08, 0x00])]);
+		const ip = Buffer.alloc(20);
+		ip[0] = 0x45;
+		ip.writeUInt16BE(20 + 20 + pcapPayload.length, 2);
+		ip[8] = 64;
+		ip[9] = 6;
+		Buffer.from([10, 0, 0, 1]).copy(ip, 12);
+		Buffer.from([10, 0, 0, 2]).copy(ip, 16);
+		const tcp = Buffer.alloc(20);
+		tcp.writeUInt16BE(12345, 0);
+		tcp.writeUInt16BE(80, 2);
+		tcp[12] = 0x50;
+		tcp[13] = 0x18;
+		tcp.writeUInt16BE(8192, 14);
+		const frame = Buffer.concat([ethernet, ip, tcp, pcapPayload]);
+		const packetHeader = Buffer.alloc(16);
+		packetHeader.writeUInt32LE(1, 0);
+		packetHeader.writeUInt32LE(0, 4);
+		packetHeader.writeUInt32LE(frame.length, 8);
+		packetHeader.writeUInt32LE(frame.length, 12);
 		writeFileSync(
 			pcap,
-			Buffer.concat([
-				Buffer.from("d4c3b2a1020004000000000000000000ffff000001000000", "hex"),
-				Buffer.from("GET /login HTTP/1.1\r\nHost: target.local\r\nCookie: sid=abc\r\npassword=demo\r\n", "latin1"),
-			]),
+			Buffer.concat([Buffer.from("d4c3b2a1020004000000000000000000ffff000001000000", "hex"), packetHeader, frame]),
 		);
 		const pcapReport = buildRuntimeAdapterExecutionGate("tshark-pcap-flow-adapter", {
 			toolIndexPath: "/tmp/tool-index.md",
-			isToolPresent: (tool) => tool === "strings",
+			isToolPresent: (tool) => tool === "python3",
 		});
 		const pcapAdapter = pcapReport.adapters.find((row) => row.adapterId === "tshark-pcap-flow-adapter")!;
 		const pcapOutput = execFileSync(
@@ -269,9 +290,13 @@ describe("REPI runtime adapter pure contracts", () => {
 			pcapAdapter,
 			parseRuntimeAdapterSignals(pcapAdapter, pcapOutput),
 		);
+		expect(pcapOutput).toContain("[pcap-file]");
+		expect(pcapOutput).toContain("[flow-conversation]");
+		expect(pcapOutput).toContain("[http-object]");
 		expect(pcapOutput).toContain("GET /login HTTP/1.1");
+		expect(pcapOutput).toContain("[credential-timeline]");
 		expect(pcapSummary.matchedProofExitSignals).toEqual(
-			expect.arrayContaining(["follow-stream", "timeline evidence"]),
+			expect.arrayContaining(["flow conversation", "follow-stream", "timeline evidence"]),
 		);
 
 		const apk = join(tempDir, "target.apk");

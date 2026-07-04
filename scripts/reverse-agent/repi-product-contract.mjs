@@ -1277,6 +1277,8 @@ rows.push(
 				"[crypto-request-field]",
 				"[pwn-exec-run]",
 				"[pwn-multirun-summary]",
+				"[pcap-file]",
+				"[flow-conversation]",
 				"[adapter-rootfs-target]",
 				"stdout_sha256",
 				"stderr_sha256",
