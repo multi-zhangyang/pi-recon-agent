@@ -41,6 +41,11 @@ jobs:
         working-directory: packages/ai
         run: npx vitest --run test/openai-completions-prompt-cache.test.ts test/cache-retention.test.ts test/openai-completions-cache-control-format.test.ts
 
+      - name: Build runtime package entrypoints
+        run: |
+          (cd packages/ai && npx tsgo -p tsconfig.build.json)
+          (cd packages/agent && npx tsgo -p tsconfig.build.json)
+
       - name: Agent runtime regression tests
         working-directory: packages/coding-agent
         run: npx vitest --run test/agent-session-dynamic-provider.test.ts test/agent-session-auto-compaction-queue.test.ts
