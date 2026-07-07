@@ -43,6 +43,7 @@ jobs:
 
       - name: Build runtime package entrypoints
         run: |
+          (cd packages/tui && npx tsgo -p tsconfig.build.json)
           (cd packages/ai && npx tsgo -p tsconfig.build.json)
           (cd packages/agent && npx tsgo -p tsconfig.build.json)
 
