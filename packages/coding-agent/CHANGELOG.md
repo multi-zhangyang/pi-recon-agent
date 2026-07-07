@@ -8,10 +8,28 @@ in `CHANGELOG.upstream.md` for reference.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-07-07
+
+Patch release focused on env-provider correctness, runtime reliability, and release install safety.
+
 ### Changed
 
 - Tightened the package README into a product-first launch page: source installer first, GitHub Release tarball install spelled out as four same-version packages, `REPI_*` env model block, `/goal` footer/progress behavior, and the verified installer PATH prompt.
 - `/goal status` now surfaces a compact token-budget progress bar in help/status notifications so print/RPC/non-TUI operators can see budget burn without relying on the TUI footer.
+- Default model discovery is env-first and explicit-config-first: no bundled provider catalog is loaded unless the operator opts in, while extension-registered providers remain supported.
+- OpenAI-compatible and Responses requests now omit unsupported optional controls by default, avoiding provider-side `store=false` and empty-tool payload failures.
+
+### Fixed
+
+- Fresh/release smoke tests now scrub outer `REPI_*` model env vars for envless checks, preventing false positives from a developer shell.
+- Print mode now reports a guard-abort summary when max-turn/max-tool limits stop a run before assistant text is produced.
+- Self-check/doctor flows now repair fresh scoped profiles before retrying readiness checks.
+- Runtime self-review notifications are de-duplicated to avoid repeated checkpoint noise.
+
+### Tests
+
+- Added provider payload regression coverage for OpenAI-compatible tool-choice/tool-list edge cases and Responses optional control handling.
+- Added release/selfcheck smoke coverage for env isolation, scoped doctor initialization, print guard output, and atomic engage artifact behavior.
 
 ## [0.1.2] - 2026-07-03
 
