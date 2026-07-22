@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { atomicWriteFile } from "./lib/memory-purge-helpers.mjs";
+import { atomicWriteFile } from "./lib/atomic-file.mjs";
 
 const commandNames = new Set([
 	"new",
@@ -41,7 +41,18 @@ const agentDir = process.env.REPI_CODING_AGENT_DIR || process.env.REPI_AGENT_DIR
 const missionDir = join(agentDir, "recon", "mission");
 const evidenceDir = join(agentDir, "recon", "evidence");
 const contextDir = join(evidenceDir, "contexts");
-const missionPath = join(missionDir, "current.json");
+const configuredMissionScope = process.env.REPI_MISSION_SCOPE?.trim();
+const sessionMissionScope = process.env.REPI_MISSION_SESSION_SCOPE?.trim();
+const workspaceMissionScope = configuredMissionScope || process.cwd();
+const effectiveMissionScope = sessionMissionScope
+	? `${workspaceMissionScope}\nsession:${sessionMissionScope}`
+	: workspaceMissionScope;
+const missionStorageScope = sessionMissionScope
+	? effectiveMissionScope
+	: configuredMissionScope;
+const missionPath = missionStorageScope
+	? join(missionDir, `current-${createHash("sha256").update(missionStorageScope).digest("hex").slice(0, 16)}.json`)
+	: join(missionDir, "current.json");
 const historyPath = join(missionDir, "history.jsonl");
 const operatorCwd = resolve(process.env.REPI_OPERATOR_CWD || process.env.PWD || process.cwd());
 
@@ -69,9 +80,9 @@ const ROUTES = [
 		domain: "Agent / LLM boundary",
 		prompt: "agent-boundary",
 		match: /\b(prompt injection|indirect prompt|tool injection|function call|tool-call|mcp|model context protocol|rag|retrieval|memory poisoning|jailbreak)\b|agent\s*安全|llm\s*安全|记忆投毒|工具滥用|越狱/i,
-		workflow: ["prompt/tool surface", "memory/RAG boundary", "injection replay", "tool-call trace", "delegation proof"],
-		tools: ["rg", "jq", "re_mission", "re_tool_trace", "re_memory", "re_verifier"],
-		evidence: ["untrusted content flow", "tool schema boundary", "replay transcript", "memory hit/miss", "capability drift edge"],
+		workflow: ["prompt/tool surface", "session/context/RAG boundary", "injection replay", "tool-call trace", "delegation proof"],
+		tools: ["rg", "jq", "re_mission", "re_evidence", "re_verifier"],
+		evidence: ["untrusted content flow", "tool schema boundary", "replay transcript", "context source hit/miss", "capability drift edge"],
 	},
 	{
 		id: "web-scan",
@@ -160,7 +171,7 @@ const ROUTES = [
 		prompt: "cloud",
 		match: /\b(cloud|aws|gcp|azure|k8s|kubernetes|iam|sts|role|serviceaccount|metadata|rbac|terraform|docker)\b/i,
 		workflow: ["credential/config map", "runtime identity", "permission graph", "metadata probe", "least proof"],
-		tools: ["aws/gcloud/az/kubectl", "jq", "docker", "terraform", "re_knowledge_graph"],
+		tools: ["aws/gcloud/az/kubectl", "jq", "docker", "terraform", "re_graph"],
 		evidence: ["identity anchors", "RBAC/IAM edges", "metadata status", "privilege path", "replay commands"],
 	},
 	{
@@ -204,8 +215,7 @@ function usage() {
 
 Mission Control is the task-level control plane. It creates a scoped mission,
 selects the reverse/pentest lane, writes an evidence contract, generates the
-next operator commands, and emits a compact resume pack without auto-injecting
-old memory into unrelated tasks.
+next operator commands, and emits a compact resume pack for the current task.
 `;
 }
 
@@ -426,7 +436,7 @@ function lanesForRoute(route) {
 			{ id: "verify", objective: "用 known-answer 或 replay 验证结果", exit: "assert/known-answer/recovered artifact hash" },
 		],
 		"agent-boundary": [
-			{ id: "surface", objective: "映射 system/developer/user/tool/memory/RAG/MCP 不可信入口", exit: "boundary graph 与资源清单" },
+			{ id: "surface", objective: "映射 system/developer/user/tool/session-context/RAG/MCP 不可信入口", exit: "boundary graph 与资源清单" },
 			{ id: "tool-boundary", objective: "证明工具调用、shell/API 参数、schema 校验和输出回灌边界", exit: "tool schema + trace 证据" },
 			{ id: "injection-replay", objective: "构造间接 prompt/tool injection replay harness", exit: "最小复现 transcript" },
 			{ id: "delegation", objective: "追踪 MCP/resource/sub-agent/delegation 权限漂移边", exit: "capability drift 证据" },
@@ -465,7 +475,7 @@ function starterCommandsForRoute(route, target) {
 		"windows-ad": [`nxc smb ${q} --shares 2>/dev/null || true`, `ldapsearch -x -H ldap://${q} -s base 2>/dev/null || true`, `certipy find -target ${q} 2>/dev/null || true`],
 		malware: [`sha256sum ${q}`, `file ${q}`, `strings -a ${q} | head -300`],
 		"crypto-stego": [`file ${q}`, `xxd -l 256 ${q} 2>/dev/null || true`, `exiftool ${q} 2>/dev/null | head -120 || true`],
-		"agent-boundary": [`rg -n "system|developer|tool|function|mcp|memory|rag|retrieval|prompt" ${q} 2>/dev/null || true`, `find ${q} -maxdepth 3 -type f | head -200`, `repi mission pack`],
+		"agent-boundary": [`rg -n "system|developer|tool|function|session|transcript|context|mcp|rag|retrieval|prompt" ${q} 2>/dev/null || true`, `find ${q} -maxdepth 3 -type f | head -200`, `repi mission pack`],
 		"ctf-sandbox": [`file ${q} 2>/dev/null || true`, `find ${q} -maxdepth 3 -type f -print 2>/dev/null | head -200`, `rg -n "flag|ctf|key|secret|password|token" ${q} 2>/dev/null || true`],
 	};
 	return commandsByRoute[route.id] ?? generic;
@@ -475,20 +485,43 @@ function buildPlan(task, options = {}) {
 	const rawTarget = options.target || argValue("--target") || task;
 	const target = redact(rawTarget);
 	const route = selectRoute(task, options.domain, rawTarget);
+	const coreDomainById = {
+		"ctf-sandbox": "CTF / sandbox",
+		"exploit-reliability": "Exploit reliability",
+		"agent-boundary": "Agent / LLM boundary",
+		"memory-forensics": "Memory forensics",
+		"pcap-dfir": "DFIR / PCAP / stego",
+		"mobile-ios": "Mobile / iOS",
+		mobile: "Mobile / Android",
+		"js-reverse": "Frontend JS reverse",
+		"web-scan": "Web pentest scanning",
+		"web-api": "Web / API pentest",
+		"crypto-stego": "Crypto / stego",
+		"firmware-iot": "Firmware / IoT",
+		"cloud-identity": "Cloud / container",
+		"windows-ad": "Identity / Windows / AD",
+		malware: "Malware analysis",
+		"native-pwn": "Pwn / exploit",
+	};
+	const coreDomain = coreDomainById[route.id] || "Reverse/Pentest general";
 	const basePrompt = `Mission: ${task}\nTarget: ${target}\nRoute: ${route.domain}\nExecute passive map first, prove one end-to-end path, bind claims to evidence, and stop narrative-only drift.`;
 	const starterCommands = starterCommandsForRoute(route, target);
 	return {
 		route: {
 			id: route.id,
-			domain: route.domain,
+			domain: coreDomain,
+			legacyDomain: route.domain,
 			prompt: route.prompt,
+			intent: route.workflow[0] || "execute routed reverse/pentest workflow",
+			toolchain: route.tools.join(" + "),
+			skillHint: route.prompt,
 			workflow: route.workflow,
 			recommendedTools: route.tools,
 		},
 		lanes: lanesForRoute(route),
 		evidenceContract: {
 			required: route.evidence,
-			forbidden: ["raw secrets", "unscoped old-memory injection", "narrative-only exploitability claim"],
+			forbidden: ["raw secrets", "cross-task context leakage", "narrative-only exploitability claim"],
 			outputOrder: "Outcome → Key Evidence → Verification → Next Step",
 		},
 		starterCommands,
@@ -509,6 +542,19 @@ function newMission(task, options = {}) {
 	const createdAt = nowStamp();
 	const plan = buildPlan(cleanTask, options);
 	const id = `${compactTime()}-${slugify(cleanTask)}-${sha(`${createdAt}:${cleanTask}`)}`;
+	const lanes = plan.lanes.map((lane, index) => ({
+		...lane,
+		name: lane.id,
+		next: [lane.exit],
+		status: index === 0 ? "in_progress" : "pending",
+		updatedAt: createdAt,
+	}));
+	const checkpoints = [
+		{ name: "route_resolved", status: "done", note: plan.route.domain, updatedAt: createdAt },
+		{ name: "passive_map_done", status: "pending", updatedAt: createdAt },
+		{ name: "evidence_ledger_updated", status: "pending", updatedAt: createdAt },
+		{ name: "completion_audit_ready", status: "pending", updatedAt: createdAt },
+	];
 	return {
 		kind: "repi-mission",
 		schemaVersion: 1,
@@ -518,10 +564,12 @@ function newMission(task, options = {}) {
 		updatedAt: createdAt,
 		workspace: operatorCwd,
 		root,
+		scope: `cwd:${sha(effectiveMissionScope).slice(0, 16)}`,
 		task: cleanTask,
 		target: redact(options.target || argValue("--target") || cleanTask),
 		route: plan.route,
-		lanes: plan.lanes,
+		lanes,
+		checkpoints,
 		evidenceContract: plan.evidenceContract,
 		starterCommands: plan.starterCommands,
 		nextActions: plan.nextActions,
@@ -531,10 +579,7 @@ function newMission(task, options = {}) {
 			contextDir,
 			evidenceLedger: join(evidenceDir, "ledger.md"),
 		},
-		notes: [
-			"Memory is scoped by mission/workspace/target; this command does not auto-inject unrelated old tasks.",
-			"Close explicitly with repi mission close; deposit long-term lessons only when they are reusable and sanitized.",
-		],
+		notes: ["Mission state contains only the current task. Close it explicitly with repi mission close."],
 	};
 }
 
@@ -547,6 +592,22 @@ function saveMission(mission) {
 
 function loadMission() {
 	return readJson(missionPath);
+}
+
+function isMissionRecord(value) {
+	if (!value || typeof value !== "object" || typeof value.task !== "string") return false;
+	if (value.kind === "repi-mission" && value.schemaVersion === 1) return true;
+	return (
+		typeof value.id === "string" &&
+		typeof value.scope === "string" &&
+		value.route &&
+		Array.isArray(value.lanes) &&
+		Array.isArray(value.checkpoints)
+	);
+}
+
+function isActiveMission(value) {
+	return isMissionRecord(value) && value.status !== "closed" && value.status !== "empty";
 }
 
 function evidenceTail(maxLines = 60) {
@@ -590,7 +651,7 @@ function latestArtifacts(maxItems = 16) {
 }
 
 function buildContextPack(mission) {
-	const active = mission && mission.kind === "repi-mission" ? mission : undefined;
+	const active = isActiveMission(mission) ? mission : undefined;
 	const generatedAt = nowStamp();
 	const pack = {
 		kind: "repi-mission-context-pack",
@@ -614,11 +675,9 @@ function buildContextPack(mission) {
 		resumeBrief: active
 			? `Continue mission ${active.id}: ${active.task}. Route=${active.route?.domain}. Next=${(active.nextActions ?? [])[0] ?? "map target"}.`
 			: "No active mission. Start with repi mission new <task>.",
-		memoryPolicy: {
-			scoped: true,
-			autoInjectRawMemory: false,
-			requireExplicitPromotion: true,
-			reason: "避免旧任务污染新任务；只把当前 mission/workspace/target 范围内的摘要作为恢复上下文。",
+		contextPolicy: {
+			currentMissionOnly: true,
+			reason: "只把当前 mission 的紧凑状态作为恢复上下文。",
 		},
 	};
 	return pack;
@@ -739,7 +798,7 @@ try {
 
 	if (["status", "show", "doctor"].includes(command)) {
 		const mission = loadMission();
-		const ok = mission?.kind === "repi-mission" && mission?.schemaVersion === 1 && mission?.status === "active";
+		const ok = isActiveMission(mission);
 		finish({
 			kind: "repi-mission-report",
 			schemaVersion: 1,
@@ -756,7 +815,7 @@ try {
 
 	if (command === "next") {
 		const mission = loadMission();
-		const ok = mission?.kind === "repi-mission" && mission?.status === "active";
+		const ok = isActiveMission(mission);
 		finish({
 			kind: "repi-mission-report",
 			schemaVersion: 1,
@@ -783,7 +842,7 @@ try {
 			agentDir,
 			missionPath,
 			ok: true,
-			mission: mission?.kind === "repi-mission" ? mission : null,
+			mission: isMissionRecord(mission) ? mission : null,
 			contextPack: pack,
 			output,
 		});
@@ -791,22 +850,22 @@ try {
 
 	if (["close", "done", "complete"].includes(command)) {
 		const mission = loadMission();
-		if (!mission?.kind) throw new Error("No active mission to close.");
+		if (!isActiveMission(mission)) throw new Error("No active mission to close.");
 		const summary = redact(argValue("--summary") || positionalText() || "");
 		const closed = saveMission({
 			...mission,
 			status: "closed",
 			closedAt: nowStamp(),
 			summary,
-			nextActions: ["repi mission new <next-task>", "repi memory consolidate --dry-run", "repi health"],
+			nextActions: ["repi mission new <next-task>", "repi health"],
 		});
-		finish({ kind: "repi-mission-report", schemaVersion: 1, action: "close", root, agentDir, missionPath, ok: true, mission: closed, message: "Mission closed. Long-term memory deposition is explicit; no raw session history was promoted automatically." });
+		finish({ kind: "repi-mission-report", schemaVersion: 1, action: "close", root, agentDir, missionPath, ok: true, mission: closed, message: "Mission closed." });
 	}
 
 	if (["reset", "clear"].includes(command)) {
 		if (!hasFlag("--yes")) throw new Error("reset requires --yes");
 		const current = loadMission();
-		if (current?.kind) {
+		if (isMissionRecord(current)) {
 			appendPrivate(historyPath, `${JSON.stringify({ ts: nowStamp(), event: "mission_reset", id: current.id, status: current.status })}\n`);
 		}
 		writePrivate(missionPath, `${JSON.stringify({ kind: "repi-mission", schemaVersion: 1, status: "empty", updatedAt: nowStamp(), task: null }, null, 2)}\n`);

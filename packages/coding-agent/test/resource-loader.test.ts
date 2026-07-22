@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ExtensionRunner } from "../src/core/extensions/runner.ts";
 import { ModelRegistry } from "../src/core/model-registry.ts";
-import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
+import { DefaultResourceLoader, loadProjectContextFiles } from "../src/core/resource-loader.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import type { Skill } from "../src/core/skills.ts";
@@ -319,6 +319,16 @@ Content`,
 
 			const { agentsFiles } = loader.getAgentsFiles();
 			expect(agentsFiles.some((f) => f.path.includes("AGENTS.md"))).toBe(true);
+		});
+
+		it("walks ancestor context files without resolving the parent against cwd", () => {
+			const parent = dirname(cwd);
+			writeFileSync(join(parent, "AGENTS.md"), "Parent instructions");
+			writeFileSync(join(cwd, "AGENTS.md"), "Project instructions");
+
+			const files = loadProjectContextFiles({ cwd, agentDir });
+
+			expect(files.map((file) => file.content)).toEqual(["Parent instructions", "Project instructions"]);
 		});
 
 		it("should skip AGENTS.md and CLAUDE.md discovery when noContextFiles is true", async () => {

@@ -111,6 +111,16 @@ describe("repi advanced-technique catalog", () => {
 		expect(text).toContain("duplicate");
 	});
 
+	it("models agent context poisoning as session-scoped, not durable memory", () => {
+		const entry = techniqueById("agent-context-exfil");
+		const text = `${entry?.name}\n${entry?.triggers}\n${entry?.procedure.join("\n")}\n${entry?.proofExit}`;
+		expect(entry).toBeDefined();
+		expect(text).toContain("session transcript");
+		expect(text).toContain("tool-result");
+		expect(text).toContain("clean-session");
+		expect(text).not.toContain("long-term memory");
+	});
+
 	it("covers the core offensive domains", () => {
 		const domains = new Set(techniqueDomains());
 		for (const required of [

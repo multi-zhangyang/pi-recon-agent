@@ -11,9 +11,50 @@ export function truncateMiddle(text: string, limit: number): string {
 	return `${text.slice(0, headEnd)}\n...<truncated ${text.length - limit} chars>...\n${text.slice(tailStart)}`;
 }
 
+/** Remove credentials and auth material before text crosses a persistence boundary. */
+export function redactSensitiveText(value: string, limit = 2000): string {
+	let text = String(value ?? "");
+	text = text.replace(/(https?:\/\/)([^\s/@:]+):([^\s/@]+)@/gi, "$1<redacted>@");
+	text = text.replace(/(\bBearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, "$1<redacted>");
+	text = text.replace(/\b(?:sk|rk|ghp|glpat)-[A-Za-z0-9._-]{8,}\b/gi, "<redacted:token>");
+	text = text.replace(
+		/(\b(?:api[_-]?key|access[_-]?key|secret|token|password|passwd|authorization|cookie|client[_-]?secret|auth[_-]?token)\s*[:=]\s*)(["']?)[^\s"'`,;&}]+\2/gi,
+		"$1$2<redacted>$2",
+	);
+	text = text.replace(
+		/([?&](?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|key)=)[^&\s#]+/gi,
+		"$1<redacted>",
+	);
+	return truncateMiddle(text, limit);
+}
+
 export function metadataValue(text: string, key: string): string | undefined {
 	const match = new RegExp(`^${key}:\\s*(.+)$`, "im").exec(text);
 	return match?.[1]?.trim();
+}
+
+/**
+ * Parse the last line-delimited JSON code block in an artifact. JSON strings
+ * may contain Markdown fences (for example a compiler report's embedded
+ * shell repro), so a first-match fence regex can stop inside the payload.
+ */
+export function parseJsonCodeFence<T>(text: string): T | undefined {
+	const openings = [...text.matchAll(/^```json[ \t]*\r?$/gim)];
+	for (const opening of openings.reverse()) {
+		const bodyStart = (opening.index ?? 0) + opening[0].length;
+		const body = text.slice(bodyStart).replace(/^\n/, "");
+		const closings = [...body.matchAll(/^[ \t]*```[ \t]*\r?$/gm)];
+		for (const closing of closings.reverse()) {
+			const candidate = body.slice(0, closing.index ?? 0).trim();
+			try {
+				return JSON.parse(candidate) as T;
+			} catch {
+				// A later fence may belong to trailing Markdown; try the prior
+				// line-delimited close before declaring the artifact malformed.
+			}
+		}
+	}
+	return undefined;
 }
 
 export function numericMetadataValue(text: string, key: string): number | undefined {
@@ -55,6 +96,35 @@ export function sha256Text(text: string): string {
 	return createHash("sha256").update(text).digest("hex");
 }
 
+export function compactStoredArtifact(kind: string, path: string, text: string, limit = 4096): string {
+	const signals = text
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(
+			(line) =>
+				line &&
+				(/^(?:#{1,3}\s+|status:|verdict:|score:|mode:|mission_id:|route:|target:|missing:|matched:|blockers?:|gaps?:|next(?:_actions?)?:|checks?:|failures?:)/i.test(
+					line,
+				) ||
+					/^-\s+.*(?:blocked|missing|fail|gap|next|proof|verify)/i.test(line)),
+		)
+		.slice(0, 24)
+		.map((line) => redactSensitiveText(line, 220));
+	return truncateMiddle(
+		[
+			`${kind}:`,
+			"status: stored",
+			`artifact: ${path}`,
+			`bytes: ${Buffer.byteLength(text)}`,
+			`sha256: ${sha256Text(text)}`,
+			"signals:",
+			...(signals.length ? signals.map((line) => `- ${line}`) : ["- none"]),
+			"detail: full artifact is available at artifact path",
+		].join("\n"),
+		limit,
+	);
+}
+
 // opt #159 (moved from recon-profile.ts #158): hash an artifact file's FULL
 // contents without loading it whole. createHash("sha256").update(readFileSync
 // (path)) read the ENTIRE file into memory — a multi-GB artifact (memory dump,
@@ -64,10 +134,8 @@ export function sha256Text(text: string): string {
 // through the hash in fixed HASH_FILE_CHUNK_SIZE chunks via positioned readSync,
 // so memory stays bounded to one chunk regardless of file size. The digest
 // covers ALL bytes (unlike opt #156's tail-read), so the hash is byte-identical
-// to the old whole-file hash. Shared here so both recon-profile.ts and
-// memory-event.ts use one implementation without a circular import (recon-
-// profile is the assembly layer that imports repi/*; repi/* must not import
-// back from recon-profile).
+// to the old whole-file hash. Shared by the profile assembly layer and
+// standalone REPI helpers without introducing a circular import.
 const HASH_FILE_CHUNK_SIZE = 1024 * 1024;
 const HASH_FILE_FAST_MAX = 1024 * 1024;
 export function hashFileSha256(path: string): string {

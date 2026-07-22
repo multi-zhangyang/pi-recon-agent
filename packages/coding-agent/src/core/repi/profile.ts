@@ -113,7 +113,8 @@ export const REPI_TOOL_INDEX_CANDIDATES = [
 	"playwright",
 ] as const;
 
-export const REPI_TOOL_NAMES = [
+/** Stable subset used to recognize and suppress legacy REPI profile copies. */
+export const REPI_PROFILE_SIGNATURE_TOOL_NAMES = [
 	"re_route",
 	"re_kernel",
 	"re_techniques",
@@ -123,7 +124,6 @@ export const REPI_TOOL_NAMES = [
 	"re_exploit_lab",
 	"re_mobile_runtime",
 	"re_native_runtime",
-	"re_memory",
 	"re_tool_index",
 	"re_toolchain_domain",
 	"re_runtime_bridge",
@@ -139,15 +139,12 @@ export const REPI_TOOL_NAMES = [
 	"re_delegate",
 	"re_swarm",
 	"re_supervisor",
-	"re_reflect",
-	"re_context",
 	"re_operator",
 	"re_verifier",
 	"re_compiler",
 	"re_replayer",
 	"re_autofix",
 	"re_proof_loop",
-	"re_knowledge_graph",
 	"re_profile_check",
 	"re_lane",
 	"re_map",
@@ -155,6 +152,15 @@ export const REPI_TOOL_NAMES = [
 	"re_bootstrap",
 	"re_complete",
 ] as const;
+
+/** REPI tools present in both the primary session and recursion-bounded worker sessions. */
+export const REPI_ALWAYS_REGISTERED_TOOL_NAMES = REPI_PROFILE_SIGNATURE_TOOL_NAMES;
+
+/** Process-isolated delegation tools omitted inside REPI agent-thread workers. */
+export const REPI_ROOT_ONLY_TOOL_NAMES = ["re_subagent", "re_reason", "re_challenge"] as const;
+
+/** Complete REPI tool surface registered by the primary inline profile. */
+export const REPI_TOOL_NAMES = [...REPI_ALWAYS_REGISTERED_TOOL_NAMES, ...REPI_ROOT_ONLY_TOOL_NAMES] as const;
 
 export const REPI_COMMAND_NAMES = [
 	"re-route",
@@ -171,7 +177,6 @@ export const REPI_COMMAND_NAMES = [
 	"re-runtime-adapter",
 	"re-lane-specialist-pack",
 	"re-domain-proof-exit",
-	"re-memory",
 	"re-mission",
 	"re-evidence",
 	"re-graph",
@@ -181,15 +186,12 @@ export const REPI_COMMAND_NAMES = [
 	"re-delegate",
 	"re-swarm",
 	"re-supervisor",
-	"re-reflect",
-	"re-context",
 	"re-operator",
 	"re-verifier",
 	"re-compiler",
 	"re-replayer",
 	"re-autofix",
 	"re-proof-loop",
-	"re-knowledge-graph",
 	"re-profile-check",
 	"re-lane",
 	"re-map",

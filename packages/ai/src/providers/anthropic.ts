@@ -16,6 +16,8 @@ import type {
 	ImageContent,
 	Message,
 	Model,
+	ProviderEnv,
+	ProviderHeaders,
 	SimpleStreamOptions,
 	StopReason,
 	StreamFunction,
@@ -26,10 +28,12 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.ts";
+import { splitDeferredTools } from "../utils/deferred-tools.ts";
 import { safeStringifyError, terminalErrorMessage } from "../utils/error-stringify.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
-import { headersToRecord } from "../utils/headers.ts";
+import { headersToRecord, mergeProviderHeaders } from "../utils/headers.ts";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.ts";
+import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { callOnResponseWithDrain } from "../utils/response-drain.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 
@@ -42,11 +46,11 @@ import { transformMessages } from "./transform-messages.ts";
  * Resolve cache retention preference.
  * Defaults to "short" and uses PI_CACHE_RETENTION for backward compatibility.
  */
-function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
+function resolveCacheRetention(cacheRetention?: CacheRetention, env?: ProviderEnv): CacheRetention {
 	if (cacheRetention) {
 		return cacheRetention;
 	}
-	if (typeof process !== "undefined" && process.env.PI_CACHE_RETENTION === "long") {
+	if (getProviderEnvValue("PI_CACHE_RETENTION", env) === "long") {
 		return "long";
 	}
 	return "short";
@@ -55,8 +59,9 @@ function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention 
 function getCacheControl(
 	model: Model<"anthropic-messages">,
 	cacheRetention?: CacheRetention,
+	env?: ProviderEnv,
 ): { retention: CacheRetention; cacheControl?: CacheControlEphemeral } {
-	const retention = resolveCacheRetention(cacheRetention);
+	const retention = resolveCacheRetention(cacheRetention, env);
 	if (retention === "none") {
 		return { retention };
 	}
@@ -180,7 +185,21 @@ function getAnthropicCompat(
 		supportsCacheControlOnTools: model.compat?.supportsCacheControlOnTools ?? !isFireworks,
 		supportsTemperature: model.compat?.supportsTemperature ?? true,
 		allowEmptySignature: model.compat?.allowEmptySignature ?? false,
+		supportsToolReferences: model.compat?.supportsToolReferences ?? defaultSupportsToolReferences(model),
 	};
+}
+
+/** First-party Claude models that accept client-side tool references. */
+function defaultSupportsToolReferences(model: Model<"anthropic-messages">): boolean {
+	const baseUrl = model.baseUrl.replace(/\/+$/, "");
+	if (model.provider !== "anthropic" || baseUrl !== "https://api.anthropic.com" || model.id.includes("haiku")) {
+		return false;
+	}
+	const version = model.id.match(/^claude-(?:opus|sonnet|fable)-(\d+)(?:-(\d+))?(?:-|$)/);
+	if (!version) return false;
+	const major = Number(version[1]);
+	const minor = version[2] && version[2].length < 8 ? Number(version[2]) : 0;
+	return major > 4 || (major === 4 && minor >= 5);
 }
 
 export interface AnthropicOptions extends StreamOptions {
@@ -245,14 +264,8 @@ export interface AnthropicOptions extends StreamOptions {
 	client?: Anthropic;
 }
 
-function mergeHeaders(...headerSources: (Record<string, string | null> | undefined)[]): Record<string, string | null> {
-	const merged: Record<string, string | null> = {};
-	for (const headers of headerSources) {
-		if (headers) {
-			Object.assign(merged, headers);
-		}
-	}
-	return merged;
+function mergeHeaders(...headerSources: (ProviderHeaders | undefined)[]): ProviderHeaders {
+	return mergeProviderHeaders(...headerSources) ?? {};
 }
 
 interface ServerSentEvent {
@@ -567,7 +580,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 					});
 				}
 
-				const cacheRetention = options?.cacheRetention ?? resolveCacheRetention();
+				const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
 				const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
 
 				const created = createClient(
@@ -578,6 +591,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 					options?.headers,
 					copilotDynamicHeaders,
 					cacheSessionId,
+					options?.env,
 				);
 				client = created.client;
 				isOAuth = created.isOAuthToken;
@@ -610,6 +624,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 					output.usage.output = event.message.usage.output_tokens || 0;
 					output.usage.cacheRead = event.message.usage.cache_read_input_tokens || 0;
 					output.usage.cacheWrite = event.message.usage.cache_creation_input_tokens || 0;
+					output.usage.cacheWrite1h = event.message.usage.cache_creation?.ephemeral_1h_input_tokens || 0;
 					// Anthropic doesn't provide total_tokens, compute from components
 					output.usage.totalTokens =
 						output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
@@ -864,9 +879,10 @@ function createClient(
 	apiKey: string,
 	interleavedThinking: boolean,
 	useFineGrainedToolStreamingBeta: boolean,
-	optionsHeaders?: Record<string, string>,
+	optionsHeaders?: ProviderHeaders,
 	dynamicHeaders?: Record<string, string>,
 	sessionId?: string,
+	env?: ProviderEnv,
 ): { client: Anthropic; isOAuthToken: boolean } {
 	// Adaptive thinking models have interleaved thinking built in, so skip the beta header.
 	const needsInterleavedBeta = interleavedThinking && model.compat?.forceAdaptiveThinking !== true;
@@ -882,7 +898,7 @@ function createClient(
 		const client = new Anthropic({
 			apiKey: null,
 			authToken: null,
-			baseURL: resolveCloudflareBaseUrl(model),
+			baseURL: resolveCloudflareBaseUrl(model, env),
 			dangerouslyAllowBrowser: true,
 			defaultHeaders: mergeHeaders(
 				{
@@ -947,7 +963,7 @@ function createClient(
 	}
 
 	// API key auth
-	const sessionAffinityHeaders: Record<string, string | null> =
+	const sessionAffinityHeaders: ProviderHeaders =
 		sessionId && getAnthropicCompat(model).sendSessionAffinityHeaders ? { "x-session-affinity": sessionId } : {};
 	const client = new Anthropic({
 		apiKey,
@@ -975,11 +991,32 @@ function buildParams(
 	isOAuthToken: boolean,
 	options?: AnthropicOptions,
 ): MessageCreateParamsStreaming {
-	const { cacheControl } = getCacheControl(model, options?.cacheRetention);
+	const { cacheControl } = getCacheControl(model, options?.cacheRetention, options?.env);
 	const compat = getAnthropicCompat(model);
+	const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
+	const normalizeToolName = isOAuthToken ? toClaudeCodeName : (name: string) => name;
+	const toolPlacement = splitDeferredTools(
+		{ ...context, messages: transformedMessages },
+		compat.supportsToolReferences,
+		normalizeToolName,
+	);
+	let immediateTools = toolPlacement.immediate;
+	let deferredTools = [...toolPlacement.deferred.values()];
+	if (immediateTools.length === 0 && deferredTools.length > 0) {
+		immediateTools = deferredTools;
+		deferredTools = [];
+	}
+	const deferredToolNames = new Set(deferredTools.map((tool) => normalizeToolName(tool.name)));
 	const params: MessageCreateParamsStreaming = {
 		model: model.id,
-		messages: convertMessages(context.messages, model, isOAuthToken, cacheControl, compat.allowEmptySignature),
+		messages: convertTransformedMessages(
+			transformedMessages,
+			isOAuthToken,
+			cacheControl,
+			compat.allowEmptySignature,
+			deferredToolNames,
+			normalizeToolName,
+		),
 		max_tokens: options?.maxTokens ?? model.maxTokens,
 		stream: true,
 	};
@@ -1016,13 +1053,16 @@ function buildParams(
 		params.temperature = options.temperature;
 	}
 
-	if (context.tools && context.tools.length > 0) {
-		params.tools = convertTools(
-			context.tools,
-			isOAuthToken,
-			compat.supportsEagerToolInputStreaming,
-			compat.supportsCacheControlOnTools ? cacheControl : undefined,
-		);
+	if (immediateTools.length > 0 || deferredTools.length > 0) {
+		params.tools = [
+			...convertTools(
+				immediateTools,
+				isOAuthToken,
+				compat.supportsEagerToolInputStreaming,
+				compat.supportsCacheControlOnTools ? cacheControl : undefined,
+			),
+			...convertTools(deferredTools, isOAuthToken, compat.supportsEagerToolInputStreaming, undefined, true),
+		];
 	}
 
 	// Configure thinking mode: adaptive, budget-based, or explicitly disabled.
@@ -1086,10 +1126,54 @@ export function convertMessages(
 	cacheControl?: CacheControlEphemeral,
 	allowEmptySignature = false,
 ): MessageParam[] {
-	const params: MessageParam[] = [];
-
-	// Transform messages for cross-provider compatibility
 	const transformedMessages = transformMessages(messages, model, normalizeToolCallId);
+	return convertTransformedMessages(transformedMessages, isOAuthToken, cacheControl, allowEmptySignature);
+}
+
+function convertToolResult(
+	msg: ToolResultMessage,
+	isOAuthToken: boolean,
+	deferredToolNames: ReadonlySet<string>,
+	loadedToolNames: Set<string>,
+	normalizeToolName: (name: string) => string,
+): { toolResult: ContentBlockParam; siblingContent: ContentBlockParam[] } {
+	const references: Array<{ type: "tool_reference"; tool_name: string }> = [];
+	for (const name of msg.addedToolNames ?? []) {
+		const normalizedName = normalizeToolName(name);
+		if (!deferredToolNames.has(normalizedName) || loadedToolNames.has(normalizedName)) continue;
+		loadedToolNames.add(normalizedName);
+		references.push({
+			type: "tool_reference",
+			tool_name: isOAuthToken ? toClaudeCodeName(name) : name,
+		});
+	}
+	const convertedContent = convertContentBlocks(msg.content);
+	return {
+		toolResult: {
+			type: "tool_result",
+			tool_use_id: msg.toolCallId,
+			content: references.length > 0 ? references : convertedContent,
+			is_error: msg.isError,
+		},
+		siblingContent:
+			references.length === 0
+				? []
+				: typeof convertedContent === "string"
+					? [{ type: "text", text: convertedContent }]
+					: convertedContent,
+	};
+}
+
+function convertTransformedMessages(
+	transformedMessages: Message[],
+	isOAuthToken: boolean,
+	cacheControl?: CacheControlEphemeral,
+	allowEmptySignature = false,
+	deferredToolNames: ReadonlySet<string> = new Set(),
+	normalizeToolName: (name: string) => string = (name) => name,
+): MessageParam[] {
+	const params: MessageParam[] = [];
+	const loadedToolNames = new Set<string>();
 
 	for (let i = 0; i < transformedMessages.length; i++) {
 		const msg = transformedMessages[i];
@@ -1223,37 +1307,30 @@ export function convertMessages(
 				content: blocks,
 			});
 		} else if (msg.role === "toolResult") {
-			// Collect all consecutive toolResult messages, needed for z.ai Anthropic endpoint
+			// Collect all consecutive toolResult messages, needed for z.ai Anthropic endpoint.
 			const toolResults: ContentBlockParam[] = [];
-
-			// Add the current tool result
-			toolResults.push({
-				type: "tool_result",
-				tool_use_id: msg.toolCallId,
-				content: convertContentBlocks(msg.content),
-				is_error: msg.isError,
-			});
-
-			// Look ahead for consecutive toolResult messages
-			let j = i + 1;
+			const siblingContent: ContentBlockParam[] = [];
+			let j = i;
 			while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
-				const nextMsg = transformedMessages[j] as ToolResultMessage; // We know it's a toolResult
-				toolResults.push({
-					type: "tool_result",
-					tool_use_id: nextMsg.toolCallId,
-					content: convertContentBlocks(nextMsg.content),
-					is_error: nextMsg.isError,
-				});
+				const converted = convertToolResult(
+					transformedMessages[j] as ToolResultMessage,
+					isOAuthToken,
+					deferredToolNames,
+					loadedToolNames,
+					normalizeToolName,
+				);
+				toolResults.push(converted.toolResult);
+				siblingContent.push(...converted.siblingContent);
 				j++;
 			}
 
-			// Skip the messages we've already processed
+			// Skip the messages we've already processed.
 			i = j - 1;
 
-			// Add a single user message with all tool results
+			// Displaced reference-bearing results must follow every tool_result block.
 			params.push({
 				role: "user",
-				content: toolResults,
+				content: [...toolResults, ...siblingContent],
 			});
 		}
 	}
@@ -1294,6 +1371,7 @@ function convertTools(
 	isOAuthToken: boolean,
 	supportsEagerToolInputStreaming: boolean,
 	cacheControl?: CacheControlEphemeral,
+	deferLoading = false,
 ): Anthropic.Messages.Tool[] {
 	if (!tools) return [];
 
@@ -1309,6 +1387,7 @@ function convertTools(
 				properties: schema.properties ?? {},
 				required: schema.required ?? [],
 			},
+			...(deferLoading ? { defer_loading: true } : {}),
 			...(cacheControl && index === tools.length - 1 ? { cache_control: cacheControl } : {}),
 		};
 	});

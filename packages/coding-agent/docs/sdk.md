@@ -39,8 +39,14 @@ await session.prompt("What files are in the current directory?");
 
 ## Installation
 
+The packages are GitHub Release artifacts rather than registry packages. For a local SDK dependency, download one same-version release set and install all four tarballs together:
+
 ```bash
-npm install @pi-recon/repi-coding-agent
+npm install \
+  ./pi-recon-repi-ai-0.1.3.tgz \
+  ./pi-recon-repi-agent-core-0.1.3.tgz \
+  ./pi-recon-repi-tui-0.1.3.tgz \
+  ./pi-recon-repi-coding-agent-0.1.3.tgz
 ```
 
 The SDK is included in the main package. No separate installation needed.
@@ -368,18 +374,16 @@ When you pass a custom `ResourceLoader`, `cwd` and `agentDir` no longer control 
 ### Model
 
 ```typescript
-import { getModel } from "@pi-recon/repi-ai";
 import { AuthStorage, ModelRegistry } from "@pi-recon/repi-coding-agent";
 
 const authStorage = AuthStorage.create();
 const modelRegistry = ModelRegistry.create(authStorage);
 
-// Find specific built-in model (doesn't check if API key exists)
-const opus = getModel("anthropic", "claude-opus-4-5");
+// Models are explicit runtime data; find one supplied by models.json, REPI_*, or an extension.
+const opus = modelRegistry.find("my-provider", "my-model");
 if (!opus) throw new Error("Model not found");
 
-// Find any model by provider/id, including custom models from models.json
-// (doesn't check if API key exists)
+// Find any explicitly configured model by provider/id (doesn't check auth).
 const customModel = modelRegistry.find("my-provider", "my-model");
 
 // Get only models that have valid API keys configured
@@ -392,7 +396,7 @@ const { session } = await createAgentSession({
   // Models for cycling (Ctrl+P in interactive mode)
   scopedModels: [
     { model: opus, thinkingLevel: "high" },
-    { model: haiku, thinkingLevel: "off" },
+    { model: customModel ?? opus, thinkingLevel: "off" },
   ],
   
   authStorage,
@@ -412,13 +416,13 @@ If no model is provided:
 API key resolution priority (handled by AuthStorage):
 1. Runtime overrides (via `setRuntimeApiKey`, not persisted)
 2. Stored credentials in `auth.json` (API keys or OAuth tokens)
-3. Environment variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.)
-4. Fallback resolver (for custom provider keys from `models.json`)
+3. Explicit `apiKey`/header references in `models.json` or an environment model
+4. A provider-specific environment convention, when one is intentionally configured
 
 ```typescript
 import { AuthStorage, ModelRegistry } from "@pi-recon/repi-coding-agent";
 
-// Default: uses ~/.repi/agent/auth.json and ~/.repi/agent/models.json
+// Uses ~/.repi/agent/auth.json and the explicit ~/.repi/agent/models.json, if present.
 const authStorage = AuthStorage.create();
 const modelRegistry = ModelRegistry.create(authStorage);
 
@@ -441,7 +445,7 @@ const { session } = await createAgentSession({
   modelRegistry: customRegistry,
 });
 
-// No custom models.json (built-in models only)
+// In-memory registry with no persisted model catalog.
 const simpleRegistry = ModelRegistry.inMemory(authStorage);
 ```
 

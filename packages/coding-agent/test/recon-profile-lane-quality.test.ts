@@ -34,7 +34,7 @@ describe("REPI lane evidence quality", () => {
 			expect(harness.execCalls).toHaveLength(1);
 			expect(weakRun.content[0]?.text).toContain("evidence_quality:");
 			expect(weakRun.content[0]?.text).toContain("deficits:");
-			expect(weakRun.content[0]?.text).toContain("self_heal_commands:");
+			expect(weakRun.content[0]?.text).toContain("self_heal_labels:");
 			expect(weakRun.content[0]?.text).toContain("heal-native-baseline");
 			const artifactPath = /evidence_artifact: (.+)/.exec(weakRun.content[0]?.text ?? "")?.[1]?.trim();
 			expect(artifactPath).toBeDefined();

@@ -69,30 +69,99 @@ describe("init-repi-profile.mjs install-time profile initialization", () => {
 		const nextProfileInode = statSync(profilePath).ino;
 		if (settingsInode !== 0 && nextSettingsInode !== 0) expect(nextSettingsInode).not.toBe(settingsInode);
 		if (profileInode !== 0 && nextProfileInode !== 0) expect(nextProfileInode).not.toBe(profileInode);
-		expect(JSON.parse(readFileSync(settingsPath, "utf8")).memory.schemaVersion).toBe(2);
+		expect(JSON.parse(readFileSync(settingsPath, "utf8"))).not.toHaveProperty("memory");
 		expect(JSON.parse(readFileSync(profilePath, "utf8")).kind).toBe("isolated-repi-profile");
 		expect(statSync(settingsPath).mode & 0o777).toBe(0o600);
 		expect(statSync(profilePath).mode & 0o777).toBe(0o600);
 		expect(collectTmp(agentDir)).toEqual([]);
 	});
 
-	it("does not seed legacy global memory files before the cwd-scoped store exists", () => {
+	it("keeps install-time storage minimal", () => {
 		runInit();
 
-		for (const name of [
-			"field-journal.md",
-			"case-index.md",
-			"evolution-log.md",
-			"core-memory.md",
-			"project-memory.md",
-			"procedural-memory.md",
-			"events.jsonl",
-		]) {
-			expect(existsSync(join(agentDir, "recon", "memory", name))).toBe(false);
+		expect(existsSync(join(agentDir, "recon", "memory"))).toBe(false);
+		expect(existsSync(join(agentDir, "recon", "evidence"))).toBe(false);
+		expect(existsSync(join(agentDir, "recon", "tools"))).toBe(false);
+	});
+
+	it("migrates retired state without deleting sessions, missions, evidence, or reports", () => {
+		const stalePaths = [
+			join(agentDir, "memory", "case-index.md"),
+			join(agentDir, "SYSTEM.md"),
+			join(agentDir, "APPEND_SYSTEM.md"),
+			join(agentDir, "prompts", "memory.md"),
+			join(agentDir, "skills", "reverse-pentest-orchestrator", "references", "memory-schema.md"),
+			join(agentDir, "recon", "memory", "events.jsonl"),
+			join(agentDir, "recon", "builtin", "prompts", "memory.md"),
+			join(agentDir, "recon", "evidence", "knowledge", "graph.md"),
+			join(agentDir, "recon", "evidence", "runs", "old-case-memory-repair.md"),
+			join(agentDir, "recon", "evidence", "tool-calls", "trace.jsonl"),
+			join(agentDir, "recon", "archive", "legacy-file-profile-old", "extension.ts"),
+			join(agentDir, "recon", "agent-threads", "run-1", "agent-home", "recon", "memory", "events.jsonl"),
+			join(agentDir, "recon", "agent-threads", "run-1", "agent-home", "prompts", "memory.md"),
+		];
+		const preservedPaths = [
+			join(agentDir, "sessions", "keep.jsonl"),
+			join(agentDir, "evidence", "ledger.md"),
+			join(agentDir, "mission", "current.json"),
+			join(agentDir, "reports", "latest.md"),
+			join(agentDir, "recon", "agent-threads", "run-1", "agent-home", "evidence", "ledger.md"),
+			join(agentDir, "recon", "agent-threads", "run-1", "agent-home", "mission", "current.json"),
+			join(agentDir, "recon", "agent-threads", "run-1", "agent-home", "reports", "latest.md"),
+		];
+		const isolatedSettings = [
+			join(agentDir, "recon", "agent-threads", "run-1", "agent-home", "settings.json"),
+			join(agentDir, "recon", "evidence", "swarms", "2020-run-sessions", ".repi", "agent", "settings.json"),
+			join(
+				agentDir,
+				"recon",
+				"evidence",
+				"swarms",
+				"2020-run-worker-child-session-runtime-child-process",
+				"home",
+				".repi",
+				"agent",
+				"settings.json",
+			),
+		];
+		const unrelatedEvidenceSettings = join(agentDir, "recon", "evidence", "swarms", "notes", "settings.json");
+		for (const path of [...stalePaths, ...preservedPaths]) {
+			mkdirSync(join(path, ".."), { recursive: true });
+			writeFileSync(path, "stale\n");
 		}
-		expect(existsSync(join(agentDir, "recon", "memory", "playbooks"))).toBe(false);
-		expect(existsSync(join(agentDir, "recon", "evidence", "ledger.md"))).toBe(true);
-		expect(existsSync(join(agentDir, "recon", "tools", "tool-index.md"))).toBe(true);
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({
+				memory: { autoInject: true },
+				extensions: ["custom-extension.ts", "reverse-pentest-core.ts"],
+				skills: ["custom-skill", "reverse-pentest-orchestrator"],
+				prompts: ["custom-prompt", "prompts"],
+				enabledModels: ["custom/model", "reverse-pentest/model"],
+			}),
+		);
+		for (const path of isolatedSettings) {
+			mkdirSync(join(path, ".."), { recursive: true });
+			writeFileSync(path, JSON.stringify({ memory: { autoRecall: true }, defaultModel: "keep" }));
+		}
+		mkdirSync(join(unrelatedEvidenceSettings, ".."), { recursive: true });
+		writeFileSync(unrelatedEvidenceSettings, JSON.stringify({ memory: { autoRecall: true } }));
+
+		runInit();
+
+		for (const path of stalePaths) expect(existsSync(path), path).toBe(false);
+		for (const path of preservedPaths) expect(existsSync(path), path).toBe(true);
+		const settings = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8"));
+		expect(settings).not.toHaveProperty("memory");
+		expect(settings.extensions).toEqual(["custom-extension.ts"]);
+		expect(settings.skills).toEqual(["custom-skill"]);
+		expect(settings.prompts).toEqual(["custom-prompt"]);
+		expect(settings.enabledModels).toEqual(["custom/model"]);
+		for (const path of isolatedSettings) {
+			const isolated = JSON.parse(readFileSync(path, "utf8"));
+			expect(isolated).not.toHaveProperty("memory");
+			expect(isolated.defaultModel).toBe("keep");
+		}
+		expect(JSON.parse(readFileSync(unrelatedEvidenceSettings, "utf8"))).toHaveProperty("memory");
 	});
 
 	it("copies legacy model/auth files atomically with private permissions", () => {

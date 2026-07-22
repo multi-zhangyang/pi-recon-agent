@@ -5,13 +5,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { appendPrivateTextFile, writePrivateTextFile } from "../../src/core/repi/storage.ts";
 
 // writePrivateTextFile is the SHARED write path for all REPI persisted state
-// (playbooks, missions, evidence, memory transactions, tool index). It writes
+// (playbooks, missions, evidence, and tool index). It writes
 // atomically (temp+rename, 0o600): a crash mid-write must never leave a
 // truncated/partial file — readTextFile swallows the parse failure and returns
 // "" (graceful) but the content is SILENTLY LOST. temp+rename replaces the
 // inode; the old truncate-then-write kept it — the inode-change assertion is
 // the regression probe. appendPrivateTextFile is the SHARED append path for the
-// append-only ledgers (tool-trace, runtime failure/repair, evidence, journals);
+// append-only ledgers (runtime failure/repair and evidence);
 // it now true-appends (appendFileSync, O(chunk), inode preserved) instead of
 // read-modify-write (O(file) read + atomic rewrite per append) — its separator
 // contract + 0o600 mode are preserved, see the append test below.

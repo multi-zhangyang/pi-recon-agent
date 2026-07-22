@@ -1,8 +1,8 @@
 /**
  * Minimal SDK Usage
  *
- * Uses all defaults: discovers skills, extensions, tools, context files
- * from cwd and ~/.pi/agent. Model chosen from settings or first available.
+ * Uses standard resource discovery and the canonical model runtime. Model
+ * metadata must come from settings, models.json, REPI_*, or an extension.
  */
 
 import { createAgentSession } from "@pi-recon/repi-coding-agent";

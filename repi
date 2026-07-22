@@ -23,6 +23,7 @@ fi
 
 # REPI is the independent product entrypoint. It never owns the
 # upstream `pi` command and keeps all runtime state in ~/.repi/agent.
+# Active reverse/pentest execution entry.
 export REPI_CODING_AGENT_APP_NAME="${REPI_CODING_AGENT_APP_NAME:-repi}"
 export REPI_CODING_AGENT_CONFIG_DIR="${REPI_CODING_AGENT_CONFIG_DIR:-.repi}"
 export REPI_CODING_AGENT_DIR="${REPI_CODING_AGENT_DIR:-${REPI_AGENT_DIR:-$HOME/.repi/agent}}"
@@ -37,15 +38,32 @@ export REPI_PRINT_PROGRESS="${REPI_PRINT_PROGRESS:-1}"
 export REPI_PRINT_TIMEOUT_MS="${REPI_PRINT_TIMEOUT_MS:-210000}"
 export REPI_PRINT_TIMEOUT_GRACE_MS="${REPI_PRINT_TIMEOUT_GRACE_MS:-30000}"
 export REPI_PRINT_TIMEOUT_TOOL_GRACE_MS="${REPI_PRINT_TIMEOUT_TOOL_GRACE_MS:-300000}"
-export REPI_PRINT_MAX_TURNS="${REPI_PRINT_MAX_TURNS:-24}"
-export REPI_PRINT_MAX_TOOL_CALLS="${REPI_PRINT_MAX_TOOL_CALLS:-80}"
+export REPI_PRINT_MAX_TURNS="${REPI_PRINT_MAX_TURNS:-10}"
+export REPI_PRINT_MAX_TOOL_CALLS="${REPI_PRINT_MAX_TOOL_CALLS:-48}"
 export REPI_STDIN_READ_TIMEOUT_MS="${REPI_STDIN_READ_TIMEOUT_MS:-1500}"
 export REPI_BASH_DEFAULT_TIMEOUT_SECONDS="${REPI_BASH_DEFAULT_TIMEOUT_SECONDS:-120}"
+export REPI_DEFAULT_THINKING="${REPI_DEFAULT_THINKING:-medium}"
 # Compatibility for inherited upstream internals; user-facing REPI docs prefer REPI_* names.
 export PI_SKIP_VERSION_CHECK="${PI_SKIP_VERSION_CHECK:-$REPI_SKIP_VERSION_CHECK}"
 export PI_SKIP_PACKAGE_UPDATE_CHECK="${PI_SKIP_PACKAGE_UPDATE_CHECK:-$REPI_SKIP_PACKAGE_UPDATE_CHECK}"
 export PI_TELEMETRY="${PI_TELEMETRY:-$REPI_TELEMETRY}"
 export PI_OFFLINE="${PI_OFFLINE:-$REPI_OFFLINE}"
+
+# Node 24+ only honors HTTP(S)_PROXY/ALL_PROXY for fetch when the
+# --use-env-proxy runtime flag is enabled. Add it through NODE_OPTIONS so the
+# main CLI and every Node child/provider inherit the same transport policy.
+# Older supported Node versions ignore this block because the flag probe fails.
+if [ -n "${HTTP_PROXY:-}${HTTPS_PROXY:-}${ALL_PROXY:-}${http_proxy:-}${https_proxy:-}${all_proxy:-}" ]; then
+  case " ${NODE_OPTIONS:-} " in
+    *" --use-env-proxy "*) ;;
+    *)
+      if node -p 'process.allowedNodeEnvironmentFlags?.has("--use-env-proxy") ? "yes" : "no"' 2>/dev/null | grep -qx yes; then
+        export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--use-env-proxy"
+      fi
+      ;;
+  esac
+fi
+
 # Compatibility for upstream pi extensions. Keep legacy PI_* paths pointed at
 # REPI's isolated profile so packages such as @narumitw/pi-goal and
 # pi-web-access do not fall back to ~/.pi when loaded by repi.
@@ -56,16 +74,92 @@ if [ -n "${REPI_ALLOW_BROWSER_COOKIES:-}" ] && [ -z "${PI_ALLOW_BROWSER_COOKIES:
 fi
 export REPI_REPO_ROOT="$ROOT"
 
+REPI_DIST_CLI="$ROOT/packages/coding-agent/dist/cli.js"
+REPI_DIST_MANIFEST="$ROOT/packages/coding-agent/dist/repi-runtime.json"
+REPI_RUNTIME_MARKER="$ROOT/scripts/reverse-agent/mark-repi-runtime.mjs"
+REPI_SOURCE_CLI="$ROOT/packages/coding-agent/src/cli.ts"
+
+repi_dist_candidate_is_current() {
+  [ "${REPI_USE_SOURCE:-0}" != "1" ] || return 1
+  [ -f "$REPI_DIST_MANIFEST" ] || return 1
+
+  local package entry config newer
+  for config in "$ROOT/package-lock.json" "$ROOT/tsconfig.base.json"; do
+    if [ -f "$config" ] && [ "$config" -nt "$REPI_DIST_MANIFEST" ]; then
+      return 1
+    fi
+  done
+
+  for package in tui ai agent coding-agent; do
+    case "$package" in
+      tui) entry="$ROOT/packages/tui/dist/index.js" ;;
+      ai) entry="$ROOT/packages/ai/dist/index.js" ;;
+      agent) entry="$ROOT/packages/agent/dist/index.js" ;;
+      coding-agent) entry="$REPI_DIST_CLI" ;;
+    esac
+    [ -f "$entry" ] || return 1
+    [ ! "$entry" -nt "$REPI_DIST_MANIFEST" ] || return 1
+
+    for config in "$ROOT/packages/$package/package.json" "$ROOT/packages/$package/tsconfig.build.json"; do
+      if [ -f "$config" ] && [ "$config" -nt "$REPI_DIST_MANIFEST" ]; then
+        return 1
+      fi
+    done
+  done
+
+  newer="$(find \
+    "$ROOT/packages/tui/src" \
+    "$ROOT/packages/ai/src" \
+    "$ROOT/packages/agent/src" \
+    "$ROOT/packages/coding-agent/src" \
+    -newer "$REPI_DIST_MANIFEST" -print -quit 2>/dev/null || true)"
+  [ -z "$newer" ] || return 1
+
+  [ -f "$ROOT/packages/coding-agent/dist/modes/interactive/theme/dark.json" ] || return 1
+  [ -f "$ROOT/packages/coding-agent/dist/modes/interactive/theme/light.json" ] || return 1
+  [ ! "$ROOT/packages/coding-agent/dist/modes/interactive/theme/dark.json" -nt "$REPI_DIST_MANIFEST" ] || return 1
+  [ ! "$ROOT/packages/coding-agent/dist/modes/interactive/theme/light.json" -nt "$REPI_DIST_MANIFEST" ] || return 1
+
+  [ -f "$REPI_RUNTIME_MARKER" ] || return 1
+}
+
+run_repi_cli() {
+  if repi_dist_candidate_is_current; then
+    exec node "$REPI_RUNTIME_MARKER" "$ROOT" --launch -- "$@"
+  fi
+  if [ -x "$ROOT/node_modules/.bin/tsx" ] && [ -f "$REPI_SOURCE_CLI" ]; then
+    exec "$ROOT/node_modules/.bin/tsx" --tsconfig "$ROOT/tsconfig.json" "$REPI_SOURCE_CLI" "$@"
+  fi
+
+  echo "REPI runtime is unavailable: no current production build or source runner was found." >&2
+  echo "Run 'npm install --ignore-scripts && npm run build' in $ROOT." >&2
+  exit 1
+}
+
 validate_repi_env_model_config() {
   local has_model_config=0
-  if [ -n "${REPI_BASE_URL:-}${REPI_MODEL_BASE_URL:-}${REPI_MODEL:-}${REPI_MODEL_ID:-}${REPI_MODEL_API:-}${REPI_API:-}" ]; then
+  if [ -n "${REPI_BASE_URL:-}${REPI_MODEL_BASE_URL:-}${REPI_API_BASE_URL:-}${REPI_ENDPOINT:-}${REPI_MODEL_ENDPOINT:-}${REPI_MODEL:-}${REPI_MODEL_ID:-}${REPI_MODEL_API:-}${REPI_API:-}" ]; then
     has_model_config=1
   fi
   [ "$has_model_config" -eq 1 ] || return 0
 
   local model="${REPI_MODEL:-${REPI_MODEL_ID:-}}"
-  local base_url="${REPI_BASE_URL:-${REPI_MODEL_BASE_URL:-}}"
+  local base_url="${REPI_BASE_URL:-${REPI_MODEL_BASE_URL:-${REPI_API_BASE_URL:-${REPI_ENDPOINT:-${REPI_MODEL_ENDPOINT:-}}}}}"
   if [ -n "$model" ] && [ -n "$base_url" ]; then
+    local model_api="${REPI_MODEL_API:-${REPI_API:-}}"
+    if [ -n "$model_api" ]; then
+      model_api="${model_api,,}"
+      model_api="${model_api//_/-}"
+      case "$model_api" in
+        openai-compatible|openai-chat|chat|chat-completions|openai-completions|response|responses|openai-response|openai-responses|anthropic|claude|anthropic-compatible|anthropic-messages) ;;
+        *)
+          echo "REPI env model config is incomplete or invalid; refusing to fall back to a saved/default model." >&2
+          printf '  invalid: REPI_MODEL_API="%s"\n' "${REPI_MODEL_API:-${REPI_API:-}}" >&2
+          echo "  allowed: openai-compatible | openai-responses | anthropic" >&2
+          exit 2
+          ;;
+      esac
+    fi
     return 0
   fi
 
@@ -90,13 +184,25 @@ MSG
   exit 2
 }
 
+is_repi_list_models_metadata_request() {
+  local arg list_models_count=0
+  for arg in "$@"; do
+    case "$arg" in
+      --offline|--recon|--reverse-pentest) ;;
+      --list-models) list_models_count=$((list_models_count + 1)) ;;
+      *) return 1 ;;
+    esac
+  done
+  [ "$list_models_count" -eq 1 ]
+}
+
 case "${1:-}" in
   install|setup)
     if [ "${1:-}" = "install" ] && [ "$#" -ge 2 ]; then
       case "${2:-}" in
         --root|--bin-dir|--user|--system|-h|--help) ;;
         *)
-          exec "$ROOT/node_modules/.bin/tsx" --tsconfig "$ROOT/tsconfig.json" "$ROOT/packages/coding-agent/src/cli.ts" "$@"
+          run_repi_cli "$@"
           ;;
       esac
     fi
@@ -113,7 +219,7 @@ case "${1:-}" in
       case "${2:-}" in
         --root|--fast|--full|--no-pull|--skip-npm|--bin-dir|--user|--system|-h|--help) ;;
         *)
-          exec "$ROOT/node_modules/.bin/tsx" --tsconfig "$ROOT/tsconfig.json" "$ROOT/packages/coding-agent/src/cli.ts" "$@"
+          run_repi_cli "$@"
           ;;
       esac
     fi
@@ -125,64 +231,28 @@ case "${1:-}" in
     exec node "$ROOT/scripts/reverse-agent/repi-bootstrap.mjs" "$ROOT" "$@"
     ;;
   uninstall)
+    # `uninstall <source>` is the package-manager alias for remove. Keep the
+    # launcher lifecycle command for the no-source form and its own flags.
+    case "${2:-}" in
+      -l|--local|-a|--approve|-na|--no-approve)
+        run_repi_cli "$@"
+        ;;
+      --apply|--purge|--yes|-y|-h|--help|--source|--source=*)
+        ;;
+      --*)
+        ;;
+      "")
+        ;;
+      *)
+        run_repi_cli "$@"
+        ;;
+    esac
     shift
     exec node "$ROOT/scripts/reverse-agent/repi-uninstall.mjs" "$ROOT" "$@"
     ;;
   commands)
-    cat <<'MSG'
-REPI command quick reference
-
-Install / update:
-  repi install [--user|--system|--bin-dir <dir>]     Refresh launcher/profile from this checkout
-  repi update [--fast|--full|--no-pull]              Pull latest code, reinstall, run doctor/smoke
-  repi bootstrap [--dry-run|--only a,b|--list]      Install the RE/pentest toolchain (gdb/pwntools/binwalk/...)
-  repi uninstall [--apply] [--purge] [--source <dir>]  Remove the repi launcher (dry-run by default; never touches pi)
-
-Health:
-  repi health [--fix] [--selfcheck|--deep]          Operator health dashboard and safe repair plan
-  repi doctor [--fix]                                Runtime, profile, model and memory diagnostics
-  repi smoke [--full]                                Fast local smoke test
-  repi selfcheck [--deep] --provider <id> --model <id>
-  repi bugreport --output /tmp/repi-bugreport.json   Redacted diagnostic bundle
-  repi trust status                                  Show project trust decision for current folder
-  repi trust yes|no|clear [path]                     Save or clear project trust
-  repi mission new <task> [--target <target>]        Start a scoped mission/control-plane
-  repi mission status|plan|next|pack|close           Mission state, lane plan, resume pack
-  repi engage <target> [--full] [--swarm]            Active reverse/pentest execution entry
-  repi attack|reverse|web <target>                   Aliases for repi engage
-
-Models:
-  export REPI_AUTH_TOKEN=sk-... REPI_BASE_URL=https://... REPI_PROVIDER=gateway REPI_MODEL=vendor/model
-  export REPI_MODEL_API=openai-compatible   # also: openai-responses, anthropic
-  repi --list-models                        # REPI env-only model appears as repi-env by default
-  repi model add --provider <id> --api openai-completions --base-url <url> --model <model>
-  repi model login --provider <id> --api-key-stdin
-  repi model default --provider <id> --model <model>  # legacy; REPI_* env is preferred
-  repi model list [--provider <id>] [--model <id>] [--show-urls]
-  repi model doctor|test|cost|export|import
-
-MCP:
-  repi mcp status
-  repi mcp list
-  repi mcp probe <server-id>
-  repi mcp search <server-id> [query]
-  repi mcp resources <server-id>
-
-Memory:
-  repi memory status|list|show|why|forget|quarantine|doctor|export|purge|sanitize|diff|consolidate
-
-Swarm:
-  repi swarm plan <target> --workers 5
-  repi swarm run <target> --workers 5 --provider <id> --model <model>
-  repi swarm status latest
-  repi swarm merge latest
-
-Run:
-  repi                                             Interactive
-  repi -p "task"                                  One-shot task
-  repi --provider <id> --model <model> -p "task"  One-shot with a specific model
-MSG
-    exit 0
+    shift
+    exec node "$ROOT/scripts/reverse-agent/repi-commands.mjs" "$ROOT" "$@"
     ;;
   trust)
     shift
@@ -217,6 +287,10 @@ MSG
     exec node "$ROOT/scripts/reverse-agent/repi-engage.mjs" "$ROOT" "$@"
     ;;
   mcp)
+    case "${2:-}" in
+      -h|--help) ;;
+      -*) run_repi_cli "$@" ;;
+    esac
     sub="${2:-status}"
     if [ "$#" -ge 2 ]; then shift 2; else shift 1; fi
     case "$sub" in
@@ -231,10 +305,14 @@ MSG
     esac
     ;;
   swarm)
+    case "${2:-}" in
+      -h|--help) ;;
+      -*) run_repi_cli "$@" ;;
+    esac
     sub="${2:-help}"
     if [ "$#" -ge 2 ]; then shift 2; else shift 1; fi
     case "$sub" in
-      plan|run|status|merge|llm-run|run-llm|workers)
+      plan|run|status|list|resolve|merge|llm-run|run-llm|workers)
         exec node "$ROOT/scripts/reverse-agent/repi-swarm-llm-run.mjs" "$ROOT" "$sub" "$@"
         ;;
       help|--help|-h)
@@ -247,47 +325,11 @@ MSG
         ;;
     esac
     ;;
-  memory)
-    sub="${2:-status}"
-    if [ "$#" -ge 2 ]; then shift 2; else shift 1; fi
-    case "$sub" in
-      consolidate)
-        exec node "$ROOT/scripts/reverse-agent/memory-consolidate.mjs" "$ROOT" "$@"
-        ;;
-      status|list|show|diff|why|forget|quarantine|doctor|export|purge|sanitize|repair)
-        exec node "$ROOT/scripts/reverse-agent/memory-inspect.mjs" "$ROOT" "$sub" "$@"
-        ;;
-      help|--help|-h)
-        cat <<'MSG'
-Usage:
-  repi memory status [--json]
-  repi memory list [--json] [--limit N] [--all] [--query <text>] [--verbose]
-  repi memory show <query-or-event-id> [--json]
-  repi memory diff [--json] [--limit N] [--all]
-  repi memory why <query-or-event-id> [--json]
-  repi memory forget <query-or-event-id> [--reason <text>]
-  repi memory quarantine <query-or-event-id> [--reason <text>]
-  repi memory doctor [--json]
-  repi memory export [--output <path>] [--full] [--json]
-  repi memory purge [--dry-run|--apply --yes] [--governed|--older-than-days N|--query <text>|--id <event-id>|--all]
-  repi memory sanitize [--dry-run|--apply --yes] [--include-evidence] [--include-sessions] [--backup]
-  repi memory repair [--dry-run|--apply --yes]    # repair invalid JSONL and event hash-chain drift
-  repi memory consolidate [--dry-run] [--json]
-
-  All memory commands accept [--cwd <dir>] to scope to a specific project's memory
-  (per-cwd isolation; default: legacy global root). The agent runtime auto-scopes
-  to the session cwd.
-MSG
-        exit 0
-        ;;
-      *)
-        echo "Unknown repi memory command: $sub" >&2
-        echo "Run: repi memory --help" >&2
-        exit 2
-        ;;
-    esac
-    ;;
   model|models)
+    case "${2:-}" in
+      -h|--help) ;;
+      -*) run_repi_cli "$@" ;;
+    esac
     sub="${2:-doctor}"
     if [ "$#" -ge 2 ]; then shift 2; else shift 1; fi
     case "$sub" in
@@ -304,4 +346,7 @@ MSG
 esac
 
 validate_repi_env_model_config
-exec "$ROOT/node_modules/.bin/tsx" --tsconfig "$ROOT/tsconfig.json" "$ROOT/packages/coding-agent/src/cli.ts" "$@"
+if is_repi_list_models_metadata_request "$@"; then
+  exec node "$ROOT/scripts/reverse-agent/model-inspect.mjs" "$ROOT" list --cli-format
+fi
+run_repi_cli "$@"

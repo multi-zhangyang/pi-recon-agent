@@ -3,9 +3,10 @@ import { Container, Text } from "@pi-recon/repi-tui";
 import { mkdir as fsMkdir, stat as fsStat } from "fs/promises";
 import { dirname } from "path";
 import { type Static, Type } from "typebox";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
-import { getLanguageFromPath, highlightCode, type Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
+import { themedKeyHint } from "../presentation/keybinding-hints.ts";
+import { getLanguageFromPath, highlightCode } from "../presentation/syntax-highlight.ts";
+import type { Theme } from "../presentation/theme.ts";
 import { atomicWriteFile } from "./atomic-write.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
@@ -70,23 +71,27 @@ class WriteCallRenderComponent extends Text {
 
 const WRITE_PARTIAL_FULL_HIGHLIGHT_LINES = 50;
 
-function highlightSingleLine(line: string, lang: string): string {
-	const highlighted = highlightCode(line, lang);
+function highlightSingleLine(line: string, lang: string, theme: Theme): string {
+	const highlighted = highlightCode(line, theme, lang);
 	return highlighted[0] ?? "";
 }
 
-function refreshWriteHighlightPrefix(cache: WriteHighlightCache): void {
+function refreshWriteHighlightPrefix(cache: WriteHighlightCache, theme: Theme): void {
 	const prefixCount = Math.min(WRITE_PARTIAL_FULL_HIGHLIGHT_LINES, cache.normalizedLines.length);
 	if (prefixCount === 0) return;
 	const prefixSource = cache.normalizedLines.slice(0, prefixCount).join("\n");
-	const prefixHighlighted = highlightCode(prefixSource, cache.lang);
+	const prefixHighlighted = highlightCode(prefixSource, theme, cache.lang);
 	for (let i = 0; i < prefixCount; i++) {
 		cache.highlightedLines[i] =
-			prefixHighlighted[i] ?? highlightSingleLine(cache.normalizedLines[i] ?? "", cache.lang);
+			prefixHighlighted[i] ?? highlightSingleLine(cache.normalizedLines[i] ?? "", cache.lang, theme);
 	}
 }
 
-function rebuildWriteHighlightCacheFull(rawPath: string | null, fileContent: string): WriteHighlightCache | undefined {
+function rebuildWriteHighlightCacheFull(
+	rawPath: string | null,
+	fileContent: string,
+	theme: Theme,
+): WriteHighlightCache | undefined {
 	const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
 	if (!lang) return undefined;
 	const displayContent = normalizeDisplayText(fileContent);
@@ -96,7 +101,7 @@ function rebuildWriteHighlightCacheFull(rawPath: string | null, fileContent: str
 		lang,
 		rawContent: fileContent,
 		normalizedLines: normalized.split("\n"),
-		highlightedLines: highlightCode(normalized, lang),
+		highlightedLines: highlightCode(normalized, theme, lang),
 	};
 }
 
@@ -104,12 +109,14 @@ function updateWriteHighlightCacheIncremental(
 	cache: WriteHighlightCache | undefined,
 	rawPath: string | null,
 	fileContent: string,
+	theme: Theme,
 ): WriteHighlightCache | undefined {
 	const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
 	if (!lang) return undefined;
-	if (!cache) return rebuildWriteHighlightCacheFull(rawPath, fileContent);
-	if (cache.lang !== lang || cache.rawPath !== rawPath) return rebuildWriteHighlightCacheFull(rawPath, fileContent);
-	if (!fileContent.startsWith(cache.rawContent)) return rebuildWriteHighlightCacheFull(rawPath, fileContent);
+	if (!cache) return rebuildWriteHighlightCacheFull(rawPath, fileContent, theme);
+	if (cache.lang !== lang || cache.rawPath !== rawPath)
+		return rebuildWriteHighlightCacheFull(rawPath, fileContent, theme);
+	if (!fileContent.startsWith(cache.rawContent)) return rebuildWriteHighlightCacheFull(rawPath, fileContent, theme);
 	if (fileContent.length === cache.rawContent.length) return cache;
 
 	const deltaRaw = fileContent.slice(cache.rawContent.length);
@@ -124,12 +131,12 @@ function updateWriteHighlightCacheIncremental(
 	const segments = deltaNormalized.split("\n");
 	const lastIndex = cache.normalizedLines.length - 1;
 	cache.normalizedLines[lastIndex] += segments[0];
-	cache.highlightedLines[lastIndex] = highlightSingleLine(cache.normalizedLines[lastIndex], cache.lang);
+	cache.highlightedLines[lastIndex] = highlightSingleLine(cache.normalizedLines[lastIndex], cache.lang, theme);
 	for (let i = 1; i < segments.length; i++) {
 		cache.normalizedLines.push(segments[i]);
-		cache.highlightedLines.push(highlightSingleLine(segments[i], cache.lang));
+		cache.highlightedLines.push(highlightSingleLine(segments[i], cache.lang, theme));
 	}
-	refreshWriteHighlightPrefix(cache);
+	refreshWriteHighlightPrefix(cache, theme);
 	return cache;
 }
 
@@ -158,7 +165,7 @@ function formatWriteCall(
 	} else if (fileContent) {
 		const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
 		const renderedLines = lang
-			? (cache?.highlightedLines ?? highlightCode(replaceTabs(normalizeDisplayText(fileContent)), lang))
+			? (cache?.highlightedLines ?? highlightCode(replaceTabs(normalizeDisplayText(fileContent)), theme, lang))
 			: normalizeDisplayText(fileContent).split("\n");
 		const lines = trimTrailingEmptyLines(renderedLines);
 		const totalLines = lines.length;
@@ -167,7 +174,7 @@ function formatWriteCall(
 		const remaining = lines.length - maxLines;
 		text += `\n\n${displayLines.map((line) => (lang ? line : theme.fg("toolOutput", replaceTabs(line)))).join("\n")}`;
 		if (remaining > 0) {
-			text += `${theme.fg("muted", `\n... (${remaining} more lines, ${totalLines} total,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+			text += `${theme.fg("muted", `\n... (${remaining} more lines, ${totalLines} total,`)} ${themedKeyHint(theme, "app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 		}
 	}
 
@@ -276,8 +283,8 @@ export function createWriteToolDefinition(
 				(context.lastComponent as WriteCallRenderComponent | undefined) ?? new WriteCallRenderComponent();
 			if (fileContent !== null) {
 				component.cache = context.argsComplete
-					? rebuildWriteHighlightCacheFull(rawPath, fileContent)
-					: updateWriteHighlightCacheIncremental(component.cache, rawPath, fileContent);
+					? rebuildWriteHighlightCacheFull(rawPath, fileContent, theme)
+					: updateWriteHighlightCacheIncremental(component.cache, rawPath, fileContent, theme);
 			} else {
 				component.cache = undefined;
 			}

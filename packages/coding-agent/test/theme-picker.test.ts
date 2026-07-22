@@ -6,7 +6,7 @@ import {
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
 	setRegisteredThemes,
-} from "../src/modes/interactive/theme/theme.ts";
+} from "../src/core/presentation/theme-runtime.ts";
 
 type ThemeFile = {
 	name: string;

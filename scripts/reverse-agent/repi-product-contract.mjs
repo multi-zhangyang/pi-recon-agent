@@ -42,57 +42,105 @@ const requiredFiles = [
 	"README.md",
 	"AGENTS.md",
 	"docs/reverse-agent/mainline-overhaul.md",
+	"packages/coding-agent/src/core/agent-session-compaction.ts",
+	"packages/coding-agent/src/core/agent-session-factory.ts",
+	"packages/coding-agent/src/core/agent-session-extension-runtime.ts",
+	"packages/coding-agent/src/core/agent-session-model-runtime.ts",
+	"packages/coding-agent/src/core/agent-session-policy.ts",
+	"packages/coding-agent/src/core/agent-session-presentation-runtime.ts",
+	"packages/coding-agent/src/core/agent-session-retry-runtime.ts",
+	"packages/coding-agent/src/core/agent-session-tree-runtime.ts",
 	"packages/coding-agent/src/core/recon-profile.ts",
+	"packages/coding-agent/src/core/repi/artifact-selection-runtime.ts",
 	"packages/coding-agent/src/core/repi/artifact-scope.ts",
-	"packages/coding-agent/src/core/repi/case-memory.ts",
+	"packages/coding-agent/src/core/repi/attack-graph-runtime.ts",
+	"packages/coding-agent/src/core/repi/autofix-runtime.ts",
+	"packages/coding-agent/src/core/repi/bootstrap-runtime.ts",
+	"packages/coding-agent/src/core/repi/campaign-operation-runtime.ts",
+	"packages/coding-agent/src/core/repi/claim-release-runtime.ts",
+	"packages/coding-agent/src/core/repi/completion-audit-runtime.ts",
+	"packages/coding-agent/src/core/repi/delegate-orchestration-runtime.ts",
+	"packages/coding-agent/src/core/repi/domain-proof-exit-rules.ts",
+	"packages/coding-agent/src/core/repi/domain-proof-exit-runtime.ts",
 	"packages/coding-agent/src/core/repi/evidence.ts",
+	"packages/coding-agent/src/core/repi/evidence-graph-runtime.ts",
+	"packages/coding-agent/src/core/repi/evidence-runtime.ts",
+	"packages/coding-agent/src/core/repi/execution-kernel.ts",
+	"packages/coding-agent/src/core/repi/exploit-mobile-runtime.ts",
+	"packages/coding-agent/src/core/repi/exploit-chain-runtime.ts",
+	"packages/coding-agent/src/core/repi/failure-runtime.ts",
+	"packages/coding-agent/src/core/repi/graph-artifacts.ts",
 	"packages/coding-agent/src/core/repi/graph.ts",
 	"packages/coding-agent/src/core/repi/goal.ts",
 	"packages/coding-agent/src/core/repi/jsonl.ts",
-	"packages/coding-agent/src/core/repi/knowledge-scope.ts",
-	"packages/coding-agent/src/core/repi/memory-active.ts",
-	"packages/coding-agent/src/core/repi/memory-compact-resume.ts",
-	"packages/coding-agent/src/core/repi/memory-deposition.ts",
-	"packages/coding-agent/src/core/repi/memory-distillation.ts",
-	"packages/coding-agent/src/core/repi/memory-distill.ts",
-	"packages/coding-agent/src/core/repi/memory-event.ts",
-	"packages/coding-agent/src/core/repi/memory-feedback.ts",
-	"packages/coding-agent/src/core/repi/memory-experience.ts",
-	"packages/coding-agent/src/core/repi/memory-maturation.ts",
-	"packages/coding-agent/src/core/repi/memory-orchestrator.ts",
-	"packages/coding-agent/src/core/repi/memory-quality.ts",
-	"packages/coding-agent/src/core/repi/memory-replay.ts",
-	"packages/coding-agent/src/core/repi/memory-search.ts",
-	"packages/coding-agent/src/core/repi/memory-skill.ts",
-	"packages/coding-agent/src/core/repi/memory-strategy.ts",
-	"packages/coding-agent/src/core/repi/memory-supervisor.ts",
-	"packages/coding-agent/src/core/repi/memory-usefulness.ts",
-	"packages/coding-agent/src/core/repi/memory-ux.ts",
-	"packages/coding-agent/src/core/repi/memory-vector.ts",
+	"packages/coding-agent/src/core/repi/lane-specialist-pack.ts",
+	"packages/coding-agent/src/core/repi/native-runtime.ts",
+	"packages/coding-agent/src/core/repi/operator-execution-runtime.ts",
+	"packages/coding-agent/src/core/repi/operator-feedback-runtime.ts",
+	"packages/coding-agent/src/core/repi/operator-orchestration-runtime.ts",
+	"packages/coding-agent/src/core/repi/operator-policy-runtime.ts",
+	"packages/coding-agent/src/core/repi/provider-worker-runtime.ts",
+	"packages/coding-agent/src/core/repi/profile-check.ts",
+	"packages/coding-agent/src/core/repi/profile-kernel-report-runtime.ts",
 	"packages/coding-agent/src/core/repi/profile.ts",
+	"packages/coding-agent/src/core/repi/proof-artifact-runtime.ts",
 	"packages/coding-agent/src/core/repi/proof-loop.ts",
+	"packages/coding-agent/src/core/repi/proof-loop-runtime.ts",
+	"packages/coding-agent/src/core/repi/recon-commands.ts",
+	"packages/coding-agent/src/core/repi/recon-lane-runtime.ts",
+	"packages/coding-agent/src/core/repi/recon-tools.ts",
 	"packages/coding-agent/src/core/repi/resources.ts",
 	"packages/coding-agent/src/core/repi/runtime-adapter.ts",
+	"packages/coding-agent/src/core/repi/runtime-adapter-execution-runtime.ts",
+	"packages/coding-agent/src/core/repi/runtime-binding.ts",
+	"packages/coding-agent/src/core/repi/specialist-command-planner.ts",
+	"packages/coding-agent/src/core/repi/specialist-evidence.ts",
+	"packages/coding-agent/src/core/repi/specialist-native-command-provider.ts",
+	"packages/coding-agent/src/core/repi/specialist-web-command-provider.ts",
 	"packages/coding-agent/src/core/repi/routes.ts",
+	"packages/coding-agent/src/core/repi/session-lifecycle-runtime.ts",
 	"packages/coding-agent/src/core/repi/mission.ts",
-	"packages/coding-agent/src/core/repi/memory-scope.ts",
-	"packages/coding-agent/src/core/repi/memory-store.ts",
-	"packages/coding-agent/src/core/repi/memory-runtime.ts",
 	"packages/coding-agent/src/core/repi/storage.ts",
 	"packages/coding-agent/src/core/repi/target.ts",
 	"packages/coding-agent/src/core/repi/text.ts",
+	"packages/coding-agent/src/core/repi/tool-presence.ts",
 	"packages/coding-agent/src/core/repi/toolchain.ts",
+	"packages/coding-agent/src/core/repi/toolchain-runtime.ts",
+	"packages/coding-agent/src/core/repi/toolchain-capability-runtime.ts",
+	"packages/coding-agent/src/core/repi/web-runtime.ts",
 	"packages/coding-agent/src/core/repi/worker-runtime.ts",
-	"packages/coding-agent/test/recon-profile-compaction.e2e.test.ts",
+	"packages/coding-agent/src/core/repi/swarm-claim-runtime.ts",
+	"packages/coding-agent/src/core/repi/swarm-commander-runtime.ts",
+	"packages/coding-agent/src/core/repi/swarm-artifact-paths.ts",
+	"packages/coding-agent/src/core/repi/swarm-runtime-types.ts",
+	"packages/coding-agent/src/core/repi/swarm-supervisor-runtime.ts",
+	"packages/coding-agent/src/core/repi/swarm-worker-artifact-runtime.ts",
+	"packages/coding-agent/src/core/repi/swarm-worker-child-session-runtime.ts",
+	"packages/coding-agent/src/core/repi/swarm-worker-lease-scheduler-runtime.ts",
+	"packages/coding-agent/src/core/repi/swarm-worker-retry-handoff-runtime.ts",
+	"packages/coding-agent/src/modes/interactive/external-process-runtime.ts",
+	"packages/coding-agent/src/modes/interactive/interactive-auth-runtime.ts",
+	"packages/coding-agent/src/modes/interactive/interactive-compaction-runtime.ts",
+	"packages/coding-agent/src/modes/interactive/interactive-command-runtime.ts",
+	"packages/coding-agent/src/modes/interactive/interactive-event-runtime.ts",
+	"packages/coding-agent/src/modes/interactive/interactive-extension-runtime.ts",
+	"packages/coding-agent/src/modes/interactive/interactive-selector-runtime.ts",
+	"packages/coding-agent/src/modes/interactive/interactive-submit-runtime.ts",
+	"packages/coding-agent/src/modes/interactive/interactive-resource-runtime.ts",
 	"packages/coding-agent/test/recon-profile-proof-loop.test.ts",
 	"packages/coding-agent/test/recon-profile-proof-swarm.test.ts",
+	"packages/coding-agent/test/repi-session-lifecycle-runtime.test.ts",
 	"packages/coding-agent/test/repi-goal-rpc-mode.test.ts",
 	"packages/coding-agent/test/repi-goal.test.ts",
 	"scripts/reverse-agent/repi-smoke.mjs",
 	"scripts/reverse-agent/repi-install-path-smoke.mjs",
+	"scripts/clean-production-dist.mjs",
+	"scripts/reverse-agent/lib/packed-source-closure.mjs",
+	"scripts/reverse-agent/mark-repi-runtime.mjs",
+	"scripts/reverse-agent/repi-release-manifest.mjs",
 	"scripts/reverse-agent/repi-release-tarball-smoke.mjs",
+	"scripts/reverse-agent/repi-live-model-contract.mjs",
 	"scripts/reverse-agent/repi-extension-compat-smoke.mjs",
-	"scripts/reverse-agent/memory-inspect.mjs",
 ];
 
 const rows = [];
@@ -121,10 +169,32 @@ rows.push(
 
 rows.push(
 	check(
+		"validation:clean-production-dist-before-pack",
+		packageJson.scripts?.["clean:production-dist"] === "node scripts/clean-production-dist.mjs ." &&
+			packageJson.scripts?.build?.startsWith("npm run clean:production-dist && ") &&
+			includesAll(read("scripts/clean-production-dist.mjs"), [
+				'"tui", "ai", "agent", "coding-agent"',
+				'rmSync(join(root, "packages", packageName, "dist")',
+			]) &&
+			includesAll(read("scripts/reverse-agent/repi-release-tarball-smoke.mjs"), [
+				'run("clean:production-dist", process.execPath',
+				"findPackedOutputsWithoutSources",
+				"tarball contains stale compiled outputs",
+				"production dist cleanup failed",
+			]),
+		"root build and release smoke remove production dist before compiling and packing",
+		"Keep production builds clean so outputs from deleted source files cannot survive into runtime manifests or npm tarballs.",
+	),
+);
+
+rows.push(
+	check(
 		"validation:release-tarball-smoke-script",
 		packageJson.scripts?.["smoke:release"] === "node scripts/reverse-agent/repi-release-tarball-smoke.mjs" &&
 			existsSync(join(root, "scripts/reverse-agent/repi-release-tarball-smoke.mjs")) &&
 			includesAll(read("scripts/reverse-agent/repi-release-tarball-smoke.mjs"), [
+				"npm-install:four-tarballs-global",
+				'"install", "--global", "--prefix"',
 				"package-bin:path-command",
 				"package-bin:fresh-list-models",
 				"package-bin:goal-help-print",
@@ -153,11 +223,30 @@ rows.push(
 );
 rows.push(
 	check(
+		"validation:live-model-contract-script",
+		packageJson.scripts?.["smoke:live-model"] ===
+				"node scripts/reverse-agent/repi-live-model-contract.mjs ." &&
+			includesAll(read("scripts/reverse-agent/repi-live-model-contract.mjs"), [
+				"REPI_RUN_LIVE_MODEL",
+				"REPI_BASE_URL",
+				"REPI_MODEL",
+				"single-response",
+				"read-tool-round-trip",
+			]),
+		`smoke:live-model=${packageJson.scripts?.["smoke:live-model"] ?? "<missing>"}`,
+		"Keep the opt-in network contract generic and exercise both a response and a real tool round trip.",
+	),
+);
+rows.push(
+	check(
 		"validation:release-workflow-tarball-gate",
-		includesAll(read(".github/workflows/release.yml"), [
-			"REPI release tarball install smoke",
-			"npm run smoke:release -- . --skip-build --json",
-			"`repi` on PATH",
+			includesAll(read(".github/workflows/release.yml"), [
+				"REPI release tarball install smoke",
+				"npm run smoke:release -- . --skip-build --json",
+				"repi-release-manifest.mjs",
+				"repi-release-manifest.json",
+				"four same-version files",
+				"`repi` on PATH",
 			"`/goal` in print/json/RPC",
 			"fresh env-only models",
 			"stale",
@@ -181,21 +270,6 @@ rows.push(
 		]),
 		"CI gates PRs on offline smoke, installer PATH smoke, and real npm extension compatibility smoke before diff cleanliness",
 		"Keep PR/main CI wired to user-visible install and extension smokes, not only unit/type checks.",
-	),
-);
-const reconCompactionE2E = read("packages/coding-agent/test/recon-profile-compaction.e2e.test.ts");
-rows.push(
-	check(
-		"validation:recon-e2e-lazy-import-contract",
-		includesAll(reconCompactionE2E, [
-			"it.skipIf(!RUN_RECON_E2E)",
-			'await import("../src/core/recon-profile.ts")',
-		]) &&
-			!/import\s+\{\s*createReconExtensionFactory\s*\}\s+from\s+["']\.\.\/src\/core\/recon-profile\.ts["']/m.test(
-				reconCompactionE2E,
-			),
-		"skipped recon compaction e2e lazily imports recon-profile only when enabled",
-		"Keep opt-in recon e2e coverage out of the fast default suite collect path.",
 	),
 );
 rows.push(
@@ -243,6 +317,20 @@ rows.push(
 		packageJson.scripts?.["smoke:install-path"] === "node scripts/reverse-agent/repi-install-path-smoke.mjs ." &&
 			existsSync(join(root, "scripts/reverse-agent/repi-install-path-smoke.mjs")) &&
 			includesAll(read("scripts/reverse-agent/repi-install-path-smoke.mjs"), [
+				"launcher:prefers-current-dist",
+				"launcher:single-process-exit-semantics",
+				"launcher:single-process-signal-semantics",
+				"launcher:explicit-source-mode",
+				"launcher:missing-runtime-manifest-falls-back-to-tsx",
+				"launcher:corrupt-runtime-manifest-falls-back-to-tsx",
+				"launcher:package-command-uses-dist",
+				"launcher:missing-dist-falls-back-to-tsx",
+				"launcher:corrupt-dist-falls-back-to-tsx",
+				"launcher:corrupt-transitive-dist-falls-back-to-tsx",
+				"launcher:stale-dist-falls-back-to-tsx",
+				"launcher:deleted-source-falls-back-to-tsx",
+				"launcher:product-command-stays-shell-routed",
+				"benchmark:runtime-manifest-verify-overhead",
 				"install:user-bin-off-path",
 				"assert:user-rc-path-export",
 				"path:user-rc-new-shell",
@@ -250,6 +338,7 @@ rows.push(
 				"install:root-friendly-summary",
 				"path:explicit-bin-current-shell",
 				"INFO: Installing REPI launcher",
+				"INFO: Building REPI production runtime",
 				"INFO: Verifying offline startup",
 				"■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 100%",
 				"Successfully added repi to $PATH in ~/.bashrc",
@@ -283,10 +372,11 @@ rows.push(
 			"npm run smoke:release -- . --json",
 			"repi install npm:pi-web-access",
 		]) &&
-			includesAll(read("packages/coding-agent/README.md"), [
+				includesAll(read("packages/coding-agent/README.md"), [
 				"# REPI Coding Agent",
 				"Recommended source installer:",
-				"Release tarball install uses the four same-version GitHub Release packages together",
+					"Release tarball install uses the four same-version GitHub Release packages together",
+					"installing only the coding-agent tarball fails",
 				"source ~/.bashrc  # Load new PATH (or open a new terminal)",
 				"REPI_CONTEXT_WINDOW=262144",
 				"repi doctor",
@@ -298,6 +388,27 @@ rows.push(
 			),
 		"README and package README lead with install, env model, goal/footer, extension, and release-smoke launch paths",
 		"Keep docs product-first and operator-usable; do not regress to a generic npm package README or hide REPI_* env setup.",
+	),
+);
+
+const releaseInstallDocs = [
+	"packages/ai/README.md",
+	"packages/agent/README.md",
+	"packages/coding-agent/README.md",
+	"packages/coding-agent/docs/quickstart.md",
+	"packages/coding-agent/docs/sdk.md",
+	"packages/coding-agent/docs/containerization.md",
+];
+const registryInstallClaims = releaseInstallDocs.filter((rel) => /npm install(?: -g)? @pi-recon\//.test(read(rel)));
+rows.push(
+	check(
+		"docs:no-unpublished-registry-install",
+		registryInstallClaims.length === 0 &&
+			includesAll(read("packages/ai/README.md"), ["GitHub Release tarballs", "pi-recon-repi-ai-", ".tgz"]) &&
+			includesAll(read("packages/agent/README.md"), ["matching AI package", "pi-recon-repi-agent-core-", ".tgz"]) &&
+			includesAll(read("packages/coding-agent/docs/quickstart.md"), ["repi-release-manifest.json", "four files"]),
+		registryInstallClaims.length > 0 ? `false registry installs=${registryInstallClaims.join(", ")}` : "release docs use local tarball sets",
+		"Do not document registry installs until every referenced @pi-recon package is actually published at the same version.",
 	),
 );
 rows.push(
@@ -327,6 +438,27 @@ rows.push(
 );
 
 const launcher = read("repi");
+const repiBootstrap = read("packages/coding-agent/src/cli/repi-bootstrap.ts");
+const printMode = read("packages/coding-agent/src/modes/print-mode.ts");
+rows.push(
+	check(
+		"launcher:bounded-print-budget",
+		includesAll(launcher, [
+			'REPI_PRINT_MAX_TURNS="${REPI_PRINT_MAX_TURNS:-10}"',
+			'REPI_PRINT_MAX_TOOL_CALLS="${REPI_PRINT_MAX_TOOL_CALLS:-48}"',
+		]) &&
+			includesAll(repiBootstrap, [
+				'process.env.REPI_PRINT_MAX_TURNS = process.env.REPI_PRINT_MAX_TURNS || "10"',
+				'process.env.REPI_PRINT_MAX_TOOL_CALLS = process.env.REPI_PRINT_MAX_TOOL_CALLS || "48"',
+			]) &&
+			includesAll(printMode, [
+				"return isRepiProductMode() ? 10 : undefined",
+				"return isRepiProductMode() ? 48 : undefined",
+			]),
+		"launcher, bootstrap, and print runtime use the same bounded 10-turn/48-tool defaults",
+		"Keep every executable entrypoint aligned so the reserved final synthesis turn is reached before the wall timeout.",
+	),
+);
 const cliSource = read("packages/coding-agent/src/cli.ts");
 const productCommandsSource = read("packages/coding-agent/src/cli/repi-product-commands.ts");
 const modelInspectSource = read("scripts/reverse-agent/model-inspect.mjs");
@@ -344,6 +476,62 @@ rows.push(
 			!/\bPI_CODING_AGENT_CONFIG_DIR\b/.test(launcher),
 		"entrypoint=repi env=REPI_*",
 		"Keep the launcher as the independent REPI product entrypoint. Do not reintroduce Pi app/config identity exports.",
+	),
+);
+rows.push(
+	check(
+		"launcher:production-runtime-contract",
+		includesAll(launcher, [
+			"repi_dist_candidate_is_current",
+			"run_repi_cli",
+			"packages/coding-agent/dist/cli.js",
+			"packages/coding-agent/dist/repi-runtime.json",
+			"REPI_RUNTIME_MARKER",
+			'exec node "$REPI_RUNTIME_MARKER" "$ROOT" --launch -- "$@"',
+			'node_modules/.bin/tsx',
+			"REPI_USE_SOURCE",
+		]) &&
+			packageJson.scripts?.build?.includes("mark-repi-runtime.mjs") &&
+			includesAll(read("scripts/reverse-agent/install-repi.sh"), [
+				"build_repi_runtime",
+				"INFO: Building REPI production runtime",
+				"npm run clean",
+				"node_modules/.bin/tsgo",
+				"npm run build",
+				"packages/tui/dist/index.js",
+				"packages/ai/dist/index.js",
+				"packages/agent/dist/index.js",
+				"packages/coding-agent/dist/cli.js",
+				"mark-repi-runtime.mjs",
+				"packages/coding-agent/dist/repi-runtime.json",
+			]) &&
+			includesAll(read("scripts/reverse-agent/mark-repi-runtime.mjs"), [
+				"repi-source-runtime",
+				"schemaVersion: 2",
+				"runtimeRoots",
+				"listRuntimeFiles",
+				'!relativePath.endsWith(".map")',
+				"manifest.entries.length !== runtimeFiles.length",
+				"verifyRuntimeManifest",
+				"--verify",
+				"--launch",
+				"process.execve",
+				"process.argv =",
+				"pathToFileURL",
+				"manifest.kind",
+				"manifest.schemaVersion",
+				"manifest.version",
+				"manifest.entries",
+				"entry.bytes",
+				"entry.sha256",
+				"REPI runtime manifest verification failed",
+				"sha256",
+				"renameSync",
+				"--invalidate",
+				"unlinkSync",
+			]),
+		"fresh source installs build all workspace entrypoints; one Node process verifies manifest schema/version/bytes/digests, restores CLI argv, and retains same-PID tsx fallback",
+		"Keep source installs on the verified compiled Node runtime while preserving an explicit development fallback when dist is absent, stale, or corrupt.",
 	),
 );
 rows.push(
@@ -431,623 +619,6 @@ rows.push(
 	),
 );
 
-const memoryRuntime = read("packages/coding-agent/src/core/repi/memory-runtime.ts");
-rows.push(
-	check(
-		"memory:runtime-settings-contract",
-		includesAll(memoryRuntime, [
-			"RepiMemoryRuntimeSettings",
-			"repiMemorySettings",
-			"normalizeMemoryMode",
-			"normalizeMemoryContextMode",
-			"normalizeMemoryAutoDepositMode",
-			"normalizeMemoryScopePolicy",
-			"normalizeMemoryStartupDigest",
-			"autoRecall",
-			"autoInject",
-			"rawAutoInject",
-			"includeGlobalMemoryInContextPack",
-		]),
-		"memory runtime settings externalized",
-		"Put REPI memory modes, scoped recall, and injection defaults in core/repi/memory-runtime.ts.",
-	),
-);
-
-const memoryDeposition = read("packages/coding-agent/src/core/repi/memory-deposition.ts");
-rows.push(
-	check(
-		"memory:deposition-engine-contract",
-		includesAll(memoryDeposition, [
-			"MemoryDepositionStageV7",
-			"MemoryDepositionStatusV7",
-			"MemoryDepositionRuntimeEventV7",
-			"MemoryDepositionReportV7",
-			"MemoryDepositionRuntimeInputV7",
-			"isMemoryDepositionRuntimeEvent",
-			"memoryDepositionEventHash",
-			"memoryDepositionHashChainOk",
-			"repi-memory-deposition-runtime-event",
-			"MemoryDepositionEngineV7",
-			"runtime_step_event_bus",
-			"post_tool_writeback_autocapture",
-			"appendOnlyDepositionLedger",
-			"memoryEventHashBinding",
-		]),
-		"memory deposition event/report schemas, runtime input, validation, and hash-chain checks externalized",
-		"Put REPI deposition event bus schemas and hash-chain validation in core/repi/memory-deposition.ts.",
-	),
-);
-
-const memoryDistillation = read("packages/coding-agent/src/core/repi/memory-distillation.ts");
-rows.push(
-	check(
-		"memory:distillation-pattern-contract",
-		includesAll(memoryDistillation, [
-			"MemoryDistilledPatternV1",
-			"MemoryContaminationFindingV1",
-			"MemoryDistillationReportV1",
-			"MemorySedimentationAction",
-			"MemorySemanticIndexEntryV1",
-			"MemoryContradictionLedgerEntryV1",
-			"MemoryInjectionPacketV1",
-			"MemorySedimentationReportV1",
-			"memoryPatternHash",
-			"memoryPatternFrom",
-			"repi-memory-distilled-pattern",
-			"repi-memory-semantic-index-entry",
-			"mandatory_memory_injection_packet",
-			"MemorySedimentationV1",
-			"promotionRequiresArtifactSha256",
-			"quarantineBlocksInjection",
-		]),
-		"memory distillation pattern, sedimentation, injection packet schemas and pattern constructor externalized",
-		"Put REPI distillation/sedimentation schemas and pattern construction in core/repi/memory-distillation.ts.",
-	),
-);
-
-const memoryDistill = read("packages/coding-agent/src/core/repi/memory-distill.ts");
-rows.push(
-	check(
-		"memory:distill-promotion-contract",
-		includesAll(memoryDistill, [
-			"MemoryDistillProviderBackendV10",
-			"MemoryDistillPromotionDecisionV10",
-			"MemoryDistillPromotionSourceV10",
-			"MemoryDistillProviderV10",
-			"MemoryDistillCandidateV10",
-			"MemoryDistillPromotionReportV10",
-			"memoryDistillProviderConfigV10",
-			"memoryDistillCandidateHash",
-			"memoryDistillCandidateFrom",
-			"memoryDistillSnippetFromArtifacts",
-			"memoryDistillDecision",
-			"repi-memory-distill-provider",
-			"MemoryDistillPromotionV10",
-			"provider_distill_contract",
-			"artifact_to_claim_distillation",
-			"remote_distill_requires_explicit_allow",
-			"local_distill_fallback",
-		]),
-		"memory distill provider, candidate/report schemas, artifact snippets, and promotion decision externalized",
-		"Put REPI distill provider gates, candidate construction, and promotion decisions in core/repi/memory-distill.ts.",
-	),
-);
-
-const memoryFeedback = read("packages/coding-agent/src/core/repi/memory-feedback.ts");
-rows.push(
-	check(
-		"memory:feedback-closure-contract",
-		includesAll(memoryFeedback, [
-			"MemoryFeedbackClosureStatus",
-			"MemoryFeedbackClosureRowV1",
-			"MemoryFeedbackClosureReportV1",
-			"memoryFeedbackSourceEventIds",
-			"memoryFeedbackPolarity",
-			"formatMemoryFeedbackClosure",
-			"repi-memory-feedback-closure-row",
-			"repi-memory-feedback-closure-report",
-			"MemoryFeedbackClosureV1",
-			"feedbackCoverage",
-			"pendingFeedbackEventIds",
-			"orphanFeedbackEventIds",
-			"memory_reuse_feedback_promote",
-			"memory_reuse_feedback_demote",
-		]),
-		"memory feedback closure schemas, source linking, polarity detection, and formatter externalized",
-		"Put REPI feedback closure schemas, source/polarity helpers, and formatter in core/repi/memory-feedback.ts.",
-	),
-);
-
-const memoryActive = read("packages/coding-agent/src/core/repi/memory-active.ts");
-rows.push(
-	check(
-		"memory:active-kernel-contract",
-		includesAll(memoryActive, [
-			"MemoryActiveKernelActionV14",
-			"MemoryActiveKernelSourceV14",
-			"MemoryActiveKernelDecisionV14",
-			"MemoryActiveInjectionPackV14",
-			"MemoryActiveKernelReportV14",
-			"MemoryActiveKernelActionInputV14",
-			"memoryActiveKernelDecisionHash",
-			"memoryActiveKernelDecisionFrom",
-			"memoryActiveKernelActionFromScore",
-			"formatMemoryActiveKernel",
-			"repi-memory-active-kernel-decision",
-			"repi-memory-active-injection-pack",
-			"MemoryActiveKernelV14",
-			"unified_memory_decision_engine",
-			"active_recall_scheduler",
-			"scope_safe_strategy_injection",
-			"feedback_driven_promotion",
-		]),
-		"memory active kernel schema, decision constructor, action scoring, and formatter externalized",
-		"Put REPI active memory decision/injection schemas, action scoring, and formatter in core/repi/memory-active.ts.",
-	),
-);
-
-const memoryMaturation = read("packages/coding-agent/src/core/repi/memory-maturation.ts");
-rows.push(
-	check(
-		"memory:maturation-runtime-contract",
-		includesAll(memoryMaturation, [
-			"MemoryMaturationActionV15",
-			"MemoryMaturationRetentionActionV15",
-			"MemoryMaturationRowV15",
-			"MemoryMaturationRuntimeReportV15",
-			"MemoryMaturationRetentionSignalV15",
-			"memoryMaturationRowHash",
-			"memoryMaturationActionFromDecision",
-			"memoryMaturationRowFrom",
-			"memoryMaturationDaysSince",
-			"memoryMaturationRetentionSignal",
-			"formatMemoryMaturationRuntime",
-			"repi-memory-maturation-row",
-			"MemoryMaturationRuntimeV15",
-			"automatic_memory_maturation_pipeline",
-			"retention_decay_scheduler",
-			"stale_memory_rehearsal_queue",
-			"usefulness_backprop_to_maturation",
-		]),
-		"memory maturation schema, row constructor, action decision, retention/decay signal, and formatter externalized",
-		"Put REPI maturation runtime schema, retention/decay decisions, and formatter in core/repi/memory-maturation.ts.",
-	),
-);
-
-const memoryOrchestrator = read("packages/coding-agent/src/core/repi/memory-orchestrator.ts");
-rows.push(
-	check(
-		"memory:orchestrator-control-loop-contract",
-		includesAll(memoryOrchestrator, [
-			"MemoryOrchestratorPhaseV6",
-			"MemoryOrchestratorStepStatusV6",
-			"MemoryOrchestratorStepV6",
-			"MemoryOrchestratorReportV6",
-			"MemoryOrchestratorOptions",
-			"normalizeMemoryOrchestratorPhase",
-			"memoryOrchestratorStep",
-			"memoryOrchestratorPhaseCommand",
-			"memoryOrchestratorNextCommands",
-			"repi-memory-orchestrator-report",
-			"MemoryOrchestratorV6",
-			"mandatory_memory_control_loop",
-			"preTaskRetrieveBeforeOperator",
-			"scopeFilterBeforeMemoryInjection",
-			"postToolWritebackContract",
-			"finalSuperviseBeforeClaim",
-		]),
-		"memory orchestrator schema, phase normalization, step constructor, and next-command planning externalized",
-		"Put REPI memory orchestrator control-loop schema and command planning in core/repi/memory-orchestrator.ts.",
-	),
-);
-
-const memoryCompactResume = read("packages/coding-agent/src/core/repi/memory-compact-resume.ts");
-rows.push(
-	check(
-		"memory:compact-resume-ledger-contract",
-		includesAll(memoryCompactResume, [
-			"CompactResumeStateV2",
-			"CompactResumeLedgerTransitionV2",
-			"CompactResumeLedgerV2Report",
-			"CompactResumeTransitionLedgerReadV2",
-			"COMPACT_RESUME_ALLOWED_TRANSITIONS",
-			"compactResumeStateForKey",
-			"compactResumeAttemptForKey",
-			"compactResumeTransitionEntryHash",
-			"compactResumeTransitionAllowed",
-			"compactResumeTransitionsFromText",
-			"compactResumeLedgerV2ReportFromText",
-			"formatCompactResumeLedgerV2",
-			"repi-compact-resume-ledger-transition",
-			"repi-compact-resume-ledger-v2-report",
-			"CompactResumeLedgerV2",
-			"append_only_transition_ledger",
-			"idempotent_multi_compact_replay",
-			"auto_resume_budget_enforced",
-		]),
-		"compact resume ledger schema, JSONL parser, report builder, transition table, idempotent replay counters, and formatter externalized",
-		"Put REPI compact resume ledger schema, parser, report builder, state-machine helpers, and formatter in core/repi/memory-compact-resume.ts.",
-	),
-);
-
-const memoryUsefulness = read("packages/coding-agent/src/core/repi/memory-usefulness.ts");
-rows.push(
-	check(
-		"memory:usefulness-eval-contract",
-		includesAll(memoryUsefulness, [
-			"MemoryUsefulnessEvalScenarioV1",
-			"MemoryUsefulnessEvalScenarioResultV1",
-			"MemoryUsefulnessEvalReportV1",
-			"memoryUsefulnessQueryForEvent",
-			"defaultMemoryUsefulnessScenarios",
-			"repi-memory-usefulness-eval",
-			"MemoryUsefulnessEvalV1",
-			"forbiddenLeakRate",
-			"expectedEventIds",
-			"forbiddenEventIds",
-		]),
-		"memory usefulness eval schemas and default scenario/query generation externalized",
-		"Put REPI memory usefulness evaluation schemas and default scenario generation in core/repi/memory-usefulness.ts.",
-	),
-);
-
-const memoryUx = read("packages/coding-agent/src/core/repi/memory-ux.ts");
-rows.push(
-	check(
-		"memory:ux-dashboard-contract",
-		includesAll(memoryUx, [
-			"MemoryUxGovernanceActionV16",
-			"MemoryUxWhyRowV16",
-			"MemoryUxGovernanceDecisionV16",
-			"MemoryUxDashboardV16",
-			"memoryUxGovernanceCommandsForEvent",
-			"memoryUxWhyRow",
-			"formatMemoryStatusBoard",
-			"formatMemoryUxDashboard",
-			"formatMemoryUxGovernanceDecision",
-			"repi-memory-ux-dashboard",
-			"repi-memory-ux-governance-decision",
-			"user_visible_memory_status",
-			"recall_explainability",
-			"append_only_memory_governance",
-			"lifecycle_governance_commands",
-			"re_memory promote",
-			"re_memory demote",
-			"re_memory forget",
-		]),
-		"memory UX dashboard/governance schemas, why-row helpers, and formatters externalized",
-		"Put REPI user-visible memory dashboard, governance helper schemas, and formatters in core/repi/memory-ux.ts.",
-	),
-);
-
-const memoryExperience = read("packages/coding-agent/src/core/repi/memory-experience.ts");
-rows.push(
-	check(
-		"memory:experience-engine-contract",
-		includesAll(memoryExperience, [
-			"MemoryExperienceClaimTypeV8",
-			"MemoryExperienceEpisodeV8",
-			"MemoryExperienceClaimV8",
-			"MemoryExperienceLessonV8",
-			"MemoryExperiencePromotionRowV8",
-			"MemoryExperienceReportV8",
-			"memoryExperienceTargetScope",
-			"memoryExperienceIntent",
-			"memoryExperienceClaimBaseStatus",
-			"isMemoryExperienceClaimRowV8",
-			"repi-memory-experience-claim",
-			"MemoryExperienceEngineV8",
-			"episode_model_v8",
-			"structured_claim_extraction",
-			"lesson_promotion_check",
-		]),
-		"memory experience episode, claim, lesson, promotion schemas and extraction helpers externalized",
-		"Put REPI memory experience schemas, hashes, claim status, and validation in core/repi/memory-experience.ts.",
-	),
-);
-
-const memoryScope = read("packages/coding-agent/src/core/repi/memory-scope.ts");
-rows.push(
-	check(
-		"memory:scope-isolation-contract",
-		includesAll(memoryScope, [
-			"RepiMemoryScope",
-			"MemoryScopeIsolationEvent",
-			"MemoryScopeIsolationRowV1",
-			"MemoryScopeIsolationReportV1",
-			"memoryTargetScope",
-			"memoryRouteMatches",
-			"contextSessionId",
-			"contextBranchId",
-			"buildCurrentMemoryScope",
-			"memoryScopeIsolationRow",
-			"buildMemoryScopeIsolationReport",
-			"formatMemoryScopeIsolation",
-			"scope_filter_by_mission_session_workspace_target",
-			"cross_workspace_contamination_blocks_injection",
-			"cross_target_contamination_blocks_injection",
-			"legacy_memory_scope_requires_manual_review",
-		]),
-		"memory scope identity, target/route matching, isolation rows, report builder, and formatter externalized",
-		"Put REPI memory scope identity, target/route normalization, isolation decisions, and report formatting in core/repi/memory-scope.ts.",
-	),
-);
-
-const memoryEvent = read("packages/coding-agent/src/core/repi/memory-event.ts");
-rows.push(
-	check(
-		"memory:event-contract",
-		includesAll(memoryEvent, [
-			"MemoryEventSource",
-			"MemoryOutcome",
-			"MemoryArtifactHash",
-			"MemoryQuality",
-			"MemoryEventV1",
-			"MemoryEventInput",
-			"isMemoryArtifactHash",
-			"isMemoryQuality",
-			"isMemoryEvent",
-			"memoryArtifactTier",
-			"memoryArtifactHashes",
-			"memoryEventHash",
-			"memoryEventHashChainOk",
-			"memoryEventSignature",
-			"repi-memory-event",
-			"runtime_artifact",
-			"persisted_memory",
-		]),
-		"memory event schema, type guards, artifact hashes, signatures, and hash-chain helpers externalized",
-		"Put REPI memory event schema, validation, artifact hashing, event signatures, and hash-chain helpers in core/repi/memory-event.ts.",
-	),
-);
-
-const memoryQuality = read("packages/coding-agent/src/core/repi/memory-quality.ts");
-rows.push(
-	check(
-		"memory:quality-ledger-contract",
-		includesAll(memoryQuality, [
-			"MemoryQualityLifecycleDecisionV11",
-			"MemoryQualitySignalV11",
-			"MemoryQualityLedgerRowV11",
-			"MemoryQualityLedgerReportV11",
-			"MemoryQualityUsefulnessReportSource",
-			"memoryQualityLedgerRowHash",
-			"isMemoryQualityLedgerRow",
-			"latestMemoryQualityRowsByEvent",
-			"memoryQualityUsefulnessSignals",
-			"memoryQualityDecision",
-			"formatMemoryQualityLedger",
-			"repi-memory-quality-ledger-row",
-			"MemoryQualityLedgerV11",
-			"quality_score_feedback_loop",
-			"forbidden_leak",
-			"scope_blocked",
-			"ab_replay_improved",
-		]),
-		"memory quality ledger schema, validator, hash, usefulness signals, lifecycle decision, and formatter externalized",
-		"Put REPI memory quality schema, row validation, feedback signals, lifecycle decision logic, and formatter in core/repi/memory-quality.ts.",
-	),
-);
-
-const memoryReplay = read("packages/coding-agent/src/core/repi/memory-replay.ts");
-rows.push(
-	check(
-		"memory:replay-evaluator-contract",
-		includesAll(memoryReplay, [
-			"MemoryReplayVerdictV12",
-			"MemoryReplayScenarioV12",
-			"MemoryReplayEvaluatorRowV12",
-			"MemoryReplayEvaluatorReportV12",
-			"memoryReplayEvaluatorRowHash",
-			"isMemoryReplayEvaluatorRow",
-			"memoryReplayCausalSignals",
-			"formatMemoryReplayEvaluator",
-			"repi-memory-replay-evaluator-row",
-			"MemoryReplayEvaluatorV12",
-			"memory_ab_replay",
-			"causal_attribution_signal",
-			"replay_delta_feedback_writeback",
-			"attributionEventIds",
-			"regressionEventIds",
-		]),
-		"memory replay evaluator schema, validator, row hash, causal signal aggregation, and formatter externalized",
-		"Put REPI memory replay evaluator schema, validation, causal signal rollup, and formatter in core/repi/memory-replay.ts.",
-	),
-);
-
-const memoryStrategy = read("packages/coding-agent/src/core/repi/memory-strategy.ts");
-rows.push(
-	check(
-		"memory:strategy-capsule-contract",
-		includesAll(memoryStrategy, [
-			"MemoryStrategyCapsuleLifecycleV13",
-			"MemoryStrategyCapsuleV13",
-			"MemoryStrategyCapsuleReportV13",
-			"memoryStrategyCapsuleHash",
-			"memoryStrategyCapsuleFrom",
-			"memoryStrategyLifecycleForReplay",
-			"formatMemoryStrategyCapsules",
-			"repi-memory-strategy-capsule",
-			"MemoryStrategyCapsuleV13",
-			"executable_strategy_capsule",
-			"replay_backed_strategy_promotion",
-			"strategy_quality_check",
-			"operatorPromptSnippet",
-			"verifierPromptSnippet",
-		]),
-		"memory strategy capsule schema, hash, constructor, replay lifecycle decision, and formatter externalized",
-		"Put REPI strategy capsule schema, replay-to-capsule lifecycle logic, and formatter in core/repi/memory-strategy.ts.",
-	),
-);
-
-const memorySkill = read("packages/coding-agent/src/core/repi/memory-skill.ts");
-rows.push(
-	check(
-		"memory:skill-capsule-contract",
-		includesAll(memorySkill, [
-			"MemorySkillCapsuleTypeV9",
-			"MemorySkillCapsuleLifecycleV9",
-			"MemorySkillCapsulePromotionCheckV9",
-			"MemorySkillCapsuleV9",
-			"MemorySkillCapsuleReportV9",
-			"memorySkillCapsuleHash",
-			"memorySkillCapsuleTypeFromLesson",
-			"memorySkillCapsuleTypeFromPattern",
-			"memorySkillCapsuleLifecycleFromPattern",
-			"memorySkillCapsuleLifecycleFromClaim",
-			"memorySkillCapsulePromotionCheck",
-			"memorySkillCapsuleFrom",
-			"repi-memory-skill-capsule",
-			"skill_capsule_assetization",
-			"verified_skill_promotion_check",
-			"operator_skill_injection",
-		]),
-		"memory skill capsule schemas, constructors, lifecycle mapping, and promotion checks externalized",
-		"Put REPI skill capsule schema and pure promotion/lifecycle decisions in core/repi/memory-skill.ts.",
-	),
-);
-
-const memorySupervisor = read("packages/coding-agent/src/core/repi/memory-supervisor.ts");
-rows.push(
-	check(
-		"memory:supervisor-lifecycle-contract",
-		includesAll(memorySupervisor, [
-			"MemorySupervisorAction",
-			"MemorySupervisorDecisionV1",
-			"MemorySupervisorReportV1",
-			"memorySupervisorTtlDays",
-			"memorySupervisorDecisionFromEntry",
-			"memorySupervisorMergeDecision",
-			"memorySupervisorQuarantineDecision",
-			"formatMemorySupervisorBoard",
-			"formatMemorySupervisor",
-			"repi-memory-supervisor-decision",
-			"repi-memory-supervisor-report",
-			"MemorySupervisorV1",
-			"supervisorRunsAfterSedimentation",
-			"promotionRequiresArtifactSha256",
-			"promotionRequiresVerifierOrReplay",
-			"quarantineOverridesPromotion",
-			"failureFeedbackDemotes",
-			"mergeByCaseSignature",
-		]),
-		"memory supervisor lifecycle schemas, decision builders, formatters, and TTL policy externalized",
-		"Put REPI memory supervisor lifecycle schema, decision builders, formatters, and retention policy in core/repi/memory-supervisor.ts.",
-	),
-);
-
-const caseMemory = read("packages/coding-agent/src/core/repi/case-memory.ts");
-rows.push(
-	check(
-		"memory:case-index-contract",
-		includesAll(caseMemory, [
-			"CaseMemoryV1",
-			"isCaseMemory",
-			"caseMemorySnapshotFromEvent",
-			"rebuildCaseMemoryFromEvents",
-			"repi-case-memory",
-			"lastEventHash",
-			"sourceEvents",
-			"reuseCount",
-			"failureCount",
-		]),
-		"case memory schema, validation, snapshot, and rebuild logic externalized",
-		"Put REPI case memory schema and event-to-case rebuild logic in core/repi/case-memory.ts.",
-	),
-);
-
-const memorySearch = read("packages/coding-agent/src/core/repi/memory-search.ts");
-rows.push(
-	check(
-		"memory:search-semantics-contract",
-		includesAll(memorySearch, [
-			"MemoryRetrievalHit",
-			"memoryTextForSearch",
-			"memorySearchTokens",
-			"memorySemanticAliases",
-			"memoryHybridQueryTokens",
-			"memoryVectorTokens",
-			"memoryVectorQualityWeight",
-			"memoryCaseTextForSearch",
-			"memoryArtifactTextForSearch",
-			"memoryHybridOverlapScore",
-			"memoryHybridSignalScore",
-			"case-memory-hybrid",
-			"artifact-hybrid",
-			"memory_semantic_hybrid_reuse",
-			"authz",
-			"pwn",
-			"firmware",
-		]),
-		"memory retrieval text, tokens, semantic aliases, vector quality weight, and hybrid scoring externalized",
-		"Put REPI memory search semantics and domain alias expansion in core/repi/memory-search.ts.",
-	),
-);
-
-const memoryVector = read("packages/coding-agent/src/core/repi/memory-vector.ts");
-rows.push(
-	check(
-		"memory:vector-retrieval-contract",
-		includesAll(memoryVector, [
-			"MemoryEmbeddingProviderKind",
-			"MemoryEmbeddingProviderV1",
-			"MemoryVectorIndexEntryV1",
-			"MemoryVectorIndexV1",
-			"MemoryVectorSearchHitV1",
-			"MemoryVectorSearchReportV1",
-			"MEMORY_VECTOR_DIMENSIONS",
-			"MEMORY_VECTOR_MODEL",
-			"MEMORY_EMBEDDING_PROVIDER_GATE_MARKERS",
-			"memoryVectorForTokens",
-			"memoryVectorForText",
-			"memoryEmbeddingProviderKind",
-			"memoryEmbeddingProviderConfig",
-			"normalizeMemoryEmbeddingVector",
-			"memoryOpenAiCompatibleEmbeddings",
-			"memoryEmbeddingVectorsForTexts",
-			"memoryVectorCosine",
-			"memoryVectorEntryFromEvent",
-			"formatMemoryVectorSearch",
-			"formatMemoryEmbeddingProvider",
-			"remote_embedding_requires_explicit_allow",
-			"local_hash_embedding_fallback",
-			"embedding_api_key_env_ref_only",
-		]),
-		"memory vector provider gates, local hash vectors, cosine, vector index row construction, and formatters externalized",
-		"Put REPI vector retrieval provider config, local embeddings, vector index row logic, and formatters in core/repi/memory-vector.ts.",
-	),
-);
-
-const memoryStore = read("packages/coding-agent/src/core/repi/memory-store.ts");
-rows.push(
-	check(
-		"memory:store-runtime-contract",
-		includesAll(memoryStore, [
-			"RepiMemoryStoreOperation",
-			"MemoryTransactionFileDigestV1",
-			"MemoryAppendTransactionV1",
-			"MemoryStoreVerificationV1",
-			"MemoryStoreJsonlScan",
-			"MemoryStoreVerificationBuildInput",
-			"withMemoryStoreLock",
-			"memoryStoreSleep",
-			"textWithJsonlLine",
-			"writeFileAtomic",
-			"writeMemoryTransaction",
-			"buildMemoryStoreVerificationReport",
-			"formatMemoryStoreVerification",
-			"repi-memory-append-transaction",
-			"repi-memory-store-verification",
-			"MemoryStoreV5",
-			"repi-memory-store-lock",
-			"memory_store_lock_timeout",
-			"0o600",
-		]),
-		"memory store transaction/verification schemas, report builder, lock, private write helpers, and formatter externalized",
-		"Put REPI memory store schemas, verification report building, locking, JSONL append text, atomic writes, transaction manifest writes, and verification formatting in core/repi/memory-store.ts.",
-	),
-);
-
 const evidence = read("packages/coding-agent/src/core/repi/evidence.ts");
 rows.push(
 	check(
@@ -1088,28 +659,6 @@ rows.push(
 	),
 );
 
-const knowledgeScope = read("packages/coding-agent/src/core/repi/knowledge-scope.ts");
-rows.push(
-	check(
-		"knowledge:scope-isolation-contract",
-		includesAll(knowledgeScope, [
-			"KnowledgeScopeSource",
-			"KnowledgeScopeIsolationSourceV1",
-			"KnowledgeScopeIsolationV1",
-			"KnowledgeScopeIsolationBuildOptions",
-			"knowledgeScopeRowForSource",
-			"buildKnowledgeScopeIsolation",
-			"artifactScopeMatchForSource",
-			"artifactScopeVerdictPriority",
-			"knowledge_graph_scope_filter_blocks_quarantined_artifacts",
-			"knowledge_graph_command_hints_exclude_scope_blocked_sources",
-			"knowledge_scope_isolation_report_in_artifact",
-		]),
-		"knowledge graph scope isolation types and builder externalized",
-		"Put knowledge graph scope isolation source rows, artifact matching, and builder logic in core/repi/knowledge-scope.ts.",
-	),
-);
-
 const jsonl = read("packages/coding-agent/src/core/repi/jsonl.ts");
 rows.push(
 	check(
@@ -1126,7 +675,6 @@ rows.push(
 		"storage:artifact-and-defaults-contract",
 		includesAll(storage, [
 			"reconDir",
-			"memoryPath",
 			"RepiStorageDefaultsOptions",
 			"ensureRepiStorage",
 			"currentMissionPath",
@@ -1134,9 +682,6 @@ rows.push(
 			"builtinSkillFilePath",
 			"builtinPromptFilePath",
 			"toolIndexPath",
-			"memoryStoreReportPath",
-			"memoryStoreSnapshotPath",
-			"toolCallTraceLedgerPath",
 			"chmodPrivate",
 			"writePrivateTextFile",
 			"readTextFile",
@@ -1156,31 +701,13 @@ rows.push(
 	check(
 		"artifact-scope:scope-filter-contract",
 		includesAll(artifactScope, [
-			"ArtifactScopeFilterDecisionV1",
-			"ArtifactScopeFilterReportV1",
 			"ArtifactScopeFilterOptions",
-			"ArtifactScopeArtifact",
-			"ArtifactScopeEvent",
-			"ArtifactScopeMemoryReport",
-			"ArtifactScopeReportBuildOptions",
-			"ScopedMarkdownArtifactSelectionOptions",
-			"knowledgeScopePathKey",
-			"artifactTargetMatches",
-			"artifactScopeVerdictPriority",
 			"artifactScopeInferTarget",
-			"artifactScopeMatchForSource",
-			"artifactExplicitTarget",
-			"artifactScopeDecisionMap",
-			"buildArtifactScopeFilterReport",
-			"scopedMarkdownArtifacts",
-			"latestScopedMarkdownArtifact",
-			"formatArtifactScopeFilter",
-			"latest_artifact_side_channel_scope_filter",
-			"artifact_hash_path_matches_memory_scope",
-			"context_artifact_index_excludes_scope_blocked_artifacts",
+			"artifactScopeDefaultOptions",
+			"artifactTargetMatches",
 		]),
-		"artifact scope types, report builder, and filter helpers externalized",
-		"Put artifact scope/filter types, path keys, target matching, decision maps, report construction, and formatting in core/repi/artifact-scope.ts.",
+		"artifact target inference and mission-defaulted filtering externalized",
+		"Keep target inference, mission defaults, and target matching in core/repi/artifact-scope.ts.",
 	),
 );
 
@@ -1256,56 +783,442 @@ rows.push(
 );
 
 const reconProfile = read("packages/coding-agent/src/core/recon-profile.ts");
+const agentSessionSource = read("packages/coding-agent/src/core/agent-session.ts");
+const agentThreadProcessRuntime = read("packages/coding-agent/src/core/agent-thread-process-runtime.ts");
+const agentThreadRuntime = read("packages/coding-agent/src/core/agent-thread-runtime.ts");
+const agentThreadMergeRuntime = read("packages/coding-agent/src/core/agent-thread-merge-runtime.ts");
+const attackGraphRuntime = read("packages/coding-agent/src/core/repi/attack-graph-runtime.ts");
+const artifactSelectionRuntime = read("packages/coding-agent/src/core/repi/artifact-selection-runtime.ts");
+const autofixRuntime = read("packages/coding-agent/src/core/repi/autofix-runtime.ts");
+const bootstrapRuntime = read("packages/coding-agent/src/core/repi/bootstrap-runtime.ts");
+const campaignOperationRuntime = read("packages/coding-agent/src/core/repi/campaign-operation-runtime.ts");
+const claimReleaseRuntime = read("packages/coding-agent/src/core/repi/claim-release-runtime.ts");
+const completionAuditRuntime = read("packages/coding-agent/src/core/repi/completion-audit-runtime.ts");
+const domainProofExitRules = read("packages/coding-agent/src/core/repi/domain-proof-exit-rules.ts");
+const domainProofExitRuntime = read("packages/coding-agent/src/core/repi/domain-proof-exit-runtime.ts");
+const evidenceGraphRuntime = read("packages/coding-agent/src/core/repi/evidence-graph-runtime.ts");
+const evidenceRuntime = read("packages/coding-agent/src/core/repi/evidence-runtime.ts");
+const exploitChainRuntime = read("packages/coding-agent/src/core/repi/exploit-chain-runtime.ts");
+const agentSessionExtensionRuntime = read("packages/coding-agent/src/core/agent-session-extension-runtime.ts");
+const delegateOrchestrationRuntime = read("packages/coding-agent/src/core/repi/delegate-orchestration-runtime.ts");
+const operatorExecutionRuntime = read("packages/coding-agent/src/core/repi/operator-execution-runtime.ts");
+const operatorFeedbackRuntime = read("packages/coding-agent/src/core/repi/operator-feedback-runtime.ts");
+const operatorOrchestrationRuntime = read("packages/coding-agent/src/core/repi/operator-orchestration-runtime.ts");
+const operatorPolicyRuntime = read("packages/coding-agent/src/core/repi/operator-policy-runtime.ts");
+const proofLoopRuntime = read("packages/coding-agent/src/core/repi/proof-loop-runtime.ts");
+const profileKernelReportRuntime = read("packages/coding-agent/src/core/repi/profile-kernel-report-runtime.ts");
+const reconLaneRuntime = read("packages/coding-agent/src/core/repi/recon-lane-runtime.ts");
+const runtimeAdapterExecutionRuntime = read(
+	"packages/coding-agent/src/core/repi/runtime-adapter-execution-runtime.ts",
+);
+const runtimeBinding = read("packages/coding-agent/src/core/repi/runtime-binding.ts");
+const sessionLifecycleRuntime = read("packages/coding-agent/src/core/repi/session-lifecycle-runtime.ts");
+const swarmSupervisorRuntime = read("packages/coding-agent/src/core/repi/swarm-supervisor-runtime.ts");
+const toolchainCapabilityRuntime = read("packages/coding-agent/src/core/repi/toolchain-capability-runtime.ts");
+const legacyProfileImplementations = [
+	"function buildAttackGraph(",
+	"function proofLoopGapItems(",
+	"function buildProofLoop(",
+	"async function runProofLoop(",
+	"function laneCommandPack(",
+	"async function runLaneCommandPack(",
+	"function buildDecisionCore(",
+	"function buildOperator(",
+	"async function executeOperatorStep(",
+	"function latestCompilerClaimCheckInputs(",
+	"function latestClaimReleaseMarkerPath(",
+	"function strictClaimCheckSnapshot(",
+	"function buildClaimCheckResult(",
+	"function auditCompletion(",
+	"function formatCompletionAuditFromAudit(",
+	"function proofExitRegexes(",
+	"function proofExitExpectedEvidence(",
+	"function domainProofExitArtifactCorpus(",
+	"function buildDomainProofExitClosure(",
+	"function writeDomainProofExitClosureArtifact(",
+	"function buildAutofix(",
+	"function formatAutofix(",
+	"function writeAutofixArtifact(",
+	"function buildExploitChain(",
+	"function writeExploitChainArtifact(",
+	"function buildDelegate(",
+	"function autonomousExecutionBudget(",
+	"function buildSwarm(",
+	"function buildSupervisor(",
+	"function createSessionScopedExtensionApi(",
+	'pi.on("before_agent_start"',
+	'pi.on("session_tree"',
+	"function persistedReconStats(",
+	"function buildToolDigest(",
+	"function parseToolIndex(",
+	"function recommendedToolsForRoute(",
+	"function fallbackForMissingTools(",
+	"function autopilotExecutionStrategy(",
+	"async function installBootstrapTools(",
+	"async function refreshToolIndex(",
+	"function buildProfessionalRuntimeBridgesGate(",
+	"function writeProfessionalRuntimeBridgesArtifact(",
+	"function buildRuntimeAdapterExecutionGate(",
+	"function writeRuntimeAdapterExecutionArtifact(",
+	"async function runRuntimeAdapterExecution(",
+	"function buildToolchainDomainCapability(",
+	"function writeToolchainDomainCapabilityArtifact(",
+	"function appendEvidence(",
+	"function buildPentestingTaskTreeSnapshot(",
+	"function writeAttackGraphArtifact(",
+	"function latestScopedMarkdownArtifact(",
+	"function contextArtifactIndex(",
+	"function buildProfileCheckOutput(",
+	"function writeKernelArtifact(",
+	"function buildKernelOutput(",
+	"function writeReportScaffold(",
+].filter((marker) => reconProfile.includes(marker));
 rows.push(
 	check(
 		"architecture:profile-is-assembly-layer",
 		includesAll(reconProfile, [
+			"./repi/artifact-selection-runtime.ts",
 			"./repi/evidence.ts",
+			"./repi/evidence-graph-runtime.ts",
+			"./repi/evidence-runtime.ts",
 			"./repi/artifact-scope.ts",
-			"./repi/case-memory.ts",
+			"./repi/attack-graph-runtime.ts",
+			"./repi/autofix-runtime.ts",
+			"./repi/bootstrap-runtime.ts",
+			"./repi/campaign-operation-runtime.ts",
+			"./repi/claim-release-runtime.ts",
+			"./repi/completion-audit-runtime.ts",
+			"./repi/delegate-orchestration-runtime.ts",
+			"./repi/domain-proof-exit-rules.ts",
+			"./repi/domain-proof-exit-runtime.ts",
+			"./repi/exploit-mobile-runtime.ts",
+			"./repi/exploit-chain-runtime.ts",
+			"./repi/failure-runtime.ts",
 			"./repi/graph.ts",
-			"./repi/goal.ts",
-			"./repi/jsonl.ts",
-			"./repi/knowledge-scope.ts",
+			"./repi/lane-specialist-pack.ts",
+			"./repi/native-runtime.ts",
+			"./repi/operator-orchestration-runtime.ts",
 			"./repi/profile.ts",
+			"./repi/profile-kernel-report-runtime.ts",
+			"./repi/proof-loop-runtime.ts",
+			"./repi/recon-commands.ts",
+			"./repi/recon-lane-runtime.ts",
+			"./repi/recon-tools.ts",
 			"./repi/resources.ts",
 			"./repi/routes.ts",
+			"./repi/session-lifecycle-runtime.ts",
 			"./repi/mission.ts",
-			"./repi/memory-active.ts",
-			"./repi/memory-compact-resume.ts",
-			"./repi/memory-deposition.ts",
-			"./repi/memory-distillation.ts",
-			"./repi/memory-distill.ts",
-			"./repi/memory-event.ts",
-			"./repi/memory-feedback.ts",
-			"./repi/memory-experience.ts",
-			"./repi/memory-maturation.ts",
-			"./repi/memory-orchestrator.ts",
-			"./repi/memory-quality.ts",
-			"./repi/memory-replay.ts",
-			"./repi/memory-search.ts",
-			"./repi/memory-skill.ts",
-			"./repi/memory-strategy.ts",
-			"./repi/memory-supervisor.ts",
-			"./repi/memory-usefulness.ts",
-			"./repi/memory-ux.ts",
-			"./repi/memory-vector.ts",
-			"./repi/memory-scope.ts",
-			"./repi/memory-store.ts",
-			"./repi/memory-runtime.ts",
 			"./repi/storage.ts",
 			"./repi/target.ts",
 			"./repi/text.ts",
-			"./repi/toolchain.ts",
-			"./repi/runtime-adapter.ts",
-			"./repi/worker-runtime.ts",
-		]),
-		"recon-profile imports REPI modules",
+			"./repi/toolchain-capability-runtime.ts",
+			"./repi/runtime-adapter-execution-runtime.ts",
+			"./repi/runtime-binding.ts",
+			"./repi/web-runtime.ts",
+			"./repi/swarm-supervisor-runtime.ts",
+			"createExploitChainRuntime({",
+			"createAttackGraphRuntime({",
+			"createAutofixRuntime({",
+			"createClaimReleaseRuntime({",
+			"createCompletionAuditRuntime<DomainProofExitClosureV1>({",
+			"createDelegateOrchestrationRuntime({",
+			"createDomainProofExitRules({ activeLane, readCurrentMission })",
+			"createDomainProofExitRuntime({",
+			"createEvidenceGraphRuntime({",
+			"createOperatorOrchestrationRuntime({",
+			"createProofLoopRuntime({",
+			"createProfileKernelReportRuntime<DomainProofExitClosureV1>({",
+			"createReconLaneRuntime({",
+			"createRuntimeAdapterExecutionRuntime({ appendEvidence })",
+			"createSwarmSupervisorRuntime({",
+			"createToolchainCapabilityRuntime({ appendEvidence })",
+			"installRepiSessionLifecycle(",
+		]) &&
+			includesAll(artifactSelectionRuntime, [
+				"function scopedMarkdownArtifacts(",
+				"function latestScopedMarkdownArtifact(",
+				"function contextArtifactIndex(",
+			]) &&
+			includesAll(attackGraphRuntime, ["export function createAttackGraphRuntime", "function buildAttackGraph("]) &&
+			includesAll(evidenceRuntime, ["function appendEvidence(", "function appendAgentThreadEvidence("]) &&
+			includesAll(evidenceGraphRuntime, [
+				"export function createEvidenceGraphRuntime",
+				"function buildPentestingTaskTreeSnapshot(",
+				"function writeAttackGraphArtifact(",
+			]) &&
+			includesAll(profileKernelReportRuntime, [
+				"export function createProfileKernelReportRuntime",
+				"function buildProfileCheckOutput(",
+				"function buildKernelOutput(",
+				"function writeReportScaffold(",
+			]) &&
+			includesAll(autofixRuntime, [
+				"export function createAutofixRuntime",
+				"function buildAutofix(",
+				"function formatAutofix(",
+				"function writeAutofixArtifact(",
+				"appendRuntimeFailureRepairFromAutofix",
+			]) &&
+			includesAll(bootstrapRuntime, [
+				'from "./toolchain.ts"',
+				"export function buildToolDigest",
+				"export function parseToolIndex",
+				"export function recommendedToolsForRoute",
+				"function fallbackForMissingTools(",
+				"export function autopilotExecutionStrategy",
+				"export async function installBootstrapTools",
+				"export async function refreshToolIndex",
+			]) &&
+			includesAll(claimReleaseRuntime, [
+				"export function createClaimReleaseRuntime",
+				"function strictClaimCheckSnapshot(",
+				"function buildClaimCheckResult(",
+				"schemaVersion: 3",
+				"sourceBindings",
+			]) &&
+			includesAll(completionAuditRuntime, [
+				"export function createCompletionAuditRuntime",
+				"function auditCompletion(",
+				"function formatCompletionAuditFromAudit(",
+				"artifactMatchesScope",
+				"replayClosureBlockers",
+			]) &&
+			includesAll(domainProofExitRules, [
+				"export function createDomainProofExitRules",
+				"function proofExitRegexes(",
+				"function proofExitExpectedEvidence(",
+				"function domainProofExitNextCommands(",
+			]) &&
+			includesAll(domainProofExitRuntime, [
+				"export function createDomainProofExitRuntime",
+				"function domainProofExitArtifactCorpus(",
+				"function buildDomainProofExitClosure(",
+				"function writeDomainProofExitClosureArtifact(",
+			]) &&
+			includesAll(exploitChainRuntime, [
+				"export function createExploitChainRuntime",
+				"function buildExploitChain(",
+				"function writeExploitChainArtifact(",
+			]) &&
+			includesAll(agentSessionExtensionRuntime, [
+				"export class AgentSessionExtensionRuntime",
+				"bindExtensions",
+			]) &&
+			includesAll(agentSessionSource, ["new AgentSessionExtensionRuntime(", "this._extensionRuntime.bindExtensions("]) &&
+			includesAll(delegateOrchestrationRuntime, [
+				"export function createDelegateOrchestrationRuntime",
+				"function buildDelegate(",
+				"function autonomousExecutionBudget(",
+			]) &&
+			includesAll(operatorOrchestrationRuntime, [
+				"export function createOperatorOrchestrationRuntime",
+				"function buildDecisionCore(",
+				"function buildOperator(",
+				"async function executeOperatorStep(",
+				"function latestCompilerClaimCheckInputs(",
+			]) &&
+			includesAll(proofLoopRuntime, ["export function createProofLoopRuntime", "function buildProofLoop(", "async function runProofLoop("]) &&
+			includesAll(reconLaneRuntime, ["export function createReconLaneRuntime", "function laneCommandPack(", "async function runLaneCommandPack("]) &&
+			includesAll(runtimeAdapterExecutionRuntime, [
+				'from "./runtime-adapter.ts"',
+				"export function createRuntimeAdapterExecutionRuntime",
+				"function buildExecutionGate(",
+				"function writeExecutionArtifact(",
+				"async function runExecution(",
+				"parseRuntimeAdapterSignals",
+				"atomicWriteFileSync(",
+			]) &&
+			includesAll(sessionLifecycleRuntime, [
+				'from "./goal.ts"',
+				"export function installRepiSessionLifecycle",
+				"function createSessionScopedExtensionApi(",
+				'pi.on("before_agent_start"',
+				'pi.on("session_tree"',
+				"lastInjectedState: stats.lastInjectedState",
+				"updateMissionRuntimeStats(persistedReconStats(stats))",
+			]) &&
+			includesAll(toolchainCapabilityRuntime, [
+				'from "./toolchain-runtime.ts"',
+				"export function createToolchainCapabilityRuntime",
+				"function buildProfessionalRuntimeBridges(",
+				"function writeProfessionalRuntimeBridges(",
+				"function buildDomainCapability(",
+				"function writeDomainCapability(",
+			]) &&
+			legacyProfileImplementations.length === 0,
+		legacyProfileImplementations.length
+			? `legacy_profile_implementations=${legacyProfileImplementations.join(",")}`
+			: "recon-profile wires split REPI runtimes without retaining their heavy implementations",
 		"New REPI domains should land in core/repi/* modules first; recon-profile.ts should assemble and register.",
 	),
 );
 
+rows.push(
+	check(
+		"runtime:operation-checkpoint-transitions",
+		includesAll(campaignOperationRuntime, [
+			"const output = await refreshToolIndex(pi)",
+			'updateMissionCheckpoint("tool_index_checked", "done", command)',
+			"return done(output)",
+		]),
+		"internal operation commands persist tool-index completion before returning to the planner",
+		"Every successful internal operation that satisfies a mission gate must persist the matching checkpoint transition.",
+	),
+);
+
+rows.push(
+	check(
+		"architecture:operator-feedback-boundary",
+		includesAll(operatorFeedbackRuntime, [
+			"export function createOperatorFeedbackRuntime",
+			"function classifyOperatorFeedback(",
+			"successfulControlPlaneCommand",
+			"explicitRuntimeFailure",
+		]) &&
+			includesAll(operatorOrchestrationRuntime, [
+				'from "./operator-feedback-runtime.ts"',
+				"createOperatorFeedbackRuntime({ latestSwarmRetryQueue })",
+			]) &&
+			!operatorOrchestrationRuntime.includes("function classifyOperatorFeedback("),
+		"operator feedback classification is isolated and protects control-plane output from data-plane keyword matches",
+		"Keep feedback signal classification in operator-feedback-runtime and consume only its structured rows in orchestration.",
+	),
+);
+
+rows.push(
+	check(
+		"architecture:operator-policy-boundary",
+		includesAll(operatorPolicyRuntime, [
+			"export function createOperatorPolicyRuntime",
+			"function operatorFeedbackFallbackCommands",
+			"function dispatcherFeedbackScoreboard",
+			"function operatorVerificationLines",
+		]) &&
+			includesAll(operatorOrchestrationRuntime, [
+				'from "./operator-policy-runtime.ts"',
+				"createOperatorPolicyRuntime({",
+				"operatorPolicyRuntime",
+			]) &&
+			![
+				"function operatorStepPriority(",
+				"function operatorFeedbackFallbackCommands(",
+				"function dispatcherFeedbackScoreboard(",
+			].some((marker) => operatorOrchestrationRuntime.includes(marker)),
+		"operator priority, feedback routing, scoring, and verification policy are isolated from orchestration",
+		"Keep deterministic operator policy in operator-policy-runtime and side effects in orchestration/execution runtimes.",
+	),
+);
+
+rows.push(
+	check(
+		"architecture:operator-planner-executor-boundary",
+		includesAll(operatorExecutionRuntime, [
+			"export type OperatorExecutionRuntimeDependencies",
+			"export type OperatorExecutionControl",
+			"export function createOperatorExecutionRuntime",
+			"dependencies.executeOperationStep",
+		]) &&
+			includesAll(operatorOrchestrationRuntime, [
+				'from "./operator-execution-runtime.ts"',
+				"createOperatorExecutionRuntime(dependencies)",
+				"operatorExecutionRuntime.executeOperatorStep",
+			]) &&
+			!["const missionMatch =", "const kernelMatch =", "function operationStepFromOperator("].some((marker) =>
+				operatorOrchestrationRuntime.includes(marker),
+			),
+		"operator planning and command execution use separate runtimes with explicit control ports",
+		"Keep policy/artifact planning in operator-orchestration-runtime and command parsing/execution in operator-execution-runtime.",
+	),
+);
+
+rows.push(
+	check(
+		"architecture:orchestration-runtime-binding-contract",
+		includesAll(runtimeBinding, [
+			"export function createRuntimeBinding",
+			"accessed before initialization",
+			"already initialized",
+			"export function assertRuntimeBindings",
+			"runtime topology incomplete",
+		]) &&
+			includesAll(reconProfile, [
+				'createRuntimeBinding<ReturnType<typeof createOperatorOrchestrationRuntime>>("operator")',
+				'createRuntimeBinding<ReturnType<typeof createCampaignOperationRuntime>>("campaign-operation")',
+				'createRuntimeBinding<ReturnType<typeof createDelegateOrchestrationRuntime>>("delegate")',
+				'createRuntimeBinding<ReturnType<typeof createSwarmSupervisorRuntime>>("swarm-supervisor")',
+				"operatorRuntimeBinding.bind(",
+				"campaignRuntimeBinding.bind(",
+				"delegateRuntimeBinding.bind(",
+				"swarmRuntimeBinding.bind(",
+				"assertRuntimeBindings([",
+			]) &&
+			!["let operatorRuntime:", "let delegateRuntime:", "latestSupervisorArtifactPathForFailure"].some((marker) =>
+				reconProfile.includes(marker),
+			),
+		"cyclic orchestration ports are single-assignment, fail-fast, and audited before tool registration",
+		"Keep unavoidable orchestration cycles behind explicit runtime bindings; never restore uninitialized module-level runtime variables.",
+	),
+);
+
+const specialistEvidenceSource = read("packages/coding-agent/src/core/repi/specialist-evidence.ts");
+const webRuntimeSource = read("packages/coding-agent/src/core/repi/web-runtime.ts");
+const exploitMobileRuntimeSource = read("packages/coding-agent/src/core/repi/exploit-mobile-runtime.ts");
+const nativeRuntimeSource = read("packages/coding-agent/src/core/repi/native-runtime.ts");
+const legacyRuntimeImplementations = [
+	"function liveBrowserNodeScript(",
+	"function webAuthzStateNodeScript(",
+	"function exploitLabRunnerScript(",
+	"function mobileRuntimeFridaHookScript(",
+	"function nativeRuntimeGdbScript(",
+	"function buildLiveBrowserArtifact(",
+	"function buildWebAuthzStateArtifact(",
+	"function buildExploitLabArtifact(",
+	"function buildMobileRuntimeArtifact(",
+	"function buildNativeRuntimeArtifact(",
+].filter((marker) => reconProfile.includes(marker));
+rows.push(
+	check(
+		"architecture:professional-runtime-split-contract",
+		includesAll(reconProfile, [
+			"createExploitMobileRuntime({",
+			"createNativeRuntime({",
+			"runWebRuntimeLiveBrowser(pi, options, webRuntimeDependencies)",
+			"runWebRuntimeAuthzState(pi, options, webRuntimeDependencies)",
+		]) &&
+			includesAll(specialistEvidenceSource, [
+				"export function analyzeBrowserXhrWsEvidence",
+				"export function analyzeIdentityAdEvidence",
+			]) &&
+			includesAll(webRuntimeSource, [
+				"export type WebRuntimeDependencies",
+				"export async function runLiveBrowser",
+				"export function buildWebAuthzStateOutput",
+			]) &&
+			includesAll(exploitMobileRuntimeSource, [
+				"export function createExploitMobileRuntime",
+				"buildExploitLabOutput",
+				"buildMobileRuntimeOutput",
+				"stripScriptIndent",
+			]) &&
+			includesAll(nativeRuntimeSource, [
+				"export function createNativeRuntime",
+				"buildNativeRuntimeOutput",
+				"stripScriptIndent",
+			]) &&
+			legacyRuntimeImplementations.length === 0,
+		legacyRuntimeImplementations.length
+			? `legacy_runtime_implementations=${legacyRuntimeImplementations.join(",")}`
+			: "specialist, web, exploit/mobile, and native runtimes are split and wired through the profile assembly",
+		"Keep heavy specialist analyzers and runtime artifact builders in core/repi modules; recon-profile.ts should only wire dependencies and register commands/tools.",
+	),
+);
+
 const workerRuntime = read("packages/coding-agent/src/core/repi/worker-runtime.ts");
+const providerWorkerRuntime = read("packages/coding-agent/src/core/repi/provider-worker-runtime.ts");
+const swarmWorkerArtifactRuntime = read("packages/coding-agent/src/core/repi/swarm-worker-artifact-runtime.ts");
+const swarmWorkerChildSessionRuntime = read("packages/coding-agent/src/core/repi/swarm-worker-child-session-runtime.ts");
+const swarmWorkerLeaseSchedulerRuntime = read("packages/coding-agent/src/core/repi/swarm-worker-lease-scheduler-runtime.ts");
+const swarmWorkerRetryHandoffRuntime = read("packages/coding-agent/src/core/repi/swarm-worker-retry-handoff-runtime.ts");
 rows.push(
 	check(
 		"profile:worker-runtime-split-contract",
@@ -1320,22 +1233,121 @@ rows.push(
 			"workerChildSessionLaunchPolicy",
 			"workerChildSessionToWorkerRuntimePoolBridge",
 			"verifyWorkerChildSessionRuntimeBatch",
-			"REPI_AUTH_TOKEN",
-			"REPI_SUBAGENT_MODEL",
+			"REPI_MODEL_ENV_VARIABLES",
 			"child_session_provider_env_not_allowlisted",
 			"runtime:worker-runtime-pool-validation",
 			"runtime:claim-aware-worker-merge",
 			"runtime:child-session-pool-bridge-validation",
 		]) &&
-			includesAll(reconProfile, [
-				"./repi/worker-runtime.ts",
+			includesAll(swarmSupervisorRuntime, [
+				'from "./swarm-worker-artifact-runtime.ts"',
+				"createSwarmWorkerArtifactRuntime({",
+			]) &&
+			includesAll(swarmWorkerArtifactRuntime, [
+				"createSwarmWorkerChildSessionRuntime",
+				"createSwarmWorkerLeaseSchedulerRuntime",
+				"createSwarmWorkerRetryHandoffRuntime",
+			]) &&
+			includesAll(swarmWorkerChildSessionRuntime, [
+				"verifyWorkerChildSessionRuntimeBatch",
 				"verifyWorkerRuntimePool",
+				"workerChildSessionLaunchPolicy",
 				"workerChildSessionToWorkerRuntimePoolBridge",
+			]) &&
+			includesAll(swarmWorkerLeaseSchedulerRuntime, [
 				"verifyWorkerLeaseSchedulerV1",
+				"workerLeaseSchedulerEventHash",
+			]) &&
+			includesAll(swarmWorkerRetryHandoffRuntime, [
+				"buildWorkerRetryHandoffMergeSummaryV1",
 				"verifyWorkerRetryHandoffClosureV1",
+				"verifyWorkerRetryHandoffMergeSummaryV1",
+			]) &&
+			includesAll(reconProfile, [
+				"./repi/swarm-supervisor-runtime.ts",
+				"createSwarmSupervisorRuntime({",
 			]),
 		"worker/subagent runtime pool, lease scheduler, retry-handoff closure, and child-session validation live in a split pure module",
 		"Keep heavy runtime validation outside recon-profile.ts; profile should assemble live artifacts and call pure contracts.",
+	),
+);
+
+rows.push(
+	check(
+		"architecture:provider-worker-runtime-split-contract",
+		includesAll(providerWorkerRuntime, [
+			"RepiProviderRuntimeMatrixV1",
+			"RepiProviderFailureInjectionReportV1",
+			"RepiRepairRollbackPolicyV1",
+			"verifyProviderRuntimeMatrixV1",
+			"verifyProviderFailureInjectionReportV1",
+			"verifyRepairRollbackPolicyV1",
+			"verifyParallelProviderWorkerMatrixV1",
+			"verifyRemoteProviderLongRunV1",
+		]) &&
+			workerRuntime.includes('from "./provider-worker-runtime.ts"') &&
+			!workerRuntime.includes("export function verifyProviderRuntimeMatrixV1("),
+		"provider reliability matrices and rollback policy validation are isolated from the worker pool core",
+		"Keep provider transport evaluation in provider-worker-runtime.ts; worker-runtime.ts owns scheduling, leases, and handoff closure only.",
+	),
+);
+
+const swarmRuntimeTypes = read("packages/coding-agent/src/core/repi/swarm-runtime-types.ts");
+const swarmClaimRuntime = read("packages/coding-agent/src/core/repi/swarm-claim-runtime.ts");
+const swarmCommanderRuntime = read("packages/coding-agent/src/core/repi/swarm-commander-runtime.ts");
+rows.push(
+	check(
+		"architecture:swarm-runtime-types-split-contract",
+		includesAll(swarmRuntimeTypes, [
+			"export type SwarmArtifact",
+			"export type SupervisorArtifact",
+			"export type SwarmSupervisorRuntimeDependencies",
+			"export type StructuredClaimMergeV1",
+		]) &&
+			swarmSupervisorRuntime.includes('from "./swarm-runtime-types.ts"') &&
+			swarmSupervisorRuntime.includes('export type * from "./swarm-runtime-types.ts"') &&
+			!swarmSupervisorRuntime.includes("export type SwarmArtifact ="),
+		"swarm schemas and dependency contracts are separated from execution and persistence",
+		"Keep schema-only swarm types free of process, filesystem, and persistence implementation code.",
+	),
+);
+
+const legacySwarmSupervisorImplementations = [
+	"function buildSwarmRuntimeClaimLedger(",
+	"function buildStructuredClaimMergeFromSwarm(",
+	"function refreshSwarmRuntimeClaimLedger(",
+	"function supervisorClaimCheckPolicy(",
+	"function supervisorPlanCoverage(",
+	"function buildSupervisor(",
+	"function parseSupervisorCritique(",
+].filter((marker) => swarmSupervisorRuntime.includes(marker));
+rows.push(
+	check(
+		"architecture:swarm-runtime-components-split-contract",
+		includesAll(swarmSupervisorRuntime, [
+			'from "./swarm-claim-runtime.ts"',
+			'from "./swarm-commander-runtime.ts"',
+			"createSwarmClaimRuntime({",
+			"createSwarmCommanderRuntime({",
+		]) &&
+			includesAll(swarmClaimRuntime, [
+				"export function createSwarmClaimRuntime",
+				"function buildSwarmRuntimeClaimLedger(",
+				"function buildStructuredClaimMergeFromSwarm(",
+				"function refreshSwarmRuntimeClaimLedger(",
+			]) &&
+			includesAll(swarmCommanderRuntime, [
+				"export function createSwarmCommanderRuntime",
+				"function supervisorClaimCheckPolicy(",
+				"function supervisorPlanCoverage(",
+				"function buildSupervisor(",
+				"function parseSupervisorCritique(",
+			]) &&
+			legacySwarmSupervisorImplementations.length === 0,
+		legacySwarmSupervisorImplementations.length
+			? `legacy_swarm_supervisor_implementations=${legacySwarmSupervisorImplementations.join(",")}`
+			: "swarm supervisor composes claim, commander, and worker runtimes without retaining their implementations",
+		"Keep claim merging, supervisor review, and worker artifact construction in their dedicated swarm runtime modules.",
 	),
 );
 
@@ -1356,10 +1368,11 @@ rows.push(
 			"Footer: ${footer}",
 			"repi-goal-continuation",
 		]) &&
-			includesAll(reconProfile, ["./repi/goal.ts", "installRepiGoalMode(pi)", "./repi/resources.ts"]) &&
+			includesAll(reconProfile, ["./repi/session-lifecycle-runtime.ts", "installRepiSessionLifecycle(", "./repi/resources.ts"]) &&
+			includesAll(sessionLifecycleRuntime, ['from "./goal.ts"', "installRepiGoalMode(pi)"]) &&
 			includesAll(resourceSource, ["createReconResourceLoaderOptions", "isExternalGoalModeExtension"]),
 		"/goal command, goal_complete tool, footer status, continuation, and legacy conflict suppression are built in",
-		"Keep REPI goal mode built into the inline profile and suppress external @narumitw/pi-goal conflicts.",
+		"Keep REPI goal mode built into the session lifecycle and suppress external @narumitw/pi-goal conflicts.",
 	),
 );
 const goalUnitTests = read("packages/coding-agent/test/repi-goal.test.ts");
@@ -1448,7 +1461,11 @@ rows.push(
 			"tshark-pcap-flow-adapter",
 			"binwalk-firmware-extract-adapter",
 			"firmware-rootfs-service-map-adapter",
-		]) && includesAll(reconProfile, ["./repi/runtime-adapter.ts", "runRuntimeAdapterExecution"]),
+		]) &&
+			includesAll(runtimeAdapterExecutionRuntime, [
+				'from "./runtime-adapter.ts"',
+				"runRuntimeAdapterExecution: runExecution",
+			]),
 		"runtime adapter matrix covers GDB/r2/Frida/CDP/PCAP/firmware/rootfs and target auto-detection",
 		"Keep re_runtime_adapter able to infer the runner from URL, PCAP, APK/IPA/package, firmware/rootfs, pwn/crash, and native target shapes.",
 	),
@@ -1489,8 +1506,8 @@ rows.push(
 				"binary mitigation map",
 			]) &&
 			includesAll(toolPresenceSource, ["repiHostToolPresent", "repiResolvedToolPresent"]) &&
-			includesAll(reconProfile, [
-				"resolvedToolPresent",
+			includesAll(runtimeAdapterExecutionRuntime, [
+				"repiResolvedToolPresent",
 				"runner_preflight_blocked_no_synthetic_success",
 				"command_preflight_blocked_no_synthetic_success",
 			]),
@@ -1524,10 +1541,10 @@ rows.push(
 				"runtimeAdapterParserSummaryForGraph",
 				"runtimeAdapterClosure",
 			]) &&
-			includesAll(reconProfile, [
+			includesAll(attackGraphRuntime, [
+				"export function createAttackGraphRuntime",
+				"function buildAttackGraph(",
 				"artifact:binary-mitigation-map",
-				"runtime adapter missing mitigation map proof",
-				"parseEvidenceLedgerTaskRecords",
 				"runtime-adapter-json",
 				"runtime-adapter-lineage",
 				"runtime-adapter-artifact",
@@ -1546,49 +1563,51 @@ rows.push(
 				"target-profile-auto-detect",
 				"parser_signal_summary",
 				"missing-proof-exit",
-				"evidenceRecordHasCounterSignal",
-				"evidenceRecordHasHypothesisSignal",
 				"counter-evidence-prior-hypothesis",
 				"command-output-hypothesis",
-				"command",
 				"produces",
 				"refutes",
 				"verifies",
+			]) &&
+			includesAll(reconProfile, [
+				"createAttackGraphRuntime({",
+				"const { buildAttackGraph } = createAttackGraphRuntime({",
+				"buildAttackGraphOutput",
+				"writeAttackGraphArtifact",
+				"parseEvidenceLedgerTaskRecords",
+				"evidenceRecordHasCounterSignal",
+				"evidenceRecordHasHypothesisSignal",
 			]),
 		"attack graph includes taskTree nodes linking commands, runtime adapter artifacts, hypotheses, verification, and counter-evidence",
 		"Keep re_graph build as a traceable task tree, not just a flat mission/lane summary.",
 	),
 );
 
+const proofLoopSource = read("packages/coding-agent/src/core/repi/proof-loop.ts");
 rows.push(
 	check(
 		"proof-loop:gap-classifier-contract",
-		includesAll(read("packages/coding-agent/src/core/repi/proof-loop.ts"), [
+		includesAll(proofLoopSource, [
 			"RepiProofLoopGapClass",
 			"runtime_adapter_gap",
 			"proof_spine_seed",
 			"classifyRepiProofLoopGap",
 			"repiProofLoopQuickPathFromItems",
 			"repiProofLoopRuntimeAdapterCommands",
-				"runtimeAdapterIdsFromGapText",
-				"RepiProofLoopRuntimeAdapterClosureRowV1",
-				"repiProofLoopRuntimeAdapterClosureRows",
-				"proof_spine_ready",
-				"needs_adapter_rerun",
-				"appendProofSpine",
-			"re_graph build",
+			"runtimeAdapterIdsFromGapText",
+			"RepiProofLoopRuntimeAdapterClosureRowV1",
+			"repiProofLoopRuntimeAdapterClosureRows",
+			"proof_spine_ready",
+			"needs_adapter_rerun",
+			"appendProofSpine",
 			"re_runtime_adapter run",
-			"re_verifier matrix",
-			"re_compiler draft",
-			"re_replayer run",
-			"re_autofix plan",
 		]) &&
-			includesAll(reconProfile, [
-				"./repi/proof-loop.ts",
+			includesAll(proofLoopRuntime, [
+				"export function createProofLoopRuntime",
 				"parseAttackGraphArtifact",
 				"proofLoopAttackGraphGapItems",
-				"proofLoopGapClassifier",
-				"proofLoopQuickPathFromGapItems",
+				"proofLoopGapItems",
+				"proofLoopQuickPlanFromItems",
 				"proofLoopQuickPlanRows",
 				"runtime_adapter_closure",
 				"proofLoopQuickPath",
@@ -1603,7 +1622,18 @@ rows.push(
 				"quick_path_execution",
 				"gap_classifier",
 				"quick_path",
-				"if (proof.mode === \"run\") appendProofLoopMemoryEvent(proof, path)",
+				"re_graph build",
+				"re_verifier matrix",
+				"re_compiler draft",
+				"re_replayer run",
+				"re_autofix plan",
+			]) &&
+			includesAll(reconProfile, [
+				"./repi/proof-loop-runtime.ts",
+				"createProofLoopRuntime({",
+				"latestProofLoopArtifactPath",
+				"runProofLoop",
+				"buildProofLoopOutput",
 			]),
 		"proof loop classifies gaps in a split pure module and executes a quick verifier/compiler/replayer/autofix path",
 		"Keep re_proof_loop focused on fast executable gap classification and bounded proof repair, not only static queue dumps.",
@@ -1613,22 +1643,27 @@ rows.push(
 rows.push(
 	check(
 		"swarm:timeout-budget-contract",
-		includesAll(reconProfile, [
-			"swarmWorkerTimeoutMs",
-			"REPI_SWARM_SUBAGENT_TIMEOUT_MS",
-			"swarmWorkerRetryLimit",
-			"REPI_SWARM_RETRY_LIMIT",
-			"retry_execution",
-			"retryAttempt",
-			"timeoutMs",
-			"timedOut",
-			"cancelledAt",
-			"WorkerRuntimePoolV1",
-			"workerRetryHandoffClosure",
-			"worker_retry_handoff_closure",
-			"workerRetryHandoffMergeSummary",
-			"worker_retry_handoff_merge_summary",
-		]) &&
+			includesAll(swarmSupervisorRuntime, [
+				"swarmWorkerTimeoutMs",
+				"REPI_SWARM_SUBAGENT_TIMEOUT_MS",
+				"swarmWorkerRetryLimit",
+				"REPI_SWARM_RETRY_LIMIT",
+				"retry_execution",
+				"retryAttempt",
+				"timeoutMs",
+				"timedOut",
+				"cancelledAt",
+				"workerRetryHandoffClosure",
+				"worker_retry_handoff_closure",
+				"workerRetryHandoffMergeSummary",
+				"worker_retry_handoff_merge_summary",
+			]) &&
+			includesAll(swarmWorkerRetryHandoffRuntime, [
+				"buildSwarmWorkerRetryHandoffClosure",
+				"buildWorkerRetryHandoffMergeSummaryV1",
+				"verifyWorkerRetryHandoffClosureV1",
+				"verifyWorkerRetryHandoffMergeSummaryV1",
+			]) &&
 			includesAll(read("packages/coding-agent/src/core/repi/worker-runtime.ts"), [
 				"WorkerRetryHandoffMergeSummaryV1",
 				"buildWorkerRetryHandoffMergeSummaryV1",
@@ -1640,19 +1675,20 @@ rows.push(
 				"sourceArtifactsPreserved",
 				"runtime:retry-handoff-merge-summary-validation",
 			]) &&
+			includesAll(reconProfile, ["./repi/swarm-supervisor-runtime.ts", "createSwarmSupervisorRuntime({", "runSwarm"]) &&
 			includesAll(read("packages/coding-agent/src/core/agent-thread-manager.ts"), [
 				"killWorkerProcessTree",
-				"detached: process.platform",
 				"REPI_PRINT_MAX_TURNS",
-				"REPI_AGENT_THREAD_STOP_KILL_GRACE_MS",
 				"handoffRecovered",
-				"handoff_recovered",
 				"timeoutMs",
 				"maxTurns",
 				"cancelledAt",
 				"stopped_by_user",
 				"SIGKILL",
-			]),
+			]) &&
+			includesAll(agentThreadProcessRuntime, ["detached: process.platform"]) &&
+			includesAll(agentThreadRuntime, ["runtimeAgentThreadStopKillGraceMs", "REPI_AGENT_THREAD_STOP_KILL_GRACE_MS"]) &&
+			includesAll(agentThreadMergeRuntime, ["handoff_recovered"]),
 		"swarm/subagent workers carry explicit timeout/cancel/max-turn metadata, process-tree kill, and recoverable handoff merge evidence",
 		"Keep subagent scheduling bounded, cancellable, and retry-budget visible across handoff manifests.",
 	),
@@ -1666,47 +1702,27 @@ const scanFiles = [
 	"repi",
 	"packages/coding-agent/src/core/recon-profile.ts",
 	"packages/coding-agent/src/core/repi/artifact-scope.ts",
-	"packages/coding-agent/src/core/repi/case-memory.ts",
 	"packages/coding-agent/src/core/repi/evidence.ts",
+	"packages/coding-agent/src/core/repi/exploit-mobile-runtime.ts",
 	"packages/coding-agent/src/core/repi/graph.ts",
 	"packages/coding-agent/src/core/repi/goal.ts",
 	"packages/coding-agent/src/core/repi/jsonl.ts",
-	"packages/coding-agent/src/core/repi/knowledge-scope.ts",
+	"packages/coding-agent/src/core/repi/native-runtime.ts",
 	"packages/coding-agent/src/core/repi/profile.ts",
 	"packages/coding-agent/src/core/repi/resources.ts",
 	"packages/coding-agent/src/core/repi/runtime-adapter.ts",
+	"packages/coding-agent/src/core/repi/specialist-evidence.ts",
 	"packages/coding-agent/src/core/repi/routes.ts",
 	"packages/coding-agent/src/core/repi/mission.ts",
-	"packages/coding-agent/src/core/repi/memory-active.ts",
-	"packages/coding-agent/src/core/repi/memory-compact-resume.ts",
-	"packages/coding-agent/src/core/repi/memory-deposition.ts",
-	"packages/coding-agent/src/core/repi/memory-distillation.ts",
-	"packages/coding-agent/src/core/repi/memory-distill.ts",
-	"packages/coding-agent/src/core/repi/memory-event.ts",
-	"packages/coding-agent/src/core/repi/memory-feedback.ts",
-	"packages/coding-agent/src/core/repi/memory-experience.ts",
-	"packages/coding-agent/src/core/repi/memory-maturation.ts",
-	"packages/coding-agent/src/core/repi/memory-orchestrator.ts",
-	"packages/coding-agent/src/core/repi/memory-quality.ts",
-	"packages/coding-agent/src/core/repi/memory-replay.ts",
-	"packages/coding-agent/src/core/repi/memory-search.ts",
-	"packages/coding-agent/src/core/repi/memory-skill.ts",
-	"packages/coding-agent/src/core/repi/memory-strategy.ts",
-	"packages/coding-agent/src/core/repi/memory-supervisor.ts",
-	"packages/coding-agent/src/core/repi/memory-usefulness.ts",
-	"packages/coding-agent/src/core/repi/memory-ux.ts",
-	"packages/coding-agent/src/core/repi/memory-vector.ts",
-	"packages/coding-agent/src/core/repi/memory-scope.ts",
-	"packages/coding-agent/src/core/repi/memory-store.ts",
-	"packages/coding-agent/src/core/repi/memory-runtime.ts",
 	"packages/coding-agent/src/core/repi/storage.ts",
 	"packages/coding-agent/src/core/repi/target.ts",
 	"packages/coding-agent/src/core/repi/text.ts",
+	"packages/coding-agent/src/core/repi/tool-presence.ts",
 	"packages/coding-agent/src/core/repi/toolchain.ts",
+	"packages/coding-agent/src/core/repi/web-runtime.ts",
 	"packages/coding-agent/src/core/repi/worker-runtime.ts",
 	"scripts/reverse-agent/repi-smoke.mjs",
 	"scripts/reverse-agent/repi-release-tarball-smoke.mjs",
-	"scripts/reverse-agent/memory-inspect.mjs",
 ];
 const forbiddenPatterns = [
 	{ id: "old-source", re: /builtin:pi-recon/ },
@@ -1717,17 +1733,43 @@ const forbiddenPatterns = [
 	{ id: "old-route-security-general", re: /Security general/ },
 	{ id: "red-team-theme", re: /\bred[- ]team\b/i },
 ];
-const allowedLegacyCompatibility = ({ rel, line, id }) =>
-	rel === "scripts/reverse-agent/memory-inspect.mjs" &&
-	id.startsWith("old-route-") &&
-	(/normalizeRouteLabel/.test(line) || /replace/.test(line) || /return "Reverse\/Pentest general"/.test(line));
-const forbiddenHits = scanFiles.flatMap((rel) => patternHits(rel, forbiddenPatterns, allowedLegacyCompatibility));
+const forbiddenHits = scanFiles.flatMap((rel) => patternHits(rel, forbiddenPatterns));
 rows.push(
 	check(
 		"theme:no-old-pi-or-generic-security-drift",
 		forbiddenHits.length === 0,
 		forbiddenHits.length ? JSON.stringify(forbiddenHits.slice(0, 12)) : `scanned=${scanFiles.length}`,
 		"Do not reintroduce old Pi-recon markers, old generic security route labels, or red-team theme text in product surfaces.",
+	),
+);
+
+const retiredMemorySurfaceFiles = [
+	"README.md",
+	"docs/reverse-agent/mainline-overhaul.md",
+	"docs/reverse-agent/repi-runtime-configuration.md",
+	"packages/coding-agent/src/core/recon-profile.ts",
+	"packages/coding-agent/src/core/repi/exploit-mobile-runtime.ts",
+	"packages/coding-agent/src/core/repi/native-runtime.ts",
+	"packages/coding-agent/src/core/repi/profile.ts",
+	"packages/coding-agent/src/core/repi/resources.ts",
+	"packages/coding-agent/src/core/repi/specialist-evidence.ts",
+	"packages/coding-agent/src/core/repi/storage.ts",
+	"packages/coding-agent/src/core/repi/web-runtime.ts",
+	"packages/coding-agent/src/main.ts",
+	"scripts/reverse-agent/repi-smoke.mjs",
+];
+const retiredMemoryPatterns = [
+	{ id: "retired-memory-command", re: /\bre_(?:memory|note|reflect|context)\b|\/re-(?:memory|note|reflect|context)\b/ },
+	{ id: "retired-memory-module", re: /(?:memory-(?:recall|deposition|distill|vector|store|runtime)|case-memory|knowledge-scope|tool-call-trace)/i },
+	{ id: "retired-memory-policy", re: /MemoryPolicy(?:V\d+)?|autoRecall|autoDeposit|maxInjectedTokens/ },
+];
+const retiredMemoryHits = retiredMemorySurfaceFiles.flatMap((rel) => patternHits(rel, retiredMemoryPatterns));
+rows.push(
+	check(
+		"runtime:no-retired-persistent-memory-surface",
+		retiredMemoryHits.length === 0,
+		retiredMemoryHits.length ? JSON.stringify(retiredMemoryHits.slice(0, 12)) : `scanned=${retiredMemorySurfaceFiles.length}`,
+		"Remove retired recall/deposit/inject/writeback, case/vector/knowledge, and trace-ledger references from product surfaces.",
 	),
 );
 
@@ -1738,7 +1780,6 @@ rows.push(
 		includesAll(smoke, [
 			"product-contract",
 			"doctor",
-			"memory-status",
 			"model-doctor",
 			"model-status-env",
 			"launcher-help",
@@ -1750,7 +1791,7 @@ rows.push(
 			"goal_complete",
 			"activeToolNames",
 		]),
-		"smoke covers product contract, doctor, memory, model parse, launcher help/list, fresh env-only models, and RPC /goal",
+		"smoke covers product contract, doctor, model parse, launcher help/list, fresh env-only models, and RPC /goal",
 		"Keep smoke focused on fast user-facing REPI usability checks.",
 	),
 );

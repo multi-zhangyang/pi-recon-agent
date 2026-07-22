@@ -4,6 +4,9 @@ import { getModel } from "../src/models.ts";
 import { consumeChatStream } from "../src/providers/mistral.ts";
 import type { AssistantMessage, Model, Usage } from "../src/types.ts";
 import { AssistantMessageEventStream } from "../src/utils/event-stream.ts";
+import { registerMistralFixtures } from "./model-fixtures.ts";
+
+registerMistralFixtures();
 
 // Regression guard for the mistral late tool-call name bug. The tool-call `name`
 // was captured only at block CREATION (the first delta for a given `index`). If
@@ -102,7 +105,7 @@ async function* fakeStream(): AsyncIterable<CompletionEvent> {
 
 describe("Mistral late tool-call name (mistral.ts)", () => {
 	it("captures the tool-call name when it arrives on a later delta for the same index", async () => {
-		const model = getModel("mistral", "devstral-medium-latest");
+		const model = getModel<"mistral-conversations">("mistral", "devstral-medium-latest")!;
 		const output = buildOutput(model);
 		const stream = new AssistantMessageEventStream();
 

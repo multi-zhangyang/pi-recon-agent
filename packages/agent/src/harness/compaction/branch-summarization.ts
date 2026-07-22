@@ -1,4 +1,4 @@
-import type { Model } from "@pi-recon/repi-ai";
+import type { Model, Models } from "@pi-recon/repi-ai";
 import { completeSimple } from "@pi-recon/repi-ai";
 import type { AgentMessage } from "../../types.ts";
 import {
@@ -10,6 +10,7 @@ import {
 import type { BranchSummaryResult, Session, SessionTreeEntry } from "../types.ts";
 import { BranchSummaryError, err, ok, type Result, SessionError } from "../types.ts";
 import { estimateTokens, SUMMARIZATION_SYSTEM_PROMPT } from "./compaction.ts";
+import { summaryInputTokenBudget, truncateSummaryToTokenBudget } from "./policy.ts";
 import {
 	computeFileLists,
 	createFileOps,
@@ -17,6 +18,8 @@ import {
 	type FileOperations,
 	formatFileOperations,
 	serializeConversation,
+	stripFileOperationSections,
+	truncateForSummary,
 } from "./utils.ts";
 
 /** File-operation details stored on generated branch summary entries. */
@@ -55,6 +58,22 @@ export interface GenerateBranchSummaryOptions {
 	apiKey: string;
 	/** Optional request headers forwarded to the provider. */
 	headers?: Record<string, string>;
+	/** Abort signal for the summarization request. */
+	signal: AbortSignal;
+	/** Optional instructions appended to or replacing the default prompt. */
+	customInstructions?: string;
+	/** Replace the default prompt with custom instructions instead of appending them. */
+	replaceInstructions?: boolean;
+	/** Tokens reserved for prompt and model output. Defaults to 16384. */
+	reserveTokens?: number;
+}
+
+/** Options for provider-owned auth and dispatch through a Models runtime. */
+export interface GenerateBranchSummaryModelsOptions {
+	/** Provider collection used for the summarization request. */
+	models: Models;
+	/** Model used for summarization. */
+	model: Model<any>;
 	/** Abort signal for the summarization request. */
 	signal: AbortSignal;
 	/** Optional instructions appended to or replacing the default prompt. */
@@ -161,8 +180,13 @@ export function prepareBranchEntries(entries: SessionTreeEntry[], tokenBudget: n
 		if (tokenBudget > 0 && totalTokens + tokens > tokenBudget) {
 			if (entry.type === "compaction" || entry.type === "branch_summary") {
 				if (totalTokens < tokenBudget * 0.9) {
-					messages.unshift(message);
-					totalTokens += tokens;
+					const summaryMessage = message as Extract<AgentMessage, { role: "branchSummary" | "compactionSummary" }>;
+					const summary = truncateSummaryToTokenBudget(summaryMessage.summary, tokenBudget - totalTokens);
+					if (summary) {
+						const boundedMessage = { ...summaryMessage, summary };
+						messages.unshift(boundedMessage);
+						totalTokens += estimateTokens(boundedMessage);
+					}
 				}
 			}
 			break;
@@ -207,16 +231,29 @@ Use this EXACT format:
 ## Next Steps
 1. [What should happen next to continue this work]
 
-Keep each section concise. Preserve exact file paths, function names, and error messages.`;
+Keep each section concise. Preserve exact file paths, function names, and error messages.
+Omit repeated system/capability packets and verbose memory/retrieval/dispatcher/queue/worker payloads. Keep only mission/goal IDs, active lane, status counts, decisive evidence, artifact paths, and one exact next command.`;
 
-/** Generate a summary for abandoned branch entries. */
-export async function generateBranchSummary(
+const MAX_BRANCH_SUMMARY_CHARS = 12_000;
+const MAX_BRANCH_INSTRUCTIONS_CHARS = 4_000;
+
+/** Generate a summary for abandoned branch entries through a Models runtime. */
+export function generateBranchSummary(
+	entries: SessionTreeEntry[],
+	options: GenerateBranchSummaryModelsOptions,
+): Promise<Result<BranchSummaryResult, BranchSummaryError>>;
+/** @deprecated Pass `models` so provider-owned auth is used. */
+export function generateBranchSummary(
 	entries: SessionTreeEntry[],
 	options: GenerateBranchSummaryOptions,
+): Promise<Result<BranchSummaryResult, BranchSummaryError>>;
+export async function generateBranchSummary(
+	entries: SessionTreeEntry[],
+	options: GenerateBranchSummaryModelsOptions | GenerateBranchSummaryOptions,
 ): Promise<Result<BranchSummaryResult, BranchSummaryError>> {
-	const { model, apiKey, headers, signal, customInstructions, replaceInstructions, reserveTokens = 16384 } = options;
+	const { model, signal, customInstructions, replaceInstructions, reserveTokens = 16384 } = options;
 	const contextWindow = model.contextWindow || 128000;
-	const tokenBudget = contextWindow - reserveTokens;
+	const tokenBudget = summaryInputTokenBudget(contextWindow, reserveTokens);
 
 	const { messages, fileOps } = prepareBranchEntries(entries, tokenBudget);
 
@@ -225,11 +262,14 @@ export async function generateBranchSummary(
 	}
 	const llmMessages = convertToLlm(messages);
 	const conversationText = serializeConversation(llmMessages);
+	const safeCustomInstructions = customInstructions?.trim()
+		? truncateForSummary(customInstructions.trim(), MAX_BRANCH_INSTRUCTIONS_CHARS)
+		: undefined;
 	let instructions: string;
-	if (replaceInstructions && customInstructions) {
-		instructions = customInstructions;
-	} else if (customInstructions) {
-		instructions = `${BRANCH_SUMMARY_PROMPT}\n\nAdditional focus: ${customInstructions}`;
+	if (replaceInstructions && safeCustomInstructions) {
+		instructions = safeCustomInstructions;
+	} else if (safeCustomInstructions) {
+		instructions = `${BRANCH_SUMMARY_PROMPT}\n\nAdditional focus: ${safeCustomInstructions}`;
 	} else {
 		instructions = BRANCH_SUMMARY_PROMPT;
 	}
@@ -242,11 +282,16 @@ export async function generateBranchSummary(
 			timestamp: Date.now(),
 		},
 	];
-	const response = await completeSimple(
-		model,
-		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		{ apiKey, headers, signal, maxTokens: 2048 },
-	);
+	const context = { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages };
+	const response =
+		"models" in options
+			? await options.models.completeSimple(model, context, { signal, maxTokens: 2048 })
+			: await completeSimple(model, context, {
+					apiKey: options.apiKey,
+					headers: options.headers,
+					signal,
+					maxTokens: 2048,
+				});
 	if (response.stopReason === "aborted") {
 		return err(new BranchSummaryError("aborted", response.errorMessage || "Branch summary aborted"));
 	}
@@ -258,12 +303,27 @@ export async function generateBranchSummary(
 			),
 		);
 	}
+	if (response.stopReason !== "stop") {
+		return err(
+			new BranchSummaryError(
+				"summarization_failed",
+				`Branch summary failed: incomplete model response (${response.stopReason})`,
+			),
+		);
+	}
 
-	let summary = response.content
+	const summaryText = response.content
 		.filter((c): c is { type: "text"; text: string } => c.type === "text")
 		.map((c) => c.text)
-		.join("\n");
-	summary = BRANCH_SUMMARY_PREAMBLE + summary;
+		.join("\n")
+		.trim();
+	if (!summaryText) {
+		return err(new BranchSummaryError("summarization_failed", "Branch summary failed: model returned no text"));
+	}
+	let summary = truncateForSummary(
+		stripFileOperationSections(BRANCH_SUMMARY_PREAMBLE + summaryText),
+		MAX_BRANCH_SUMMARY_CHARS,
+	);
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
 	summary += formatFileOperations(readFiles, modifiedFiles);
 

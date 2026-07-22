@@ -3,10 +3,10 @@ import type { AssistantMessage, ToolResultMessage, Usage } from "@pi-recon/repi-
 import { Container, Text, type TUI } from "@pi-recon/repi-tui";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import type { AgentSessionEvent } from "../../../src/core/agent-session.ts";
+import { initTheme } from "../../../src/core/presentation/theme-runtime.ts";
 import type { SessionContext } from "../../../src/core/session-manager.ts";
 import type { ToolExecutionComponent } from "../../../src/modes/interactive/components/tool-execution.ts";
 import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode.ts";
-import { initTheme } from "../../../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../../src/utils/ansi.ts";
 
 const TOOL_CALL_ID = "tool-4167";
@@ -37,9 +37,10 @@ type RenderSessionContextThis = {
 	settingsManager: {
 		getShowImages(): boolean;
 		getImageWidthCells(): number;
+		getShowCacheMissNotices(): boolean;
 	};
-	sessionManager: { getCwd(): string };
-	session: { retryAttempt: number };
+	sessionManager: { getCwd(): string; getEntries(): [] };
+	session: { retryAttempt: number; modelRegistry: { find(): undefined } };
 	toolOutputExpanded: boolean;
 	isInitialized: boolean;
 	updateEditorBorderColor(): void;
@@ -72,9 +73,10 @@ function createFakeInteractiveModeThis(): RenderSessionContextThis {
 		settingsManager: {
 			getShowImages: () => false,
 			getImageWidthCells: () => 60,
+			getShowCacheMissNotices: () => false,
 		},
-		sessionManager: { getCwd: () => process.cwd() },
-		session: { retryAttempt: 0 },
+		sessionManager: { getCwd: () => process.cwd(), getEntries: () => [] },
+		session: { retryAttempt: 0, modelRegistry: { find: () => undefined } },
 		toolOutputExpanded: false,
 		isInitialized: true,
 		updateEditorBorderColor: vi.fn(),

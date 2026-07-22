@@ -13,8 +13,6 @@ const json = args.includes("--json");
 const fix = args.includes("--fix");
 const selfcheck = args.includes("--selfcheck") || args.includes("--deep");
 const deep = args.includes("--deep");
-const includeEvidence = args.includes("--include-evidence") || args.includes("--deep-sanitize");
-const includeSessions = args.includes("--include-sessions") || args.includes("--deep-sanitize");
 const selfcheckProvider = flagValue(args, "--provider") || process.env.REPI_SELFCHECK_PROVIDER || "";
 const selfcheckModel = flagValue(args, "--model") || process.env.REPI_SELFCHECK_MODEL || "";
 const selfcheckTimeoutMs = flagValue(args, "--timeout-ms") || process.env.REPI_SELFCHECK_TIMEOUT_MS || "";
@@ -23,14 +21,14 @@ const localScriptsDir = dirname(fileURLToPath(import.meta.url));
 
 function usage() {
 	return `Usage:
-  repi health [--json] [--fix] [--selfcheck|--deep] [--provider <id>] [--model <id>] [--timeout-ms N] [--include-evidence] [--include-sessions]
+  repi health [--json] [--fix] [--selfcheck|--deep] [--provider <id>] [--model <id>] [--timeout-ms N]
 
 Health is the operator dashboard for release/open-source readiness:
-- aggregates doctor/model/memory/swarm/storage state
+- aggregates doctor/model/swarm/storage state
 - includes task-level mission control state and next operator actions
 - shows one prioritized action list instead of scattered command output
-- --fix applies safe local repairs: profile init, memory repair, memory sanitize (no raw backup)
-- --deep additionally runs selfcheck and deep sanitize scopes
+- --fix applies safe local installation and model configuration repairs
+- --deep additionally runs the extended selfcheck
 `;
 }
 
@@ -166,21 +164,10 @@ function shortHash(value) {
 const fixActions = [];
 if (fix) {
 	fixActions.push({ id: "doctor-fix", ...runNode("scripts/reverse-agent/repi-doctor.mjs", ["--fix", "--json"], { timeout: 90_000 }) });
-	fixActions.push({ id: "memory-repair", ...runNode("scripts/reverse-agent/memory-inspect.mjs", ["repair", "--apply", "--yes", "--json"], { timeout: 60_000 }) });
-	const sanitizeArgs = ["sanitize", "--apply", "--yes", "--json"];
-	if (includeEvidence) sanitizeArgs.push("--include-evidence");
-	if (includeSessions) sanitizeArgs.push("--include-sessions");
-	fixActions.push({ id: "memory-sanitize", ...runNode("scripts/reverse-agent/memory-inspect.mjs", sanitizeArgs, { timeout: 120_000 }) });
 }
 
 const doctor = runNode("scripts/reverse-agent/repi-doctor.mjs", ["--json"], { timeout: 60_000 });
 const modelDoctor = runNode("scripts/reverse-agent/model-inspect.mjs", ["doctor", "--json"], { timeout: 60_000 });
-const memoryDoctor = runNode("scripts/reverse-agent/memory-inspect.mjs", ["doctor", "--json"], { timeout: 60_000 });
-const memoryStatus = runNode("scripts/reverse-agent/memory-inspect.mjs", ["status", "--json"], { timeout: 60_000 });
-const sanitizeDryArgs = ["sanitize", "--dry-run", "--json"];
-if (includeEvidence) sanitizeDryArgs.push("--include-evidence");
-if (includeSessions) sanitizeDryArgs.push("--include-sessions");
-const memorySanitize = runNode("scripts/reverse-agent/memory-inspect.mjs", sanitizeDryArgs, { timeout: 120_000 });
 const missionStatus = runNode("scripts/reverse-agent/repi-mission.mjs", ["status", "--json"], { timeout: 30_000 });
 const swarmStatus = runNode("scripts/reverse-agent/repi-swarm-llm-run.mjs", ["status", "latest", "--json"], { timeout: 45_000 });
 const latestEngagement = readJsonFile(join(agentDir, "recon", "evidence", "engagements", "latest.json"));
@@ -218,33 +205,6 @@ items.push(
 	),
 );
 
-const memDiagnostics = memoryDoctor.parsed?.diagnostics ?? [];
-const blockingMemDiagnostics = memDiagnostics.filter((row) => row.level === "fail" && row.id !== "memory-secret-scan");
-items.push(
-	item(
-		"memory-governance",
-		blockingMemDiagnostics.length > 0 ? "fail" : memDiagnostics.length > 0 ? "warn" : "pass",
-		blockingMemDiagnostics.length > 0
-			? "memory doctor has blocking diagnostics"
-			: memDiagnostics.length > 0
-				? "memory doctor has fixable hygiene diagnostics"
-				: "memory doctor clean",
-		{ diagnostics: memDiagnostics.map((row) => `${row.level}:${row.id}`), invalidLines: memoryDoctor.parsed?.status?.eventStore?.invalidLines ?? null, exit: memoryDoctor.code },
-		["repi memory doctor", "repi memory repair --apply --yes", "repi memory sanitize --dry-run"],
-	),
-);
-
-const changedSanitize = Number(memorySanitize.parsed?.changedFiles ?? 0);
-items.push(
-	item(
-		"memory-secret-hygiene",
-		changedSanitize > 0 ? "warn" : "pass",
-		changedSanitize > 0 ? `${changedSanitize} local memory/evidence files would be sanitized` : "no local memory redaction drift detected",
-		{ changedFiles: changedSanitize, scannedFiles: memorySanitize.parsed?.scannedFiles ?? null, scopes: { includeEvidence, includeSessions } },
-		[includeEvidence || includeSessions ? "repi memory sanitize --apply --yes --include-evidence --include-sessions" : "repi memory sanitize --apply --yes"],
-	),
-);
-
 const reconSize = directorySize(join(agentDir, "recon"));
 const sessionSize = directorySize(join(agentDir, "sessions"));
 const storageWarn = reconSize.mb > 500 || sessionSize.mb > 500;
@@ -254,7 +214,7 @@ items.push(
 		storageWarn ? "warn" : "pass",
 		`recon=${reconSize.mb}MB sessions=${sessionSize.mb}MB`,
 		{ recon: reconSize, sessions: sessionSize },
-		["repi memory purge --dry-run --older-than-days 30", "repi memory export --output /tmp/repi-memory.json"],
+		["du -sh ~/.repi/agent/recon ~/.repi/agent/sessions"],
 	),
 );
 
@@ -299,16 +259,19 @@ if (latestEngagement?.kind || latestEngagement?.runId) {
 	items.push(item("active-engagement", "skip", "no active engagement run yet", {}, ["repi engage <target>"]));
 }
 
-if (swarmStatus.parsed?.ok) {
-	const narrativeOnly = swarmStatus.parsed?.merge?.narrativeOnlyBlocked === true;
-	const failedWorkers = swarmStatus.parsed?.workers?.filter((row) => row.status !== "pass") ?? [];
-	const plannedOnly = swarmStatus.parsed?.state === "planned";
+const swarmReport = swarmStatus.parsed;
+const swarmRunExists = typeof swarmReport?.runId === "string" && swarmReport.runId.length > 0;
+if (swarmRunExists) {
+	const narrativeOnly = swarmReport.merge?.narrativeOnlyBlocked === true;
+	const failedWorkers = swarmReport.workers?.filter((row) => row.status !== "pass") ?? [];
+	const plannedOnly = swarmReport.state === "planned";
+	const failedVerdict = swarmReport.ok === false || swarmReport.state === "failed";
 	items.push(
 		item(
 			"swarm-latest",
-			plannedOnly ? "skip" : failedWorkers.length || narrativeOnly ? "warn" : "pass",
-			`latest swarm state=${swarmStatus.parsed.state}; workers=${swarmStatus.parsed.workers?.length ?? 0}; narrativeOnly=${Boolean(narrativeOnly)}`,
-			{ runId: swarmStatus.parsed.runId, failedWorkers, merge: swarmStatus.parsed.merge ?? null },
+			plannedOnly ? "skip" : failedWorkers.length || narrativeOnly || failedVerdict ? "warn" : "pass",
+			`latest swarm state=${swarmReport.state ?? "unknown"}; verdict=${failedVerdict ? "failed" : "pass"}; workers=${swarmReport.workers?.length ?? 0}; narrativeOnly=${Boolean(narrativeOnly)}`,
+			{ runId: swarmReport.runId, state: swarmReport.state ?? null, verdictOk: swarmReport.ok, failedWorkers, merge: swarmReport.merge ?? null, exit: swarmStatus.code },
 			["repi swarm status latest", "repi swarm merge latest", "repi swarm run <target> --workers 5"],
 		),
 	);
@@ -322,7 +285,7 @@ if (selfcheckReport) {
 		item(
 			"live-selfcheck",
 			selfcheckReport.parsed?.ok ? "pass" : "fail",
-			selfcheckReport.parsed?.ok ? "model/tool/memory/parallel selfcheck pass" : `${failedRows.length} selfcheck rows failed`,
+			selfcheckReport.parsed?.ok ? "model/tool/parallel selfcheck pass" : `${failedRows.length} selfcheck rows failed`,
 			{
 				failedRows: failedRows.map((row) => row.id),
 				exit: selfcheckReport.code,
@@ -352,8 +315,6 @@ const report = {
 	agentDir,
 	fix,
 	deep,
-	includeEvidence,
-	includeSessions,
 	score: scoreItems(items),
 	status: items.some((entry) => entry.status === "fail") ? "fail" : items.some((entry) => entry.status === "warn") ? "warn" : "pass",
 	items,

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import { createReconExtensionFactory } from "../src/core/recon-profile.ts";
+import { readCurrentMission } from "../src/core/repi/mission.ts";
 
 const ENV_AGENT_DIR = "REPI_CODING_AGENT_DIR";
 const ENV_BRANCH_ID = "REPI_BRANCH_ID";
@@ -167,6 +168,7 @@ describe("REPI kernel profile runtime adapter and evidence graph flows", () => {
 				{
 					kind: "RuntimeAdapterExecutionArtifactV1",
 					schemaVersion: 1,
+					missionId: readCurrentMission()?.id,
 					adapterId: "gdb-native-trace-adapter",
 					domainId: "rev-native",
 					bridgeId: "tool-bridge-runtime",
@@ -198,7 +200,7 @@ describe("REPI kernel profile runtime adapter and evidence graph flows", () => {
 						missingProofExitSignals: [],
 					},
 					artifactKinds: ["native-symbol-map", "binary-mitigation-map", "runtime-adapter-transcript"],
-					ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
+					ingestTargets: ["evidence-ledger"],
 					proofExitSignals: ["binary mitigation map"],
 				},
 				null,
@@ -313,6 +315,7 @@ describe("REPI kernel profile runtime adapter and evidence graph flows", () => {
 		};
 
 		await missionTool.execute("tool-call-id", { action: "new", task: "verify login replay hypothesis" });
+		mkdirSync(join(agentDir, "recon", "evidence"), { recursive: true });
 		const replayArtifact = join(agentDir, "recon", "evidence", "login-replay.txt");
 		writeFileSync(replayArtifact, "HTTP/1.1 200 replay accepted\n", "utf-8");
 		await evidenceTool.execute("tool-call-id", {
@@ -413,6 +416,6 @@ describe("REPI kernel profile runtime adapter and evidence graph flows", () => {
 		expect(notify).toHaveBeenCalledTimes(1);
 		expect(notify).toHaveBeenCalledWith("REPI self-review checkpoint is due", "info");
 		const selfReviewEntries = appendEntry.mock.calls.filter(([kind]) => kind === "repi-self-review-due");
-		expect(selfReviewEntries).toHaveLength(1);
+		expect(selfReviewEntries).toEqual([]);
 	});
 });

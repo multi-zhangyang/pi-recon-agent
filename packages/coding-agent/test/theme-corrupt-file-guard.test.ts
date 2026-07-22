@@ -36,7 +36,7 @@ const REAL_LIGHT = join(FIXTURE_DIR, "light.json");
 async function freshTheme() {
 	// Bust the module-level BUILTIN_THEMES cache so each test re-reads the temp dir.
 	vi.resetModules();
-	return await import("../src/modes/interactive/theme/theme.ts");
+	return await import("../src/core/presentation/theme-runtime.ts");
 }
 
 describe("theme loading corrupt-file guards (opt #52)", () => {

@@ -151,4 +151,22 @@ describe("opt #237: manual /compact on a small session does not hallucinate a co
 		const compactionEntries = sessionManager.getEntries().filter((e) => e.type === "compaction");
 		expect(compactionEntries).toHaveLength(0);
 	}, 15000);
+
+	it("skips threshold auto-compaction when the cut would remove no history", async () => {
+		const events: Array<{ type: string; result?: unknown; errorMessage?: string }> = [];
+		session.subscribe((event) => {
+			if (event.type === "compaction_end") events.push(event);
+		});
+		const runAutoCompaction = (
+			session as unknown as {
+				_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
+			}
+		)._runAutoCompaction.bind(session);
+
+		await expect(runAutoCompaction("threshold", false)).resolves.toBe(false);
+		expect(completeSimpleMock).not.toHaveBeenCalled();
+		expect(sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(0);
+		expect(events).toEqual([expect.objectContaining({ type: "compaction_end", result: undefined })]);
+		expect(events[0]).not.toHaveProperty("errorMessage");
+	}, 15000);
 });

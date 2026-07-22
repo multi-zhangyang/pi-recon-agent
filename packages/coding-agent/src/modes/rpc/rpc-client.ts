@@ -5,12 +5,13 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
-import type { AgentEvent, AgentMessage, ThinkingLevel } from "@pi-recon/repi-agent-core";
+import type { AgentMessage, ThinkingLevel } from "@pi-recon/repi-agent-core";
 import type { ImageContent } from "@pi-recon/repi-ai";
-import type { SessionStats } from "../../core/agent-session.ts";
+import type { AgentSessionEvent, SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
 import type { ToolInfo } from "../../core/extensions/types.ts";
+import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
 import type { RpcCommand, RpcResponse, RpcSessionState, RpcSlashCommand } from "./rpc-types.ts";
 
@@ -46,7 +47,7 @@ export interface ModelInfo {
 	reasoning: boolean;
 }
 
-export type RpcEventListener = (event: AgentEvent) => void;
+export type RpcEventListener = (event: AgentSessionEvent) => void;
 
 // ============================================================================
 // RPC Client
@@ -488,6 +489,20 @@ export class RpcClient {
 	}
 
 	/**
+	 * Get session entries in append order, optionally only those after the `since` entry id.
+	 */
+	async getEntries(since?: string): Promise<{ entries: SessionEntry[]; leafId: string | null }> {
+		const response = await this.send({ type: "get_entries", since });
+		return this.getData<{ entries: SessionEntry[]; leafId: string | null }>(response);
+	}
+
+	/** Get the session entry tree. */
+	async getTree(): Promise<{ tree: SessionTreeNode[]; leafId: string | null }> {
+		const response = await this.send({ type: "get_tree" });
+		return this.getData<{ tree: SessionTreeNode[]; leafId: string | null }>(response);
+	}
+
+	/**
 	 * Get text of last assistant message.
 	 */
 	async getLastAssistantText(): Promise<string | null> {
@@ -532,39 +547,66 @@ export class RpcClient {
 
 	/**
 	 * Wait for agent to become idle (no streaming).
-	 * Resolves when agent_end event is received.
+	 * Resolves immediately when the session is already idle, or when the next
+	 * agent_settled event is received.
 	 */
 	waitForIdle(timeout = 60000): Promise<void> {
 		return new Promise((resolve, reject) => {
-			// Forward-declared so the timeout/event callbacks can deregister the
-			// waiter. The callbacks only fire after this synchronous body finishes,
-			// by which point `waiter` is assigned — no TDZ at call time.
+			let completed = false;
 			let waiter!: { reject: (error: Error) => void; unsubscribe: () => void; timer: NodeJS.Timeout };
-			const timer = setTimeout(() => {
+
+			const cleanup = () => {
+				clearTimeout(waiter.timer);
 				waiter.unsubscribe();
 				this.pendingWaiters.delete(waiter);
-				reject(new Error(`Timeout waiting for agent to become idle. Stderr: ${this.stderr}`));
+			};
+			const finish = () => {
+				if (completed) return;
+				completed = true;
+				cleanup();
+				resolve();
+			};
+			const fail = (error: Error) => {
+				if (completed) return;
+				completed = true;
+				cleanup();
+				reject(error);
+			};
+
+			const timer = setTimeout(() => {
+				fail(new Error(`Timeout waiting for agent to become idle. Stderr: ${this.stderr}`));
 			}, timeout);
 
 			const unsubscribe = this.onEvent((event) => {
-				if (event.type === "agent_end") {
-					clearTimeout(timer);
-					waiter.unsubscribe();
-					this.pendingWaiters.delete(waiter);
-					resolve();
+				if (event.type === "agent_settled") {
+					finish();
 				}
 			});
-			waiter = { reject, unsubscribe, timer };
+			waiter = { reject: fail, unsubscribe, timer };
 			this.pendingWaiters.add(waiter);
+
+			// Subscribe before requesting the state snapshot. This closes both sides
+			// of the race: a run that settled before the subscription is observed as
+			// !isStreaming, while one that settles during the request is caught by
+			// the listener. Keep event-only compatibility if an older RPC process
+			// cannot answer get_state; process exit still rejects via pendingWaiters.
+			void this.getState().then(
+				(state) => {
+					if (!state.isStreaming) finish();
+				},
+				(error: Error) => {
+					if (!this.process || this.exitError) fail(error);
+				},
+			);
 		});
 	}
 
 	/**
 	 * Collect events until agent becomes idle.
 	 */
-	collectEvents(timeout = 60000): Promise<AgentEvent[]> {
+	collectEvents(timeout = 60000): Promise<AgentSessionEvent[]> {
 		return new Promise((resolve, reject) => {
-			const events: AgentEvent[] = [];
+			const events: AgentSessionEvent[] = [];
 			let waiter!: { reject: (error: Error) => void; unsubscribe: () => void; timer: NodeJS.Timeout };
 			const timer = setTimeout(() => {
 				waiter.unsubscribe();
@@ -574,7 +616,7 @@ export class RpcClient {
 
 			const unsubscribe = this.onEvent((event) => {
 				events.push(event);
-				if (event.type === "agent_end") {
+				if (event.type === "agent_settled") {
 					clearTimeout(timer);
 					waiter.unsubscribe();
 					this.pendingWaiters.delete(waiter);
@@ -589,7 +631,7 @@ export class RpcClient {
 	/**
 	 * Send prompt and wait for completion, returning all events.
 	 */
-	async promptAndWait(message: string, images?: ImageContent[], timeout = 60000): Promise<AgentEvent[]> {
+	async promptAndWait(message: string, images?: ImageContent[], timeout = 60000): Promise<AgentSessionEvent[]> {
 		const eventsPromise = this.collectEvents(timeout);
 		await this.prompt(message, images);
 		return eventsPromise;
@@ -619,13 +661,16 @@ export class RpcClient {
 			}
 
 			// Otherwise it's an event
-			for (const listener of this.eventListeners) {
+			// Iterate a snapshot because listeners such as waitForIdle unsubscribe
+			// themselves while handling agent_settled. Iterating the live array would
+			// shift the next listener into the removed slot and skip its dispatch.
+			for (const listener of [...this.eventListeners]) {
 				// opt #148: wrap each listener so a throw doesn't abort the loop and
 				// starve every subsequent listener for this event (and get swallowed
 				// under the misleading outer "non-JSON lines" catch). A misbehaving
 				// listener must not silence its siblings or drop the line dispatch.
 				try {
-					listener(data as AgentEvent);
+					listener(data as AgentSessionEvent);
 				} catch (err) {
 					console.error("rpc-client event listener threw:", err);
 				}

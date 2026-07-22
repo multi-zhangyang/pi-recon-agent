@@ -1,6 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getModel } from "../src/models.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createModels, createProvider } from "../src/models.ts";
+import { streamOpenAICompletions, streamSimpleOpenAICompletions } from "../src/providers/openai-completions.ts";
 import { streamSimple } from "../src/stream.ts";
+import type { Model } from "../src/types.ts";
 
 // Empty tools arrays must NOT be serialized as `tools: []` — some OpenAI-compatible
 // backends (e.g. DashScope / Aliyun Qwen via compatible-mode) reject the request with
@@ -11,6 +13,38 @@ const mockState = vi.hoisted(() => ({
 	lastParams: undefined as unknown,
 	lastClientOptions: undefined as unknown,
 }));
+
+const openAICompletionsModel: Model<"openai-completions"> = {
+	id: "gpt-4o-mini",
+	name: "GPT-4o Mini",
+	api: "openai-completions",
+	provider: "openai",
+	baseUrl: "https://api.openai.com/v1",
+	reasoning: false,
+	input: ["text", "image"],
+	cost: { input: 0.15, output: 0.6, cacheRead: 0.075, cacheWrite: 0 },
+	contextWindow: 128_000,
+	maxTokens: 16_384,
+};
+
+const cloudflareGatewayModel: Model<"openai-completions"> = {
+	id: "workers-ai/@cf/moonshotai/kimi-k2.6",
+	name: "Kimi K2.6",
+	api: "openai-completions",
+	provider: "cloudflare-ai-gateway",
+	baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat",
+	reasoning: true,
+	input: ["text", "image"],
+	cost: { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0 },
+	contextWindow: 256_000,
+	maxTokens: 256_000,
+	compat: { sendSessionAffinityHeaders: true },
+};
+
+const cloudflareEnv = {
+	CLOUDFLARE_ACCOUNT_ID: "account-id",
+	CLOUDFLARE_GATEWAY_ID: "gateway-id",
+};
 
 vi.mock("openai", () => {
 	class FakeOpenAI {
@@ -60,12 +94,11 @@ describe("openai-completions empty tools handling", () => {
 		mockState.lastClientOptions = undefined;
 	});
 
-	it("omits tools field when context.tools is an empty array", async () => {
-		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
-		const model = { ...baseModel, api: "openai-completions" } as const;
+	afterEach(() => vi.unstubAllEnvs());
 
+	it("omits tools field when context.tools is an empty array", async () => {
 		await streamSimple(
-			model,
+			openAICompletionsModel,
 			{
 				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
 				tools: [],
@@ -78,11 +111,8 @@ describe("openai-completions empty tools handling", () => {
 	});
 
 	it("omits tools field when context.tools is undefined", async () => {
-		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
-		const model = { ...baseModel, api: "openai-completions" } as const;
-
 		await streamSimple(
-			model,
+			openAICompletionsModel,
 			{
 				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
 			},
@@ -94,11 +124,8 @@ describe("openai-completions empty tools handling", () => {
 	});
 
 	it("does not send default max token fields", async () => {
-		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
-		const model = { ...baseModel, api: "openai-completions" } as const;
-
 		await streamSimple(
-			model,
+			openAICompletionsModel,
 			{
 				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
 			},
@@ -111,11 +138,8 @@ describe("openai-completions empty tools handling", () => {
 	});
 
 	it("sends explicit maxTokens with the standard-compatible max_tokens field", async () => {
-		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
-		const model = { ...baseModel, api: "openai-completions" } as const;
-
 		await streamSimple(
-			model,
+			openAICompletionsModel,
 			{
 				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
 			},
@@ -127,18 +151,105 @@ describe("openai-completions empty tools handling", () => {
 		expect(params.max_completion_tokens).toBeUndefined();
 	});
 
-	it("uses conservative OpenAI-compatible fields for Cloudflare AI Gateway /compat models", async () => {
-		process.env.CLOUDFLARE_ACCOUNT_ID = "account-id";
-		process.env.CLOUDFLARE_GATEWAY_ID = "gateway-id";
-		const model = getModel("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6")!;
+	it("resolves a legacy stream API key from request-scoped env", async () => {
+		await streamSimple(
+			openAICompletionsModel,
+			{ messages: [{ role: "user", content: "hi", timestamp: Date.now() }] },
+			{ env: { OPENAI_API_KEY: "scoped-openai-key" } },
+		).result();
+
+		expect(mockState.lastClientOptions).toMatchObject({ apiKey: "scoped-openai-key" });
+	});
+
+	it("materializes Cloudflare provider credentials and endpoint from its auth context", async () => {
+		const scopedEnv: Record<string, string> = {
+			CLOUDFLARE_API_KEY: "scoped-cloudflare-key",
+			CLOUDFLARE_ACCOUNT_ID: "scoped-account",
+			CLOUDFLARE_GATEWAY_ID: "scoped-gateway",
+		};
+		const models = createModels({
+			authContext: {
+				env: async (name) => scopedEnv[name],
+				fileExists: async () => false,
+			},
+		});
+		models.setProvider(
+			createProvider({
+				id: "cloudflare-ai-gateway",
+				auth: {
+					apiKey: {
+						name: "Cloudflare API key",
+						resolve: async ({ ctx }) => {
+							const apiKey = await ctx.env("CLOUDFLARE_API_KEY");
+							const accountId = await ctx.env("CLOUDFLARE_ACCOUNT_ID");
+							const gatewayId = await ctx.env("CLOUDFLARE_GATEWAY_ID");
+							if (!apiKey || !accountId || !gatewayId) return undefined;
+							return {
+								auth: { apiKey },
+								env: {
+									CLOUDFLARE_ACCOUNT_ID: accountId,
+									CLOUDFLARE_GATEWAY_ID: gatewayId,
+								},
+								source: "CLOUDFLARE_API_KEY",
+							};
+						},
+					},
+				},
+				models: [cloudflareGatewayModel],
+				api: {
+					stream: streamOpenAICompletions,
+					streamSimple: streamSimpleOpenAICompletions,
+				},
+			}),
+		);
+		const model = models.getModel("cloudflare-ai-gateway", cloudflareGatewayModel.id);
+		if (!model) throw new Error("Expected Cloudflare model");
+
+		const result = await models.completeSimple(model, {
+			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+		});
+
+		expect(result.stopReason).toBe("stop");
+		const clientOptions = mockState.lastClientOptions as {
+			apiKey?: string;
+			baseURL?: string;
+			defaultHeaders?: Record<string, unknown>;
+		};
+		expect(clientOptions.apiKey).toBe("scoped-cloudflare-key");
+		expect(clientOptions.baseURL).toBe("https://gateway.ai.cloudflare.com/v1/scoped-account/scoped-gateway/compat");
+		expect(clientOptions.defaultHeaders?.Authorization).toBeNull();
+		expect(clientOptions.defaultHeaders?.["cf-aig-authorization"]).toBe("Bearer scoped-cloudflare-key");
+	});
+
+	it("prefers request-scoped Cloudflare endpoint values over process env", async () => {
+		vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "process-account");
+		vi.stubEnv("CLOUDFLARE_GATEWAY_ID", "process-gateway");
 
 		await streamSimple(
-			model,
+			cloudflareGatewayModel,
+			{ messages: [{ role: "user", content: "hi", timestamp: Date.now() }] },
+			{
+				apiKey: "test",
+				env: {
+					CLOUDFLARE_ACCOUNT_ID: "provider-account",
+					CLOUDFLARE_GATEWAY_ID: "provider-gateway",
+				},
+			},
+		).result();
+
+		expect(mockState.lastClientOptions).toMatchObject({
+			baseURL: "https://gateway.ai.cloudflare.com/v1/provider-account/provider-gateway/compat",
+		});
+	});
+
+	it("uses conservative OpenAI-compatible fields for Cloudflare AI Gateway /compat models", async () => {
+		await streamSimple(
+			cloudflareGatewayModel,
 			{
 				systemPrompt: "You are helpful.",
 				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
 			},
-			{ apiKey: "test", maxTokens: 1234, reasoning: "high" },
+			{ apiKey: "test", maxTokens: 1234, reasoning: "high", env: cloudflareEnv },
 		).result();
 
 		const params = mockState.lastParams as {
@@ -164,16 +275,18 @@ describe("openai-completions empty tools handling", () => {
 	});
 
 	it("preserves inline upstream Authorization for Cloudflare AI Gateway BYOK requests", async () => {
-		process.env.CLOUDFLARE_ACCOUNT_ID = "account-id";
-		process.env.CLOUDFLARE_GATEWAY_ID = "gateway-id";
-		const model = getModel("cloudflare-ai-gateway", "gpt-5.1")!;
+		const model = { ...cloudflareGatewayModel, id: "gpt-5.1", name: "GPT-5.1" };
 
 		await streamSimple(
 			model,
 			{
 				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
 			},
-			{ apiKey: "cf-token", headers: { Authorization: "Bearer upstream-token" } },
+			{
+				apiKey: "cf-token",
+				headers: { Authorization: "Bearer upstream-token" },
+				env: cloudflareEnv,
+			},
 		).result();
 
 		const clientOptions = mockState.lastClientOptions as { defaultHeaders?: Record<string, unknown> };
@@ -182,16 +295,12 @@ describe("openai-completions empty tools handling", () => {
 	});
 
 	it("sends session affinity headers for Workers AI through Cloudflare AI Gateway", async () => {
-		process.env.CLOUDFLARE_ACCOUNT_ID = "account-id";
-		process.env.CLOUDFLARE_GATEWAY_ID = "gateway-id";
-		const workersModel = getModel("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6")!;
-
 		await streamSimple(
-			workersModel,
+			cloudflareGatewayModel,
 			{
 				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
 			},
-			{ apiKey: "test", sessionId: "session-1" },
+			{ apiKey: "test", sessionId: "session-1", env: cloudflareEnv },
 		).result();
 
 		const clientOptions = mockState.lastClientOptions as { defaultHeaders?: Record<string, string> };
@@ -201,11 +310,8 @@ describe("openai-completions empty tools handling", () => {
 	});
 
 	it("still emits tools: [] for Anthropic/LiteLLM proxy when conversation has tool history", async () => {
-		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
-		const model = { ...baseModel, api: "openai-completions" } as const;
-
 		await streamSimple(
-			model,
+			openAICompletionsModel,
 			{
 				messages: [
 					{ role: "user", content: "use the tool", timestamp: Date.now() },

@@ -1,6 +1,6 @@
 import { Box, Markdown, type MarkdownTheme, Spacer, Text } from "@pi-recon/repi-tui";
 import type { BranchSummaryMessage } from "../../../core/messages.ts";
-import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import { getMarkdownTheme, theme } from "../../../core/presentation/theme-runtime.ts";
 import { keyText } from "./keybinding-hints.ts";
 
 /**

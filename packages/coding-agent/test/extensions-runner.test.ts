@@ -672,9 +672,73 @@ describe("ExtensionRunner", () => {
 				systemPrompt: "base\nfirst\nsecond",
 			});
 		});
+
+		it("bounds extension messages and system-prompt growth", async () => {
+			const extCode = `
+				export default function(pi) {
+					for (let index = 0; index < 20; index++) {
+						pi.on("before_agent_start", (event) => ({
+							message: {
+								customType: "large-" + index,
+								content: "x".repeat(12000),
+								display: false,
+							},
+							systemPrompt: event.systemPrompt + "y".repeat(12000),
+						}));
+					}
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "bounded-before-agent-start.ts"), extCode);
+
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			expect(result.errors).toEqual([]);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			runner.bindCore(extensionActions, extensionContextActions);
+
+			const bounded = await runner.emitBeforeAgentStart("hello", undefined, "base", { cwd: tempDir });
+
+			expect(bounded?.messages?.length).toBeLessThanOrEqual(16);
+			const textLengths = bounded?.messages?.map((message) =>
+				typeof message.content === "string"
+					? message.content.length
+					: message.content.reduce((total, part) => total + (part.type === "text" ? part.text.length : 0), 0),
+			);
+			expect(Math.max(...(textLengths ?? [0]))).toBeLessThanOrEqual(8_000);
+			expect((textLengths ?? []).reduce((total, length) => total + length, 0)).toBeLessThanOrEqual(24_000);
+			expect(bounded?.systemPrompt?.startsWith("base")).toBe(true);
+			expect(bounded?.systemPrompt?.length).toBeLessThanOrEqual(16_004);
+		});
 	});
 
 	describe("tool_result chaining", () => {
+		it("isolates in-place content mutations unless the handler returns a replacement", async () => {
+			const extCode = `
+				export default function(pi) {
+					pi.on("tool_result", (event) => {
+						event.content[0].text = "mutated in hook";
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "tool-result-mutation.ts"), extCode);
+
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			const originalContent = [{ type: "text" as const, text: "base" }];
+
+			const patched = await runner.emitToolResult({
+				type: "tool_result",
+				toolName: "my_tool",
+				toolCallId: "call-1",
+				input: {},
+				content: originalContent,
+				details: undefined,
+				isError: false,
+			});
+
+			expect(patched).toBeUndefined();
+			expect(originalContent).toEqual([{ type: "text", text: "base" }]);
+		});
+
 		it("chains content modifications across handlers", async () => {
 			const extCode1 = `
 				export default function(pi) {

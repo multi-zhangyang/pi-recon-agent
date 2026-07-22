@@ -55,6 +55,9 @@ import { getModel } from "../src/models.ts";
 import type { BedrockOptions } from "../src/providers/amazon-bedrock.ts";
 import { streamBedrock, streamSimpleBedrock } from "../src/providers/amazon-bedrock.ts";
 import type { Context, Model } from "../src/types.ts";
+import { registerBedrockFixtures } from "./model-fixtures.ts";
+
+registerBedrockFixtures();
 
 const context: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: Date.now() }],

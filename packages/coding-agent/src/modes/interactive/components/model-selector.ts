@@ -10,8 +10,8 @@ import {
 	type TUI,
 } from "@pi-recon/repi-tui";
 import type { ModelRegistry } from "../../../core/model-registry.ts";
+import { theme } from "../../../core/presentation/theme-runtime.ts";
 import type { SettingsManager } from "../../../core/settings-manager.ts";
-import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint } from "./keybinding-hints.ts";
 
@@ -139,7 +139,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		let models: ModelItem[];
 
 		// Refresh to pick up any changes to models.json
-		this.modelRegistry.refresh();
+		await this.modelRegistry.refresh();
 
 		// Check for models.json errors
 		const loadError = this.modelRegistry.getError();

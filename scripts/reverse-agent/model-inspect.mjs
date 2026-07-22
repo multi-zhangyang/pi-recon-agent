@@ -51,6 +51,31 @@ const envModelApiAliases = new Set([
 	"anthropic-compatible",
 	"anthropic-messages",
 ]);
+const envBaseUrlNames = [
+	"REPI_BASE_URL",
+	"REPI_MODEL_BASE_URL",
+	"REPI_API_BASE_URL",
+	"REPI_ENDPOINT",
+	"REPI_MODEL_ENDPOINT",
+];
+const envApiNames = ["REPI_MODEL_API", "REPI_API", "REPI_PROTOCOL", "REPI_MODEL_PROTOCOL"];
+const envAuthNames = ["REPI_AUTH_TOKEN", "REPI_API_KEY", "REPI_MODEL_API_KEY", "REPI_TOKEN", "REPI_MODEL_TOKEN"];
+const envContextNames = [
+	"REPI_CONTEXT_WINDOW",
+	"REPI_MODEL_CONTEXT_WINDOW",
+	"REPI_AUTO_COMPACT_WINDOW",
+	"REPI_MODEL_AUTO_COMPACT_WINDOW",
+	"REPI_CONTEXT_LENGTH",
+	"REPI_MODEL_CONTEXT_LENGTH",
+];
+const envMaxTokensNames = [
+	"REPI_MAX_TOKENS",
+	"REPI_MODEL_MAX_TOKENS",
+	"REPI_MAX_OUTPUT_TOKENS",
+	"REPI_MODEL_MAX_OUTPUT_TOKENS",
+	"REPI_OUTPUT_TOKEN_LIMIT",
+];
+const envInputNames = ["REPI_MODEL_INPUT", "REPI_INPUT", "REPI_MODEL_INPUT_MODALITIES", "REPI_INPUT_MODALITIES"];
 
 function usage() {
 	return `Usage:
@@ -76,10 +101,25 @@ Environment-only model setup is the recommended default path (Claude Code style,
   export REPI_MODEL_API=openai-compatible   # aliases: openai-completions, openai-responses, response, anthropic
   export REPI_CONTEXT_WINDOW=262144
   export REPI_AUTO_COMPACT_WINDOW=262144    # alias of REPI_CONTEXT_WINDOW
+  export REPI_MAX_TOKENS=16384
+  export REPI_MODEL_INPUT=text,image         # comma-separated: text,image
+  export REPI_MODEL_REASONING=true
+  export REPI_HEADERS='{"X-Tenant":"$TENANT_ID"}'
+  export REPI_MODEL_HEADERS='{"X-Model-Route":"code"}'
+  export REPI_COMPAT='{"supportsDeveloperRole":false}'
+  export REPI_MODEL_THINKING_LEVEL_MAP='{"high":"high","xhigh":null}'
+  export REPI_AUTH_HEADER=false
+  export REPI_MODEL_COST_INPUT=0.25          # USD per 1M input tokens
+  export REPI_MODEL_COST_OUTPUT=1.50         # USD per 1M output tokens
+  export REPI_MODEL_COST_CACHE_READ=0.025    # USD per 1M cache-read tokens
+  export REPI_MODEL_COST_CACHE_WRITE=0.30    # USD per 1M cache-write tokens
+  export REPI_MODEL_COST_TIERS='[{"inputTokensAbove":128000,"input":0.20,"output":1.20,"cacheRead":0.02,"cacheWrite":0.25}]'
   export REPI_SUBAGENT_MODEL=vendor/subagent-model
   repi --approve -p "..."
 
 model status shows the effective REPI_* env-only provider, base URL redaction state, API style, model id, context window, max tokens, and shell-quote/config mistakes without making a network call.
+Pricing is in USD per 1M tokens. The four REPI_MODEL_COST_* variables also accept REPI_COST_*, REPI_MODEL_*_PRICE, and REPI_*_PRICE aliases; REPI_MODEL_COST_TIERS also accepts REPI_COST_TIERS and uses JSON objects with inputTokensAbove/input/output/cacheRead/cacheWrite.
+REPI_HEADERS/REPI_MODEL_HEADERS, REPI_COMPAT/REPI_MODEL_COMPAT, and REPI_MODEL_THINKING_LEVEL_MAP accept JSON. Status reports header names and configuration flags without printing header values.
 Base URL note: OpenAI-compatible/Responses SDKs usually expect REPI_BASE_URL=https://host/v1; Anthropic-compatible SDKs usually expect REPI_BASE_URL=https://host because the SDK appends /v1/messages.
 model doctor is offline: it parses ~/.repi/agent/models.json plus REPI_* env-only providers, checks provider/model metadata, local auth, context window and cost fields; --fix repairs safe local config issues but does not auto-pick a settings default provider/model.
 model list hides provider base URLs by default to avoid leaking private gateway endpoints into screenshots/logs; add --show-urls for local troubleshooting.
@@ -345,24 +385,75 @@ function storedAuthStatus(authData, providerId) {
 	return { configured: false, source: "invalid-auth-entry" };
 }
 
-function costOf(model, provider) {
+function nonNegativeNumber(value, fallback = 0) {
+	const parsed = Number(value);
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function costOf(model = {}, provider = {}) {
+	const modelCost = model?.cost && typeof model.cost === "object" ? model.cost : {};
+	const providerCost = provider?.cost && typeof provider.cost === "object" ? provider.cost : {};
+	const tiers = Array.isArray(modelCost.tiers)
+		? modelCost.tiers
+		: Array.isArray(providerCost.tiers)
+			? providerCost.tiers
+			: undefined;
 	return {
-		input: Number(model.cost?.input ?? provider.cost?.input ?? 0),
-		output: Number(model.cost?.output ?? provider.cost?.output ?? 0),
-		cacheRead: Number(model.cost?.cacheRead ?? provider.cost?.cacheRead ?? 0),
-		cacheWrite: Number(model.cost?.cacheWrite ?? provider.cost?.cacheWrite ?? 0),
+		input: nonNegativeNumber(modelCost.input ?? providerCost.input),
+		output: nonNegativeNumber(modelCost.output ?? providerCost.output),
+		cacheRead: nonNegativeNumber(modelCost.cacheRead ?? providerCost.cacheRead),
+		cacheWrite: nonNegativeNumber(modelCost.cacheWrite ?? providerCost.cacheWrite),
+		...(tiers ? { tiers } : {}),
 	};
+}
+
+function costRatesForUsage(cost, tokens) {
+	const selectedTier = selectedCostTier(cost, tokens);
+	return selectedTier
+		? {
+				input: nonNegativeNumber(selectedTier.input),
+				output: nonNegativeNumber(selectedTier.output),
+				cacheRead: nonNegativeNumber(selectedTier.cacheRead),
+				cacheWrite: nonNegativeNumber(selectedTier.cacheWrite),
+			}
+		: {
+				input: nonNegativeNumber(cost?.input),
+				output: nonNegativeNumber(cost?.output),
+				cacheRead: nonNegativeNumber(cost?.cacheRead),
+				cacheWrite: nonNegativeNumber(cost?.cacheWrite),
+			};
+}
+
+function selectedCostTier(cost, tokens) {
+	let selectedTier;
+	let threshold = -1;
+	const inputUsage = Number(tokens?.input ?? 0) + Number(tokens?.cacheRead ?? 0) + Number(tokens?.cacheWrite ?? 0);
+	for (const tier of cost?.tiers ?? []) {
+		if (!tier || typeof tier !== "object") continue;
+		const tierThreshold = Number(tier.inputTokensAbove);
+		if (Number.isFinite(tierThreshold) && inputUsage > tierThreshold && tierThreshold > threshold) {
+			selectedTier = tier;
+			threshold = tierThreshold;
+		}
+	}
+	return selectedTier;
+}
+
+function costText(cost) {
+	const text = `input:${cost.input}/output:${cost.output}/cacheRead:${cost.cacheRead}/cacheWrite:${cost.cacheWrite}`;
+	return cost?.tiers?.length ? `${text}/tiers:${cost.tiers.length}` : text;
 }
 
 function loadProviders() {
 	const envProvider = envOnlyProviderConfig();
+	const envError = envProvider?.configError ?? null;
 	const withEnvProvider = (providers) =>
 		envProvider ? { ...(providers && typeof providers === "object" ? providers : {}), [envProvider.providerId]: envProvider.provider } : providers;
-	if (!existsSync(modelsPath)) return { providers: withEnvProvider({}), parseError: null, missing: true };
+	if (!existsSync(modelsPath)) return { providers: withEnvProvider({}), parseError: null, envError, missing: true };
 	const parsed = readJson(modelsPath);
-	if (parsed?.__error) return { providers: {}, parseError: parsed.__error, missing: false };
+	if (parsed?.__error) return { providers: withEnvProvider({}), parseError: parsed.__error, envError, missing: false };
 	const providers = parsed?.providers && typeof parsed.providers === "object" && !Array.isArray(parsed.providers) ? parsed.providers : {};
-	return { providers: withEnvProvider(providers), parseError: null, missing: false };
+	return { providers: withEnvProvider(providers), parseError: null, envError, missing: false };
 }
 
 function listModelsProbe() {
@@ -488,6 +579,7 @@ function buildDoctorReport() {
 	const diagnostics = [];
 	let modelCount = 0;
 	if (loaded.parseError) diagnostics.push({ level: "fail", id: "models-json-parse", message: loaded.parseError });
+	if (loaded.envError) diagnostics.push({ level: "fail", id: "env-model-cost", message: loaded.envError });
 	if (settings?.__error) diagnostics.push({ level: "fail", id: "settings-json-parse", message: settings.__error });
 	if (loaded.missing) diagnostics.push({ level: "warn", id: "models-json-missing", message: `${modelsPath} not found; use REPI_* environment variables for the default env-only provider, or create models.json for persistent providers` });
 	for (const [providerId, provider] of Object.entries(loaded.providers)) {
@@ -578,6 +670,15 @@ function findModel(providers, providerId, modelId) {
 
 function buildCostReport() {
 	const loaded = loadProviders();
+	if (loaded.envError) {
+		return {
+			kind: "repi-model-cost-report",
+			schemaVersion: 1,
+			generatedAt: new Date().toISOString(),
+			ok: false,
+			error: loaded.envError,
+		};
+	}
 	const providerId = flagValue(rawArgs, "--provider");
 	const modelId = flagValue(rawArgs, "--model");
 	const inputTokens = numberFlag(rawArgs, ["--input-tokens", "--input"], 0);
@@ -595,11 +696,14 @@ function buildCostReport() {
 		};
 	}
 	const cost = costOf(found.model, found.provider);
+	const tokens = { input: inputTokens, output: outputTokens, cacheRead: cacheReadTokens, cacheWrite: cacheWriteTokens };
+	const rates = costRatesForUsage(cost, tokens);
+	const selectedTier = selectedCostTier(cost, tokens);
 	const total =
-		(inputTokens * cost.input +
-			outputTokens * cost.output +
-			cacheReadTokens * cost.cacheRead +
-			cacheWriteTokens * cost.cacheWrite) /
+		(inputTokens * rates.input +
+			outputTokens * rates.output +
+			cacheReadTokens * rates.cacheRead +
+			cacheWriteTokens * rates.cacheWrite) /
 		1_000_000;
 	return {
 		kind: "repi-model-cost-report",
@@ -609,8 +713,16 @@ function buildCostReport() {
 		provider: found.providerId,
 		model: found.model.id,
 		unit: "USD per 1M tokens",
-		tokens: { input: inputTokens, output: outputTokens, cacheRead: cacheReadTokens, cacheWrite: cacheWriteTokens },
-		rates: cost,
+		tokens,
+		baseRates: {
+			input: cost.input,
+			output: cost.output,
+			cacheRead: cost.cacheRead,
+			cacheWrite: cost.cacheWrite,
+		},
+		rates,
+		costTiers: cost.tiers ?? [],
+		selectedTier: selectedTier ?? null,
 		estimatedUsd: total,
 	};
 }
@@ -650,7 +762,7 @@ function buildListReport() {
 		kind: "repi-model-list-report",
 		schemaVersion: 1,
 		generatedAt: new Date().toISOString(),
-		ok: !loaded.parseError && !filterMissing,
+		ok: !loaded.parseError && !loaded.envError && !filterMissing,
 		agentDir,
 		modelsPath,
 		authPath,
@@ -660,27 +772,113 @@ function buildListReport() {
 		providerCount: providerFilter ? (Object.prototype.hasOwnProperty.call(loaded.providers, providerFilter) ? 1 : 0) : Object.keys(loaded.providers).length,
 		modelCount: rows.length,
 		rows,
-		error: loaded.parseError ?? (filterMissing ? `model list found no rows for provider=${providerFilter ?? "<any>"} model=${modelFilter ?? "<any>"}` : undefined),
+		error:
+			loaded.parseError ??
+			loaded.envError ??
+			(filterMissing ? `model list found no rows for provider=${providerFilter ?? "<any>"} model=${modelFilter ?? "<any>"}` : undefined),
+	};
+}
+
+function configValueEnvNames(value) {
+	const names = [];
+	for (let index = 0; index < value.length; index++) {
+		if (value[index] !== "$") continue;
+		const next = value[index + 1];
+		if (next === "$" || next === "!") {
+			index++;
+			continue;
+		}
+		if (next === "{") {
+			const end = value.indexOf("}", index + 2);
+			if (end < 0) continue;
+			const name = value.slice(index + 2, end);
+			if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !names.includes(name)) names.push(name);
+			index = end;
+			continue;
+		}
+		const match = value.slice(index + 1).match(/^[A-Za-z_][A-Za-z0-9_]*/);
+		if (match) {
+			if (!names.includes(match[0])) names.push(match[0]);
+			index += match[0].length;
+		}
+	}
+	return names;
+}
+
+function configuredConfigValue(value) {
+	if (typeof value !== "string") return false;
+	if (value.startsWith("!")) return true;
+	return configValueEnvNames(value).every((name) => Boolean(process.env[name]));
+}
+
+function providerHasConfiguredAuth(provider, authData, providerId) {
+	const credential = authData && typeof authData === "object" ? authData[providerId] : undefined;
+	if (credential?.type === "oauth") return false;
+	if (credential?.type === "api_key") return configuredConfigValue(credential.key) && credential.key.length > 0;
+	return configuredConfigValue(provider?.apiKey);
+}
+
+function buildCliListReport() {
+	const loaded = loadProviders();
+	const authData = existsSync(authPath) ? readJson(authPath) : {};
+	if (authData?.__error) {
+		return {
+			kind: "repi-cli-model-list-report",
+			schemaVersion: 1,
+			ok: false,
+			rows: [],
+			error: `${authPath}: ${authData.__error}`,
+		};
+	}
+	const rows = modelRowsForList(loaded.providers, authData, undefined, undefined).filter((row) =>
+		providerHasConfiguredAuth(loaded.providers[row.provider], authData, row.provider),
+	);
+	const rawEnvApi = firstEnv(envApiNames);
+	const invalidEnvApi = invalidModelApi(rawEnvApi);
+	const warnings = [];
+	if (loaded.parseError) warnings.push(`errors loading models.json:\n${loaded.parseError}`);
+	if (loaded.envError) warnings.push(loaded.envError);
+	if (invalidEnvApi) {
+		warnings.push(
+			`Provider "${firstEnv(["REPI_PROVIDER", "REPI_MODEL_PROVIDER", "REPI_PROVIDER_ID"]) || "repi-env"}": invalid REPI_MODEL_API=${JSON.stringify(invalidEnvApi)}; allowed openai-compatible|openai-responses|anthropic`,
+		);
+	}
+	return {
+		kind: "repi-cli-model-list-report",
+		schemaVersion: 1,
+		ok: !loaded.envError,
+		rows,
+		warnings,
+		error: loaded.envError ?? undefined,
 	};
 }
 
 function envStatusReport() {
-	const baseUrl = firstEnv(["REPI_BASE_URL", "REPI_MODEL_BASE_URL"]);
+	const baseUrl = firstEnv(envBaseUrlNames);
 	const model = firstEnv(["REPI_MODEL", "REPI_MODEL_ID"]);
 	const provider = firstEnv(["REPI_PROVIDER", "REPI_MODEL_PROVIDER", "REPI_PROVIDER_ID"]) || "repi-env";
-	const rawApi = firstEnv(["REPI_MODEL_API", "REPI_API"]);
+	const rawApi = firstEnv(envApiNames);
 	const api = normalizeModelApi(rawApi);
 	const invalidApi = invalidModelApi(rawApi);
-	const authEnv = firstEnv(["REPI_AUTH_TOKEN"])
-		? "REPI_AUTH_TOKEN"
-		: firstEnv(["REPI_API_KEY"])
-			? "REPI_API_KEY"
-			: firstEnv(["REPI_MODEL_API_KEY"])
-				? "REPI_MODEL_API_KEY"
-				: "REPI_AUTH_TOKEN";
-	const contextWindow = envInt(["REPI_CONTEXT_WINDOW", "REPI_MODEL_CONTEXT_WINDOW", "REPI_AUTO_COMPACT_WINDOW", "REPI_MODEL_AUTO_COMPACT_WINDOW"], 262144, 1024, 1048576);
-	const maxTokens = envInt(["REPI_MAX_TOKENS", "REPI_MODEL_MAX_TOKENS", "REPI_MAX_OUTPUT_TOKENS"], 16384, 64, 131072);
+	const authEnv = firstEnvEntry(envAuthNames)?.name ?? "REPI_AUTH_TOKEN";
+	const contextConfig = envInt(envContextNames, 262144, 1024, 1048576);
+	const maxTokensConfig = envInt(envMaxTokensNames, 16384, 64, 131072);
+	const inputConfig = parseEnvInput(firstEnv(envInputNames));
+	const reasoningConfig = envBool(["REPI_MODEL_REASONING", "REPI_REASONING"]);
+	const authHeaderConfig = firstEnvEntry(["REPI_AUTH_HEADER", "REPI_MODEL_AUTH_HEADER"])
+		? envBool(["REPI_AUTH_HEADER", "REPI_MODEL_AUTH_HEADER"])
+		: { value: undefined, error: null };
+	const providerHeaders = parseEnvJsonObject(["REPI_HEADERS", "REPI_PROVIDER_HEADERS"], validateHeaders);
+	const modelHeaders = parseEnvJsonObject(["REPI_MODEL_HEADERS"], validateHeaders);
+	const providerCompat = parseEnvJsonObject(["REPI_COMPAT"]);
+	const modelCompat = parseEnvJsonObject(["REPI_MODEL_COMPAT"]);
+	const thinkingLevelMap = parseEnvJsonObject(
+		["REPI_MODEL_THINKING_LEVEL_MAP", "REPI_THINKING_LEVEL_MAP"],
+		validateThinkingLevelMap,
+	);
 	const subagentModel = firstEnv(["REPI_SUBAGENT_MODEL"]) || null;
+	const costConfig = envCostConfig();
+	const enabled = Boolean(baseUrl && model);
 	const issues = [];
 	if (!baseUrl) issues.push("REPI_BASE_URL is missing");
 	if (!model) issues.push("REPI_MODEL is missing");
@@ -689,6 +887,23 @@ function envStatusReport() {
 		issues.push(
 			`REPI_MODEL_API is invalid: ${invalidApi}; allowed openai-compatible|openai-responses|anthropic`,
 		);
+	}
+	if (enabled) {
+		for (const error of [
+			costConfig.error,
+			contextConfig.error,
+			maxTokensConfig.error,
+			inputConfig.error,
+			reasoningConfig.error,
+			authHeaderConfig.error,
+			providerHeaders.error,
+			modelHeaders.error,
+			providerCompat.error,
+			modelCompat.error,
+			thinkingLevelMap.error,
+		]) {
+			if (error) issues.push(error);
+		}
 	}
 	const baseUrlText = String(baseUrl ?? "").replace(/\/+$/, "");
 	if (baseUrlText) {
@@ -708,7 +923,7 @@ function envStatusReport() {
 		if (typeof value === "string" && /['"]/.test(value)) issues.push(`${name} contains a quote character; check shell export quoting`);
 	}
 	return {
-		enabled: Boolean(baseUrl && model),
+		enabled,
 		provider,
 		model: model ?? null,
 		api,
@@ -718,10 +933,24 @@ function envStatusReport() {
 		baseUrlHidden: !showUrls(),
 		authEnv,
 		authPresent: Boolean(process.env[authEnv]),
-		contextWindow,
-		autoCompactWindow: contextWindow,
-		maxTokens,
+		contextWindow: contextConfig.value,
+		autoCompactWindow: contextConfig.value,
+		maxTokens: maxTokensConfig.value,
 		subagentModel,
+		input: inputConfig.input,
+		reasoning: reasoningConfig.value,
+		authHeader: authHeaderConfig.value ?? false,
+		headers: {
+			provider: providerHeaders.value ? Object.keys(providerHeaders.value) : [],
+			model: modelHeaders.value ? Object.keys(modelHeaders.value) : [],
+		},
+		compatConfigured: {
+			provider: Boolean(providerCompat.value),
+			model: Boolean(modelCompat.value),
+		},
+		thinkingLevelMapConfigured: Boolean(thinkingLevelMap.value),
+		cost: costConfig.cost,
+		costError: costConfig.error,
 		issues,
 	};
 }
@@ -739,6 +968,7 @@ function buildStatusReport() {
 				api: env.api,
 				contextWindow: env.contextWindow,
 				maxTokens: env.maxTokens,
+				cost: env.cost,
 			}
 		: defaultModel.configured
 			? {
@@ -752,6 +982,11 @@ function buildStatusReport() {
 					maxTokens:
 						loaded.providers?.[defaultModel.providerId]?.models?.find((candidate) => candidate?.id === defaultModel.modelId)
 							?.maxTokens ?? null,
+					cost: (() => {
+						const provider = loaded.providers?.[defaultModel.providerId];
+						const model = provider?.models?.find((candidate) => candidate?.id === defaultModel.modelId);
+						return model ? costOf(model, provider) : null;
+					})(),
 				}
 			: {
 					source: "unset",
@@ -760,14 +995,19 @@ function buildStatusReport() {
 					api: null,
 					contextWindow: null,
 					maxTokens: null,
-				};
+				cost: null,
+			};
 	const diagnostics = [];
 	if (loaded.parseError) diagnostics.push({ level: "fail", id: "models-json-parse", message: loaded.parseError });
+	if (loaded.envError && !env.issues.includes(loaded.envError)) {
+		diagnostics.push({ level: "fail", id: "env-model-metadata", message: loaded.envError });
+	}
 	for (const issue of env.issues) {
 		const invalidApi = issue.startsWith("REPI_MODEL_API is invalid:");
+		const invalidMetadata = issue.startsWith("invalid REPI_");
 		diagnostics.push({
-			level: invalidApi ? "fail" : env.enabled ? "warn" : "info",
-			id: invalidApi ? "env-model-api" : "env-model",
+			level: invalidApi || invalidMetadata ? "fail" : env.enabled ? "warn" : "info",
+			id: invalidApi ? "env-model-api" : invalidMetadata ? "env-model-metadata" : "env-model",
 			message: issue,
 		});
 	}
@@ -802,9 +1042,13 @@ function providerEnvName(providerId) {
 }
 
 function firstEnv(names) {
+	return firstEnvEntry(names)?.value;
+}
+
+function firstEnvEntry(names) {
 	for (const name of names) {
 		const value = process.env[name]?.trim();
-		if (value) return value;
+		if (value) return { name, value };
 	}
 	return undefined;
 }
@@ -828,51 +1072,220 @@ function invalidModelApi(value) {
 }
 
 function envInt(names, fallback, min, max) {
-	const value = firstEnv(names);
-	const parsed = value ? Number.parseInt(value, 10) : fallback;
-	if (!Number.isFinite(parsed)) return fallback;
-	return Math.max(min, Math.min(max, parsed));
+	const entry = firstEnvEntry(names);
+	if (!entry) return { value: fallback, error: null };
+	const parsed = Number(entry.value);
+	if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
+		return { value: fallback, error: `invalid ${entry.name}: expected an integer between ${min} and ${max}` };
+	}
+	return { value: parsed, error: null };
+}
+
+function envNumber(names, fallback = 0, min = 0) {
+	const entry = firstEnvEntry(names);
+	if (!entry) return { value: fallback, error: null };
+	const parsed = Number(entry.value);
+	return Number.isFinite(parsed) && parsed >= min
+		? { value: parsed, error: null }
+		: { value: fallback, error: `invalid ${entry.name}: expected a number greater than or equal to ${min}` };
+}
+
+function parseEnvCostTiers(value) {
+	if (!value) return { tiers: undefined, error: null };
+	let parsed;
+	try {
+		parsed = JSON.parse(value);
+	} catch {
+		return { tiers: undefined, error: "invalid REPI_MODEL_COST_TIERS: expected a JSON array" };
+	}
+	if (!Array.isArray(parsed)) {
+		return { tiers: undefined, error: "invalid REPI_MODEL_COST_TIERS: expected a JSON array" };
+	}
+	const tiers = [];
+	for (let index = 0; index < parsed.length; index++) {
+		const tier = parsed[index];
+		if (!tier || typeof tier !== "object" || Array.isArray(tier)) {
+			return { tiers: undefined, error: `invalid REPI_MODEL_COST_TIERS[${index}]: expected an object` };
+		}
+		for (const field of ["input", "output", "cacheRead", "cacheWrite"]) {
+			if (typeof tier[field] !== "number" || !Number.isFinite(tier[field]) || tier[field] < 0) {
+				return {
+					tiers: undefined,
+					error: `invalid REPI_MODEL_COST_TIERS[${index}].${field}: expected a non-negative number`,
+				};
+			}
+		}
+		if (!Number.isSafeInteger(tier.inputTokensAbove) || tier.inputTokensAbove < 0) {
+			return {
+				tiers: undefined,
+				error: `invalid REPI_MODEL_COST_TIERS[${index}].inputTokensAbove: expected a non-negative integer`,
+			};
+		}
+		tiers.push({
+			inputTokensAbove: tier.inputTokensAbove,
+			input: tier.input,
+			output: tier.output,
+			cacheRead: tier.cacheRead,
+			cacheWrite: tier.cacheWrite,
+		});
+	}
+	return { tiers, error: null };
+}
+
+function envCostConfig() {
+	const parsedTiers = parseEnvCostTiers(firstEnv(["REPI_MODEL_COST_TIERS", "REPI_COST_TIERS"]));
+	const input = envNumber(["REPI_MODEL_COST_INPUT", "REPI_COST_INPUT", "REPI_MODEL_INPUT_PRICE", "REPI_INPUT_PRICE"]);
+	const output = envNumber(["REPI_MODEL_COST_OUTPUT", "REPI_COST_OUTPUT", "REPI_MODEL_OUTPUT_PRICE", "REPI_OUTPUT_PRICE"]);
+	const cacheRead = envNumber([
+		"REPI_MODEL_COST_CACHE_READ",
+		"REPI_COST_CACHE_READ",
+		"REPI_MODEL_CACHE_READ_PRICE",
+		"REPI_CACHE_READ_PRICE",
+	]);
+	const cacheWrite = envNumber([
+		"REPI_MODEL_COST_CACHE_WRITE",
+		"REPI_COST_CACHE_WRITE",
+		"REPI_MODEL_CACHE_WRITE_PRICE",
+		"REPI_CACHE_WRITE_PRICE",
+	]);
+	return {
+		cost: {
+			input: input.value,
+			output: output.value,
+			cacheRead: cacheRead.value,
+			cacheWrite: cacheWrite.value,
+			...(parsedTiers.tiers ? { tiers: parsedTiers.tiers } : {}),
+		},
+		error: [parsedTiers.error, input.error, output.error, cacheRead.error, cacheWrite.error].find(Boolean) ?? null,
+	};
 }
 
 function envBool(names, fallback = false) {
-	const value = firstEnv(names);
-	if (!value) return fallback;
-	if (/^(?:1|true|yes|y|on)$/i.test(value)) return true;
-	if (/^(?:0|false|no|n|off)$/i.test(value)) return false;
-	return fallback;
+	const entry = firstEnvEntry(names);
+	if (!entry) return { value: fallback, error: null };
+	if (/^(?:1|true|yes|y|on)$/i.test(entry.value)) return { value: true, error: null };
+	if (/^(?:0|false|no|n|off)$/i.test(entry.value)) return { value: false, error: null };
+	return { value: fallback, error: `invalid ${entry.name}: expected a boolean` };
+}
+
+function parseEnvJsonObject(names, validate) {
+	const entry = firstEnvEntry(names);
+	if (!entry) return { value: undefined, error: null };
+	let parsed;
+	try {
+		parsed = JSON.parse(entry.value);
+	} catch {
+		return { value: undefined, error: `invalid ${entry.name}: expected a JSON object` };
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+		return { value: undefined, error: `invalid ${entry.name}: expected a JSON object` };
+	}
+	const error = validate?.(parsed, entry.name);
+	return error ? { value: undefined, error } : { value: parsed, error: null };
+}
+
+function validateHeaders(headers, variableName) {
+	for (const [name, value] of Object.entries(headers)) {
+		if (typeof value !== "string" && value !== null) {
+			return `invalid ${variableName}.${name}: expected a string or null`;
+		}
+	}
+	return null;
+}
+
+function validateThinkingLevelMap(map, variableName) {
+	const levels = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+	for (const [level, value] of Object.entries(map)) {
+		if (!levels.has(level)) return `invalid ${variableName}.${level}: unknown thinking level`;
+		if (typeof value !== "string" && value !== null) {
+			return `invalid ${variableName}.${level}: expected a string or null`;
+		}
+	}
+	return null;
+}
+
+function parseEnvInput(value) {
+	if (!value) return { input: ["text"], error: null };
+	let items;
+	if (value.startsWith("[")) {
+		try {
+			items = JSON.parse(value);
+		} catch {
+			return { input: ["text"], error: "invalid REPI_MODEL_INPUT: expected comma-separated values or a JSON array" };
+		}
+		if (!Array.isArray(items)) return { input: ["text"], error: "invalid REPI_MODEL_INPUT: expected a JSON array" };
+	} else {
+		items = value.split(",").map((item) => item.trim());
+	}
+	const normalized = items.map((item) => String(item).trim());
+	if (!normalized.length || normalized.some((item) => item !== "text" && item !== "image")) {
+		return { input: ["text"], error: 'invalid REPI_MODEL_INPUT: allowed modalities are "text" and "image"' };
+	}
+	return { input: [...new Set(normalized)], error: null };
 }
 
 function envOnlyProviderConfig() {
-	const baseUrl = firstEnv(["REPI_BASE_URL", "REPI_MODEL_BASE_URL"]);
+	const baseUrl = firstEnv(envBaseUrlNames);
 	const model = firstEnv(["REPI_MODEL", "REPI_MODEL_ID"]);
 	if (!baseUrl || !model) return undefined;
 	const providerId = firstEnv(["REPI_PROVIDER", "REPI_MODEL_PROVIDER", "REPI_PROVIDER_ID"]) || "repi-env";
-	const apiKeyEnv = firstEnv(["REPI_AUTH_TOKEN"])
-		? "REPI_AUTH_TOKEN"
-		: firstEnv(["REPI_API_KEY"])
-			? "REPI_API_KEY"
-			: firstEnv(["REPI_MODEL_API_KEY"])
-				? "REPI_MODEL_API_KEY"
-				: "REPI_AUTH_TOKEN";
+	if (invalidModelApi(firstEnv(envApiNames))) return undefined;
+	const apiKeyEnv = firstEnvEntry(envAuthNames)?.name ?? "REPI_AUTH_TOKEN";
+	const costConfig = envCostConfig();
+	const inputConfig = parseEnvInput(firstEnv(envInputNames));
+	const reasoningConfig = envBool(["REPI_MODEL_REASONING", "REPI_REASONING"]);
+	const contextConfig = envInt(envContextNames, 262144, 1024, 1048576);
+	const maxTokensConfig = envInt(envMaxTokensNames, 16384, 64, 131072);
+	const authHeaderConfig = firstEnvEntry(["REPI_AUTH_HEADER", "REPI_MODEL_AUTH_HEADER"])
+		? envBool(["REPI_AUTH_HEADER", "REPI_MODEL_AUTH_HEADER"])
+		: { value: undefined, error: null };
+	const providerHeaders = parseEnvJsonObject(["REPI_HEADERS", "REPI_PROVIDER_HEADERS"], validateHeaders);
+	const modelHeaders = parseEnvJsonObject(["REPI_MODEL_HEADERS"], validateHeaders);
+	const providerCompat = parseEnvJsonObject(["REPI_COMPAT"]);
+	const modelCompat = parseEnvJsonObject(["REPI_MODEL_COMPAT"]);
+	const thinkingLevelMap = parseEnvJsonObject(
+		["REPI_MODEL_THINKING_LEVEL_MAP", "REPI_THINKING_LEVEL_MAP"],
+		validateThinkingLevelMap,
+	);
+	const configError = [
+		costConfig.error,
+		inputConfig.error,
+		reasoningConfig.error,
+		contextConfig.error,
+		maxTokensConfig.error,
+		authHeaderConfig.error,
+		providerHeaders.error,
+		modelHeaders.error,
+		providerCompat.error,
+		modelCompat.error,
+		thinkingLevelMap.error,
+	].find(Boolean);
 	const models = [model, firstEnv(["REPI_SUBAGENT_MODEL"])]
 		.filter(Boolean)
 		.filter((value, index, values) => values.indexOf(value) === index)
 		.map((id) => ({
 			id,
 			name: id === model ? firstEnv(["REPI_MODEL_NAME"]) || id : firstEnv(["REPI_SUBAGENT_MODEL_NAME"]) || id,
-			input: inputList(firstEnv(["REPI_MODEL_INPUT", "REPI_INPUT"]) || "text"),
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: envInt(["REPI_CONTEXT_WINDOW", "REPI_MODEL_CONTEXT_WINDOW", "REPI_AUTO_COMPACT_WINDOW", "REPI_MODEL_AUTO_COMPACT_WINDOW"], 262144, 1024, 1048576),
-			maxTokens: envInt(["REPI_MAX_TOKENS", "REPI_MODEL_MAX_TOKENS", "REPI_MAX_OUTPUT_TOKENS"], 16384, 64, 131072),
-			reasoning: envBool(["REPI_MODEL_REASONING", "REPI_REASONING"], false),
+			input: inputConfig.input,
+			cost: costConfig.cost,
+			contextWindow: contextConfig.value,
+			maxTokens: maxTokensConfig.value,
+			reasoning: reasoningConfig.value,
+			...(thinkingLevelMap.value ? { thinkingLevelMap: thinkingLevelMap.value } : {}),
+			...(modelHeaders.value ? { headers: modelHeaders.value } : {}),
+			...(modelCompat.value ? { compat: modelCompat.value } : {}),
 		}));
 	return {
 		providerId,
+		configError,
 		provider: {
 			name: firstEnv(["REPI_PROVIDER_NAME", "REPI_MODEL_PROVIDER_NAME"]) || "REPI environment model",
-			api: normalizeModelApi(firstEnv(["REPI_MODEL_API", "REPI_API"])),
+			api: normalizeModelApi(firstEnv(envApiNames)),
 			baseUrl,
 			apiKey: `$${apiKeyEnv}`,
+			...(providerHeaders.value ? { headers: providerHeaders.value } : {}),
+			...(providerCompat.value ? { compat: providerCompat.value } : {}),
+			...(authHeaderConfig.value !== undefined ? { authHeader: authHeaderConfig.value } : {}),
 			models,
 			__source: "environment",
 		},
@@ -1237,12 +1650,7 @@ function sanitizeProviderConfig(providerId, provider) {
 		input: Array.isArray(model?.input) ? model.input : inputList(model?.input),
 		contextWindow: Number(model?.contextWindow ?? 262144),
 		maxTokens: Number(model?.maxTokens ?? 16384),
-		cost: {
-			input: Number(model?.cost?.input ?? next.cost?.input ?? 0),
-			output: Number(model?.cost?.output ?? next.cost?.output ?? 0),
-			cacheRead: Number(model?.cost?.cacheRead ?? next.cost?.cacheRead ?? 0),
-			cacheWrite: Number(model?.cost?.cacheWrite ?? next.cost?.cacheWrite ?? 0),
-		},
+		cost: costOf(model, next),
 	})).filter((model) => model.id);
 	return next;
 }
@@ -1379,7 +1787,6 @@ function buildLoginReport() {
 		ok: true,
 		provider: providerId,
 		authPath,
-		keyPreview: redact(apiKey),
 		next: [`repi model test --provider ${providerId} --model <model-id>`],
 	};
 }
@@ -1585,13 +1992,14 @@ function printDoctor(report) {
 	if (report.defaultModel) console.log(`default: ${report.defaultModel.providerId ?? "<unset>"}/${report.defaultModel.modelId ?? "<unset>"} :: ${report.defaultModel.ok ? "ok" : "bad"} (${report.defaultModel.message})`);
 	for (const action of report.fixActions ?? []) console.log(`${action.status === "fixed" ? "FIXED" : "FIX"} ${action.id}: ${action.detail}`);
 	console.log(`providers=${report.providerCount} models=${report.modelCount} listModelsExit=${report.listModels.exit}`);
-	for (const provider of report.providers) {
+		for (const provider of report.providers) {
 		console.log(`- ${provider.id}: api=${provider.api} baseUrl=${provider.baseUrl} apiKey=${provider.apiKey}`);
 		for (const issue of provider.issues) console.log(`  WARN ${issue}`);
 		for (const model of provider.models) {
-			console.log(
-				`  model=${model.id} ctx=${model.contextWindow} max=${model.maxTokens} cost=input:${model.cost.input}/output:${model.cost.output}/cacheRead:${model.cost.cacheRead}/cacheWrite:${model.cost.cacheWrite}`,
-			);
+			console.log(`  model=${model.id} ctx=${model.contextWindow} max=${model.maxTokens} cost=${costText(model.cost)}`);
+			for (const tier of model.cost.tiers ?? []) {
+				console.log(`    tier inputTokensAbove:${tier.inputTokensAbove} ${costText(tier)}`);
+			}
 			for (const issue of model.issues) console.log(`    WARN ${issue}`);
 		}
 	}
@@ -1607,6 +2015,8 @@ function printCost(report) {
 	console.log("REPI Model Cost");
 	console.log(`provider=${report.provider} model=${report.model}`);
 	console.log(`rates(USD/1M): input=${report.rates.input} output=${report.rates.output} cacheRead=${report.rates.cacheRead} cacheWrite=${report.rates.cacheWrite}`);
+	if (report.selectedTier) console.log(`selectedTier=inputTokensAbove:${report.selectedTier.inputTokensAbove}`);
+	if (report.costTiers?.length) console.log(`configuredTiers=${report.costTiers.length}`);
 	console.log(`tokens: input=${report.tokens.input} output=${report.tokens.output} cacheRead=${report.tokens.cacheRead} cacheWrite=${report.tokens.cacheWrite}`);
 	console.log(`estimatedUsd=${report.estimatedUsd.toFixed(8)}`);
 }
@@ -1627,8 +2037,83 @@ function printList(report) {
 	for (const row of report.rows) {
 		console.log(`- ${row.provider}/${row.model} api=${row.api} ctx=${row.contextWindow} max=${row.maxTokens} auth=${row.auth}`);
 		console.log(`  baseUrl=${row.baseUrl}`);
-		console.log(`  cost=input:${row.cost.input}/output:${row.cost.output}/cacheRead:${row.cost.cacheRead}/cacheWrite:${row.cost.cacheWrite}`);
+		console.log(`  cost=${costText(row.cost)}`);
+		for (const tier of row.cost.tiers ?? []) {
+			console.log(`  tier inputTokensAbove:${tier.inputTokensAbove} ${costText(tier)}`);
+		}
 	}
+}
+
+function formatTokenCount(count) {
+	if (count >= 1_000_000) {
+		const millions = count / 1_000_000;
+		return millions % 1 === 0 ? `${millions}M` : `${millions.toFixed(1)}M`;
+	}
+	if (count >= 1_000) {
+		const thousands = count / 1_000;
+		return thousands % 1 === 0 ? `${thousands}K` : `${thousands.toFixed(1)}K`;
+	}
+	return count.toString();
+}
+
+function printCliList(report) {
+	if (!report.ok) {
+		console.error(report.error);
+		return;
+	}
+	for (const warning of report.warnings) console.error(`Warning: ${warning}`);
+	if (!report.rows.length) {
+		console.log(`No models available. Configure a model with REPI_* environment variables (Claude Code-style) or ~/.repi/agent/models.json. See:
+  ${join(root, "packages", "coding-agent", "docs", "repi-runtime-configuration.md")}
+  ${join(root, "packages", "coding-agent", "docs", "model-provider-formats.md")}
+
+Quick env-only path:
+  export REPI_AUTH_TOKEN=sk-...
+  export REPI_BASE_URL=https://gateway.example/v1
+  export REPI_PROVIDER=gateway  # optional; footer/provider id
+  export REPI_MODEL=vendor/model-id
+  export REPI_MODEL_API=openai-compatible
+  export REPI_AUTO_COMPACT_WINDOW=262144  # optional alias of REPI_CONTEXT_WINDOW
+  repi --list-models
+  repi -p "Reply exactly: REPI_OK"`);
+		return;
+	}
+
+	const rows = report.rows
+		.map((row) => ({
+			provider: row.provider,
+			model: row.model,
+			context: formatTokenCount(row.contextWindow),
+			maxOut: formatTokenCount(row.maxTokens),
+			thinking: row.reasoning ? "yes" : "no",
+			images: row.input.includes("image") ? "yes" : "no",
+			pricing: `${row.cost.input}/${row.cost.output}/${row.cost.cacheRead}/${row.cost.cacheWrite}${row.cost.tiers?.length ? `+${row.cost.tiers.length}t` : ""}`,
+		}))
+		.sort((left, right) => left.provider.localeCompare(right.provider) || left.model.localeCompare(right.model));
+	const headers = {
+		provider: "provider",
+		model: "model",
+		context: "context",
+		maxOut: "max-out",
+		thinking: "thinking",
+		images: "images",
+		pricing: "cost in/out/read/write ($/1M)",
+	};
+	const widths = Object.fromEntries(
+		Object.entries(headers).map(([key, label]) => [key, Math.max(label.length, ...rows.map((row) => row[key].length))]),
+	);
+	const line = (row) =>
+		[
+			row.provider.padEnd(widths.provider),
+			row.model.padEnd(widths.model),
+			row.context.padEnd(widths.context),
+			row.maxOut.padEnd(widths.maxOut),
+			row.thinking.padEnd(widths.thinking),
+			row.images.padEnd(widths.images),
+			row.pricing.padEnd(widths.pricing),
+		].join("  ");
+	console.log(line(headers));
+	for (const row of rows) console.log(line(row));
 }
 
 function printStatus(report) {
@@ -1636,8 +2121,16 @@ function printStatus(report) {
 	console.log(`effective=${report.effective.source} provider=${report.effective.provider ?? "<unset>"} model=${report.effective.model ?? "<unset>"}`);
 	if (report.effective.api) console.log(`api=${report.effective.api}`);
 	if (report.effective.contextWindow) console.log(`contextWindow=${report.effective.contextWindow} maxTokens=${report.effective.maxTokens}`);
+	if (report.effective.cost) console.log(`effective.cost=${costText(report.effective.cost)}`);
 	console.log(`env.enabled=${report.env.enabled} env.provider=${report.env.provider} env.model=${report.env.model ?? "<unset>"}`);
 	console.log(`env.baseUrl=${report.env.baseUrl ?? "<unset>"} auth=${report.env.authEnv}:${report.env.authPresent ? "set" : "missing"}`);
+	console.log(
+		`env.metadata=input:${report.env.input.join(",")}/reasoning:${report.env.reasoning}/authHeader:${report.env.authHeader}/providerHeaders:${report.env.headers.provider.join(",") || "none"}/modelHeaders:${report.env.headers.model.join(",") || "none"}/providerCompat:${report.env.compatConfigured.provider}/modelCompat:${report.env.compatConfigured.model}/thinkingMap:${report.env.thinkingLevelMapConfigured}`,
+	);
+	console.log(`env.cost=${costText(report.env.cost)}`);
+	for (const tier of report.env.cost.tiers ?? []) {
+		console.log(`env.cost.tier inputTokensAbove:${tier.inputTokensAbove} ${costText(tier)}`);
+	}
 	if (report.env.subagentModel) console.log(`env.subagentModel=${report.env.subagentModel}`);
 	for (const diagnostic of report.diagnostics ?? []) console.log(`${diagnostic.level.toUpperCase()} ${diagnostic.id}: ${diagnostic.message}`);
 	console.log(`verdict: ${report.ok ? "pass" : "fail"}`);
@@ -1686,7 +2179,6 @@ function printMutationReport(title, report) {
 	if (report.removed) console.log(`removed=${report.removed}`);
 	if (report.mode) console.log(`mode=${report.mode}`);
 	if (report.importedProviders) console.log(`importedProviders=${report.importedProviders.join(",")}`);
-	if (report.keyPreview) console.log(`key=${report.keyPreview}`);
 	if (report.exit !== undefined) {
 		console.log(`exit=${report.exit} ok=${report.ok}`);
 		if (report.stdoutTail) console.log(`stdout: ${report.stdoutTail.replace(/\n/g, "\\n").slice(-800)}`);
@@ -1723,7 +2215,9 @@ if (
 }
 
 const report =
-	command === "status"
+	command === "list" && rawArgs.includes("--cli-format")
+		? buildCliListReport()
+		: command === "status"
 		? buildStatusReport()
 		: command === "list"
 		? buildListReport()
@@ -1749,6 +2243,7 @@ const report =
 											? buildImportReport()
 											: buildDoctorReport();
 if (json) console.log(JSON.stringify(report, null, 2));
+else if (command === "list" && rawArgs.includes("--cli-format")) printCliList(report);
 else if (command === "status") printStatus(report);
 else if (command === "list") printList(report);
 else if (command === "cost") printCost(report);

@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { getModel } from "../src/models.ts";
 import { convertResponsesMessages } from "../src/providers/openai-responses-shared.ts";
 import type { AssistantMessage, Context, ImageContent, ToolResultMessage, Usage } from "../src/types.ts";
+import { registerOpenAIFixtures } from "./model-fixtures.ts";
+
+registerOpenAIFixtures();
 
 // opt #215: an openai-responses tool result with NO text used to always emit
 // "(see attached image)" on the function_call_output, even when there were no
@@ -20,7 +23,7 @@ const usage: Usage = {
 };
 
 function buildAssistant(toolCallId: string, now: number): AssistantMessage {
-	const model = getModel("openai-codex", "gpt-5.5");
+	const model = getModel<"openai-codex-responses">("openai-codex", "gpt-5.5")!;
 	return {
 		role: "assistant",
 		content: [{ type: "toolCall", id: toolCallId, name: "edit", arguments: { path: "x.ts" } }],
@@ -63,7 +66,7 @@ function stringOutput(input: ReturnType<typeof convertResponsesMessages>): strin
 describe("opt #215: empty responses tool result does not claim an attached image", () => {
 	it("emits empty output for a genuinely-empty successful tool result", () => {
 		const now = Date.now();
-		const model = getModel("openai-codex", "gpt-5.5");
+		const model = getModel<"openai-codex-responses">("openai-codex", "gpt-5.5")!;
 		// Force a text-only model so the image branch is not taken.
 		const textOnlyModel = { ...model, input: ["text"] as ("image" | "text")[] };
 		const input = convertResponsesMessages(
@@ -79,7 +82,7 @@ describe("opt #215: empty responses tool result does not claim an attached image
 
 	it("emits only the error prefix for an empty failed tool result", () => {
 		const now = Date.now();
-		const model = getModel("openai-codex", "gpt-5.5");
+		const model = getModel<"openai-codex-responses">("openai-codex", "gpt-5.5")!;
 		const textOnlyModel = { ...model, input: ["text"] as ("image" | "text")[] };
 		const input = convertResponsesMessages(
 			textOnlyModel,
@@ -98,7 +101,7 @@ describe("opt #215: empty responses tool result does not claim an attached image
 		// so hasImages is false here. The misleading "(see attached image)"
 		// placeholder must NOT fire; the downgrade placeholder flows through.
 		const now = Date.now();
-		const model = getModel("openai-codex", "gpt-5.5");
+		const model = getModel<"openai-codex-responses">("openai-codex", "gpt-5.5")!;
 		const textOnlyModel = { ...model, input: ["text"] as ("image" | "text")[] };
 		const image: ImageContent = {
 			type: "image",
@@ -118,7 +121,7 @@ describe("opt #215: empty responses tool result does not claim an attached image
 
 	it("replays a text tool result unchanged", () => {
 		const now = Date.now();
-		const model = getModel("openai-codex", "gpt-5.5");
+		const model = getModel<"openai-codex-responses">("openai-codex", "gpt-5.5")!;
 		const textOnlyModel = { ...model, input: ["text"] as ("image" | "text")[] };
 		const input = convertResponsesMessages(
 			textOnlyModel,

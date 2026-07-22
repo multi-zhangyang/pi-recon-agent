@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.ts";
 import { streamOpenAICompletions } from "../src/providers/openai-completions.ts";
 import type { Model } from "../src/types.ts";
+import { registerOpenRouterFixtures } from "./model-fixtures.ts";
+
+registerOpenRouterFixtures();
 
 interface CacheControl {
 	type: "ephemeral";

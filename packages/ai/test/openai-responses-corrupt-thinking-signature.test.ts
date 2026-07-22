@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import { getModel } from "../src/models.ts";
 import { convertResponsesMessages } from "../src/providers/openai-responses-shared.ts";
 import type { AssistantMessage, Context, Model, Usage } from "../src/types.ts";
+import { registerOpenAIFixtures } from "./model-fixtures.ts";
+
+registerOpenAIFixtures();
 
 // Regression guard for opt #57 — convertResponsesMessages (openai-responses-shared.ts:174) did a
 // bare `JSON.parse(block.thinkingSignature)` with NO try/catch. The thinking branch is only
@@ -45,7 +48,7 @@ function sameModelAssistant(
 
 describe("OpenAI Responses corrupt thinkingSignature guard (opt #57)", () => {
 	it("skips a corrupt thinkingSignature instead of throwing and losing the turn", () => {
-		const model = getModel("openai-codex", "gpt-5.5");
+		const model = getModel<"openai-codex-responses">("openai-codex", "gpt-5.5")!;
 		const assistant = sameModelAssistant(model, [
 			{ type: "thinking", thinking: "private reasoning", thinkingSignature: "{ this is not valid json" },
 			{ type: "text", text: "visible answer" },
@@ -81,7 +84,7 @@ describe("OpenAI Responses corrupt thinkingSignature guard (opt #57)", () => {
 	});
 
 	it("still pushes the reasoning item for a valid thinkingSignature (no behavior change)", () => {
-		const model = getModel("openai-codex", "gpt-5.5");
+		const model = getModel<"openai-codex-responses">("openai-codex", "gpt-5.5")!;
 		const assistant = sameModelAssistant(model, [
 			{
 				type: "thinking",

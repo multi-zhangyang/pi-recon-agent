@@ -59,6 +59,8 @@ export function parseCommandArgs(argsString: string): string[] {
  * Supports:
  * - $1, $2, ... for positional args
  * - $@ and $ARGUMENTS for all args
+ * - ${N:-default} for positional arg N with a default when missing/empty
+ * - ${@:-default} and ${ARGUMENTS:-default} for all args with a default when empty
  * - ${@:N} for args from Nth onwards (bash-style slicing)
  * - ${@:N:L} for L args starting from Nth
  *
@@ -66,39 +68,28 @@ export function parseCommandArgs(argsString: string): string[] {
  * containing patterns like $1, $@, or $ARGUMENTS are NOT recursively substituted.
  */
 export function substituteArgs(content: string, args: string[]): string {
-	let result = content;
-
-	// Replace $1, $2, etc. with positional args FIRST (before wildcards)
-	// This prevents wildcard replacement values containing $<digit> patterns from being re-substituted
-	result = result.replace(/\$(\d+)/g, (_, num) => {
-		const index = parseInt(num, 10) - 1;
-		return args[index] ?? "";
-	});
-
-	// Replace ${@:start} or ${@:start:length} with sliced args (bash-style)
-	// Process BEFORE simple $@ to avoid conflicts
-	result = result.replace(/\$\{@:(\d+)(?::(\d+))?\}/g, (_, startStr, lengthStr) => {
-		let start = parseInt(startStr, 10) - 1; // Convert to 0-indexed (user provides 1-indexed)
-		// Treat 0 as 1 (bash convention: args start at 1)
-		if (start < 0) start = 0;
-
-		if (lengthStr) {
-			const length = parseInt(lengthStr, 10);
-			return args.slice(start, start + length).join(" ");
-		}
-		return args.slice(start).join(" ");
-	});
-
-	// Pre-compute all args joined (optimization)
 	const allArgs = args.join(" ");
 
-	// Replace $ARGUMENTS with all args joined (new syntax, aligns with Claude, Codex, OpenCode)
-	result = result.replace(/\$ARGUMENTS/g, allArgs);
+	// One pass keeps replacement values literal instead of recursively expanding
+	// placeholder-looking text supplied by the operator.
+	return content.replace(
+		/\$\{(\d+|ARGUMENTS|@):-([^}]*)\}|\$\{@:(\d+)(?::(\d+))?\}|\$(ARGUMENTS|@|\d+)/g,
+		(_match, defaultTarget, defaultValue, sliceStart, sliceLength, simple) => {
+			if (defaultTarget) {
+				const value =
+					defaultTarget === "@" || defaultTarget === "ARGUMENTS" ? allArgs : args[parseInt(defaultTarget, 10) - 1];
+				return value || defaultValue;
+			}
 
-	// Replace $@ with all args joined (existing syntax)
-	result = result.replace(/\$@/g, allArgs);
+			if (sliceStart) {
+				const start = Math.max(parseInt(sliceStart, 10) - 1, 0);
+				return args.slice(start, sliceLength ? start + parseInt(sliceLength, 10) : undefined).join(" ");
+			}
 
-	return result;
+			if (simple === "@" || simple === "ARGUMENTS") return allArgs;
+			return args[parseInt(simple, 10) - 1] ?? "";
+		},
+	);
 }
 
 // opt #169 — stat-first regular-file + size-cap guard for the readFileSync sites

@@ -299,7 +299,8 @@ user sends prompt ────────────────────�
   │   │                                            │       │
   │   └─► turn_end                                 │       │
   │                                                        │
-  └─► agent_end                                            │
+	  ├─► agent_end                                            │
+	  └─► agent_settled (no retry/compaction/follow-up left)   │
                                                            │
 user sends another prompt ◄────────────────────────────────┘
 
@@ -500,15 +501,19 @@ The `systemPromptOptions` field gives extensions access to the same structured d
 
 Inside `before_agent_start`, `event.systemPrompt` and `ctx.getSystemPrompt()` both reflect the chained system prompt as of the current handler. Later `before_agent_start` handlers can still modify it again.
 
-#### agent_start / agent_end
+#### agent_start / agent_end / agent_settled
 
-Fired once per user prompt.
+`agent_start` fires when a low-level agent run begins. `agent_end` fires when that run ends, but REPI may still auto-retry, auto-compact and retry, or continue with queued follow-up messages. Use `agent_settled` for status integrations that need to know REPI will not continue running automatically.
 
 ```typescript
 repi.on("agent_start", async (_event, ctx) => {});
 
 repi.on("agent_end", async (event, ctx) => {
-  // event.messages - messages from this prompt
+  // event.messages - messages from this low-level run
+});
+
+repi.on("agent_settled", async (_event, ctx) => {
+  // ctx.isIdle() is true here unless another extension started a new run.
 });
 ```
 
@@ -915,7 +920,7 @@ repi.on("tool_result", async (event, ctx) => {
 
 ### ctx.isIdle() / ctx.abort() / ctx.hasPendingMessages()
 
-Control flow helpers.
+Control flow helpers. `ctx.isIdle()` is false while REPI is processing an agent run, automatic retry, auto-compaction retry, or queued continuation.
 
 ### ctx.shutdown()
 
@@ -997,7 +1002,7 @@ This reports the current base prompt inputs. It does not include per-turn `befor
 
 ### ctx.waitForIdle()
 
-Wait for the agent to finish streaming:
+Wait for the agent to fully settle, including automatic retries, auto-compaction retries, and queued continuations:
 
 ```typescript
 repi.registerCommand("my-cmd", {
@@ -2253,7 +2258,7 @@ const current = ctx.ui.getEditorText();
 // Paste into editor (triggers paste handling, including collapse for large content)
 ctx.ui.pasteToEditor("pasted content");
 
-// Stack custom autocomplete behavior on top of the built-in provider
+// Stack custom autocomplete behavior on top of the active provider
 ctx.ui.addAutocompleteProvider((current) => ({
   async getSuggestions(lines, line, col, options) {
     const beforeCursor = (lines[line] ?? "").slice(0, col);

@@ -1,5 +1,5 @@
-import { describe, expect, test } from "vitest";
-import { parseArgs } from "../src/cli/args.ts";
+import { describe, expect, test, vi } from "vitest";
+import { parseArgs, printHelp } from "../src/cli/args.ts";
 
 describe("parseArgs", () => {
 	describe("--version flag", () => {
@@ -447,5 +447,29 @@ describe("parseArgs", () => {
 			expect(result.fileArgs).toEqual(["prompt.md"]);
 			expect(result.messages).toEqual(["Do the task"]);
 		});
+	});
+});
+
+describe("printHelp", () => {
+	test("documents the explicit lightweight model configuration surface", () => {
+		const previousPrimary = process.env.REPI_PRIMARY;
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		process.env.REPI_PRIMARY = "1";
+		try {
+			printHelp();
+			const help = log.mock.calls.map((call) => call.join(" ")).join("\n");
+			expect(help).toContain("default catalog is empty");
+			expect(help).toContain("REPI_MODEL_INPUT");
+			expect(help).toContain("REPI_MODEL_THINKING_LEVEL_MAP");
+			expect(help).toContain("REPI_HEADERS");
+			expect(help).toContain("REPI_MODEL_COMPAT");
+			expect(help).toContain("REPI_MODEL_COST_CACHE_WRITE");
+			expect(help).toContain("REPI_MODEL_COST_TIERS");
+			expect(help).not.toContain("REPI_LOAD_BUILTIN_MODELS");
+		} finally {
+			if (previousPrimary === undefined) delete process.env.REPI_PRIMARY;
+			else process.env.REPI_PRIMARY = previousPrimary;
+			log.mockRestore();
+		}
 	});
 });

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { getEnvApiKey } from "../src/env-api-keys.ts";
 import { getModels, getProviders } from "../src/models.ts";
 import { complete } from "../src/stream.ts";
-import type { Api, KnownProvider, Model, ProviderStreamOptions, Tool } from "../src/types.ts";
+import type { Api, Model, ProviderId, ProviderStreamOptions, Tool } from "../src/types.ts";
 import { resolveApiKey } from "./oauth.ts";
 
 const githubCopilotToken = await resolveApiKey("github-copilot");
@@ -20,19 +20,19 @@ const echoTool: Tool<typeof echoToolSchema> = {
 
 interface AnthropicEagerE2ECase {
 	name: string;
-	provider: KnownProvider;
+	provider: ProviderId;
 	model: Model<"anthropic-messages">;
 	apiKey: string | undefined;
 }
 
-function getE2EApiKey(provider: KnownProvider): string | undefined {
+function getE2EApiKey(provider: ProviderId): string | undefined {
 	if (provider === "github-copilot") {
 		return githubCopilotToken;
 	}
 	return getEnvApiKey(provider);
 }
 
-function getAnthropicMessagesModels(provider: KnownProvider): Model<"anthropic-messages">[] {
+function getAnthropicMessagesModels(provider: ProviderId): Model<"anthropic-messages">[] {
 	const models = getModels(provider) as Model<Api>[];
 	return models.filter((model) => model.api === "anthropic-messages") as Model<"anthropic-messages">[];
 }
@@ -65,7 +65,7 @@ function getProbePriority(model: Model<"anthropic-messages">): number {
 }
 
 function selectOneCasePerProvider(cases: AnthropicEagerE2ECase[]): AnthropicEagerE2ECase[] {
-	const byProvider = new Map<KnownProvider, AnthropicEagerE2ECase[]>();
+	const byProvider = new Map<ProviderId, AnthropicEagerE2ECase[]>();
 	for (const testCase of cases) {
 		const providerCases = byProvider.get(testCase.provider) ?? [];
 		providerCases.push(testCase);
@@ -132,25 +132,33 @@ describe("Anthropic Messages eager tool input streaming E2E", () => {
 		expect(anthropicMessagesCases.map((testCase) => testCase.name).sort()).toEqual(expectedModels.sort());
 	});
 
-	describe("generated compatibility settings", () => {
-		for (const testCase of generatedCompatCases) {
-			it.skipIf(!testCase.apiKey)(`${testCase.name} accepts configured tool streaming`, { retry: 2 }, async () => {
-				await expectToolEnabledRequestAccepted(testCase.model, testCase.apiKey);
-			});
-		}
-	});
+	if (generatedCompatCases.length > 0) {
+		describe("generated compatibility settings", () => {
+			for (const testCase of generatedCompatCases) {
+				it.skipIf(!testCase.apiKey)(
+					`${testCase.name} accepts configured tool streaming`,
+					{ retry: 2 },
+					async () => {
+						await expectToolEnabledRequestAccepted(testCase.model, testCase.apiKey);
+					},
+				);
+			}
+		});
+	}
 
-	describe("forced eager_input_streaming probe", () => {
-		for (const testCase of forcedEagerProbeCases) {
-			const model = withEagerToolInputStreaming(testCase.model);
+	if (forcedEagerProbeCases.length > 0) {
+		describe("forced eager_input_streaming probe", () => {
+			for (const testCase of forcedEagerProbeCases) {
+				const model = withEagerToolInputStreaming(testCase.model);
 
-			it.skipIf(!testCase.apiKey)(
-				`${testCase.name} accepts forced eager_input_streaming`,
-				{ retry: 2 },
-				async () => {
-					await expectToolEnabledRequestAccepted(model, testCase.apiKey);
-				},
-			);
-		}
-	});
+				it.skipIf(!testCase.apiKey)(
+					`${testCase.name} accepts forced eager_input_streaming`,
+					{ retry: 2 },
+					async () => {
+						await expectToolEnabledRequestAccepted(model, testCase.apiKey);
+					},
+				);
+			}
+		});
+	}
 });

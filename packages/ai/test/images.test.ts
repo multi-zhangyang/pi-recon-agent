@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { getImageModel } from "../src/image-models.ts";
 import { generateImages } from "../src/images.ts";
 import type { ImageContent, ImagesContext, ImagesModel, ProviderImagesOptions } from "../src/types.ts";
 
@@ -10,6 +9,17 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 type ImagesOptionsWithExtras = ProviderImagesOptions & Record<string, unknown>;
+
+const openRouterImageModel: ImagesModel<"openrouter-images"> = {
+	id: "google/gemini-2.5-flash-image",
+	name: "Google: Gemini 2.5 Flash Image",
+	api: "openrouter-images",
+	provider: "openrouter",
+	baseUrl: "https://openrouter.ai/api/v1",
+	input: ["text", "image"],
+	output: ["text", "image"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+};
 
 async function basicImageGeneration<TApi extends string>(model: ImagesModel<TApi>, options?: ImagesOptionsWithExtras) {
 	const context: ImagesContext = {
@@ -72,18 +82,16 @@ describe("Images E2E Tests", () => {
 	describe.skipIf(!process.env.OPENROUTER_API_KEY)(
 		"OpenRouter Images Provider (google/gemini-2.5-flash-image)",
 		() => {
-			const model = getImageModel("openrouter", "google/gemini-2.5-flash-image");
-
 			it("should generate a basic image", { retry: 3 }, async () => {
-				await basicImageGeneration(model);
+				await basicImageGeneration(openRouterImageModel);
 			});
 
 			it("should handle text plus image output", { retry: 3 }, async () => {
-				await handleTextAndImageOutput(model);
+				await handleTextAndImageOutput(openRouterImageModel);
 			});
 
 			it("should handle image input", { retry: 3 }, async () => {
-				await handleImageInput(model);
+				await handleImageInput(openRouterImageModel);
 			});
 		},
 	);

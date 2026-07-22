@@ -2,7 +2,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import {
 	capWorkerBuffer,
 	killWorkerWithGrace,
@@ -22,7 +22,7 @@ const root = resolve(process.argv[2] && !process.argv[2].startsWith("--") ? proc
 const args = process.argv.slice(process.argv[2] && !process.argv[2].startsWith("--") ? 3 : 2);
 const json = args.includes("--json");
 const deep = args.includes("--deep") || args.includes("--full");
-const strictMemory = args.includes("--strict-memory");
+const offline = args.includes("--offline") || process.env.REPI_OFFLINE === "1";
 
 function valueAfter(flag) {
 	for (let index = 0; index < args.length; index++) {
@@ -47,12 +47,12 @@ const modelArgs = [
 function cleanEnv(extra = {}) {
 	return {
 		...process.env,
+		PATH: [root, process.env.PATH].filter(Boolean).join(delimiter),
+		REPI_OFFLINE: offline ? "1" : process.env.REPI_OFFLINE ?? "0",
 		REPI_SKIP_VERSION_CHECK: "1",
 		REPI_SKIP_PACKAGE_UPDATE_CHECK: "1",
 		REPI_TELEMETRY: "0",
 		REPI_PRINT_PROGRESS: extra.REPI_PRINT_PROGRESS ?? "0",
-		REPI_MEMORY_WRITEBACK_NO_SESSION: "0",
-		REPI_RUNTIME_WRITEBACK_NO_SESSION: "0",
 		...extra,
 	};
 }
@@ -175,23 +175,36 @@ function runWorker(index) {
 }
 
 function orchestrationSourceCheck() {
-	const path = join(root, "packages/coding-agent/src/core/recon-profile.ts");
-	const source = existsSync(path) ? readFileSync(path, "utf8") : "";
+	const paths = new Map([
+		["recon-profile.ts", join(root, "packages/coding-agent/src/core/recon-profile.ts")],
+		[
+			"swarm-supervisor-runtime.ts",
+			join(root, "packages/coding-agent/src/core/repi/swarm-supervisor-runtime.ts"),
+		],
+	]);
+	const sources = new Map(
+		[...paths.entries()].map(([name, path]) => [name, existsSync(path) ? readFileSync(path, "utf8") : ""]),
+	);
 	const markers = [
-		'name: "re_delegate"',
-		'name: "re_swarm"',
-		'name: "re_operator"',
-		"function buildDelegate",
-		"function runSwarm",
-		"function dispatchOperatorQueue",
+		["recon-profile.ts", 'name: "re_delegate"'],
+		["recon-profile.ts", 'name: "re_swarm"'],
+		["recon-profile.ts", 'name: "re_operator"'],
+		["recon-profile.ts", "function buildDelegate"],
+		["swarm-supervisor-runtime.ts", "function runSwarm"],
+		["recon-profile.ts", "function dispatchOperatorQueue"],
+		["recon-profile.ts", "createSwarmSupervisorRuntime({"],
 	];
-	const missing = markers.filter((marker) => !source.includes(marker));
+	const missing = markers
+		.filter(([file, marker]) => !sources.get(file)?.includes(marker))
+		.map(([file, marker]) => `${file}:${marker}`);
 	return {
 		id: "orchestration-source",
 		exit: missing.length ? 1 : 0,
 		ok: missing.length === 0,
 		ms: 0,
-		stdoutTail: missing.length ? `missing=${missing.join(",")}` : "re_delegate/re_swarm/re_operator implementation markers present",
+		stdoutTail: missing.length
+			? `missing=${missing.join(",")}`
+			: "re_delegate/re_swarm/re_operator wiring and split implementations present",
 		stderrTail: "",
 	};
 }
@@ -201,11 +214,7 @@ const rows = [];
 function looksLikeFreshProfileDoctorFailure(row) {
 	const text = `${row.stdoutTail ?? ""}
 ${row.stderrTail ?? ""}`;
-	return (
-		/FAIL runtime:settings/.test(text) ||
-		/FAIL memory:scoped-defaults/.test(text) ||
-		/FAIL memory:(?:core-file|project-file|procedural-file|event-store)/.test(text)
-	);
+	return /FAIL runtime:settings/.test(text);
 }
 
 const initialDoctor = runRepi("doctor", ["doctor"], { timeoutMs: 120_000 });
@@ -226,41 +235,13 @@ if (initialDoctor.ok || !looksLikeFreshProfileDoctorFailure(initialDoctor)) {
 	rows.push(
 		runRepi("doctor-fix-fresh-profile", ["doctor", "--fix", "--json"], {
 			timeoutMs: 120_000,
-			expectStdout: /repi-doctor-report|profile-init|runtime:settings|memory:scoped-defaults/,
+			expectStdout: /repi-doctor-report|profile-init|runtime:settings/,
 		}),
 	);
 	rows.push(runRepi("doctor-post-fix", ["doctor"], { timeoutMs: 120_000 }));
 }
 rows.push(runRepi("model-doctor", ["model", "doctor"], { timeoutMs: 60_000 }));
 rows.push(runRepi("model-list", ["model", "list", "--json"], { timeoutMs: 60_000, expectStdout: /repi-model-list-report/ }));
-rows.push(
-	runRepi("memory-doctor", ["memory", "doctor", "--json"], {
-		timeoutMs: 60_000,
-		expectStdout: /repi-memory-doctor-report/,
-		normalize: (row, stdout) => {
-			if (strictMemory || row.ok) return row;
-			try {
-				const parsed = JSON.parse(stdout);
-				const diagnostics = Array.isArray(parsed?.diagnostics) ? parsed.diagnostics : [];
-				const failIds = diagnostics
-					.filter((diagnostic) => diagnostic?.level === "fail")
-					.map((diagnostic) => String(diagnostic.id ?? ""));
-				if (parsed?.kind === "repi-memory-doctor-report" && failIds.length > 0 && failIds.every((id) => id === "memory-secret-scan")) {
-					return {
-						...row,
-						ok: true,
-						severity: "warn",
-						warning: "memory-secret-scan",
-						remediation: "Existing local memory contains redaction matches; run: repi memory sanitize --dry-run, then repi memory sanitize --apply --yes after review. Use --strict-memory to fail selfcheck on this warning.",
-					};
-				}
-			} catch {
-				// Keep the original failing row when stdout is not parseable.
-			}
-			return row;
-		},
-	}),
-);
 rows.push(runRepi("bugreport", ["bugreport", "--stdout"], { timeoutMs: 90_000, expectStdout: /repi-bugreport/ }));
 rows.push(
 	runRepi("swarm-plan", ["swarm", "plan", "local-selfcheck", "--workers", "2", "--json"], {
@@ -268,44 +249,42 @@ rows.push(
 		timeoutMs: 60_000,
 	}),
 );
-rows.push(
-	runRepi("model-min", [...modelArgs, "--no-session", "--no-tools", "-p", "Reply exactly: REPI_MODEL_OK"], {
-		expectStdout: /REPI_MODEL_OK/,
-		timeoutMs,
-	}),
-);
-rows.push(
-	runRepi(
-		"tool-min",
-		[
-			...modelArgs,
-			"--no-session",
-			"--tools",
-			"bash",
-			"-p",
-			"Use bash to run exactly: echo REPI_TOOL_OK. Then output only the command result.",
-		],
-		{ expectStdout: /REPI_TOOL_OK/, timeoutMs },
-	),
-);
-rows.push(
-	runRepi(
-		"memory-visibility-probe",
-		[
-			...modelArgs,
-			"--no-session",
-			"--no-tools",
-			"-p",
-			"Do you see prior task memory in the current prompt? Reply exactly YES or NO.",
-		],
-		{ expectStdout: /\bNO\b/i, timeoutMs },
-	),
-);
-
-rows.push(...(await Promise.all([runWorker(1), runWorker(2), runWorker(3)])));
+if (offline) {
+	rows.push({
+		id: "offline-model-probes",
+		exit: 0,
+		ok: true,
+		ms: 0,
+		skipped: true,
+		stdoutTail: "offline mode: model, tool, and parallel worker probes skipped",
+		stderrTail: "",
+	});
+} else {
+	rows.push(
+		runRepi("model-min", [...modelArgs, "--no-session", "--no-tools", "-p", "Reply exactly: REPI_MODEL_OK"], {
+			expectStdout: /REPI_MODEL_OK/,
+			timeoutMs,
+		}),
+	);
+	rows.push(
+		runRepi(
+			"tool-min",
+			[
+				...modelArgs,
+				"--no-session",
+				"--tools",
+				"bash",
+				"-p",
+				"Use bash to run exactly: echo REPI_TOOL_OK. Then output only the command result.",
+			],
+			{ expectStdout: /REPI_TOOL_OK/, timeoutMs },
+		),
+	);
+	rows.push(...(await Promise.all([runWorker(1), runWorker(2), runWorker(3)])));
+}
 rows.push(orchestrationSourceCheck());
 
-if (deep) {
+if (deep && !offline) {
 	const isolatedProfileRoot = mkdtempSync(join(tmpdir(), "repi-selfcheck-"));
 	const isolatedAgentDir = join(isolatedProfileRoot, "agent");
 	try {
@@ -349,6 +328,16 @@ if (deep) {
 	} finally {
 		rmSync(isolatedProfileRoot, { recursive: true, force: true });
 	}
+} else if (deep) {
+	rows.push({
+		id: "offline-deep-model-probes",
+		exit: 0,
+		ok: true,
+		ms: 0,
+		skipped: true,
+		stdoutTail: "offline mode: deep model and slash-command probes skipped",
+		stderrTail: "",
+	});
 }
 
 const report = {
@@ -358,8 +347,8 @@ const report = {
 	root,
 	provider: provider ?? "default",
 	model: model ?? "default",
+	offline,
 	deep,
-	strictMemory,
 	ok: rows.every((row) => row.ok),
 	warnings: rows.filter((row) => row.severity === "warn"),
 	rows,

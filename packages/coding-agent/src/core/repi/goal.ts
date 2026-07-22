@@ -53,6 +53,8 @@ interface AssistantMessageLike {
 
 interface RepiGoalRuntime {
 	activeGoal?: RepiGoalState;
+	/** Goal objective/rules are injected once per session generation, not every turn. */
+	lastGoalSystemPromptKey?: string;
 	completionStatusTimer?: ReturnType<typeof setTimeout>;
 	continuationPending?: ContinuationPending;
 	goalRecovery?: GoalRecovery;
@@ -219,6 +221,20 @@ export function installRepiGoalMode(pi: ExtensionAPI): void {
 		clearGoalRecovery(runtime);
 		clearStaleGoalToolCallBlock(runtime);
 		runtime.recoveryAttempts.clear();
+		runtime.lastGoalSystemPromptKey = undefined;
+		runtime.activeGoal = loadGoalFromSession(ctx);
+		if (runtime.activeGoal) updateStatus(runtime, ctx, runtime.activeGoal);
+		else ctx.ui.setStatus(STATUS_KEY, undefined);
+	});
+
+	pi.on("session_tree", (_event, ctx) => {
+		// Branch navigation changes the visible custom-entry history without
+		// recreating the extension. Reload goal state so an old branch cannot
+		// inject its objective or schedule continuation in the new branch.
+		clearContinuationTracking(runtime);
+		clearGoalRecovery(runtime);
+		clearStaleGoalToolCallBlock(runtime);
+		runtime.lastGoalSystemPromptKey = undefined;
 		runtime.activeGoal = loadGoalFromSession(ctx);
 		if (runtime.activeGoal) updateStatus(runtime, ctx, runtime.activeGoal);
 		else ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -248,6 +264,9 @@ export function installRepiGoalMode(pi: ExtensionAPI): void {
 		}
 		const restoredGoal = loadGoalFromSession(ctx);
 		if (restoredGoal?.id === runtime.activeGoal.id) runtime.activeGoal = restoredGoal;
+		// Compaction can remove the original goal prompt from the transcript; the
+		// next turn must receive the full objective/rules once to restore context.
+		runtime.lastGoalSystemPromptKey = undefined;
 		updateGoalUsage(runtime.activeGoal, ctx);
 		persistGoal(pi, runtime.activeGoal);
 		updateStatus(runtime, ctx, runtime.activeGoal);
@@ -278,6 +297,9 @@ export function installRepiGoalMode(pi: ExtensionAPI): void {
 		if (!runtime.activeGoal || runtime.activeGoal.status !== "active") return undefined;
 		updateGoalUsage(runtime.activeGoal, ctx);
 		updateStatus(runtime, ctx, runtime.activeGoal);
+		const goalSystemPromptKey = `${runtime.activeGoal.id}\0${runtime.activeGoal.text}`;
+		if (runtime.lastGoalSystemPromptKey === goalSystemPromptKey) return undefined;
+		runtime.lastGoalSystemPromptKey = goalSystemPromptKey;
 		return {
 			systemPrompt: `${event.systemPrompt}\n\n${buildGoalSystemPrompt(runtime.activeGoal)}`,
 		};
@@ -305,7 +327,7 @@ export function installRepiGoalMode(pi: ExtensionAPI): void {
 					ctx.ui.notify("Goal hit context overflow; compacting then continuing.", "warning");
 					ctx.compact({
 						customInstructions:
-							"Preserve the active REPI /goal objective, completed evidence, unresolved checks, current commands, changed files, and exact next action. Resume goal mode after compaction.",
+							"Preserve the active REPI /goal ID and objective, status counts, decisive evidence, artifact paths, changed files, and one exact next command. Omit memory/retrieval/dispatcher/queue dumps and repeated system/capability packets. Resume goal mode after compaction.",
 						onError: (error) => {
 							ctx.ui.notify(
 								`Goal compaction failed: ${formatError(error)}. Run /goal resume after fixing it.`,
@@ -809,35 +831,31 @@ export function formatTokenCount(value: number): string {
 
 function buildGoalPrompt(goal: RepiGoalState): string {
 	const budgetLine = goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatTokenCount(goal.tokenBudget)}.`;
-	return `REPI goal mode is active. Complete this goal fully:\n\n${goalObjectiveBlock(goal)}${budgetLine}\n\n${goalPersistenceRules("this goal")}`;
+	return `Start the active REPI goal.\n${goalObjectiveBlock(goal)}${budgetLine}\nWork until verified completion; call goal_complete only after every requirement is checked.`;
 }
 
 function buildObjectiveUpdatedPrompt(goal: RepiGoalState): string {
 	const budgetLine = goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatBudget(goal)} used.`;
-	return `The active REPI /goal objective was updated. Continue working toward this goal:\n\n${goalObjectiveBlock(goal)}${budgetLine}\n\n${goalPersistenceRules("the updated goal")}`;
+	return `The active REPI goal changed. Continue from the current verified state.\n${goalObjectiveBlock(goal)}${budgetLine}`;
 }
 
 function buildResumePrompt(goal: RepiGoalState): string {
 	const budgetLine = goal.tokenBudget === undefined ? "" : `\nToken budget: ${formatBudget(goal)} used.`;
-	return `The user explicitly resumed the paused REPI /goal. Continue working toward this goal:\n\n${goalObjectiveBlock(goal)}${budgetLine}\n\n${goalPersistenceRules("this goal")}`;
+	return `The user resumed the active REPI goal. Continue from the current verified state.\n${goalObjectiveBlock(goal)}${budgetLine}`;
 }
 
 export function buildGoalSystemPrompt(goal: RepiGoalState): string {
 	const budgetLine =
 		goal.tokenBudget === undefined ? "" : `\n- Respect the goal token budget (${formatBudget(goal)} used).`;
-	return `Active REPI /goal:\n${goalObjectiveBlock(goal)}\n\nGoal-mode rules:\n- Keep going until the active goal is completely resolved end-to-end.\n- Treat the current worktree, command output, tests, runtime behavior, network responses, and external state as authoritative.\n- Do not redefine the goal into a smaller task; audit every requirement before completion.\n- Do not stop at analysis, a plan, TODO list, partial fixes, or suggested next steps.\n- Autonomously perform implementation and verification with the available tools when they are needed to complete the goal.\n- Persevere through recoverable tool/provider failures by trying reasonable alternatives instead of yielding early.\n- If the goal is not complete at the end of a turn, expect an automatic continuation and keep working from where you left off.\n- Only call goal_complete after the goal is fully complete and verified.${budgetLine}`;
+	return `Active REPI goal:\n${goalObjectiveBlock(goal)}\nRules: keep working until every requirement is verified; treat live files, commands, tests, runtime, and network state as authoritative; call goal_complete only after the final checks.${budgetLine}`;
 }
 
 function buildContinuePrompt(goal: RepiGoalState, marker: string): string {
-	return `Continue the active REPI /goal until it is complete:\n\n${goalObjectiveBlock(goal)}\n\nThis is automatic continuation #${goal.iteration}. Current files, command output, tests, runtime behavior, network responses, and external state are authoritative; re-check them as needed. ${goalPersistenceRules("this goal")}\n\n${continuationMarkerComment(marker)}`;
+	return `Continue the active REPI goal from the current verified state (automatic continuation #${goal.iteration}). ${continuationMarkerComment(marker)}`;
 }
 
 function goalObjectiveBlock(goal: RepiGoalState): string {
 	return `<goal_objective>\n${escapeXmlText(goal.text)}\n</goal_objective>`;
-}
-
-function goalPersistenceRules(goalLabel: string): string {
-	return `Keep going until ${goalLabel} is completely resolved end-to-end. Do not redefine ${goalLabel} into a smaller task. Do not stop at analysis, a plan, TODO list, partial fixes, or suggested next steps. Autonomously perform implementation and verification with the available tools when they are needed. Treat current files, command output, tests, runtime behavior, network responses, and external state as authoritative. If a tool call or provider call fails, try reasonable alternatives instead of yielding early. Before calling goal_complete, audit ${goalLabel} requirement by requirement against the verified current state. Only call goal_complete after ${goalLabel} is fully complete and verified.`;
 }
 
 function currentTokenTotal(ctx: RepiGoalContext): number {

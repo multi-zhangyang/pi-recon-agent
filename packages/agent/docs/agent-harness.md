@@ -79,6 +79,8 @@ Stream options are shallow-copied when a snapshot is created. `headers` and `met
 
 The session contains persisted entries only. Session reads return persisted state and do not include queued writes.
 
+`Session.buildContextEntries()` returns the compaction-aware entry sequence used for model context. `Session.buildContext()` derives runtime state from the full active branch, then projects those selected entries to `AgentMessage[]`. Custom entries are omitted by default; applications can configure `entryProjectors` for selected custom types and stack `entryTransforms` after the default compaction transform to filter or reorder context entries.
+
 Session storage implementations must persist leaf changes as `leaf` entries. `setLeafId()` is not an in-memory-only cursor update; it appends a durable entry whose `targetId` is the active tree leaf or `null` for root. Reopening storage must reconstruct the current leaf from the latest persisted leaf-affecting entry.
 
 ### Pending session writes
@@ -115,7 +117,7 @@ The following operations are allowed during a turn where appropriate:
 - `abort`
 - runtime config setters
 
-Phase/settlement semantics are still provisional and need a full lifecycle pass.
+Each operation owns one `ActiveHarnessRun` containing the phase, abort controller, and idle promise. Settlement flushes pending writes, restores unacknowledged queue items, clears cancellation markers, releases run ownership, and only then resolves `waitForIdle()`.
 
 ## Turn execution
 
@@ -154,7 +156,7 @@ The low-level loop converts harness `ThinkingLevel` to provider `reasoning` at t
 - `"off"` -> `undefined`
 - all other thinking levels pass through
 
-No state refresh is needed on `agent_end` except flushing leftover pending session writes and clearing the operation phase. The exact `settled` event timing is still under review.
+On `agent_end`, the harness flushes writes, restores unacknowledged queue items, emits `settled`, then performs the final pending-write flush while settling the owning run. A `settled` callback may queue a session write; that write is flushed before `waitForIdle()` resolves.
 
 If the system-prompt callback throws while starting `prompt`, `skill`, or `promptFromTemplate`, the operation rejects with `AgentHarnessError` and the harness returns to idle. If it throws from the save-point snapshot created by `prepareNextTurn`, the low-level agent run records an assistant error message.
 
@@ -162,14 +164,18 @@ If the system-prompt callback throws while starting `prompt`, `skill`, or `promp
 
 The target hook system is described in [hooks.md](./hooks.md).
 
-Summary:
+Implemented behavior:
 
-- `AgentHarness` emits typed hook events and consumes typed results.
-- A single hooks implementation owns registration, cleanup, provenance, and result reducers.
-- Observational and mutation hooks use one event-specific `on()` API; the event result type determines whether a handler may return a result.
-- Result-producing events are reduced by typed reducer tables; app-specific hooks add reducers only for app-specific result-producing events.
-- Hook registration provenance is sidecar metadata on the registration. Resource and tool provenance belongs on app-specific concrete value types.
-- Hook context should be a plain object of facades, not raw internals or late-bound getter mazes.
+- `on()` registers typed mutation hooks by event type; `subscribe()` registers observational listeners separately.
+- Event-specific reducers in `hook-reducers.ts` chain context/provider transforms, accumulate startup messages, apply tool-result patches, and fail closed for tool/session vetoes.
+- Hook work is bound to the owning run signal. An ignored hook cannot keep an aborted operation alive.
+- Observational listeners are awaited during an active run. Once cancellation begins, their terminal delivery becomes best-effort so an ignored listener cannot pin `abort()`, `dispose()`, or run settlement.
+
+Still planned:
+
+- registration provenance and app-specific hook metadata
+- a harness/session facade for extension writes
+- generic app-defined hook event/reducer registration
 
 Event payloads describe what is happening. Harness getters describe latest config for future snapshots. Hook and listener settlement should be awaited in lifecycle order where possible; transport backpressure is handled below the harness by `AssistantMessageStream`, so the harness does not need a separate async event queue merely to keep SSE or websocket reads flowing.
 
@@ -203,7 +209,7 @@ Abort does not clear `nextTurn` messages. Messages queued with `nextTurn()` surv
 
 Abort does not discard pending session writes. Pending writes flush at the next save point if reached, at `agent_end`, or in operation failure cleanup.
 
-Abort barrier semantics still need an audit.
+Queue delivery uses an explicit pending -> in-flight -> delivering -> acknowledged lifecycle. Abort retracts pending and in-flight steering/follow-up messages, while a message that has crossed the synchronous delivery barrier is allowed to finish. If its durable `message_end` handling fails, settlement restores it for a later run instead of losing it.
 
 ## Compaction and tree navigation
 
@@ -247,7 +253,7 @@ This list tracks the remaining work before treating `AgentHarness` as migration-
 
 ### 1. Add explicit tool registry read/update semantics
 
-Status: In progress
+Status: Done
 
 Done:
 
@@ -306,25 +312,24 @@ Done:
 - Queue drains roll back if queue-update notification fails.
 - `message_end` persistence happens before subscriber notification.
 - `abort()` signals cancellation before notifications and still waits for idle through notification errors.
+- Each operation owns an `ActiveHarnessRun`; `abort()`, `dispose()`, compaction, and tree navigation share the same cancellation/settlement boundary.
+- Queue delivery has explicit pending, in-flight, delivering, and acknowledged phases; unacknowledged messages restore at settlement.
+- Per-turn terminal state resets before every turn, preventing a prior assistant message from suppressing a later failure lifecycle.
+- Hook reducers and observer delivery are cancellation-aware; ignored extension work cannot keep an aborted run alive.
 - Idle model/thinking/tool updates validate and persist before committing in-memory state.
 - `setLeafId()` persists durable `leaf` entries so tree navigation survives storage reopen.
 
 Remaining:
 
-- Finalize phase/idle semantics.
-- Audit whether `settled` can fire too early.
-- Make session writes inside `settled` callbacks deterministic.
 - Audit follow-up behavior around `agent_end`.
 - Implement auto-compaction decision point.
 - Implement retry handling.
-- Verify `before_agent_start` hook semantics against coding-agent.
 - Decide whether `before_agent_start` needs more turn info such as tools/tool snippets.
 - Document or change runtime config event timing while busy.
-- Audit `abort()` barrier semantics.
 
 ### 4. Implement generic hook/event extension mechanism
 
-Status: Designed in [hooks.md](./hooks.md), not implemented
+Status: In progress
 
 Done:
 
@@ -332,16 +337,17 @@ Done:
 - Hooks receive only event payloads.
 - `emitHook(event)` derives the hook type from `event.type`.
 - Provider request/payload hooks have ordered transform semantics.
+- Result chaining lives in event-specific reducer functions.
+- Context/provider transforms chain; tool/session vetoes stop on the first block/cancel result.
+- Tool-result patches accumulate across handlers.
+- Hook waits are cancelled with the owning run signal.
 
 Remaining:
 
 - Add `HookEvent`, `ResultOf`, registration options with generic source metadata, and the single `AgentHarnessHooks` implementation.
-- Move result chaining out of `AgentHarness` into reducer functions.
-- Type-check base harness reducers so every result-producing `AgentHarnessEvent` has reducer semantics.
 - Make `AgentHarness` accept and expose the concrete hooks instance with constructor inference for app-specific hooks.
 - Define the initial harness/context facades exposed through hook context.
-- Preserve current provider hook behavior, including stream option patch deletion semantics.
-- Add parity tests for reducer semantics: transform chaining, patch chaining, early block/cancel, cleanup, source metadata, and typed app-specific reducer coverage.
+- Add parity coverage for reducer semantics, cancellation, source metadata, and typed app-specific reducer coverage.
 
 Notes:
 

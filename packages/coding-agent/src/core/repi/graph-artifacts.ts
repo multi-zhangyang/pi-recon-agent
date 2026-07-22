@@ -1,5 +1,6 @@
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { type ArtifactScopeFilterOptions, artifactMissionMatches, artifactTargetMatches } from "./artifact-scope.ts";
 import type {
 	RuntimeAdapterExecutionArtifactV1,
 	RuntimeAdapterParserRuleV1,
@@ -12,6 +13,7 @@ import {
 	readTextFile,
 	recentMarkdownArtifacts,
 } from "./storage.ts";
+import { parseJsonCodeFence } from "./text.ts";
 
 export type RuntimeAdapterExecutionGraphArtifact = RuntimeAdapterExecutionArtifactV1 & {
 	stdoutHead?: string;
@@ -211,6 +213,7 @@ export function isRuntimeAdapterExecutionGraphArtifact(row: unknown): row is Run
 
 export function recentRuntimeAdapterExecutionArtifacts(
 	limit = 8,
+	options: ArtifactScopeFilterOptions = {},
 ): Array<{ path: string; artifact: RuntimeAdapterExecutionGraphArtifact }> {
 	const root = join(evidenceToolchainDir(), "runtime-adapters");
 	try {
@@ -232,22 +235,26 @@ export function recentRuntimeAdapterExecutionArtifacts(
 					});
 			})
 			.sort((left, right) => right.mtimeMs - left.mtimeMs || right.path.localeCompare(left.path))
-			.slice(0, limit)
 			.map(({ path }) => {
 				const artifact = readJsonObjectFile<unknown>(path);
 				return isRuntimeAdapterExecutionGraphArtifact(artifact) ? { path, artifact } : undefined;
 			})
-			.filter((item): item is { path: string; artifact: RuntimeAdapterExecutionGraphArtifact } => Boolean(item));
+			.filter((item): item is { path: string; artifact: RuntimeAdapterExecutionGraphArtifact } => Boolean(item))
+			.filter(
+				({ artifact }) =>
+					artifactMissionMatches(options.missionId, artifact.missionId) &&
+					artifactTargetMatches(options.target, artifact.target),
+			)
+			.slice(0, limit);
 	} catch {
 		return [];
 	}
 }
 
 export function parseProofLoopArtifact(path: string): RepiProofLoopGraphArtifact | undefined {
-	const match = /```json\s*([\s\S]*?)\s*```/m.exec(readTextFile(path));
-	if (!match?.[1]) return undefined;
+	const parsed = parseJsonCodeFence<Record<string, unknown>>(readTextFile(path));
+	if (!parsed) return undefined;
 	try {
-		const parsed = JSON.parse(match[1]) as Record<string, unknown>;
 		if (!(parsed.mode === "plan" || parsed.mode === "run")) return undefined;
 		if (!Array.isArray(parsed.steps) || !Array.isArray(parsed.executed)) return undefined;
 		const steps = parsed.steps
@@ -280,11 +287,21 @@ export function parseProofLoopArtifact(path: string): RepiProofLoopGraphArtifact
 	}
 }
 
-export function recentProofLoopArtifacts(limit = 4): Array<{ path: string; proof: RepiProofLoopGraphArtifact }> {
-	return recentMarkdownArtifacts(evidenceProofLoopsDir(), limit)
+export function recentProofLoopArtifacts(
+	limit = 4,
+	options: ArtifactScopeFilterOptions = {},
+): Array<{ path: string; proof: RepiProofLoopGraphArtifact }> {
+	const scanLimit = options.scanLimit ?? Math.max(32, limit * 8);
+	return recentMarkdownArtifacts(evidenceProofLoopsDir(), scanLimit)
 		.map((path) => {
 			const proof = parseProofLoopArtifact(path);
 			return proof ? { path, proof } : undefined;
 		})
-		.filter((item): item is { path: string; proof: RepiProofLoopGraphArtifact } => Boolean(item));
+		.filter((item): item is { path: string; proof: RepiProofLoopGraphArtifact } => Boolean(item))
+		.filter(
+			({ proof }) =>
+				artifactMissionMatches(options.missionId, proof.missionId) &&
+				artifactTargetMatches(options.target, proof.target),
+		)
+		.slice(0, limit);
 }

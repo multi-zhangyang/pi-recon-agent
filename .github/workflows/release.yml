@@ -39,15 +39,6 @@ jobs:
       - name: Build all packages
         run: npm run build
 
-      # `npm run build` regenerates packages/ai/src/{models,image-models}.generated.ts
-      # from a live network fetch, which drifts vs the committed snapshot. We do
-      # not commit regenerated model files, so restore them to the committed
-      # state so the working tree stays clean for the no-diff gate. The built
-      # dist/ (and thus the release tarball) already contains the fresh list.
-      - name: Restore generated model snapshots
-        run: |
-          git checkout -- packages/ai/src/models.generated.ts packages/ai/src/image-models.generated.ts
-
       - name: Repository check
         run: npm run check
 
@@ -81,17 +72,17 @@ jobs:
           git diff --check
           git diff --exit-code
 
-      # Pack the four workspace packages into tarballs and attach them to the
-      # release. Users who want a local npm install can download a tarball and
-      # run `npm i -g ./<pkg>-<ver>.tgz`; everyone else uses install.sh.
+      # Pack and attach all four workspace tarballs. They are one install set:
+      # users must pass the four same-version files to one `npm install -g`
+      # command. The manifest records that command and each artifact hash.
       # No npm publish, no NPM_TOKEN, no external account required.
       - name: Pack release tarballs
         run: |
           mkdir -p release-assets
           for d in packages/ai packages/agent packages/tui packages/coding-agent; do
-            (cd "$d" && npm pack --ignore-scripts)
-            cp "$d"/*.tgz release-assets/
+            (cd "$d" && npm pack --ignore-scripts --pack-destination ../../release-assets)
           done
+          node scripts/reverse-agent/repi-release-manifest.mjs . release-assets
           ls -la release-assets/
 
       - name: GitHub Release
@@ -100,4 +91,6 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
-          files: release-assets/*.tgz
+          files: |
+            release-assets/*.tgz
+            release-assets/repi-release-manifest.json

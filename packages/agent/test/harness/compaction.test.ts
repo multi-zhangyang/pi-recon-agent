@@ -186,6 +186,23 @@ describe("harness compaction", () => {
 		expect(entries[result.firstKeptEntryIndex]?.type).toBe("message");
 	});
 
+	it("clamps retained history to the active model context window", () => {
+		const u1 = createMessageEntry(createUserMessage("u".repeat(8000)));
+		const a1 = createMessageEntry(createAssistantMessage("a".repeat(8000)), u1.id);
+		const u2 = createMessageEntry(createUserMessage("v".repeat(8000)), a1.id);
+		const a2 = createMessageEntry(createAssistantMessage("b".repeat(8000)), u2.id);
+		const entries = [u1, a1, u2, a2];
+
+		const unscoped = getOrThrow(prepareCompaction(entries, DEFAULT_COMPACTION_SETTINGS));
+		expect(unscoped?.messagesToSummarize).toHaveLength(0);
+		expect(unscoped?.turnPrefixMessages).toHaveLength(0);
+
+		const scoped = getOrThrow(prepareCompaction(entries, DEFAULT_COMPACTION_SETTINGS, 8192));
+		const summarizedCount = (scoped?.messagesToSummarize.length ?? 0) + (scoped?.turnPrefixMessages.length ?? 0);
+		expect(summarizedCount).toBeGreaterThan(0);
+		expect(scoped?.firstKeptEntryId).not.toBe(u1.id);
+	});
+
 	it("covers cut-point and turn-start edge cases", () => {
 		const thinking = createThinkingLevelEntry("high");
 		const modelChange = createModelChangeEntry("openai", "gpt-4", thinking.id);
@@ -232,6 +249,17 @@ describe("harness compaction", () => {
 			turnStartIndex: -1,
 			isSplitTurn: false,
 		});
+		const toolUser = createMessageEntry(createUserMessage("run tool"));
+		const toolAssistant = createMessageEntry(
+			{
+				...createAssistantMessage(""),
+				content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "file.ts" } }],
+				stopReason: "toolUse",
+			},
+			toolUser.id,
+		);
+		const trailingToolResult = { ...toolResult, parentId: toolAssistant.id };
+		expect(findCutPoint([toolUser, toolAssistant, trailingToolResult], 0, 3, 1).firstKeptEntryIndex).toBe(1);
 
 		const user = createMessageEntry(createUserMessage("user"));
 		const compaction = createCompactionEntry("summary", user.id, user.id);
@@ -306,11 +334,28 @@ describe("harness compaction", () => {
 				createMessageEntry({ ...assistant, stopReason: "error" }),
 			]),
 		).toBeUndefined();
+		expect(
+			getLastAssistantUsage([
+				createMessageEntry(createUserMessage("user")),
+				createMessageEntry(assistant),
+				createMessageEntry(createAssistantMessage("partial", createMockUsage(0, 0))),
+			]),
+		).toBe(usage);
 		expect(estimateContextTokens([createUserMessage("no usage")]).lastUsageIndex).toBeNull();
 		expect(estimateContextTokens([assistant, createUserMessage("tail")])).toMatchObject({
 			usageTokens: 20,
 			lastUsageIndex: 0,
 		});
+		const estimate = estimateContextTokens([
+			createUserMessage("Hello"),
+			assistant,
+			createUserMessage("continue"),
+			createAssistantMessage("Partial thinking", createMockUsage(0, 0)),
+		]);
+		expect(estimate.usageTokens).toBe(20);
+		expect(estimate.lastUsageIndex).toBe(1);
+		expect(estimate.trailingTokens).toBeGreaterThan(0);
+		expect(estimate.tokens).toBe(20 + estimate.trailingTokens);
 	});
 
 	it("builds session context with a compaction entry", () => {
@@ -324,6 +369,30 @@ describe("harness compaction", () => {
 		const loaded = buildSessionContext([u1, a1, u2, a2, compaction, u3, a3]);
 		expect(loaded.messages).toHaveLength(5);
 		expect(loaded.messages[0]?.role).toBe("compactionSummary");
+	});
+
+	it("does not duplicate older compaction summaries in the active context", () => {
+		const user = createMessageEntry(createUserMessage("kept"));
+		const first = createCompactionEntry("first summary", user.id);
+		const followUp = createMessageEntry(createUserMessage("new work"));
+		const second = createCompactionEntry("second summary", user.id);
+
+		const loaded = buildSessionContext([user, first, followUp, second]);
+		expect(loaded.messages.filter((message) => message.role === "compactionSummary")).toHaveLength(1);
+		expect(loaded.messages[0]).toMatchObject({ role: "compactionSummary", summary: "second summary" });
+	});
+
+	it("preserves pre-compaction messages when a persisted boundary is corrupt", () => {
+		const user = createMessageEntry(createUserMessage("must survive"));
+		const compaction = createCompactionEntry("summary", "missing-entry");
+
+		const loaded = buildSessionContext([user, compaction]);
+		expect(loaded.messages.map((message) => message.role)).toEqual(["compactionSummary", "user"]);
+		const preserved = loaded.messages.find((message) => message.role === "user");
+		expect(preserved?.role).toBe("user");
+		if (preserved?.role === "user") {
+			expect(preserved.content).toEqual([{ type: "text", text: "must survive" }]);
+		}
 	});
 
 	it("tracks model and thinking level changes in built context", () => {
@@ -531,6 +600,45 @@ describe("harness compaction", () => {
 		expect(promptText).toContain("Additional focus: focus");
 	});
 
+	it("bounds carried summaries and custom instructions without carrying file metadata", async () => {
+		const messages: AgentMessage[] = [createUserMessage(`conversation:${"z".repeat(100_000)}`)];
+		let promptText = "";
+		let systemPrompt = "";
+		const { faux, model } = createFauxModel(false);
+		model.contextWindow = 8_192;
+		faux.setResponses([
+			(context) => {
+				systemPrompt = context.systemPrompt ?? "";
+				const message = context.messages[0];
+				const content = message?.role === "user" ? message.content : [];
+				promptText = Array.isArray(content) && content[0]?.type === "text" ? content[0].text : "";
+				return fauxAssistantMessage("## Goal\nBounded summary");
+			},
+		]);
+
+		getOrThrow(
+			await generateSummary(
+				messages,
+				model,
+				2000,
+				"test-key",
+				undefined,
+				undefined,
+				`focus:${"y".repeat(10_000)}`,
+				`old:${"x".repeat(20_000)}\n<read-files>\nold.txt\n</read-files>`,
+			),
+		);
+
+		const previousBlock = /<previous-summary>\n([\s\S]*?)\n<\/previous-summary>/.exec(promptText)?.[1] ?? "";
+		const customBlock = promptText.slice(promptText.indexOf("Additional focus: ") + "Additional focus: ".length);
+		expect(previousBlock.length).toBeLessThanOrEqual(12_000);
+		expect(customBlock.length).toBeLessThanOrEqual(4_000);
+		expect(promptText.length).toBeLessThanOrEqual(model.contextWindow * 4);
+		expect(promptText).not.toContain("z".repeat(50_000));
+		expect(previousBlock).not.toContain("old.txt");
+		expect(systemPrompt).toContain("untrusted data");
+	});
+
 	it("returns error results for failed or aborted summary generations", async () => {
 		const messages: AgentMessage[] = [createUserMessage("Summarize this.")];
 		const { faux: errorFaux, model: errorModel } = createFauxModel(false);
@@ -545,6 +653,23 @@ describe("harness compaction", () => {
 		abortedFaux.setResponses([fauxAssistantMessage("", { stopReason: "aborted", errorMessage: "stopped" })]);
 		const abortedResult = await generateSummary(messages, abortedModel, 2000, "test-key");
 		expect(abortedResult).toMatchObject({ ok: false, error: { code: "aborted", message: "stopped" } });
+
+		const { faux: lengthFaux, model: lengthModel } = createFauxModel(false);
+		lengthFaux.setResponses([fauxAssistantMessage("partial", { stopReason: "length" })]);
+		expect(await generateSummary(messages, lengthModel, 2000, "test-key")).toMatchObject({
+			ok: false,
+			error: {
+				code: "summarization_failed",
+				message: "Summarization failed: incomplete model response (length)",
+			},
+		});
+
+		const { faux: emptyFaux, model: emptyModel } = createFauxModel(false);
+		emptyFaux.setResponses([fauxAssistantMessage({ type: "thinking", thinking: "reasoning only" })]);
+		expect(await generateSummary(messages, emptyModel, 2000, "test-key")).toMatchObject({
+			ok: false,
+			error: { code: "summarization_failed", message: "Summarization failed: model returned no text" },
+		});
 	});
 
 	it("clamps compaction summary maxTokens to the model output cap", async () => {
@@ -601,6 +726,13 @@ describe("harness compaction", () => {
 			"test-key",
 		);
 		expect(invalidResult).toMatchObject({ ok: false, error: { code: "invalid_session" } });
+
+		const noOpResult = await compact(
+			{ ...preparation, messagesToSummarize: [], firstKeptEntryId: "entry-keep" },
+			invalidModel,
+			"test-key",
+		);
+		expect(noOpResult).toMatchObject({ ok: false, error: { code: "unknown", message: "Nothing to compact" } });
 	});
 
 	it("passes reasoning through turn-prefix summaries when enabled", async () => {
@@ -664,7 +796,9 @@ describe("harness compaction", () => {
 		const a1 = createMessageEntry(assistantMessage, u1.id);
 		const u2 = createMessageEntry(createUserMessage("continue"), a1.id);
 		const a2 = createMessageEntry(createAssistantMessage("done", createMockUsage(4000, 500)), u2.id);
-		const preparation = getOrThrow(prepareCompaction([u1, a1, u2, a2], DEFAULT_COMPACTION_SETTINGS));
+		const preparation = getOrThrow(
+			prepareCompaction([u1, a1, u2, a2], { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 2 }),
+		);
 		expect(preparation).toBeDefined();
 		const { faux, model } = createFauxModel(false);
 		faux.setResponses([fauxAssistantMessage("## Goal\nTest summary")]);

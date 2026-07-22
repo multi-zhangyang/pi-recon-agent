@@ -17,8 +17,8 @@ import {
 } from "@pi-recon/repi-tui";
 import { CONFIG_DIR_NAME } from "../../../config.ts";
 import type { PathMetadata, ResolvedPaths, ResolvedResource } from "../../../core/package-manager.ts";
+import { theme } from "../../../core/presentation/theme-runtime.ts";
 import type { PackageSource, SettingsManager } from "../../../core/settings-manager.ts";
-import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { rawKeyHint } from "./keybinding-hints.ts";
 

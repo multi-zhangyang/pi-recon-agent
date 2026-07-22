@@ -13,6 +13,7 @@
 
 import * as crypto from "node:crypto";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
+import { headlessTheme } from "../../core/extensions/headless-theme.ts";
 import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
@@ -25,8 +26,8 @@ import {
 	waitForRawStdoutBackpressure,
 	writeRawStdout,
 } from "../../core/output-guard.ts";
+import type { Theme } from "../../core/presentation/theme-runtime.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
-import { type Theme, theme } from "../interactive/theme/theme.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
 import type {
 	RpcCommand,
@@ -36,6 +37,15 @@ import type {
 	RpcSessionState,
 	RpcSlashCommand,
 } from "./rpc-types.ts";
+
+const DEFAULT_RPC_EOF_DRAIN_TIMEOUT_MS = 210_000;
+
+function rpcEofDrainTimeoutMs(): number {
+	const raw = process.env.REPI_RPC_EOF_DRAIN_TIMEOUT_MS;
+	if (!raw) return DEFAULT_RPC_EOF_DRAIN_TIMEOUT_MS;
+	const parsed = Number(raw);
+	return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_RPC_EOF_DRAIN_TIMEOUT_MS;
+}
 
 // Re-export types for consumers
 export type {
@@ -282,7 +292,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		},
 
 		get theme() {
-			return theme;
+			return headlessTheme;
 		},
 
 		getAllThemes() {
@@ -343,7 +353,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				uiContext: createExtensionUIContext(),
 				mode: "rpc",
 				commandContextActions: {
-					waitForIdle: () => session.agent.waitForIdle(),
+					waitForIdle: () => session.waitForIdle(),
 					newSession: async (options) => runtimeHost.newSession(options),
 					fork: async (entryId, forkOptions) => {
 						const result = await runtimeHost.fork(entryId, forkOptions);
@@ -380,6 +390,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		} finally {
 			unsubscribe = session.subscribe((event) => {
 				output(event);
+				if (event.type === "agent_settled") {
+					void checkShutdownRequested();
+				}
 			});
 			unsubscribeBackpressure = session.agent.subscribe(async () => {
 				await waitForRawStdoutBackpressure();
@@ -462,9 +475,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			case "new_session": {
 				const options = command.parentSession ? { parentSession: command.parentSession } : undefined;
 				const result = await runtimeHost.newSession(options);
-				if (!result.cancelled) {
-					await rebindSession();
-				}
 				return success(id, "new_session", result);
 			}
 
@@ -608,17 +618,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 			case "switch_session": {
 				const result = await runtimeHost.switchSession(command.sessionPath);
-				if (!result.cancelled) {
-					await rebindSession();
-				}
 				return success(id, "switch_session", result);
 			}
 
 			case "fork": {
 				const result = await runtimeHost.fork(command.entryId);
-				if (!result.cancelled) {
-					await rebindSession();
-				}
 				return success(id, "fork", { text: result.selectedText, cancelled: result.cancelled });
 			}
 
@@ -628,15 +632,30 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 					return error(id, "clone", "Cannot clone session: no current entry selected");
 				}
 				const result = await runtimeHost.fork(leafId, { position: "at" });
-				if (!result.cancelled) {
-					await rebindSession();
-				}
 				return success(id, "clone", { cancelled: result.cancelled });
 			}
 
 			case "get_fork_messages": {
 				const messages = session.getUserMessagesForForking();
 				return success(id, "get_fork_messages", { messages });
+			}
+
+			case "get_entries": {
+				const sessionManager = session.sessionManager;
+				let entries = sessionManager.getEntries();
+				if (command.since !== undefined) {
+					const sinceIndex = entries.findIndex((entry) => entry.id === command.since);
+					if (sinceIndex === -1) {
+						return error(id, "get_entries", `Entry not found: ${command.since}`);
+					}
+					entries = entries.slice(sinceIndex + 1);
+				}
+				return success(id, "get_entries", { entries, leafId: sessionManager.getLeafId() });
+			}
+
+			case "get_tree": {
+				const sessionManager = session.sessionManager;
+				return success(id, "get_tree", { tree: sessionManager.getTree(), leafId: sessionManager.getLeafId() });
 			}
 
 			case "get_last_assistant_text": {
@@ -861,14 +880,47 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		await runCommand(command);
 	};
 
+	const pendingInputLines = new Set<Promise<void>>();
+	const handleTrackedInputLine = (line: string): void => {
+		const pending = handleInputLine(line).finally(() => {
+			pendingInputLines.delete(pending);
+		});
+		pendingInputLines.add(pending);
+	};
+
 	const onInputEnd = () => {
-		void shutdown();
+		void (async () => {
+			// The JSONL reader dispatches lines without awaiting them. Let every
+			// accepted line enqueue its work, then drain the serialized replacement
+			// chain before disposing the runtime and closing stdout.
+			await Promise.allSettled([...pendingInputLines]);
+			await cmdChain;
+			const drainTimeoutMs = rpcEofDrainTimeoutMs();
+			let drainTimer: ReturnType<typeof setTimeout> | undefined;
+			const timedOut = await Promise.race([
+				session.waitForIdle().then(
+					() => false,
+					() => false,
+				),
+				new Promise<true>((resolve) => {
+					drainTimer = setTimeout(() => resolve(true), drainTimeoutMs);
+				}),
+			]);
+			if (drainTimer) clearTimeout(drainTimer);
+			if (timedOut) {
+				process.stderr.write(`RPC EOF drain timed out after ${drainTimeoutMs}ms; aborting the active session.\n`);
+				// abort() signals the provider synchronously before its first await.
+				// Do not await an already-stalled stream during forced shutdown.
+				void session.abort().catch(() => {});
+			}
+			await shutdown();
+		})();
 	};
 	process.stdin.on("end", onInputEnd);
 
 	detachInput = (() => {
 		const detachJsonl = attachJsonlLineReader(process.stdin, (line) => {
-			void handleInputLine(line);
+			handleTrackedInputLine(line);
 		});
 		return () => {
 			detachJsonl();

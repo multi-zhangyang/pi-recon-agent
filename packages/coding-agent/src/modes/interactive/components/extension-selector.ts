@@ -4,7 +4,7 @@
  */
 
 import { Container, getKeybindings, Spacer, Text, type TUI } from "@pi-recon/repi-tui";
-import { theme } from "../theme/theme.ts";
+import { theme } from "../../../core/presentation/theme-runtime.ts";
 import { CountdownTimer } from "./countdown-timer.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint, rawKeyHint } from "./keybinding-hints.ts";

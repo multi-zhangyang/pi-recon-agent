@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { chmodSync, closeSync, openSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, mkdirSync, openSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { chmod, open as fsOpen, writeFile as fsWriteFile, lstat, realpath, rename, stat, unlink } from "fs/promises";
 
@@ -156,10 +156,12 @@ export async function atomicWriteFile(absolutePath: string, content: string): Pr
  * change and concurrently read by getRun/listRuns). For file edits/writes prefer
  * the async atomicWriteFile (symlink-aware). No symlink handling here:
  * temp+rename over a symlink would replace the link entry, so callers must pass
- * a real-file path.
+ * a real-file path. State writers may target a lazily materialized feature
+ * directory, so this sync variant creates a missing parent with private mode.
  */
 export function atomicWriteFileSync(absolutePath: string, content: string, mode = 0o600): void {
 	const dir = dirname(absolutePath);
+	mkdirSync(dir, { recursive: true, mode: 0o700 });
 	const tempPath = join(
 		dir,
 		`.${basename(absolutePath)}.${process.pid}.${Date.now()}.${randomBytes(4).toString("hex")}.tmp`,

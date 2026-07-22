@@ -68,6 +68,8 @@ Templates support positional arguments and simple slicing:
 
 - `$1`, `$2`, ... positional args
 - `$@` or `$ARGUMENTS` for all args joined
+- `${N:-default}` for positional arg `N`, using `default` when missing or empty
+- `${@:-default}` or `${ARGUMENTS:-default}` for all args, using `default` when empty
 - `${@:N}` for args from the Nth position (1-indexed)
 - `${@:N:L}` for `L` args starting at N
 

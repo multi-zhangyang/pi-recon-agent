@@ -353,6 +353,19 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("cache miss notices", () => {
+		it("defaults to disabled and persists an explicit opt-in", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getShowCacheMissNotices()).toBe(false);
+
+			manager.setShowCacheMissNotices(true);
+			await manager.flush();
+
+			const reloaded = SettingsManager.create(projectDir, agentDir);
+			expect(reloaded.getShowCacheMissNotices()).toBe(true);
+		});
+	});
+
 	describe("getSessionDir", () => {
 		it("should return undefined when not set", () => {
 			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ theme: "dark" }));
@@ -377,6 +390,32 @@ describe("SettingsManager", () => {
 			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ sessionDir: "~/sessions" }));
 			const manager = SettingsManager.create(projectDir, agentDir);
 			expect(manager.getSessionDir()).toBe(join(homedir(), "sessions"));
+		});
+	});
+
+	describe("getShellPath", () => {
+		it("should return undefined when not set", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ theme: "dark" }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getShellPath()).toBeUndefined();
+		});
+
+		it("should preserve an absolute shell path", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ shellPath: "/bin/zsh" }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getShellPath()).toBe("/bin/zsh");
+		});
+
+		it("should expand a leading ~ in shellPath", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ shellPath: "~/.local/bin/repi-shell" }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getShellPath()).toBe(join(homedir(), ".local/bin/repi-shell"));
+		});
+
+		it("should expand a bare ~ in shellPath", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ shellPath: "~" }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getShellPath()).toBe(homedir());
 		});
 	});
 

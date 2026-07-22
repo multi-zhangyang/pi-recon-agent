@@ -1,4 +1,4 @@
-import { clearApiProviders, registerApiProvider } from "../api-registry.ts";
+import { type ApiProvider, clearApiProviders, registerFallbackApiProvider } from "../api-registry.ts";
 import type {
 	Api,
 	AssistantMessage,
@@ -361,57 +361,64 @@ export const streamOpenAIResponses = createLazyStream(loadOpenAIResponsesProvide
 export const streamSimpleOpenAIResponses = createLazySimpleStream(loadOpenAIResponsesProviderModule);
 const streamBedrockLazy = createLazyStream(loadBedrockProviderModule);
 const streamSimpleBedrockLazy = createLazySimpleStream(loadBedrockProviderModule);
+const BUILT_IN_API_PROVIDER_SOURCE = "pi-ai:built-in";
+
+function registerBuiltInApiProvider<TApi extends Api, TOptions extends StreamOptions>(
+	provider: ApiProvider<TApi, TOptions>,
+): void {
+	registerFallbackApiProvider(provider, BUILT_IN_API_PROVIDER_SOURCE);
+}
 
 export function registerBuiltInApiProviders(): void {
-	registerApiProvider({
+	registerBuiltInApiProvider({
 		api: "anthropic-messages",
 		stream: streamAnthropic,
 		streamSimple: streamSimpleAnthropic,
 	});
 
-	registerApiProvider({
+	registerBuiltInApiProvider({
 		api: "openai-completions",
 		stream: streamOpenAICompletions,
 		streamSimple: streamSimpleOpenAICompletions,
 	});
 
-	registerApiProvider({
+	registerBuiltInApiProvider({
 		api: "mistral-conversations",
 		stream: streamMistral,
 		streamSimple: streamSimpleMistral,
 	});
 
-	registerApiProvider({
+	registerBuiltInApiProvider({
 		api: "openai-responses",
 		stream: streamOpenAIResponses,
 		streamSimple: streamSimpleOpenAIResponses,
 	});
 
-	registerApiProvider({
+	registerBuiltInApiProvider({
 		api: "azure-openai-responses",
 		stream: streamAzureOpenAIResponses,
 		streamSimple: streamSimpleAzureOpenAIResponses,
 	});
 
-	registerApiProvider({
+	registerBuiltInApiProvider({
 		api: "openai-codex-responses",
 		stream: streamOpenAICodexResponses,
 		streamSimple: streamSimpleOpenAICodexResponses,
 	});
 
-	registerApiProvider({
+	registerBuiltInApiProvider({
 		api: "google-generative-ai",
 		stream: streamGoogle,
 		streamSimple: streamSimpleGoogle,
 	});
 
-	registerApiProvider({
+	registerBuiltInApiProvider({
 		api: "google-vertex",
 		stream: streamGoogleVertex,
 		streamSimple: streamSimpleGoogleVertex,
 	});
 
-	registerApiProvider({
+	registerBuiltInApiProvider({
 		api: "bedrock-converse-stream",
 		stream: streamBedrockLazy,
 		streamSimple: streamSimpleBedrockLazy,

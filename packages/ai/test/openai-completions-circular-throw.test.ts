@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.ts";
 import { streamSimple } from "../src/stream.ts";
+import { registerOpenAIFixtures } from "./model-fixtures.ts";
+
+registerOpenAIFixtures();
 
 // opt #130: provider stream IIFEs catch errors and push an "error" event with
 // `errorMessage`. The non-`Error` branch used bare `JSON.stringify(error)`.
@@ -56,7 +59,7 @@ describe("openai-completions catch-block circular-throw safety", () => {
 			return { default: FakeOpenAI };
 		});
 
-		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const { compat: _compat, ...baseModel } = getModel<"openai-responses">("openai", "gpt-4o-mini")!;
 		const model = { ...baseModel, api: "openai-completions" } as const;
 
 		const result = await streamSimple(

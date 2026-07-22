@@ -3,12 +3,12 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
 import type { CompactionSettings } from "../src/core/compaction/index.ts";
 import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provider.ts";
+import { initTheme } from "../src/core/presentation/theme-runtime.ts";
 import {
 	FooterComponent,
 	formatCwdForFooter,
 	shouldShowProviderInFooter,
 } from "../src/modes/interactive/components/footer.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 type AssistantUsage = {

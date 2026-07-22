@@ -22,11 +22,13 @@ type MissionReport = {
 	ok?: boolean;
 	mission?: {
 		status?: string;
+		scope?: string;
 		task: string;
 		target: string;
 		summary?: string;
-		route?: { id: string; domain: string };
-		lanes?: Array<{ id: string }>;
+		route?: { id: string; domain: string; intent?: string; toolchain?: string; skillHint?: string };
+		lanes?: Array<{ id: string; name?: string; status?: string }>;
+		checkpoints?: Array<{ name: string; status: string }>;
 		starterCommands?: string[];
 	};
 	task?: string;
@@ -75,6 +77,15 @@ describe("repi-mission argument parsing", () => {
 			route: { id: "native-pwn" },
 		});
 		expect(report.mission?.lanes?.map((lane) => lane.id)).toEqual(["mitigations", "primitive", "exploit", "verify"]);
+		expect(report.mission?.scope).toMatch(/^cwd:[a-f0-9]{16}$/);
+		expect(report.mission?.route).toMatchObject({
+			domain: "Pwn / exploit",
+			intent: expect.any(String),
+			toolchain: expect.any(String),
+			skillHint: "native",
+		});
+		expect(report.mission?.lanes?.[0]).toMatchObject({ name: "mitigations", status: "in_progress" });
+		expect(report.mission?.checkpoints?.some((checkpoint) => checkpoint.name === "passive_map_done")).toBe(true);
 		expect(report.mission?.starterCommands?.some((command) => command.includes("checksec"))).toBe(true);
 	});
 

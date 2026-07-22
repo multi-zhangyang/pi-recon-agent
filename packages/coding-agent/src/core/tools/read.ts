@@ -6,12 +6,13 @@ import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile, stat as fsStat } from "fs/promises";
 import { type Static, Type } from "typebox";
 import { getReadmePath } from "../../config.ts";
-import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.ts";
-import { getLanguageFromPath, highlightCode, type Theme } from "../../modes/interactive/theme/theme.ts";
 import { formatDimensionNote, resizeImage } from "../../utils/image-resize.ts";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.ts";
 import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
+import { keyText, themedKeyHint } from "../presentation/keybinding-hints.ts";
+import { getLanguageFromPath, highlightCode } from "../presentation/syntax-highlight.ts";
+import type { Theme } from "../presentation/theme.ts";
 import { resolveReadPathAsync, resolveToCwd } from "./path-utils.ts";
 import { getTextOutput, renderToolPath, replaceTabs, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -131,6 +132,18 @@ export interface ReadToolOptions {
 
 type ReadRenderArgs = { path?: string; file_path?: string; offset?: number; limit?: number };
 
+function readProbeCovers(cwd: string, previous: ReadToolInput, next: ReadToolInput): boolean {
+	if (previous.limit === undefined || next.limit === undefined) return false;
+	if (previous.limit < 1 || next.limit < 1) return false;
+	const previousStart = previous.offset ?? 1;
+	const nextStart = next.offset ?? 1;
+	if (previousStart < 1 || nextStart < 1) return false;
+	if (resolveToCwd(previous.path, cwd) !== resolveToCwd(next.path, cwd)) return false;
+	const previousEnd = previousStart + previous.limit - 1;
+	const nextEnd = nextStart + next.limit - 1;
+	return previousStart <= nextStart && previousEnd >= nextEnd;
+}
+
 function formatReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): string {
 	if (args?.offset === undefined && args?.limit === undefined) return "";
 	const startLine = args.offset ?? 1;
@@ -243,15 +256,15 @@ function formatReadResult(
 
 	const rawPath = str(args?.file_path ?? args?.path);
 	const output = getTextOutput(result, showImages);
-	const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
-	const renderedLines = lang ? highlightCode(replaceTabs(output), lang) : output.split("\n");
+	const lang = !isError && rawPath ? getLanguageFromPath(rawPath) : undefined;
+	const renderedLines = lang ? highlightCode(replaceTabs(output), theme, lang) : output.split("\n");
 	const lines = trimTrailingEmptyLines(renderedLines);
 	const maxLines = options.expanded ? lines.length : 10;
 	const displayLines = lines.slice(0, maxLines);
 	const remaining = lines.length - maxLines;
 	let text = `\n${displayLines.map((line) => (lang ? replaceTabs(line) : theme.fg("toolOutput", replaceTabs(line)))).join("\n")}`;
 	if (remaining > 0) {
-		text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+		text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${themedKeyHint(theme, "app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 	}
 
 	const truncation = result.details?.truncation;
@@ -278,7 +291,12 @@ export function createReadToolDefinition(
 		label: "read",
 		description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
 		promptSnippet: "Read file contents",
-		promptGuidelines: ["Use read to examine files instead of cat or sed."],
+		promptGuidelines: [
+			"Use read to examine files instead of cat or sed.",
+			"Batch independent read-only probes in one turn and do not repeat identical probes unless state changed.",
+		],
+		readOnly: true,
+		readOnlyProbeCovers: (previous, next) => readProbeCovers(cwd, previous, next),
 		parameters: readSchema,
 		async execute(
 			_toolCallId,

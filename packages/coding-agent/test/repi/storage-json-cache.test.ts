@@ -24,12 +24,11 @@ const { mkdirSync, rmSync, writeFileSync } = await import("node:fs");
 const { readJsonObjectFileCached } = await import("../../src/core/repi/storage.ts");
 
 // readJsonObjectFileCached is the mtime+size-keyed cache of readJsonObjectFile.
-// repiMemorySettings reads settings.json 3x per tool result; the cache pays one
-// stat(2) per call and only re-reads+re-parses when the file changes. The
-// load-bearing behaviors: (1) returns the parsed value, (2) picks up changes
-// (mtime+size invalidation — does NOT cache forever), (3) undefined on
-// missing/invalid-JSON, (4) invalid JSON is not cached so a subsequent valid
-// write is observed.
+// Repeated mission reads pay one stat(2) per call and only re-read+re-parse when
+// the file changes. The load-bearing behaviors: (1) returns the parsed value,
+// (2) picks up changes (mtime+size invalidation — does NOT cache forever),
+// (3) undefined on missing/invalid JSON, (4) invalid JSON is not cached so a
+// subsequent valid write is observed.
 
 describe("repi/storage readJsonObjectFileCached", () => {
 	let tempDir: string;
@@ -45,10 +44,10 @@ describe("repi/storage readJsonObjectFileCached", () => {
 
 	it("returns the parsed object and matches a fresh read", () => {
 		const path = join(tempDir, "settings.json");
-		writeFileSync(path, JSON.stringify({ memory: { mode: "global" }, n: 1 }));
-		expect(readJsonObjectFileCached<Record<string, unknown>>(path)).toEqual({ memory: { mode: "global" }, n: 1 });
+		writeFileSync(path, JSON.stringify({ ui: { density: "compact" }, n: 1 }));
+		expect(readJsonObjectFileCached<Record<string, unknown>>(path)).toEqual({ ui: { density: "compact" }, n: 1 });
 		// second call returns the same value (cache hit path)
-		expect(readJsonObjectFileCached<Record<string, unknown>>(path)).toEqual({ memory: { mode: "global" }, n: 1 });
+		expect(readJsonObjectFileCached<Record<string, unknown>>(path)).toEqual({ ui: { density: "compact" }, n: 1 });
 	});
 
 	it("invalidates on file change (picks up a new write rather than returning the stale cached value)", async () => {
@@ -78,11 +77,9 @@ describe("repi/storage readJsonObjectFileCached", () => {
 	});
 
 	it("serves repeat reads from the cache (no readFileSync on a cache hit — regression: was read+parse per call)", () => {
-		// The win is on the hot path: repiMemorySettings reads settings.json 3x per
-		// tool result. A cache hit must skip readFileSync+JSON.parse entirely (one
-		// stat(2) only). The mocked readFileSync counter proves the second/third
-		// calls don't re-read, then a re-write (mtime change) proves invalidation
-		// re-reads exactly once more.
+		// A cache hit must skip readFileSync+JSON.parse entirely (one stat(2)
+		// only). The mocked readFileSync counter proves the second/third calls do
+		// not re-read.
 		const path = join(tempDir, "settings.json");
 		writeFileSync(path, JSON.stringify({ n: 1 }));
 		readFileSyncCalls.current = 0;

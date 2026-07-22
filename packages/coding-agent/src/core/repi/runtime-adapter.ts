@@ -79,6 +79,7 @@ export type RuntimeAdapterExecutionCheckV1 = {
 export type RuntimeAdapterExecutionArtifactV1 = {
 	kind: "RuntimeAdapterExecutionArtifactV1";
 	schemaVersion: 1;
+	missionId?: string;
 	adapterId: string;
 	domainId: string;
 	bridgeId: string;
@@ -176,7 +177,7 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 			},
 		],
 		artifactKinds: ["native-xref-json", "native-symbol-map", "binary-mitigation-map", "runtime-adapter-transcript"],
-		ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
+		ingestTargets: ["evidence-ledger"],
 		envRefs: ["REPI_RUNTIME_ADAPTER_TIMEOUT_MS", "REPI_RUNTIME_ADAPTER_WORKDIR"],
 		proofExitSignals: [
 			"symbol/import map",
@@ -228,7 +229,7 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 			"binary-mitigation-map",
 			"runtime-adapter-transcript",
 		],
-		ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
+		ingestTargets: ["evidence-ledger"],
 		envRefs: ["REPI_RUNTIME_ADAPTER_TIMEOUT_MS", "REPI_RUNTIME_ADAPTER_WORKDIR"],
 		proofExitSignals: [
 			"debugger runtime trace",
@@ -284,7 +285,7 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 			"binary-mitigation-map",
 			"runtime-adapter-transcript",
 		],
-		ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
+		ingestTargets: ["evidence-ledger"],
 		envRefs: ["REPI_GHIDRA_PROJECT_DIR", "REPI_GHIDRA_SCRIPT_DIR", "REPI_RUNTIME_ADAPTER_TIMEOUT_MS"],
 		proofExitSignals: ["decompiler summary", "function inventory", "import table proof", "binary mitigation map"],
 	},
@@ -321,7 +322,7 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 			},
 		],
 		artifactKinds: ["frida-hook-output-jsonl", "mobile-runtime-attach-manifest", "runtime-adapter-transcript"],
-		ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
+		ingestTargets: ["evidence-ledger"],
 		envRefs: ["REPI_FRIDA_DEVICE", "REPI_FRIDA_HOOK", "REPI_ANDROID_SERIAL", "REPI_RUNTIME_ADAPTER_TIMEOUT_MS"],
 		proofExitSignals: ["Java/ObjC/Swift hook", "runtime attach env checkpoint", "hook output artifact contract"],
 	},
@@ -478,7 +479,7 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 			"cdp-target-version",
 			"runtime-adapter-transcript",
 		],
-		ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
+		ingestTargets: ["evidence-ledger"],
 		envRefs: ["REPI_BROWSER_CDP_URL", "REPI_BROWSER_PROFILE_DIR", "REPI_RUNTIME_ADAPTER_TIMEOUT_MS"],
 		proofExitSignals: [
 			"HTTP/CDP response capture",
@@ -603,7 +604,7 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 			"binary-mitigation-map",
 			"runtime-adapter-transcript",
 		],
-		ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
+		ingestTargets: ["evidence-ledger"],
 		envRefs: ["REPI_EXPLOIT_VERIFY_RUNS", "REPI_RUNTIME_ADAPTER_TIMEOUT_MS"],
 		proofExitSignals: [
 			"crash-to-offset proof",
@@ -668,7 +669,7 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 			"pcap-dns-tls-timeline",
 			"runtime-adapter-transcript",
 		],
-		ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
+		ingestTargets: ["evidence-ledger"],
 		envRefs: ["REPI_RUNTIME_ADAPTER_TIMEOUT_MS"],
 		proofExitSignals: [
 			"flow conversation",
@@ -713,7 +714,7 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 			},
 		],
 		artifactKinds: ["firmware-signature-map", "rootfs-extraction-manifest", "runtime-adapter-transcript"],
-		ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
+		ingestTargets: ["evidence-ledger"],
 		envRefs: ["REPI_RUNTIME_ADAPTER_WORKDIR", "REPI_RUNTIME_ADAPTER_TIMEOUT_MS"],
 		proofExitSignals: ["filesystem extraction", "service map", "credential/config proof"],
 	},
@@ -747,7 +748,7 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 			},
 		],
 		artifactKinds: ["rootfs-service-map", "rootfs-config-credential-scan", "runtime-adapter-transcript"],
-		ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
+		ingestTargets: ["evidence-ledger"],
 		envRefs: ["REPI_RUNTIME_ADAPTER_TIMEOUT_MS", "REPI_RUNTIME_ADAPTER_WORKDIR"],
 		proofExitSignals: ["account database proof", "rootfs service map", "credential/config proof"],
 	},
@@ -1566,11 +1567,7 @@ export function buildRuntimeAdapterExecutionGate(
 				adapter.commandTemplate.includes("adapter-") && adapter.fallbackCommandTemplate.includes("fallback"),
 			parserReady:
 				adapter.parserRules.length >= 2 && adapter.parserRules.every((rule) => rule.id.startsWith("parser-")),
-			artifactIngestReady:
-				adapter.artifactKinds.length >= 2 &&
-				adapter.ingestTargets.includes("evidence-ledger") &&
-				adapter.ingestTargets.includes("knowledge-graph") &&
-				adapter.ingestTargets.includes("memory-event"),
+			artifactIngestReady: adapter.artifactKinds.length >= 2 && adapter.ingestTargets.includes("evidence-ledger"),
 			proofExitReady: adapter.proofExitSignals.length >= 2,
 			envRefOnly: adapter.envRefs.every((ref) => /^[A-Z][A-Z0-9_]+$/.test(ref) && !runtimeAdapterSecretLike(ref)),
 			nextRuntimeCommands: [
@@ -1628,7 +1625,7 @@ export function buildRuntimeAdapterExecutionGate(
 			"runtime_adapter_execution_check",
 			"adapter_runner_parser_ingest_contract",
 			"runner_output_parser_must_write_artifact",
-			"artifact_ingest_target_must_include_evidence_knowledge_memory",
+			"artifact_ingest_target_must_include_evidence",
 			"adapter_run_secret_literals_rejected",
 		],
 	};
@@ -1715,6 +1712,7 @@ export function formatRuntimeAdapterExecutionArtifact(
 		"runtime_adapter_run:",
 		"RuntimeAdapterExecutionArtifactV1: true",
 		path ? `artifact: ${path}` : undefined,
+		`mission_id: ${artifact.missionId ?? "none"}`,
 		`adapter: ${artifact.adapterId}`,
 		`domain: ${artifact.domainId}`,
 		`bridge: ${artifact.bridgeId}`,

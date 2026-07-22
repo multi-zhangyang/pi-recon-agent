@@ -116,6 +116,27 @@ describe("generateSummary reasoning options", () => {
 		expect(completeSimpleMock.mock.calls[0][2]).not.toHaveProperty("reasoning");
 	});
 
+	it("forwards provider-scoped env to summarization requests", async () => {
+		await generateSummary(
+			messages,
+			createModel(false),
+			2000,
+			undefined,
+			{ "x-auth": "projected" },
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			{ AWS_REGION: "us-test-1", GOOGLE_CLOUD_PROJECT: "runtime-project" },
+		);
+
+		expect(completeSimpleMock.mock.calls[0][2]).toMatchObject({
+			headers: { "x-auth": "projected" },
+			env: { AWS_REGION: "us-test-1", GOOGLE_CLOUD_PROJECT: "runtime-project" },
+		});
+	});
+
 	it("clamps compaction summary maxTokens to the model output cap", async () => {
 		const preparation: CompactionPreparation = {
 			firstKeptEntryId: "entry-keep",

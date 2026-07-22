@@ -1,7 +1,7 @@
 import type { TUI } from "@pi-recon/repi-tui";
 import { beforeAll, describe, expect, it } from "vitest";
+import { initTheme } from "../src/core/presentation/theme-runtime.ts";
 import { LoginDialogComponent } from "../src/modes/interactive/components/login-dialog.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 // opt #125 — showPrompt/showManualInput return Promises that settle only on
 // onSubmit/Escape-cancel. If the dialog is torn down (session switch / rewind /

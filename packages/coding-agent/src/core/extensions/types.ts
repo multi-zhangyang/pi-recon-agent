@@ -24,6 +24,8 @@ import type {
 	Model,
 	OAuthCredentials,
 	OAuthLoginCallbacks,
+	Provider,
+	ProviderHeaders,
 	SimpleStreamOptions,
 	TextContent,
 	ToolResultMessage,
@@ -40,7 +42,6 @@ import type {
 	TUI,
 } from "@pi-recon/repi-tui";
 import type { Static, TSchema } from "typebox";
-import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { BashResult } from "../bash-executor.ts";
 import type { CompactionPreparation, CompactionResult } from "../compaction/index.ts";
 import type { EventBus } from "../event-bus.ts";
@@ -49,6 +50,7 @@ import type { ReadonlyFooterDataProvider } from "../footer-data-provider.ts";
 import type { KeybindingsManager } from "../keybindings.ts";
 import type { CustomMessage } from "../messages.ts";
 import type { ModelRegistry } from "../model-registry.ts";
+import type { Theme } from "../presentation/theme.ts";
 import type {
 	BranchSummaryEntry,
 	CompactionEntry,
@@ -219,7 +221,7 @@ export interface ExtensionUIContext {
 	/** Show a multi-line editor for text editing. */
 	editor(title: string, prefill?: string): Promise<string | undefined>;
 
-	/** Stack additional autocomplete behavior on top of the built-in provider. */
+	/** Stack additional autocomplete behavior on top of the active provider. */
 	addAutocompleteProvider(factory: AutocompleteProviderFactory): void;
 
 	/**
@@ -463,6 +465,18 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	 */
 	executionMode?: ToolExecutionMode;
 
+	/**
+	 * Declares an observation-only tool. Identical successful calls may be
+	 * deduplicated within one agent run until a non-read-only call occurs.
+	 */
+	readOnly?: boolean;
+	/**
+	 * Return true only when a successful previous read-only invocation fully
+	 * covers the observations requested by the next invocation. Probe history is
+	 * invalidated whenever a mutating or unknown tool runs.
+	 */
+	readOnlyProbeCovers?(previous: Static<TParams>, next: Static<TParams>): boolean;
+
 	/** Execute the tool. */
 	execute(
 		toolCallId: string,
@@ -654,6 +668,11 @@ export interface AgentStartEvent {
 export interface AgentEndEvent {
 	type: "agent_end";
 	messages: AgentMessage[];
+}
+
+/** Fired after an agent run has fully settled and no automatic retry, compaction, or queued continuation will run. */
+export interface AgentSettledEvent {
+	type: "agent_settled";
 }
 
 /** Fired at the start of each turn */
@@ -970,6 +989,7 @@ export type ExtensionEvent =
 	| BeforeAgentStartEvent
 	| AgentStartEvent
 	| AgentEndEvent
+	| AgentSettledEvent
 	| TurnStartEvent
 	| TurnEndEvent
 	| MessageStartEvent
@@ -1124,6 +1144,7 @@ export interface ExtensionAPI {
 	on(event: "before_agent_start", handler: ExtensionHandler<BeforeAgentStartEvent, BeforeAgentStartEventResult>): void;
 	on(event: "agent_start", handler: ExtensionHandler<AgentStartEvent>): void;
 	on(event: "agent_end", handler: ExtensionHandler<AgentEndEvent>): void;
+	on(event: "agent_settled", handler: ExtensionHandler<AgentSettledEvent>): void;
 	on(event: "turn_start", handler: ExtensionHandler<TurnStartEvent>): void;
 	on(event: "turn_end", handler: ExtensionHandler<TurnEndEvent>): void;
 	on(event: "message_start", handler: ExtensionHandler<MessageStartEvent>): void;
@@ -1303,13 +1324,16 @@ export interface ExtensionAPI {
 	 *   }
 	 * });
 	 */
+	/** Register a complete pi-ai provider without mutating the global API registry. */
+	registerProvider(provider: Provider): void;
+	/** Legacy provider-config overload retained for extension compatibility. */
 	registerProvider(name: string, config: ProviderConfig): void;
 
 	/**
 	 * Unregister a previously registered provider.
 	 *
 	 * Removes all models belonging to the named provider and restores any
-	 * built-in models that were overridden by it. Has no effect if the provider
+	 * models supplied by lower runtime layers. Has no effect if the provider
 	 * is not currently registered.
 	 *
 	 * Like `registerProvider`, this takes effect immediately when called after
@@ -1341,7 +1365,7 @@ export interface ProviderConfig {
 	/** Optional streamSimple handler for custom APIs. */
 	streamSimple?: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
 	/** Custom headers to include in requests. */
-	headers?: Record<string, string>;
+	headers?: ProviderHeaders;
 	/** If true, adds Authorization: Bearer header with the resolved API key. */
 	authHeader?: boolean;
 	/** Models to register. If provided, replaces all existing models for this provider. */
@@ -1384,7 +1408,7 @@ export interface ProviderModelConfig {
 	/** Maximum output tokens. */
 	maxTokens: number;
 	/** Custom headers for this model. */
-	headers?: Record<string, string>;
+	headers?: ProviderHeaders;
 	/** OpenAI compatibility settings. */
 	compat?: Model<Api>["compat"];
 }
@@ -1463,8 +1487,23 @@ export type SetLabelHandler = (entryId: string, label: string | undefined) => vo
  */
 export interface ExtensionRuntimeState {
 	flagValues: Map<string, boolean | string>;
-	/** Provider registrations queued during extension loading, processed when runner binds */
-	pendingProviderRegistrations: Array<{ name: string; config: ProviderConfig; extensionPath: string }>;
+	/** Legacy provider-config registrations queued during extension loading, processed when runner binds. */
+	pendingProviderRegistrations: Array<{
+		name: string;
+		config: ProviderConfig;
+		extensionPath: string;
+		order: number;
+		preApplied?: boolean;
+	}>;
+	/** Native pi-ai Provider registrations queued during extension loading, processed when runner binds. */
+	pendingNativeProviderRegistrations: Array<{
+		provider: Provider;
+		extensionPath: string;
+		order: number;
+		preApplied?: boolean;
+	}>;
+	/** Monotonic ordering shared by both pending provider registration forms. */
+	nextProviderRegistrationOrder: number;
 	/** Throws when this extension instance is stale after runtime replacement. */
 	assertActive: () => void;
 	/** Marks this extension instance as stale after runtime replacement or reload. */
@@ -1476,6 +1515,7 @@ export interface ExtensionRuntimeState {
 	 * After bindCore(): calls ModelRegistry directly for immediate effect.
 	 */
 	registerProvider: (name: string, config: ProviderConfig, extensionPath?: string) => void;
+	registerNativeProvider: (provider: Provider, extensionPath?: string) => void;
 	unregisterProvider: (name: string, extensionPath?: string) => void;
 }
 

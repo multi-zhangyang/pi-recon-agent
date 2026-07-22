@@ -88,10 +88,11 @@ describe("config value env var syntax migration", () => {
 									id: "model-a",
 									headers: { "x-model-key": "MODEL_API_KEY" },
 								},
+								{
+									id: "model-b",
+									headers: { "x-override-key": "OVERRIDE_API_KEY" },
+								},
 							],
-							modelOverrides: {
-								"model-b": { headers: { "x-override-key": "OVERRIDE_API_KEY" } },
-							},
 						},
 					},
 				},
@@ -111,7 +112,6 @@ describe("config value env var syntax migration", () => {
 					apiKey?: string;
 					headers?: Record<string, string>;
 					models?: Array<{ headers?: Record<string, string> }>;
-					modelOverrides?: Record<string, { headers?: Record<string, string> }>;
 				}
 			>;
 		};
@@ -120,7 +120,7 @@ describe("config value env var syntax migration", () => {
 		expect(provider.headers?.["x-api-key"]).toBe("$HEADER_API_KEY");
 		expect(provider.headers?.["x-literal"]).toBe("literal");
 		expect(provider.models?.[0]?.headers?.["x-model-key"]).toBe("$MODEL_API_KEY");
-		expect(provider.modelOverrides?.["model-b"]?.headers?.["x-override-key"]).toBe("$OVERRIDE_API_KEY");
+		expect(provider.models?.[1]?.headers?.["x-override-key"]).toBe("$OVERRIDE_API_KEY");
 		const logMessage = String(logSpy.mock.calls[0]?.[0] ?? "");
 		expect(logMessage).toContain(
 			'models.json.providers["custom-provider"].apiKey: CUSTOM_API_KEY -> $CUSTOM_API_KEY',
@@ -132,7 +132,7 @@ describe("config value env var syntax migration", () => {
 			'models.json.providers["custom-provider"].models["model-a"].headers["x-model-key"]: MODEL_API_KEY -> $MODEL_API_KEY',
 		);
 		expect(logMessage).toContain(
-			'models.json.providers["custom-provider"].modelOverrides["model-b"].headers["x-override-key"]: OVERRIDE_API_KEY -> $OVERRIDE_API_KEY',
+			'models.json.providers["custom-provider"].models["model-b"].headers["x-override-key"]: OVERRIDE_API_KEY -> $OVERRIDE_API_KEY',
 		);
 	});
 });

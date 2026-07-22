@@ -24,10 +24,10 @@ export default function (pi: ExtensionAPI) {
 		const { preparation, branchEntries: _, signal } = event;
 		const { messagesToSummarize, turnPrefixMessages, tokensBefore, firstKeptEntryId, previousSummary } = preparation;
 
-		// Use Gemini Flash for summarization (cheaper/faster than most conversation models)
+		// This optional summarizer must be declared in models.json or by an extension.
 		const model = ctx.modelRegistry.find("google", "gemini-2.5-flash");
 		if (!model) {
-			ctx.ui.notify(`Could not find Gemini Flash model, using default compaction`, "warning");
+			ctx.ui.notify(`Configure google/gemini-2.5-flash to use it; using default compaction`, "warning");
 			return;
 		}
 

@@ -1,8 +1,8 @@
 import type { EditorTheme, TUI } from "@pi-recon/repi-tui";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
+import { getEditorTheme, initTheme } from "../src/core/presentation/theme-runtime.ts";
 import { CustomEditor } from "../src/modes/interactive/components/custom-editor.ts";
-import { getEditorTheme, initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 // opt #142: the CustomEditor dispatch boundary (handleInput → handler()) called
 // action handlers synchronously and dropped any returned promise. The repo has

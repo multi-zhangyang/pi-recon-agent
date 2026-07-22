@@ -9,7 +9,10 @@ type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.ts";
 import { hasBedrockCredentials } from "./bedrock-utils.ts";
 import { hasCloudflareAiGatewayCredentials, hasCloudflareWorkersAICredentials } from "./cloudflare-utils.ts";
+import { registerProviderIntegrationFixtures } from "./model-fixtures.ts";
 import { resolveApiKey } from "./oauth.ts";
+
+registerProviderIntegrationFixtures();
 
 // Empty schema for test tools - must be proper OBJECT type for Cloud Code Assist
 const emptySchema = Type.Object({});
@@ -697,7 +700,7 @@ describe("AI Providers Unicode Surrogate Pair Tests", () => {
 	);
 
 	describe.skipIf(!process.env.KIMI_API_KEY)("Kimi For Coding Provider Unicode Handling", () => {
-		const llm = getModel("kimi-coding", "kimi-k2-thinking");
+		const llm = getModel("kimi-coding", "k2p7");
 
 		it("should handle emoji in tool results", { retry: 3, timeout: 30000 }, async () => {
 			await testEmojiInToolResults(llm);

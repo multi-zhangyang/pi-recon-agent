@@ -1,10 +1,10 @@
 import type { EditorTheme, TUI } from "@pi-recon/repi-tui";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
+import { getEditorTheme, initTheme } from "../src/core/presentation/theme-runtime.ts";
 import { CustomEditor } from "../src/modes/interactive/components/custom-editor.ts";
 import { SessionSelectorComponent } from "../src/modes/interactive/components/session-selector.ts";
 import { TreeSelectorComponent } from "../src/modes/interactive/components/tree-selector.ts";
-import { getEditorTheme, initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 // opt #145: three TUI-layer dispatch sites dropped returned promises from async
 // handlers (same class as opt #142's CustomEditor action-handler containment):

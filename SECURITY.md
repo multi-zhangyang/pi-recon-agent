@@ -1,6 +1,6 @@
 # 安全政策
 
-REPI Agent 是本地运行的 autonomous coding agent，用于组织逆向工程、漏洞研究和渗透测试工作流。它会在当前用户权限下读取文件、执行命令、调用模型 provider，并把 evidence、memory、session 和配置写入本机运行目录。
+REPI Agent 是本地运行的 autonomous coding agent，用于组织逆向工程、漏洞研究和渗透测试工作流。它会在当前用户权限下读取文件、执行命令、调用模型 provider，并把 evidence、session 和配置写入本机运行目录。
 
 默认运行目录：
 
@@ -15,7 +15,7 @@ REPI Agent 是本地运行的 autonomous coding agent，用于组织逆向工程
 - 影响范围和安全边界。
 - 复现步骤、PoC、日志或最小样例。
 - 受影响版本、commit、平台和配置。
-- 是否涉及 provider、auth、session、memory、extension、package install 或 release artifact。
+- 是否涉及 provider、auth、session、extension、package install 或 release artifact。
 - 已知缓解方式。
 
 不要在公开 Issue 中发布未脱敏的漏洞利用细节、API key、token、私有 baseUrl、auth.json、session 或 bugreport。
@@ -26,7 +26,7 @@ REPI Agent 是本地运行的 autonomous coding agent，用于组织逆向工程
 
 - REPI 自身代码导致的越权文件读写、命令执行或权限边界绕过。
 - 安装、更新、package/binary 分发链路中的供应链风险。
-- `bugreport`、model export、memory export 等诊断功能泄露本地密钥或私有端点。
+- `bugreport`、model export 等诊断功能泄露本地密钥或私有端点。
 - provider/auth/session 处理逻辑把用户凭据发送到非预期目标。
 - release artifact、CI、打包脚本或 npm package 内容包含密钥、私有配置或错误入口。
 - 可信边界外输入导致默认配置被静默污染，并跨 workspace/target/session 影响后续任务。
@@ -50,7 +50,7 @@ REPI Agent 是本地运行的 autonomous coding agent，用于组织逆向工程
 - API key、GitHub token、OAuth token、Authorization header。
 - `~/.repi/agent/auth.json`、未脱敏 session、原始 bugreport。
 - 私有 provider baseUrl、内部网关、客户目标信息。
-- 未脱敏 memory event、evidence、PCAP、日志或截图。
+- 未脱敏 evidence、PCAP、日志或截图。
 
 如需分享诊断信息，请使用：
 

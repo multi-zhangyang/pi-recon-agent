@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added compaction-aware session context entry transforms, custom-entry message projectors, and public in-memory/JSONL storage exports.
+
 ### Fixed
 
 - Fixed the compaction summarization system prompt to use neutral AI assistant wording for non-coding agents ([#5401](https://github.com/earendil-works/pi/issues/5401)).

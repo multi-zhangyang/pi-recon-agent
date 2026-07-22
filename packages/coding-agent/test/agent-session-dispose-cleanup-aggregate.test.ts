@@ -99,4 +99,16 @@ describe("opt #209: dispose guards cleanupSessionResources AggregateError", () =
 		// the aggregate, does not skip the loop).
 		expect(ran).toBe(true);
 	});
+
+	it("runs disposal side effects only once", () => {
+		let cleanupCalls = 0;
+		unregister = registerSessionResourceCleanup(() => {
+			cleanupCalls++;
+		});
+
+		session.dispose();
+		session.dispose();
+
+		expect(cleanupCalls).toBe(1);
+	});
 });

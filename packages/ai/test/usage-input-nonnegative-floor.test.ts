@@ -13,6 +13,9 @@ import { describe, expect, it, vi } from "vitest";
 import { processResponsesStream } from "../src/providers/openai-responses-shared.ts";
 import type { AssistantMessage, Context, Model } from "../src/types.ts";
 import { AssistantMessageEventStream } from "../src/utils/event-stream.ts";
+import { registerGoogleVertexFixtures } from "./model-fixtures.ts";
+
+registerGoogleVertexFixtures();
 
 // ---------------------------------------------------------------------------
 // openai-responses: processResponsesStream response.completed usage

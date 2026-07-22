@@ -1784,6 +1784,27 @@ export class SessionManager {
 	}
 
 	/**
+	 * Create an independent in-memory fork without mutating this manager.
+	 * A null leaf starts an empty session; otherwise the returned manager contains
+	 * the path from the root through the requested leaf.
+	 */
+	createInMemoryFork(leafId: string | null): SessionManager {
+		if (this.persist) {
+			throw new Error("createInMemoryFork requires an in-memory session");
+		}
+
+		const fork = SessionManager.inMemory(this.cwd);
+		if (leafId === null) {
+			return fork;
+		}
+
+		fork.fileEntries = [...this.fileEntries];
+		fork._buildIndex();
+		fork.createBranchedSession(leafId);
+		return fork;
+	}
+
+	/**
 	 * Create a new session file containing only the path from root to the specified leaf.
 	 * Useful for extracting a single conversation path from a branched session.
 	 * Returns the new session file path, or undefined if not persisting.

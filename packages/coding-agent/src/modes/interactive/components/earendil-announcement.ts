@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import { Container, Image, Spacer, Text } from "@pi-recon/repi-tui";
 import { getBundledInteractiveAssetPath } from "../../../config.ts";
-import { theme } from "../theme/theme.ts";
+import { theme } from "../../../core/presentation/theme-runtime.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 
 const BLOG_URL = "https://github.com/multi-zhangyang/pi-recon-agent";

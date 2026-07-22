@@ -1,6 +1,6 @@
 # REPI Documentation
 
-REPI is an autonomous reverse-engineering and penetration-testing CLI agent. It combines a terminal coding agent with REPI's reverse/pentest kernel, isolated runtime profile, evidence ledger, scoped memory, compact/resume flow, runtime adapters, MCP support, and model/provider management.
+REPI is an autonomous reverse-engineering and penetration-testing CLI agent. It combines a terminal coding agent with REPI's reverse/pentest kernel, isolated runtime profile, evidence ledger, bounded context compaction, runtime adapters, MCP support, and model/provider management.
 
 ## Quick start
 

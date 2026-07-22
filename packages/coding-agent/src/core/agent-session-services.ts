@@ -3,11 +3,16 @@ import type { ThinkingLevel } from "@pi-recon/repi-agent-core";
 import type { Model } from "@pi-recon/repi-ai";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
+import {
+	type CreateAgentSessionOptions,
+	type CreateAgentSessionResult,
+	createAgentSession,
+} from "./agent-session-factory.ts";
 import { AuthStorage } from "./auth-storage.ts";
 import type { SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
 import { ModelRegistry } from "./model-registry.ts";
+import { ModelRuntime } from "./model-runtime.ts";
 import { DefaultResourceLoader, type DefaultResourceLoaderOptions, type ResourceLoader } from "./resource-loader.ts";
-import { type CreateAgentSessionOptions, type CreateAgentSessionResult, createAgentSession } from "./sdk.ts";
 import type { SessionManager } from "./session-manager.ts";
 import { SettingsManager } from "./settings-manager.ts";
 
@@ -36,6 +41,7 @@ export interface CreateAgentSessionServicesOptions {
 	authStorage?: AuthStorage;
 	settingsManager?: SettingsManager;
 	modelRegistry?: ModelRegistry;
+	modelRuntime?: ModelRuntime;
 	extensionFlagValues?: Map<string, boolean | string>;
 	resourceLoaderOptions?: Omit<DefaultResourceLoaderOptions, "cwd" | "agentDir" | "settingsManager">;
 }
@@ -71,6 +77,9 @@ export interface AgentSessionServices {
 	authStorage: AuthStorage;
 	settingsManager: SettingsManager;
 	modelRegistry: ModelRegistry;
+	modelRuntime?: ModelRuntime;
+	/** Whether this service bundle created and owns modelRuntime. */
+	ownsModelRuntime?: boolean;
 	resourceLoader: ResourceLoader;
 	diagnostics: AgentSessionRuntimeDiagnostic[];
 }
@@ -131,11 +140,44 @@ function applyExtensionFlagValues(
 export async function createAgentSessionServices(
 	options: CreateAgentSessionServicesOptions,
 ): Promise<AgentSessionServices> {
+	let ownedRuntime: ModelRuntime | undefined;
+	try {
+		return await createAgentSessionServicesInternal(options, (runtime) => {
+			ownedRuntime = runtime;
+		});
+	} catch (error) {
+		try {
+			ownedRuntime?.dispose();
+		} catch {
+			// Preserve the service initialization error after best-effort cleanup.
+		}
+		throw error;
+	}
+}
+
+async function createAgentSessionServicesInternal(
+	options: CreateAgentSessionServicesOptions,
+	onOwnedRuntime: (runtime: ModelRuntime) => void,
+): Promise<AgentSessionServices> {
 	const cwd = resolvePath(options.cwd);
 	const agentDir = options.agentDir ? resolvePath(options.agentDir) : getAgentDir();
 	const authStorage = options.authStorage ?? AuthStorage.create(join(agentDir, "auth.json"));
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
-	const modelRegistry = options.modelRegistry ?? ModelRegistry.create(authStorage, join(agentDir, "models.json"));
+	const ownsModelRuntime = !options.modelRuntime && !options.modelRegistry;
+	const modelRuntime = options.modelRuntime
+		? options.modelRuntime
+		: options.modelRegistry
+			? undefined
+			: await ModelRuntime.create({
+					credentials: authStorage.asCredentialStore(),
+					modelsPath: join(agentDir, "models.json"),
+				});
+	if (ownsModelRuntime && modelRuntime) onOwnedRuntime(modelRuntime);
+	const modelRegistry =
+		options.modelRegistry ??
+		(modelRuntime
+			? ModelRegistry.fromRuntime(authStorage, modelRuntime)
+			: ModelRegistry.create(authStorage, join(agentDir, "models.json")));
 	const resourceLoader = new DefaultResourceLoader({
 		...(options.resourceLoaderOptions ?? {}),
 		cwd,
@@ -146,18 +188,54 @@ export async function createAgentSessionServices(
 
 	const diagnostics: AgentSessionRuntimeDiagnostic[] = [];
 	const extensionsResult = resourceLoader.getExtensions();
-	for (const { name, config, extensionPath } of extensionsResult.runtime.pendingProviderRegistrations) {
+	const pendingProviders = [
+		...extensionsResult.runtime.pendingProviderRegistrations.map((registration) => ({
+			kind: "legacy" as const,
+			registration,
+		})),
+		...extensionsResult.runtime.pendingNativeProviderRegistrations.map((registration) => ({
+			kind: "native" as const,
+			registration,
+		})),
+	].sort((left, right) => left.registration.order - right.registration.order);
+	for (const pending of pendingProviders) {
 		try {
-			modelRegistry.registerProvider(name, config);
+			if (pending.kind === "native") {
+				if (!modelRuntime) throw new Error("Native provider registration requires ModelRuntime");
+				modelRuntime.registerNativeProvider(pending.registration.provider);
+			} else {
+				const { name, config } = pending.registration;
+				if (modelRuntime && !modelRegistry.isBackedBy(modelRuntime)) {
+					modelRuntime.registerProvider(name, config);
+					try {
+						modelRegistry.registerProvider(name, config);
+					} catch (error) {
+						modelRuntime.unregisterProvider(name);
+						throw error;
+					}
+				} else {
+					modelRegistry.registerProvider(name, config);
+				}
+			}
+			pending.registration.preApplied = true;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			diagnostics.push({
 				type: "error",
-				message: `Extension "${extensionPath}" error: ${message}`,
+				message: `Extension "${pending.registration.extensionPath}" error: ${message}`,
 			});
 		}
 	}
-	extensionsResult.runtime.pendingProviderRegistrations = [];
+	if (modelRuntime) {
+		try {
+			await modelRuntime.refresh({ allowNetwork: false });
+		} catch (error) {
+			diagnostics.push({
+				type: "warning",
+				message: `Model runtime cache refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+			});
+		}
+	}
 	diagnostics.push(...applyExtensionFlagValues(resourceLoader, options.extensionFlagValues));
 
 	return {
@@ -166,6 +244,8 @@ export async function createAgentSessionServices(
 		authStorage,
 		settingsManager,
 		modelRegistry,
+		modelRuntime,
+		ownsModelRuntime,
 		resourceLoader,
 		diagnostics,
 	};
@@ -187,6 +267,8 @@ export async function createAgentSessionFromServices(
 		authStorage: options.services.authStorage,
 		settingsManager: options.services.settingsManager,
 		modelRegistry: options.services.modelRegistry,
+		modelRuntime: options.services.modelRuntime,
+		disposeModelRuntime: options.services.ownsModelRuntime,
 		resourceLoader: options.services.resourceLoader,
 		sessionManager: options.sessionManager,
 		model: options.model,

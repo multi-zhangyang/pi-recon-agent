@@ -10,10 +10,10 @@ import { randomUUID } from "node:crypto";
 import type { AssistantMessage, ImageContent } from "@pi-recon/repi-ai";
 import type { AgentSessionEvent } from "../core/agent-session.ts";
 import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
+import { headlessTheme } from "../core/extensions/headless-theme.ts";
 import type { ExtensionUIContext } from "../core/extensions/types.ts";
 import { flushRawStdout, writeRawStdout } from "../core/output-guard.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
-import type { Theme } from "./interactive/theme/theme.ts";
 
 /**
  * Options for print mode.
@@ -136,13 +136,13 @@ export function scheduleTimeoutWarning(opts: {
 function printMaxTurns(_mode: PrintModeOptions["mode"]): number | undefined {
 	const configured = envPositiveInteger("REPI_PRINT_MAX_TURNS");
 	if (configured !== undefined) return configured;
-	return isRepiProductMode() ? 24 : undefined;
+	return isRepiProductMode() ? 10 : undefined;
 }
 
 function printMaxToolCalls(_mode: PrintModeOptions["mode"]): number | undefined {
 	const configured = envPositiveInteger("REPI_PRINT_MAX_TOOL_CALLS");
 	if (configured !== undefined) return configured;
-	return isRepiProductMode() ? 80 : undefined;
+	return isRepiProductMode() ? 48 : undefined;
 }
 
 /**
@@ -168,6 +168,21 @@ function formatPrintNotify(message: string, type?: "info" | "warning" | "error")
 
 function writeJsonExtensionUiRequest(payload: Record<string, unknown>): void {
 	writeRawStdout(`${JSON.stringify({ type: "extension_ui_request", id: randomUUID(), ...payload })}\n`);
+}
+
+/**
+ * Streaming assistant updates carry the complete accumulated message in both
+ * `event.message` and `assistantMessageEvent.partial`. That is useful to a UI
+ * renderer, but pathological for a JSONL client: every token repeats the full
+ * prefix and turns an O(n) response into O(n^2) output. Print mode already
+ * emits message_start/message_end/agent_end for complete snapshots, so keep
+ * only the incremental assistant event in its machine-readable stream.
+ */
+function compactJsonEvent(event: AgentSessionEvent): unknown {
+	if (event.type !== "message_update") return event;
+	const assistantMessageEvent = { ...event.assistantMessageEvent } as Record<string, unknown>;
+	delete assistantMessageEvent.partial;
+	return { type: event.type, assistantMessageEvent };
 }
 
 function createPrintExtensionUIContext(mode: PrintModeOptions["mode"]): ExtensionUIContext {
@@ -211,7 +226,7 @@ function createPrintExtensionUIContext(mode: PrintModeOptions["mode"]): Extensio
 		setEditorComponent: () => {},
 		getEditorComponent: () => undefined,
 		get theme() {
-			return {} as Theme;
+			return headlessTheme;
 		},
 		getAllThemes: () => [],
 		getTheme: () => undefined,
@@ -283,7 +298,6 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	const startedAt = Date.now();
 	let lastProgress = "startup";
 	let heartbeat: NodeJS.Timeout | undefined;
-	let turnCount = 0;
 	let toolCallCount = 0;
 	let guardAbortReason: string | undefined;
 	let activeGuardReject: ((error: Error) => void) | undefined;
@@ -327,7 +341,6 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 			emitProgress("prompt_skipped_shutdown");
 			return;
 		}
-		turnCount = 0;
 		toolCallCount = 0;
 		guardAbortReason = undefined;
 		activeGuardReject = undefined;
@@ -336,6 +349,12 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		emitProgress(
 			`prompt_start chars=${message.length} timeoutMs=${timeoutMs ?? "none"} timeoutGraceMs=${timeoutGraceMs} timeoutToolGraceMs=${timeoutToolGraceMs} maxTurns=${maxTurns ?? "none"} maxToolCalls=${maxToolCalls ?? "none"}`,
 		);
+		const previousMaxTurns = session.agent.maxTurns;
+		const previousReserveFinalTurn = session.agent.reserveFinalTurn;
+		if (maxTurns !== undefined) {
+			session.agent.maxTurns = maxTurns;
+			session.agent.reserveFinalTurn = true;
+		}
 		if (!timeoutMs && maxTurns === undefined && maxToolCalls === undefined) {
 			await session.prompt(message, promptOptions);
 			emitProgress("prompt_done");
@@ -411,7 +430,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 					}),
 				);
 			}
-			if (maxTurns !== undefined || maxToolCalls !== undefined) {
+			if (maxToolCalls !== undefined) {
 				races.push(
 					new Promise<never>((_resolve, reject) => {
 						activeGuardReject = reject;
@@ -424,6 +443,8 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		} finally {
 			finished = true;
 			activeGuardReject = undefined;
+			session.agent.maxTurns = previousMaxTurns;
+			session.agent.reserveFinalTurn = previousReserveFinalTurn;
 			if (timer) clearTimeout(timer);
 			cancelWarn?.();
 		}
@@ -571,7 +592,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 				uiContext: createPrintExtensionUIContext(mode),
 				mode: mode === "json" ? "json" : "print",
 				commandContextActions: {
-					waitForIdle: () => session.agent.waitForIdle(),
+					waitForIdle: () => session.waitForIdle(),
 					newSession: async (newSessionOptions) => runtimeHost.newSession(newSessionOptions),
 					fork: async (entryId, forkOptions) => {
 						const result = await runtimeHost.fork(entryId, forkOptions);
@@ -630,12 +651,6 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 						streamedAssistantText = true;
 					}
 				}
-				if (event.type === "turn_start") {
-					turnCount += 1;
-					if (maxTurns !== undefined && turnCount > maxTurns) {
-						abortForGuard(`max_turns_exceeded:${turnCount}/${maxTurns}`);
-					}
-				}
 				if (event.type === "tool_execution_start") {
 					toolCallCount += 1;
 					toolInProgress += 1;
@@ -647,7 +662,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 					if (toolInProgress > 0) toolInProgress -= 1;
 				}
 				if (mode === "json") {
-					writeRawStdout(`${JSON.stringify(event)}\n`);
+					writeRawStdout(`${JSON.stringify(compactJsonEvent(event))}\n`);
 					return;
 				}
 				const line = eventProgressLine(event);
@@ -686,17 +701,19 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 			await runPromptWithTimeout(message);
 		}
 
-		if (mode === "text" && !shuttingDown) {
+		if (!shuttingDown) {
 			const state = session.state;
 			const lastMessage = state.messages[state.messages.length - 1];
 
 			if (lastMessage?.role === "assistant") {
 				const assistantMsg = lastMessage as AssistantMessage;
 				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-					writeLastAssistantText();
-					console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
+					if (mode === "text") {
+						writeLastAssistantText();
+						console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
+					}
 					exitCode = 1;
-				} else {
+				} else if (mode === "text") {
 					writeLastAssistantText();
 				}
 			}

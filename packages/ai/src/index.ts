@@ -1,12 +1,18 @@
 export type { Static, TSchema } from "typebox";
 export { Type } from "typebox";
 
+export * from "./api/lazy.ts";
 export * from "./api-registry.ts";
+export * from "./auth/context.ts";
+export * from "./auth/credential-store.ts";
+export * from "./auth/helpers.ts";
+export * from "./auth/types.ts";
 export * from "./env-api-keys.ts";
 export * from "./image-models.ts";
 export * from "./images.ts";
 export * from "./images-api-registry.ts";
 export * from "./models.ts";
+export * from "./models-store.ts";
 export type { BedrockOptions, BedrockThinkingDisplay } from "./providers/amazon-bedrock.ts";
 export type { AnthropicEffort, AnthropicOptions, AnthropicThinkingDisplay } from "./providers/anthropic.ts";
 export type { AzureOpenAIResponsesOptions } from "./providers/azure-openai-responses.ts";
@@ -28,6 +34,7 @@ export * from "./stream.ts";
 export * from "./types.ts";
 export * from "./utils/diagnostics.ts";
 export * from "./utils/event-stream.ts";
+export * from "./utils/headers.ts";
 export * from "./utils/json-parse.ts";
 export type {
 	OAuthAuthInfo,

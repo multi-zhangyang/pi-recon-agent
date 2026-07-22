@@ -7,10 +7,12 @@ import type {
 	ResponseInput,
 	ResponseInputContent,
 	ResponseInputImage,
+	ResponseInputItem,
 	ResponseInputText,
 	ResponseOutputMessage,
 	ResponseReasoningItem,
 	ResponseStreamEvent,
+	ResponseToolSearchOutputItemParam,
 } from "openai/resources/responses/responses.js";
 import { calculateCost } from "../models.ts";
 import type {
@@ -31,6 +33,7 @@ import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
+import { normalizeOpenAIToolSchema } from "../utils/tool-schema.ts";
 import { transformMessages } from "./transform-messages.ts";
 
 // =============================================================================
@@ -77,10 +80,38 @@ export interface OpenAIResponsesStreamOptions {
 
 export interface ConvertResponsesMessagesOptions {
 	includeSystemPrompt?: boolean;
+	deferredTools?: ReadonlyMap<string, Tool>;
 }
 
 export interface ConvertResponsesToolsOptions {
 	strict?: boolean | null;
+	deferLoading?: boolean;
+}
+
+type OpenAIFunctionTool = Extract<OpenAITool, { type: "function" }>;
+
+const OPENAI_TOOL_SEARCH_MODEL_IDS = new Set([
+	"gpt-5.4",
+	"gpt-5.4-mini",
+	"gpt-5.4-pro",
+	"gpt-5.5",
+	"gpt-5.6-sol",
+	"gpt-5.6-terra",
+	"gpt-5.6-luna",
+]);
+
+/** Conservative first-party fallback when generated model metadata has not been refreshed. */
+export function defaultSupportsOpenAIToolSearch(
+	model: Pick<Model<Api>, "api" | "baseUrl" | "id" | "provider">,
+): boolean {
+	const baseUrl = model.baseUrl.replace(/\/+$/, "");
+	const isOpenAIResponses =
+		model.api === "openai-responses" && model.provider === "openai" && baseUrl === "https://api.openai.com/v1";
+	const isOpenAICodex =
+		model.api === "openai-codex-responses" &&
+		model.provider === "openai-codex" &&
+		baseUrl === "https://chatgpt.com/backend-api";
+	return (isOpenAIResponses || isOpenAICodex) && OPENAI_TOOL_SEARCH_MODEL_IDS.has(model.id);
 }
 
 // =============================================================================
@@ -94,6 +125,7 @@ export function convertResponsesMessages<TApi extends Api>(
 	options?: ConvertResponsesMessagesOptions,
 ): ResponseInput {
 	const messages: ResponseInput = [];
+	const loadedToolNames = new Set<string>();
 
 	const normalizeIdPart = (part: string): string => {
 		const sanitized = part.replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -281,6 +313,32 @@ export function convertResponsesMessages<TApi extends Api>(
 				call_id: callId,
 				output,
 			});
+
+			const deferredTools: Tool[] = [];
+			for (const name of msg.addedToolNames ?? []) {
+				const tool = options?.deferredTools?.get(name);
+				if (!tool || loadedToolNames.has(name)) continue;
+				loadedToolNames.add(name);
+				deferredTools.push(tool);
+			}
+			if (deferredTools.length > 0) {
+				const names = deferredTools.map((tool) => tool.name);
+				const searchCallId = `pi_tool_load_${shortHash(`${msg.toolCallId}:${names.join(",")}`)}`;
+				messages.push({
+					type: "tool_search_call",
+					call_id: searchCallId,
+					execution: "client",
+					status: "completed",
+					arguments: { query: names.join(" "), limit: names.length },
+				} satisfies ResponseInputItem);
+				messages.push({
+					type: "tool_search_output",
+					call_id: searchCallId,
+					execution: "client",
+					status: "completed",
+					tools: convertResponsesTools(deferredTools, { deferLoading: true }),
+				} satisfies ResponseToolSearchOutputItemParam);
+			}
 		}
 		msgIndex++;
 	}
@@ -292,15 +350,18 @@ export function convertResponsesMessages<TApi extends Api>(
 // Tool conversion
 // =============================================================================
 
-export function convertResponsesTools(tools: Tool[], options?: ConvertResponsesToolsOptions): OpenAITool[] {
+export function convertResponsesTools(tools: readonly Tool[], options?: ConvertResponsesToolsOptions): OpenAITool[] {
 	const strict = options?.strict === undefined ? false : options.strict;
-	return tools.map((tool) => ({
-		type: "function",
-		name: tool.name,
-		description: tool.description,
-		parameters: tool.parameters as any, // TypeBox already generates JSON Schema
-		strict,
-	}));
+	return tools.map(
+		(tool): OpenAIFunctionTool => ({
+			type: "function",
+			name: tool.name,
+			description: tool.description,
+			parameters: normalizeOpenAIToolSchema(tool.parameters),
+			strict,
+			...(options?.deferLoading ? { defer_loading: true } : {}),
+		}),
+	);
 }
 
 // =============================================================================
@@ -316,6 +377,7 @@ export async function processResponsesStream<TApi extends Api>(
 ): Promise<void> {
 	let currentItem: ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | null = null;
 	let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | null = null;
+	let sawTerminalResponseEvent = false;
 	const blocks = output.content;
 	const blockIndex = () => blocks.length - 1;
 
@@ -531,7 +593,8 @@ export async function processResponsesStream<TApi extends Api>(
 				currentBlock = null;
 				stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
 			}
-		} else if (event.type === "response.completed") {
+		} else if (event.type === "response.completed" || event.type === "response.incomplete") {
+			sawTerminalResponseEvent = true;
 			const response = event.response;
 			if (response?.id) {
 				output.responseId = response.id;
@@ -572,6 +635,7 @@ export async function processResponsesStream<TApi extends Api>(
 			const msg = event.code || event.message ? `Error Code ${event.code}: ${event.message}` : "Unknown error";
 			throw new Error(msg);
 		} else if (event.type === "response.failed") {
+			sawTerminalResponseEvent = true;
 			const error = event.response?.error;
 			const details = event.response?.incomplete_details;
 			const msg = error
@@ -581,6 +645,9 @@ export async function processResponsesStream<TApi extends Api>(
 					: "Unknown error (no error details in response)";
 			throw new Error(msg);
 		}
+	}
+	if (!sawTerminalResponseEvent) {
+		throw new Error("OpenAI Responses stream ended before a terminal response event");
 	}
 }
 

@@ -1,9 +1,9 @@
 import { Box, type Component, Container, getCapabilities, Image, Spacer, Text, type TUI } from "@pi-recon/repi-tui";
 import type { ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.ts";
+import { theme } from "../../../core/presentation/theme-runtime.ts";
 import { createAllToolDefinitions, type ToolName } from "../../../core/tools/index.ts";
 import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
 import { convertToPng } from "../../../utils/image-convert.ts";
-import { theme } from "../theme/theme.ts";
 
 export interface ToolExecutionOptions {
 	showImages?: boolean;

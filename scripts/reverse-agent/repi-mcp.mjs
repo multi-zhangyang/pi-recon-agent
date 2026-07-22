@@ -52,6 +52,11 @@ Example ~/.repi/agent/mcp.json:
 `;
 }
 
+if (command === "help" || command === "--help" || command === "-h") {
+	console.log(usage());
+	process.exit(0);
+}
+
 function redact(text) {
 	return String(text ?? "")
 		.replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "<redacted:api-key>")

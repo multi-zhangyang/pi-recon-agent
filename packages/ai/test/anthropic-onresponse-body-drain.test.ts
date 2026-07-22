@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import { getModel } from "../src/models.ts";
 import { streamAnthropic } from "../src/providers/anthropic.ts";
 import type { Context } from "../src/types.ts";
+import { registerAnthropicFixtures } from "./model-fixtures.ts";
+
+registerAnthropicFixtures();
 
 // opt #122 — every streaming provider awaits `options?.onResponse?.(...)` BEFORE
 // iterating/cancelling the response body. A throwing onResponse (e.g. a throwing
@@ -69,7 +72,7 @@ describe("streamAnthropic cancels the body when onResponse throws (opt #122)", (
 			headers: { "content-type": "text/event-stream" },
 		});
 
-		const model = getModel("anthropic", "claude-haiku-4-5");
+		const model = getModel<"anthropic-messages">("anthropic", "claude-haiku-4-5")!;
 		const context: Context = {
 			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
 		};

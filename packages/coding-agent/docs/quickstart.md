@@ -11,9 +11,11 @@ Use this path when working from the open-source repository:
 ```bash
 git clone https://github.com/multi-zhangyang/pi-recon-agent.git
 cd pi-recon-agent
-npm install
+npm install --ignore-scripts
 npm run install:repi
 ```
+
+`install:repi` builds the four workspace runtime entrypoints before linking the launcher, so normal source installs run compiled JavaScript through Node instead of transpiling TypeScript on every startup.
 
 Validate that the installed launcher is usable:
 
@@ -22,12 +24,16 @@ repi --offline --help
 repi --offline --list-models
 ```
 
-### npm package install
+### Release tarball install
 
-After the package is published, REPI can also be installed as a global npm package:
+The `@pi-recon/*` packages are not published to the npm registry. Download the four files listed by `repi-release-manifest.json` from one GitHub Release and install them in one command:
 
 ```bash
-npm install -g @pi-recon/repi-coding-agent
+npm install -g \
+  ./pi-recon-repi-ai-0.1.3.tgz \
+  ./pi-recon-repi-agent-core-0.1.3.tgz \
+  ./pi-recon-repi-tui-0.1.3.tgz \
+  ./pi-recon-repi-coding-agent-0.1.3.tgz
 ```
 
 ### Uninstall
@@ -39,13 +45,14 @@ sudo rm -f /usr/local/bin/repi
 # optional: rm -rf ~/.repi/agent
 ```
 
-If you installed the npm package globally, use the matching package manager:
+If you installed the release tarballs globally, remove all four packages together:
 
 ```bash
-npm uninstall -g @pi-recon/repi-coding-agent
-pnpm remove -g @pi-recon/repi-coding-agent
-yarn global remove @pi-recon/repi-coding-agent
-bun uninstall -g @pi-recon/repi-coding-agent
+npm uninstall -g \
+  @pi-recon/repi-ai \
+  @pi-recon/repi-agent-core \
+  @pi-recon/repi-tui \
+  @pi-recon/repi-coding-agent
 ```
 
 Uninstalling the CLI does not automatically remove settings, credentials, sessions, and installed repi packages in `~/.repi/agent/`.

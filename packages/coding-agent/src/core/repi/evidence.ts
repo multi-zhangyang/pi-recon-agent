@@ -1,11 +1,14 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { safeHeadEnd, safeTailStart } from "../tools/truncate.ts";
-import { evidenceLedgerPath } from "./storage.ts";
+import { evidenceLedgerPath, writePrivateTextFile } from "./storage.ts";
 
 export type EvidenceKind = "runtime" | "traffic" | "served_asset" | "process_config" | "artifact" | "source" | "note";
 
+export type EvidenceVerdict = "proposed" | "supported" | "contradicted" | "inconclusive" | "proved";
+
 export type EvidenceRecord = {
 	timestamp: string;
+	missionId?: string;
 	kind: EvidenceKind;
 	priority: number;
 	title: string;
@@ -16,7 +19,15 @@ export type EvidenceRecord = {
 	hash?: string;
 	verify?: string;
 	confidence?: string;
+	claimId?: string;
+	hypothesis?: string;
+	prediction?: string;
+	observation?: string;
+	counterexample?: string;
+	verdict?: EvidenceVerdict;
 };
+
+export type ParsedEvidenceRecord = EvidenceRecord & { ledgerIndex: number };
 
 export type EvidenceGraphNode = {
 	id: string;
@@ -27,9 +38,35 @@ export type EvidenceGraphNode = {
 	note?: string;
 };
 
+export type EvidenceClaimState = {
+	claimId: string;
+	missionId?: string;
+	timestamp: string;
+	title: string;
+	kind: EvidenceKind;
+	priority: number;
+	hypothesis: string;
+	prediction?: string;
+	observation?: string;
+	counterexample?: string;
+	verdict: EvidenceVerdict;
+	command?: string;
+	verify?: string;
+};
+
+export type EvidenceClaimSummary = {
+	claims: EvidenceClaimState[];
+	open: EvidenceClaimState[];
+	proved: EvidenceClaimState[];
+	contradicted: EvidenceClaimState[];
+	nextCommands: string[];
+	lines: string[];
+};
+
 type EvidenceIoOptions = {
 	ensureStorage?: () => void;
 	readText?: (path: string, fallback?: string) => string;
+	writeText?: (path: string, text: string) => void;
 	truncate?: (text: string, limit: number) => string;
 };
 
@@ -38,6 +75,8 @@ type AppendEvidenceOptions = EvidenceIoOptions & {
 	onLedgerUpdated?: (record: EvidenceRecord) => void;
 	now?: () => Date;
 };
+
+const EVIDENCE_LEDGER_PREAMBLE = "# REPI Evidence Ledger\n\n";
 
 // opt #164 — stat-first OOM guard cap (bytes) for the evidence.ts local
 // readTextFile. Shares the SAME REPI_READ_TEXT_FILE_MAX_BYTES knob as
@@ -202,16 +241,86 @@ export function formatEvidenceRecord(record: EvidenceRecord): string {
 		`## ${record.timestamp} — P${record.priority} — ${record.kind} — ${record.title}`,
 		"",
 		`- fact: ${record.fact}`,
+		record.missionId ? `- mission_id: ${record.missionId}` : undefined,
 		record.command ? `- command: \`${record.command.replace(/`/g, "\\`")}\`` : undefined,
 		record.path ? `- path: ${record.path}` : undefined,
 		record.offset ? `- offset: ${record.offset}` : undefined,
 		record.hash ? `- hash: ${record.hash}` : undefined,
 		record.verify ? `- verify: ${record.verify}` : undefined,
 		record.confidence ? `- confidence: ${record.confidence}` : undefined,
+		record.claimId ? `- claim_id: ${record.claimId}` : undefined,
+		record.hypothesis ? `- hypothesis: ${record.hypothesis}` : undefined,
+		record.prediction ? `- prediction: ${record.prediction}` : undefined,
+		record.observation ? `- observation: ${record.observation}` : undefined,
+		record.counterexample ? `- counterexample: ${record.counterexample}` : undefined,
+		record.verdict ? `- verdict: ${record.verdict}` : undefined,
 		"",
 	]
 		.filter((line): line is string => line !== undefined)
 		.join("\n");
+}
+
+export function parseEvidenceRecords(text: string): ParsedEvidenceRecord[] {
+	const kinds = new Set<EvidenceKind>([
+		"runtime",
+		"traffic",
+		"served_asset",
+		"process_config",
+		"artifact",
+		"source",
+		"note",
+	]);
+	const verdicts = new Set<EvidenceVerdict>(["proposed", "supported", "contradicted", "inconclusive", "proved"]);
+	return text
+		.split(/^##\s+/m)
+		.filter((block) => block.trim())
+		.flatMap((block, ledgerIndex) => {
+			const header = /^(.+?)\s+—\s+P(\d+)\s+—\s+(.+?)\s+—\s+(.+)$/m.exec(block);
+			if (!header) return [];
+			const field = (name: string) => new RegExp(`^- ${name}: (.+)$`, "m").exec(block)?.[1]?.trim();
+			const commandMatch = /^- command: `((?:\\`|[^`])*)`$/m.exec(block);
+			const rawKind = header[3]?.trim() as EvidenceKind | undefined;
+			const rawVerdict = field("verdict") as EvidenceVerdict | undefined;
+			return [
+				{
+					ledgerIndex,
+					timestamp: header[1]?.trim() ?? "",
+					priority: Number.parseInt(header[2] ?? "7", 10),
+					kind: rawKind && kinds.has(rawKind) ? rawKind : "note",
+					title: header[4]?.trim() ?? "evidence",
+					fact: field("fact") ?? "",
+					missionId: field("mission_id"),
+					command: commandMatch?.[1]?.replace(/\\`/g, "`").trim(),
+					path: field("path"),
+					offset: field("offset"),
+					hash: field("hash"),
+					verify: field("verify"),
+					confidence: field("confidence"),
+					claimId: field("claim_id"),
+					hypothesis: field("hypothesis"),
+					prediction: field("prediction"),
+					observation: field("observation"),
+					counterexample: field("counterexample"),
+					verdict: rawVerdict && verdicts.has(rawVerdict) ? rawVerdict : undefined,
+				} satisfies ParsedEvidenceRecord,
+			];
+		});
+}
+
+/**
+ * Keep verdicts honest at the storage boundary. Models may emit a confident
+ * verdict before they have attached a replayable probe; the ledger must not
+ * promote that narrative into proof. Structured HTO records without a
+ * prediction/observation remain proposals, while proved/contradicted claims
+ * require the corresponding executable or falsifying anchor.
+ */
+export function normalizeEvidenceVerdict(
+	record: Omit<EvidenceRecord, "timestamp" | "priority"> & { priority?: number },
+): EvidenceVerdict | undefined {
+	if (record.verdict === "proved" && (!record.command || !record.verify || !record.observation)) return "inconclusive";
+	if (record.verdict === "contradicted" && !record.counterexample && !record.observation) return "inconclusive";
+	if (!record.verdict && (record.hypothesis || record.prediction)) return "proposed";
+	return record.verdict;
 }
 
 export function appendEvidenceRecord(
@@ -219,12 +328,28 @@ export function appendEvidenceRecord(
 	options: AppendEvidenceOptions,
 ): EvidenceRecord {
 	options.ensureStorage?.();
+	const ledgerPath = evidenceLedgerPath();
+	// Storage initialization is intentionally lazy, so the first evidence append
+	// must create the human-readable ledger preamble itself. Use the dedicated
+	// atomic writer instead of appendText here: appendPrivateTextFile preserves a
+	// legacy leading-newline contract for empty files, which would put a blank
+	// line before the markdown title.
+	let ledgerHasBytes = false;
+	try {
+		ledgerHasBytes = statSync(ledgerPath).size > 0;
+	} catch {
+		// Missing ledger: the first append creates it below.
+	}
+	if (!ledgerHasBytes) {
+		(options.writeText ?? writePrivateTextFile)(ledgerPath, EVIDENCE_LEDGER_PREAMBLE);
+	}
 	const full: EvidenceRecord = {
 		timestamp: (options.now?.() ?? new Date()).toISOString(),
 		...record,
+		verdict: normalizeEvidenceVerdict(record),
 		priority: record.priority ?? evidencePriority(record.kind),
 	};
-	options.appendText(evidenceLedgerPath(), formatEvidenceRecord(full));
+	options.appendText(ledgerPath, formatEvidenceRecord(full));
 	options.onLedgerUpdated?.(full);
 	return full;
 }
@@ -233,15 +358,83 @@ export function buildEvidenceDigest(query?: string, options: EvidenceIoOptions =
 	options.ensureStorage?.();
 	const readText = options.readText ?? readTextFile;
 	const truncate = options.truncate ?? truncateMiddle;
+	const modelVisibleLimit = 4096;
 	const text = readText(evidenceLedgerPath()).trim();
 	if (!text) return "证据 ledger 为空；用 re_evidence append 记录 runtime/traffic/source 等证据。";
-	if (!query) return truncate(text, 6000);
+	if (!query) return truncate(text, modelVisibleLimit);
 	const lower = query.toLowerCase();
 	const lines = text
 		.split(/\r?\n/)
 		.filter((line) => line.toLowerCase().includes(lower))
 		.slice(-160);
-	return lines.length ? lines.join("\n") : "No matching evidence lines";
+	return lines.length ? truncate(lines.join("\n"), modelVisibleLimit) : "No matching evidence lines";
+}
+
+export function buildEvidenceClaimSummary(
+	options: Pick<EvidenceIoOptions, "readText"> & { missionId?: string; limit?: number } = {},
+): EvidenceClaimSummary {
+	const readText = options.readText ?? readTextFile;
+	const records = parseEvidenceRecords(readText(evidenceLedgerPath()))
+		.filter((record) => !options.missionId || record.missionId === options.missionId)
+		.slice(-(options.limit ?? 80));
+	const byClaim = new Map<string, EvidenceClaimState>();
+	for (const record of records) {
+		const hypothesis = record.hypothesis;
+		if (!hypothesis) continue;
+		const claimId = record.claimId ?? `anonymous:${slug(record.title)}:${slug(record.timestamp)}`;
+		const claim: EvidenceClaimState = {
+			claimId,
+			missionId: record.missionId,
+			timestamp: record.timestamp,
+			title: record.title,
+			kind: record.kind,
+			priority: record.priority,
+			hypothesis,
+			prediction: record.prediction,
+			observation: record.observation,
+			counterexample: record.counterexample,
+			verdict: record.verdict ?? "proposed",
+			command: record.command,
+			verify: record.verify,
+		};
+		byClaim.delete(claimId);
+		byClaim.set(claimId, claim);
+	}
+	const claims = Array.from(byClaim.values());
+	const open = claims.filter((claim) => ["proposed", "supported", "inconclusive"].includes(claim.verdict));
+	const proved = claims.filter((claim) => claim.verdict === "proved");
+	const contradicted = claims.filter((claim) => claim.verdict === "contradicted");
+	const nextCommandForClaim = (claim: EvidenceClaimState): string | undefined =>
+		claim.verdict === "proposed"
+			? (claim.command ?? claim.verify)
+			: claim.verdict === "supported"
+				? claim.verify
+				: undefined;
+	const nextCommands = Array.from(
+		new Set(open.map(nextCommandForClaim).filter((command): command is string => Boolean(command))),
+	).slice(0, 12);
+	return {
+		claims,
+		open,
+		proved,
+		contradicted,
+		nextCommands,
+		lines: [
+			`claim_lifecycle: total=${claims.length} open=${open.length} proved=${proved.length} contradicted=${contradicted.length}`,
+			...open
+				.slice(-8)
+				.map(
+					(claim) =>
+						`open_claim: id=${claim.claimId} verdict=${claim.verdict} hypothesis=${truncateMiddle(claim.hypothesis, 180)} next=${nextCommandForClaim(claim) ?? "adjudicate recorded observation or add a distinguishing probe"}`,
+				),
+			...contradicted
+				.slice(-6)
+				.map(
+					(claim) =>
+						`refuted_claim: id=${claim.claimId} observation=${truncateMiddle(claim.counterexample ?? claim.observation ?? "missing", 180)}`,
+				),
+		],
+	};
 }
 
 export function buildStartupEvidenceDigest(
@@ -270,11 +463,11 @@ export function buildContextEvidenceTail(
 	options: EvidenceIoOptions & { target?: string; autoContextPack?: boolean } = {},
 ): string {
 	const truncate = options.truncate ?? truncateMiddle;
-	if (options.autoContextPack === true) return truncate(buildEvidenceDigest(undefined, options), 7000);
+	if (options.autoContextPack === true) return truncate(buildEvidenceDigest(undefined, options), 4096);
 	if (options.target) {
 		const scoped = buildEvidenceDigest(options.target, options);
 		if (scoped && scoped !== "No matching evidence lines" && !scoped.startsWith("证据 ledger 为空")) {
-			return truncate(scoped, 7000);
+			return truncate(scoped, 4096);
 		}
 	}
 	return buildStartupEvidenceDigest(options);
@@ -282,17 +475,18 @@ export function buildContextEvidenceTail(
 
 export function evidenceLedgerGraphNodes(
 	limit = 14,
-	options: Pick<EvidenceIoOptions, "readText"> = {},
+	options: Pick<EvidenceIoOptions, "readText"> & { missionId?: string } = {},
 ): EvidenceGraphNode[] {
 	const readText = options.readText ?? readTextFile;
-	const text = readText(evidenceLedgerPath());
-	const records = [...text.matchAll(/^##\s+(.+?)\s+—\s+P(\d+)\s+—\s+(.+?)\s+—\s+(.+)$/gm)].slice(-limit);
-	return records.map((match, index) => ({
-		id: `evidence:${index}:${slug(match[4] ?? "evidence")}`,
-		kind: "evidence",
-		label: match[4]?.trim() ?? "evidence",
-		status: match[3]?.trim(),
-		priority: Number.parseInt(match[2] ?? "7", 10),
-		note: match[1]?.trim(),
+	const records = parseEvidenceRecords(readText(evidenceLedgerPath()))
+		.filter((record) => !options.missionId || record.missionId === options.missionId)
+		.slice(-limit);
+	return records.map((record) => ({
+		id: `evidence:${record.ledgerIndex}:${slug(record.title)}`,
+		kind: "evidence" as const,
+		label: record.title,
+		status: record.verdict ?? record.kind,
+		priority: record.priority,
+		note: record.hypothesis ?? record.timestamp,
 	}));
 }

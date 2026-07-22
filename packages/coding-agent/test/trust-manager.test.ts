@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { hasProjectTrustInputs, ProjectTrustStore } from "../src/core/trust-manager.ts";
+import { resolveRuntimeProjectTrusted } from "../src/main.ts";
 
 describe("ProjectTrustStore", () => {
 	let tempDir: string;
@@ -81,6 +82,42 @@ describe("ProjectTrustStore", () => {
 
 		mkdirSync(join(cwd, ".agents", "skills"), { recursive: true });
 		expect(hasProjectTrustInputs(cwd)).toBe(true);
+	});
+
+	it("re-evaluates trust when a runtime moves to another project", () => {
+		const otherCwd = join(tempDir, "other-project");
+		mkdirSync(join(otherCwd, ".repi"), { recursive: true });
+		const store = new ProjectTrustStore(agentDir);
+		store.set(cwd, false);
+
+		// Returning to the startup cwd preserves its session-only decision even if
+		// the persisted store says otherwise.
+		expect(
+			resolveRuntimeProjectTrusted({
+				cwd,
+				initialSessionCwd: cwd,
+				initialProjectTrusted: true,
+				trustStore: store,
+			}),
+		).toBe(true);
+		expect(
+			resolveRuntimeProjectTrusted({
+				cwd: otherCwd,
+				initialSessionCwd: cwd,
+				initialProjectTrusted: true,
+				trustStore: store,
+			}),
+		).toBe(false);
+
+		store.set(otherCwd, true);
+		expect(
+			resolveRuntimeProjectTrusted({
+				cwd: otherCwd,
+				initialSessionCwd: cwd,
+				initialProjectTrusted: true,
+				trustStore: store,
+			}),
+		).toBe(true);
 	});
 
 	describe("atomic persistence", () => {

@@ -1,4 +1,9 @@
-import type { AgentMessage } from "@pi-recon/repi-agent-core";
+import {
+	type AgentMessage,
+	DEFAULT_COMPACTION_SETTINGS as CORE_DEFAULT_COMPACTION_SETTINGS,
+	compactionTriggerTokens as coreCompactionTriggerTokens,
+	shouldCompact as coreShouldCompact,
+} from "@pi-recon/repi-agent-core";
 import type { AssistantMessage, Usage } from "@pi-recon/repi-ai";
 import { getModel } from "@pi-recon/repi-ai";
 import { readFileSync } from "fs";
@@ -325,13 +330,50 @@ describe("getLastAssistantUsage", () => {
 		expect(usage!.input).toBe(100);
 	});
 
+	it("should skip all-zero assistant usage", () => {
+		const entries: SessionEntry[] = [
+			createMessageEntry(createUserMessage("Hello")),
+			createMessageEntry(createAssistantMessage("Hi", createMockUsage(100, 50))),
+			createMessageEntry(createUserMessage("continue")),
+			createMessageEntry(createAssistantMessage("Partial", createMockUsage(0, 0))),
+		];
+
+		const usage = getLastAssistantUsage(entries);
+		expect(usage).not.toBeNull();
+		expect(usage!.input).toBe(100);
+	});
+
 	it("should return undefined if no assistant messages", () => {
 		const entries: SessionEntry[] = [createMessageEntry(createUserMessage("Hello"))];
 		expect(getLastAssistantUsage(entries)).toBeUndefined();
 	});
 });
 
+describe("estimateContextTokens", () => {
+	it("uses the last non-zero assistant usage as the context anchor", () => {
+		const messages: AgentMessage[] = [
+			createUserMessage("Hello"),
+			createAssistantMessage("Hi", createMockUsage(100, 50)),
+			createUserMessage("continue"),
+			createAssistantMessage("Partial thinking", createMockUsage(0, 0)),
+		];
+
+		const estimate = estimateContextTokens(messages);
+
+		expect(estimate.usageTokens).toBe(150);
+		expect(estimate.lastUsageIndex).toBe(1);
+		expect(estimate.trailingTokens).toBeGreaterThan(0);
+		expect(estimate.tokens).toBe(150 + estimate.trailingTokens);
+	});
+});
+
 describe("shouldCompact", () => {
+	it("reuses the agent-core policy instead of maintaining a second implementation", () => {
+		expect(DEFAULT_COMPACTION_SETTINGS).toBe(CORE_DEFAULT_COMPACTION_SETTINGS);
+		expect(compactionTriggerTokens).toBe(coreCompactionTriggerTokens);
+		expect(shouldCompact).toBe(coreShouldCompact);
+	});
+
 	it("should return true when context exceeds threshold", () => {
 		const settings: CompactionSettings = {
 			enabled: true,
@@ -432,6 +474,27 @@ describe("findCutPoint", () => {
 		const entries: SessionEntry[] = [createMessageEntry(createAssistantMessage("a"))];
 		const result = findCutPoint(entries, 0, entries.length, 1000);
 		expect(result.firstKeptEntryIndex).toBe(0);
+	});
+
+	it("keeps a trailing tool result with its assistant cut point", () => {
+		const user = createMessageEntry(createUserMessage("run tool"));
+		const assistant = createMessageEntry({
+			...createAssistantMessage(""),
+			content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "file.ts" } }],
+			stopReason: "toolUse",
+		});
+		const toolResult = createMessageEntry({
+			role: "toolResult",
+			toolCallId: "call-1",
+			toolName: "read",
+			content: [{ type: "text", text: "tool output" }],
+			isError: false,
+			timestamp: Date.now(),
+		});
+		const result = findCutPoint([user, assistant, toolResult], 0, 3, 1);
+
+		expect(result.firstKeptEntryIndex).toBe(1);
+		expect(result.isSplitTurn).toBe(true);
 	});
 
 	it("should keep everything if all messages fit within budget", () => {

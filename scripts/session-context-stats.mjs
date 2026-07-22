@@ -6,9 +6,9 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 
-const DEFAULT_SESSIONS_DIR = path.join(homedir(), ".repi/agent/sessions");
-const MODELS_GENERATED_PATH = path.join(process.cwd(), "packages/ai/src/models.generated.ts");
-const MODELS_CONFIG_PATH = path.join(homedir(), ".repi/agent/models.json");
+const AGENT_DIR = process.env.REPI_CODING_AGENT_DIR || process.env.REPI_AGENT_DIR || path.join(homedir(), ".repi/agent");
+const DEFAULT_SESSIONS_DIR = path.join(AGENT_DIR, "sessions");
+const MODELS_CONFIG_PATH = path.join(AGENT_DIR, "models.json");
 const REPORT_TIME_ZONE = "Europe/Berlin";
 const CHART_WIDTH = 40;
 
@@ -112,34 +112,11 @@ async function* walkJsonlFiles(dir) {
 async function loadContextWindows() {
 	const windows = new Map();
 	const sources = [];
-	let text = "";
-	try {
-		text = await fs.readFile(MODELS_GENERATED_PATH, "utf8");
-		sources.push(MODELS_GENERATED_PATH);
-	} catch {
-		// Optional in non-repo usage.
-	}
-	const providerRegex = /\n\t"([^"]+)": \{([\s\S]*?\n\t)\},/g;
-	let providerMatch;
-	while ((providerMatch = providerRegex.exec(text)) !== null) {
-		const provider = providerMatch[1];
-		const body = providerMatch[2];
-		const modelRegex = /\n\t\t"([^"]+)": \{[\s\S]*?contextWindow: (\d+),/g;
-		let modelMatch;
-		while ((modelMatch = modelRegex.exec(body)) !== null) {
-			windows.set(`${provider}/${modelMatch[1]}`, Number(modelMatch[2]));
-		}
-	}
-
 	try {
 		const config = JSON.parse(await fs.readFile(MODELS_CONFIG_PATH, "utf8"));
 		sources.push(MODELS_CONFIG_PATH);
 		const providers = config?.providers && typeof config.providers === "object" ? config.providers : {};
 		for (const [providerName, provider] of Object.entries(providers)) {
-			const overrides = provider?.modelOverrides && typeof provider.modelOverrides === "object" ? provider.modelOverrides : {};
-			for (const [modelId, override] of Object.entries(overrides)) {
-				if (typeof override?.contextWindow === "number") windows.set(`${providerName}/${modelId}`, override.contextWindow);
-			}
 			if (Array.isArray(provider?.models)) {
 				for (const model of provider.models) {
 					if (typeof model?.id === "string" && typeof model.contextWindow === "number") windows.set(`${providerName}/${model.id}`, model.contextWindow);
@@ -148,6 +125,26 @@ async function loadContextWindows() {
 		}
 	} catch {
 		// Optional user config.
+	}
+
+	const firstEnv = (names) => names.map((name) => process.env[name]?.trim()).find(Boolean);
+	const envModel = firstEnv(["REPI_MODEL", "REPI_MODEL_ID"]);
+	const envContext = Number(
+		firstEnv([
+			"REPI_CONTEXT_WINDOW",
+			"REPI_MODEL_CONTEXT_WINDOW",
+			"REPI_AUTO_COMPACT_WINDOW",
+			"REPI_MODEL_AUTO_COMPACT_WINDOW",
+			"REPI_CONTEXT_LENGTH",
+			"REPI_MODEL_CONTEXT_LENGTH",
+		]),
+	);
+	if (envModel && Number.isSafeInteger(envContext) && envContext > 0) {
+		const envProvider = firstEnv(["REPI_PROVIDER", "REPI_MODEL_PROVIDER", "REPI_PROVIDER_ID"]) || "repi-env";
+		windows.set(`${envProvider}/${envModel}`, envContext);
+		const subagentModel = firstEnv(["REPI_SUBAGENT_MODEL"]);
+		if (subagentModel) windows.set(`${envProvider}/${subagentModel}`, envContext);
+		sources.push("REPI_* environment");
 	}
 
 	return { windows, sources };
@@ -341,7 +338,7 @@ function buildTextReport(summary) {
 	if (summary.filters.modelPrefixes.length > 0) lines.push(`Filters: model prefixes = ${summary.filters.modelPrefixes.join(", ")}`);
 	if (summary.filters.bashContains.length > 0) lines.push(`Filters: bash contains any of = ${summary.filters.bashContains.join(", ")}`);
 	if (summary.filters.cwd) lines.push(`Filters: cwd = ${summary.filters.cwd}`);
-	lines.push("Context usage parses full session JSONL files. max context uses max assistant usage.totalTokens per session, falling back to input + output + cacheRead + cacheWrite, plus compaction tokensBefore. medPreCompactCtx uses the last assistant usage before the first compaction, or the first compaction tokensBefore when present, divided by model contextWindow from packages/ai/src/models.generated.ts when known.");
+	lines.push("Context usage parses full session JSONL files. max context uses max assistant usage.totalTokens per session, falling back to input + output + cacheRead + cacheWrite, plus compaction tokensBefore. medPreCompactCtx uses the last assistant usage before the first compaction, or the first compaction tokensBefore when present, divided by model contextWindow from ~/.repi/agent/models.json when known.");
 	lines.push("");
 	lines.push("Totals");
 	lines.push(lineForGroup(summary.totals));

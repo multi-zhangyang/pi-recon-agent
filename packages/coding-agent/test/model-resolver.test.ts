@@ -8,6 +8,7 @@ async function withRepiEnv<T>(values: Record<string, string>, fn: () => T | Prom
 		"REPI_MODEL_ID",
 		"REPI_BASE_URL",
 		"REPI_MODEL_BASE_URL",
+		"REPI_ENDPOINT",
 		"REPI_PROVIDER",
 		"REPI_MODEL_PROVIDER",
 		"REPI_PROVIDER_ID",
@@ -25,6 +26,36 @@ async function withRepiEnv<T>(values: Record<string, string>, fn: () => T | Prom
 		}
 	}
 }
+
+test("REPI endpoint aliases participate in preferred model resolution", async () => {
+	await withRepiEnv(
+		{ REPI_ENDPOINT: "https://gateway.example/v1", REPI_MODEL_ID: "alias-model", REPI_PROVIDER_ID: "alias" },
+		async () => {
+			const model: Model<"openai-completions"> = {
+				id: "alias-model",
+				name: "Alias Model",
+				api: "openai-completions",
+				provider: "alias",
+				baseUrl: "https://gateway.example/v1",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 128000,
+				maxTokens: 8192,
+			};
+			const registry = {
+				find: (provider: string, id: string) =>
+					provider === model.provider && id === model.id ? model : undefined,
+			} as unknown as Parameters<typeof findInitialModel>[0]["modelRegistry"];
+			const result = await findInitialModel({
+				scopedModels: [],
+				isContinuing: false,
+				modelRegistry: registry,
+			});
+			expect(result.model).toBe(model);
+		},
+	);
+});
 
 // Mock models for testing
 const mockModels: Model<"anthropic-messages">[] = [

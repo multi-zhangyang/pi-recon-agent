@@ -1,7 +1,7 @@
 import { getOAuthProviders, type OAuthDeviceCodeInfo } from "@pi-recon/repi-ai/oauth";
 import { Container, type Focusable, getKeybindings, Input, Spacer, Text, type TUI } from "@pi-recon/repi-tui";
+import { theme } from "../../../core/presentation/theme-runtime.ts";
 import { openBrowser } from "../../../utils/open-browser.ts";
-import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint } from "./keybinding-hints.ts";
 

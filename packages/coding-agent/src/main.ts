@@ -9,7 +9,7 @@ import { createInterface } from "node:readline";
 import { type ImageContent, modelsAreEqual } from "@pi-recon/repi-ai";
 import { ProcessTerminal, setKeybindings, TUI } from "@pi-recon/repi-tui";
 import chalk from "chalk";
-import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.ts";
+import { type Args, isValidThinkingLevel, type Mode, parseArgs, printHelp } from "./cli/args.ts";
 import { processFileArguments } from "./cli/file-processor.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
@@ -44,14 +44,14 @@ import {
 	type ScopedModel,
 } from "./core/model-resolver.ts";
 import { installStdioErrorGuard, restoreStdout, takeOverStdout } from "./core/output-guard.ts";
+import { initTheme, stopThemeWatcher } from "./core/presentation/theme-runtime.ts";
 import {
 	createReconExtensionFactory,
 	createReconResourceLoaderOptions,
 	RECON_APPEND_SYSTEM_PROMPT,
 	RECON_SYSTEM_PROMPT,
 } from "./core/recon-profile.ts";
-import { noteIndexForInjection } from "./core/repi/memory-notes.ts";
-import { setMemoryScopeCwd } from "./core/repi/storage.ts";
+import { createRepiCapabilityActivationFactory } from "./core/repi/capabilities.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
 import {
 	formatMissingSessionCwdPrompt,
@@ -66,7 +66,6 @@ import { hasProjectTrustInputs, ProjectTrustStore } from "./core/trust-manager.t
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
 import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.ts";
 import { ExtensionSelectorComponent } from "./modes/interactive/components/extension-selector.ts";
-import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.ts";
@@ -599,8 +598,54 @@ async function resolveProjectTrusted(options: {
 	return false;
 }
 
+export function resolveRuntimeProjectTrusted(options: {
+	cwd: string;
+	initialSessionCwd: string;
+	initialProjectTrusted: boolean;
+	trustOverride?: boolean;
+	trustStore: Pick<ProjectTrustStore, "get">;
+}): boolean {
+	const runtimeCwd = resolvePath(options.cwd);
+	if (runtimeCwd === resolvePath(options.initialSessionCwd)) {
+		return options.initialProjectTrusted;
+	}
+	return options.trustOverride ?? (!hasProjectTrustInputs(runtimeCwd) || options.trustStore.get(runtimeCwd) === true);
+}
+
 export interface MainOptions {
 	extensionFactories?: ExtensionFactory[];
+}
+
+export interface RepiPromptComposition {
+	systemPrompt?: string;
+	appendSystemPrompt?: string[];
+	injectPromptPackets: boolean;
+}
+
+export function resolveRepiPromptComposition(
+	parsed: Pick<Args, "recon" | "systemPrompt" | "appendSystemPrompt">,
+): RepiPromptComposition {
+	if (!parsed.recon) {
+		return {
+			systemPrompt: parsed.systemPrompt,
+			appendSystemPrompt: parsed.appendSystemPrompt,
+			injectPromptPackets: false,
+		};
+	}
+
+	if (parsed.systemPrompt !== undefined) {
+		return {
+			systemPrompt: parsed.systemPrompt,
+			appendSystemPrompt: parsed.appendSystemPrompt,
+			injectPromptPackets: false,
+		};
+	}
+
+	return {
+		systemPrompt: RECON_SYSTEM_PROMPT,
+		appendSystemPrompt: [RECON_APPEND_SYSTEM_PROMPT, ...(parsed.appendSystemPrompt ?? [])],
+		injectPromptPackets: true,
+	};
 }
 
 export async function main(args: string[], options?: MainOptions) {
@@ -634,7 +679,8 @@ export async function main(args: string[], options?: MainOptions) {
 
 	const parsed = parseArgs(args);
 	if (parsed.recon && parsed.thinking === undefined) {
-		parsed.thinking = "high";
+		const defaultThinking = process.env.REPI_DEFAULT_THINKING?.trim().toLowerCase();
+		if (defaultThinking && isValidThinkingLevel(defaultThinking)) parsed.thinking = defaultThinking;
 	}
 	if (parsed.diagnostics.length > 0) {
 		for (const d of parsed.diagnostics) {
@@ -736,14 +782,10 @@ export async function main(args: string[], options?: MainOptions) {
 		sessionManager.appendSessionInfo(name);
 	}
 	time("createSessionManager");
-	// opt #273: scope the memory subsystem to the session's authoritative cwd
-	// so memory is project-local (per-cwd) instead of global — prevents
-	// cross-project memory pollution. Set before appendSystemPrompt so the
-	// re_note index injection reads the right project's notes.
-	setMemoryScopeCwd(sessionManager.getCwd());
 
 	const trustStore = new ProjectTrustStore(agentDir);
 	const trustPromptMode: AppMode = parsed.help || parsed.listModels !== undefined ? "print" : appMode;
+	const initialSessionCwd = resolvePath(sessionManager.getCwd());
 	const projectTrustedForSession = await resolveProjectTrusted({
 		cwd: sessionManager.getCwd(),
 		trustStore,
@@ -756,22 +798,34 @@ export async function main(args: string[], options?: MainOptions) {
 	const resolvedSkillPaths = resolveCliPaths(cwd, parsed.skills);
 	const resolvedPromptTemplatePaths = resolveCliPaths(cwd, parsed.promptTemplates);
 	const resolvedThemePaths = resolveCliPaths(cwd, parsed.themes);
-	const reconResourceLoaderOptions = parsed.recon ? createReconResourceLoaderOptions() : {};
+	const promptComposition = resolveRepiPromptComposition(parsed);
+	const reconResourceLoaderOptions = parsed.recon
+		? createReconResourceLoaderOptions({
+				// Keep the default skill index out of every provider request. The
+				// route/capability packets are enough for the first probe; users can
+				// still opt into a skill explicitly with --skill or /skills.
+				includeBuiltinSkill: false,
+				materializeBuiltinResources: false,
+			})
+		: {};
+	const preserveExplicitToolSelection =
+		parsed.tools !== undefined || parsed.noTools === true || parsed.noBuiltinTools === true;
 	const extensionFactories = parsed.recon
-		? [createReconExtensionFactory(), ...(options?.extensionFactories ?? [])]
-		: options?.extensionFactories;
-	// opt #273 follow-on: inject the Claude-Code-style project note index into
-	// the system prompt so durable per-project facts are visible at session
-	// start (mirrors Claude Code's MEMORY.md auto-load). Empty when no notes.
-	const noteIndexSegment = parsed.recon ? noteIndexForInjection() : "";
-	const appendSystemPrompt = parsed.recon
 		? [
-				...(parsed.appendSystemPrompt ?? []),
-				RECON_APPEND_SYSTEM_PROMPT,
-				...(noteIndexSegment ? [noteIndexSegment] : []),
+				createReconExtensionFactory({
+					injectRuntimePacket: promptComposition.injectPromptPackets,
+					materializeResources: false,
+				}),
+				createRepiCapabilityActivationFactory({
+					preserveExplicitToolSelection,
+					// Tool schemas are the source of truth. A static capability packet
+					// becomes stale after re_capabilities changes the active profile.
+					injectPromptPacket: false,
+				}),
+				...(options?.extensionFactories ?? []),
 			]
-		: parsed.appendSystemPrompt;
-	const systemPrompt = parsed.systemPrompt ?? (parsed.recon ? RECON_SYSTEM_PROMPT : undefined);
+		: options?.extensionFactories;
+	const { appendSystemPrompt, systemPrompt } = promptComposition;
 	const authStorage = AuthStorage.create();
 	const createRuntime: CreateAgentSessionRuntimeFactory = async ({
 		cwd,
@@ -779,12 +833,13 @@ export async function main(args: string[], options?: MainOptions) {
 		sessionManager,
 		sessionStartEvent,
 	}) => {
-		const runtimeCwd = resolvePath(cwd);
-		const runtimeSessionCwd = resolvePath(sessionManager.getCwd());
-		const projectTrusted =
-			runtimeCwd === runtimeSessionCwd
-				? projectTrustedForSession
-				: (parsed.projectTrustOverride ?? (!hasProjectTrustInputs(cwd) || trustStore.get(cwd) === true));
+		const projectTrusted = resolveRuntimeProjectTrusted({
+			cwd,
+			initialSessionCwd,
+			initialProjectTrusted: projectTrustedForSession,
+			trustOverride: parsed.projectTrustOverride,
+			trustStore,
+		});
 		const runtimeSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
 		const services = await createAgentSessionServices({
 			cwd,
@@ -802,7 +857,12 @@ export async function main(args: string[], options?: MainOptions) {
 				noSkills: parsed.noSkills,
 				noPromptTemplates: parsed.noPromptTemplates,
 				noThemes: parsed.noThemes,
-				noContextFiles: parsed.noContextFiles,
+				// REPI treats repository instruction files as untrusted target input,
+				// not ambient system instructions. Opt in explicitly when a trusted
+				// workspace really needs AGENTS.md/CLAUDE.md compatibility.
+				noContextFiles: parsed.recon
+					? parsed.noContextFiles === true || !isTruthyEnvFlag(process.env.REPI_CONTEXT_FILES)
+					: parsed.noContextFiles,
 				systemPrompt,
 				appendSystemPrompt,
 				extensionFactories,
@@ -874,6 +934,14 @@ export async function main(args: string[], options?: MainOptions) {
 		agentDir,
 		sessionManager,
 	});
+	// Mission state is stored under the profile root for compatibility, but its
+	// contents must follow the committed runtime cwd. Candidate creation failures
+	// must leave the current scope untouched.
+	const updateMissionScope = (runtimeCwd: string) => {
+		process.env.REPI_MISSION_SCOPE = runtimeCwd;
+	};
+	runtime.setAfterSessionApply(updateMissionScope);
+	updateMissionScope(runtime.cwd);
 	time("createAgentSessionRuntime");
 	const { services, session, modelFallbackMessage } = runtime;
 	const { settingsManager, modelRegistry, resourceLoader } = services;

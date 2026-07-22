@@ -9,6 +9,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as _bundledPiAgentCore from "@pi-recon/repi-agent-core";
 import * as _bundledPiAgentCoreNode from "@pi-recon/repi-agent-core/node";
+import type { Provider } from "@pi-recon/repi-ai";
 import * as _bundledPiAi from "@pi-recon/repi-ai";
 import * as _bundledPiAiOauth from "@pi-recon/repi-ai/oauth";
 import type { KeyId } from "@pi-recon/repi-tui";
@@ -202,6 +203,8 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		setThinkingLevel: notInitialized,
 		flagValues: new Map(),
 		pendingProviderRegistrations: [],
+		pendingNativeProviderRegistrations: [],
+		nextProviderRegistrationOrder: 0,
 		assertActive,
 		invalidate: (message) => {
 			state.staleMessage ??=
@@ -211,10 +214,27 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		// Pre-bind: queue registrations so bindCore() can flush them once the
 		// model registry is available. bindCore() replaces both with direct calls.
 		registerProvider: (name, config, extensionPath = "<unknown>") => {
-			runtime.pendingProviderRegistrations.push({ name, config, extensionPath });
+			runtime.pendingProviderRegistrations.push({
+				name,
+				config,
+				extensionPath,
+				order: runtime.nextProviderRegistrationOrder++,
+			});
 		},
-		unregisterProvider: (name) => {
-			runtime.pendingProviderRegistrations = runtime.pendingProviderRegistrations.filter((r) => r.name !== name);
+		registerNativeProvider: (provider, extensionPath = "<unknown>") => {
+			runtime.pendingNativeProviderRegistrations.push({
+				provider,
+				extensionPath,
+				order: runtime.nextProviderRegistrationOrder++,
+			});
+		},
+		unregisterProvider: (name, extensionPath = "<unknown>") => {
+			runtime.pendingProviderRegistrations = runtime.pendingProviderRegistrations.filter(
+				(registration) => registration.name !== name || registration.extensionPath !== extensionPath,
+			);
+			runtime.pendingNativeProviderRegistrations = runtime.pendingNativeProviderRegistrations.filter(
+				(registration) => registration.provider.id !== name || registration.extensionPath !== extensionPath,
+			);
 		},
 	};
 
@@ -364,9 +384,14 @@ function createExtensionAPI(
 			runtime.setThinkingLevel(level);
 		},
 
-		registerProvider(name: string, config: ProviderConfig) {
+		registerProvider(providerOrName: Provider | string, config?: ProviderConfig) {
 			runtime.assertActive();
-			runtime.registerProvider(name, config, extension.path);
+			if (typeof providerOrName === "string") {
+				if (!config) throw new Error("Provider config is required when registering by name");
+				runtime.registerProvider(providerOrName, config, extension.path);
+				return;
+			}
+			runtime.registerNativeProvider(providerOrName, extension.path);
 		},
 
 		unregisterProvider(name: string) {

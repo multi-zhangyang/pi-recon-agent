@@ -9,7 +9,8 @@ import {
 	type ThinkingBudgets,
 	type Transport,
 } from "@pi-recon/repi-ai";
-import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.ts";
+import { AgentEventDeliveryError, runAgentLoop, runAgentLoopContinue } from "./agent-loop.ts";
+import { PendingMessageQueue } from "./pending-message-queue.ts";
 import type {
 	AfterToolCallContext,
 	AfterToolCallResult,
@@ -147,6 +148,10 @@ export interface AgentOptions {
 	 * Non-positive / undefined = unbounded (default).
 	 */
 	maxTurns?: number;
+	/** See {@link AgentLoopConfig.reserveFinalTurn}. */
+	reserveFinalTurn?: boolean;
+	/** See {@link AgentLoopConfig.finalTurnPrompt}. */
+	finalTurnPrompt?: string;
 	/**
 	 * Side-effect callback fired when a run stops because {@link maxTurns} was reached.
 	 */
@@ -165,6 +170,10 @@ export interface AgentOptions {
 	isRetryableStreamError?: (message: AssistantMessage) => boolean;
 	/** See {@link AgentLoopConfig.maxToolResultChars}. */
 	maxToolResultChars?: number;
+	/** See {@link AgentLoopConfig.maxConsumedToolResultChars}. */
+	maxConsumedToolResultChars?: number;
+	/** See {@link AgentLoopConfig.deduplicateReadOnlyToolCalls}. */
+	deduplicateReadOnlyToolCalls?: boolean;
 	prepareNextTurn?: (
 		signal?: AbortSignal,
 	) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
@@ -175,42 +184,6 @@ export interface AgentOptions {
 	transport?: Transport;
 	maxRetryDelayMs?: number;
 	toolExecution?: ToolExecutionMode;
-}
-
-class PendingMessageQueue {
-	private messages: AgentMessage[] = [];
-	public mode: QueueMode;
-
-	constructor(mode: QueueMode) {
-		this.mode = mode;
-	}
-
-	enqueue(message: AgentMessage): void {
-		this.messages.push(message);
-	}
-
-	hasItems(): boolean {
-		return this.messages.length > 0;
-	}
-
-	drain(): AgentMessage[] {
-		if (this.mode === "all") {
-			const drained = this.messages.slice();
-			this.messages = [];
-			return drained;
-		}
-
-		const first = this.messages[0];
-		if (!first) {
-			return [];
-		}
-		this.messages = this.messages.slice(1);
-		return [first];
-	}
-
-	clear(): void {
-		this.messages = [];
-	}
 }
 
 type ActiveRun = {
@@ -228,8 +201,8 @@ type ActiveRun = {
 export class Agent {
 	private _state: MutableAgentState;
 	private readonly listeners = new Set<(event: AgentEvent, signal: AbortSignal) => Promise<void> | void>();
-	private readonly steeringQueue: PendingMessageQueue;
-	private readonly followUpQueue: PendingMessageQueue;
+	private readonly steeringQueue: PendingMessageQueue<AgentMessage>;
+	private readonly followUpQueue: PendingMessageQueue<AgentMessage>;
 	// Per-run terminal-event tracking for handleRunFailure: if a real assistant
 	// was already committed (message_end fired) before a throw — e.g. a listener
 	// threw inside processEvents on a message_update, or a post-message hook
@@ -241,6 +214,7 @@ export class Agent {
 	// (FIX 3 contract), so a committed message is observable here.
 	private turnMessageEndEmitted = false;
 	private turnEndEmitted = false;
+	private agentEndEmitted = false;
 	private lastCommittedAssistant?: AssistantMessage;
 
 	public convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
@@ -263,6 +237,10 @@ export class Agent {
 	) => boolean | Promise<boolean>;
 	/** Hard cap on assistant turns per run (undefined = unbounded). */
 	public maxTurns?: number;
+	/** Whether maxTurns reserves a final tool-free synthesis request. */
+	public reserveFinalTurn?: boolean;
+	/** Override prompt for the reserved final synthesis request. */
+	public finalTurnPrompt?: string;
 	/** Fired when a run stops because maxTurns was reached. */
 	public onRunBudgetExceeded?: (info: { turns: number; maxTurns: number }) => void;
 	/** Max auto-continue re-prompts on a length stop (0/unset = disabled). */
@@ -279,6 +257,10 @@ export class Agent {
 	public isRetryableStreamError?: (message: AssistantMessage) => boolean;
 	/** Defense-in-depth cap (chars) on tool result text blocks; 0 disables. */
 	public maxToolResultChars?: number;
+	/** Aggregate provider-context budget for already-consumed tool results. */
+	public maxConsumedToolResultChars?: number;
+	/** Whether identical read-only probes are deduplicated within a run. */
+	public deduplicateReadOnlyToolCalls?: boolean;
 	public prepareNextTurn?: (
 		signal?: AbortSignal,
 	) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
@@ -306,6 +288,8 @@ export class Agent {
 		this.afterToolCall = options.afterToolCall;
 		this.shouldStopAfterTurn = options.shouldStopAfterTurn;
 		this.maxTurns = options.maxTurns;
+		this.reserveFinalTurn = options.reserveFinalTurn;
+		this.finalTurnPrompt = options.finalTurnPrompt;
 		this.onRunBudgetExceeded = options.onRunBudgetExceeded;
 		this.lengthContinueMaxTurns = options.lengthContinueMaxTurns;
 		this.lengthContinuePrompt = options.lengthContinuePrompt;
@@ -314,9 +298,11 @@ export class Agent {
 		this.streamRetryMaxDelayMs = options.streamRetryMaxDelayMs;
 		this.isRetryableStreamError = options.isRetryableStreamError;
 		this.maxToolResultChars = options.maxToolResultChars;
+		this.maxConsumedToolResultChars = options.maxConsumedToolResultChars;
+		this.deduplicateReadOnlyToolCalls = options.deduplicateReadOnlyToolCalls;
 		this.prepareNextTurn = options.prepareNextTurn;
-		this.steeringQueue = new PendingMessageQueue(options.steeringMode ?? "one-at-a-time");
-		this.followUpQueue = new PendingMessageQueue(options.followUpMode ?? "one-at-a-time");
+		this.steeringQueue = new PendingMessageQueue<AgentMessage>(options.steeringMode ?? "one-at-a-time");
+		this.followUpQueue = new PendingMessageQueue<AgentMessage>(options.followUpMode ?? "one-at-a-time");
 		this.sessionId = options.sessionId;
 		this.thinkingBudgets = options.thinkingBudgets;
 		this.transport = options.transport ?? "auto";
@@ -418,6 +404,9 @@ export class Agent {
 
 	/** Clear transcript state, runtime state, and queued messages. */
 	reset(): void {
+		if (this.activeRun) {
+			throw new Error("Cannot reset while Agent is processing. Abort and wait for completion first.");
+		}
 		this._state.messages = [];
 		this._state.isStreaming = false;
 		this._state.streamingMessage = undefined;
@@ -525,6 +514,18 @@ export class Agent {
 		};
 	}
 
+	private claimQueuedMessageDelivery(message: AgentMessage): boolean {
+		if (this.signal?.aborted && (this.steeringQueue.isInFlight(message) || this.followUpQueue.isInFlight(message))) {
+			return false;
+		}
+		const steeringCancelled = this.steeringQueue.consumeCancellation(message);
+		const followUpCancelled = this.followUpQueue.consumeCancellation(message);
+		if (steeringCancelled || followUpCancelled) return false;
+		this.steeringQueue.beginDelivery(message);
+		this.followUpQueue.beginDelivery(message);
+		return true;
+	}
+
 	private createLoopConfig(options: { skipInitialSteeringPoll?: boolean } = {}): AgentLoopConfig {
 		let skipInitialSteeringPoll = options.skipInitialSteeringPoll === true;
 		return {
@@ -538,6 +539,8 @@ export class Agent {
 			maxRetryDelayMs: this.maxRetryDelayMs,
 			toolExecution: this.toolExecution,
 			maxTurns: this.maxTurns,
+			reserveFinalTurn: this.reserveFinalTurn,
+			finalTurnPrompt: this.finalTurnPrompt,
 			onRunBudgetExceeded: this.onRunBudgetExceeded,
 			lengthContinueMaxTurns: this.lengthContinueMaxTurns,
 			lengthContinuePrompt: this.lengthContinuePrompt,
@@ -546,13 +549,27 @@ export class Agent {
 			streamRetryMaxDelayMs: this.streamRetryMaxDelayMs,
 			isRetryableStreamError: this.isRetryableStreamError,
 			maxToolResultChars: this.maxToolResultChars,
+			maxConsumedToolResultChars: this.maxConsumedToolResultChars,
+			deduplicateReadOnlyToolCalls: this.deduplicateReadOnlyToolCalls,
 			beforeToolCall: this.beforeToolCall,
 			afterToolCall: this.afterToolCall,
 			shouldStopAfterTurn: this.shouldStopAfterTurn
 				? async (context) => (await this.shouldStopAfterTurn?.(context, this.signal)) === true
 				: undefined,
-			prepareNextTurn: this.prepareNextTurn ? async () => await this.prepareNextTurn?.(this.signal) : undefined,
+			// The low-level loop owns a context snapshot for the duration of a run. Extensions
+			// and tool handlers can still update Agent.state between turns (for example,
+			// progressive tool activation), so refresh the next provider turn from live state
+			// even when the caller did not install a custom prepareNextTurn hook.
+			prepareNextTurn: async () => {
+				const prepared = await this.prepareNextTurn?.(this.signal);
+				return {
+					context: prepared?.context ?? this.createContextSnapshot(),
+					model: prepared?.model ?? this._state.model,
+					thinkingLevel: prepared?.thinkingLevel ?? this._state.thinkingLevel,
+				};
+			},
 			convertToLlm: this.convertToLlm,
+			claimMessageDelivery: (message) => this.claimQueuedMessageDelivery(message),
 			transformContext: this.transformContext,
 			getApiKey: this.getApiKey,
 			getSteeringMessages: async () => {
@@ -600,6 +617,7 @@ export class Agent {
 		// lifecycle, and a prior turn_end must not skip this run's turn_end).
 		this.turnMessageEndEmitted = false;
 		this.turnEndEmitted = false;
+		this.agentEndEmitted = false;
 		this.lastCommittedAssistant = undefined;
 
 		// Apply the raised listener cap AFTER activeRun + isStreaming are set (so
@@ -631,7 +649,21 @@ export class Agent {
 			// labeling (aborted vs error) stays correct. (opt #116)
 			const wasAborted = abortController.signal.aborted;
 			if (!wasAborted) abortController.abort();
-			await this.handleRunFailure(error, wasAborted);
+			try {
+				await this.handleRunFailure(error, wasAborted);
+			} catch (recoveryError) {
+				if (error instanceof AgentEventDeliveryError) {
+					throw new AggregateError(
+						[error, recoveryError],
+						"Agent event delivery failed and terminal recovery also failed",
+					);
+				}
+				throw recoveryError;
+			}
+			// Provider/runtime failures are represented in-band by the failure
+			// assistant. Delivery failures indicate external state may have diverged,
+			// so terminal recovery cannot turn them into a successful call result.
+			if (error instanceof AgentEventDeliveryError) throw error;
 		} finally {
 			this.finishRun();
 		}
@@ -669,7 +701,9 @@ export class Agent {
 			if (!this.turnEndEmitted) {
 				await emit({ type: "turn_end", message: committed, toolResults: [] });
 			}
-			await emit({ type: "agent_end", messages: [committed] });
+			if (!this.agentEndEmitted) {
+				await emit({ type: "agent_end", messages: [committed] });
+			}
 			if (listenerError !== undefined) throw listenerError;
 			return;
 		}
@@ -692,6 +726,12 @@ export class Agent {
 	}
 
 	private finishRun(): void {
+		// A queue drain is committed only by its message_end reducer. Return items
+		// that were drained but never committed (budget stop or listener failure).
+		this.steeringQueue.restoreUnacknowledged();
+		this.followUpQueue.restoreUnacknowledged();
+		this.steeringQueue.clearCancellationMarkers();
+		this.followUpQueue.clearCancellationMarkers();
 		this._state.isStreaming = false;
 		this._state.streamingMessage = undefined;
 		this._state.pendingToolCalls = new Set<string>();
@@ -739,6 +779,8 @@ export class Agent {
 			case "message_end":
 				this._state.streamingMessage = undefined;
 				this._state.messages.push(event.message);
+				this.steeringQueue.acknowledge(event.message);
+				this.followUpQueue.acknowledge(event.message);
 				if (event.message.role === "assistant") {
 					this.lastCommittedAssistant = event.message as AssistantMessage;
 					this.turnMessageEndEmitted = true;
@@ -768,6 +810,7 @@ export class Agent {
 
 			case "agent_end":
 				this._state.streamingMessage = undefined;
+				this.agentEndEmitted = true;
 				break;
 		}
 
@@ -775,7 +818,9 @@ export class Agent {
 		if (!signal) {
 			throw new Error("Agent listener invoked outside active run");
 		}
-		for (const listener of this.listeners) {
+		// Snapshot subscribers so changes made by a callback affect only later
+		// events, not the event currently being dispatched.
+		for (const listener of Array.from(this.listeners)) {
 			await listener(event, signal);
 		}
 	}

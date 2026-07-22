@@ -5,6 +5,10 @@ import { streamOpenAICompletions } from "../src/providers/openai-completions.ts"
 import { streamOpenAIResponses } from "../src/providers/openai-responses.ts";
 import { stream } from "../src/stream.ts";
 import type { Context, Model } from "../src/types.ts";
+import { registerAnthropicFixtures, registerOpenAIFixtures } from "./model-fixtures.ts";
+
+registerAnthropicFixtures();
+registerOpenAIFixtures();
 
 class PayloadCaptured extends Error {
 	constructor() {

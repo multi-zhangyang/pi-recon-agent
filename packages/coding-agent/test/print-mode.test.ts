@@ -12,7 +12,11 @@ type FakeExtensionRunner = {
 
 type FakeSession = {
 	sessionManager: { getHeader: () => object | undefined };
-	agent: { waitForIdle: ReturnType<typeof vi.fn<() => Promise<void>>> };
+	agent: {
+		waitForIdle: ReturnType<typeof vi.fn<() => Promise<void>>>;
+		maxTurns?: number;
+		reserveFinalTurn?: boolean;
+	};
 	state: { messages: AssistantMessage[] };
 	extensionRunner: FakeExtensionRunner;
 	bindExtensions: ReturnType<typeof vi.fn>;
@@ -202,6 +206,61 @@ describe("runPrintMode", () => {
 		writeSpy.mockRestore();
 	});
 
+	it("compacts streaming message_update events in json print mode", async () => {
+		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "done" }));
+		const { session } = runtimeHost;
+		let listener: ((event: any) => void) | undefined;
+		session.subscribe.mockImplementation((fn) => {
+			listener = fn;
+			return () => {};
+		});
+		const finalMessage = createAssistantMessage({ text: "streamed answer" });
+		session.prompt.mockImplementation(async () => {
+			listener?.({ type: "message_start", message: finalMessage });
+			listener?.({
+				type: "message_update",
+				message: finalMessage,
+				assistantMessageEvent: {
+					type: "text_delta",
+					contentIndex: 0,
+					delta: "streamed answer",
+					partial: finalMessage,
+				},
+			});
+			session.state.messages = [finalMessage];
+			listener?.({ type: "message_end", message: finalMessage });
+		});
+
+		const written: string[] = [];
+		const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: any, encOrCb?: any, cb?: any) => {
+			written.push(String(chunk));
+			const callback = typeof encOrCb === "function" ? encOrCb : cb;
+			if (typeof callback === "function") callback();
+			return true;
+		});
+
+		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+			mode: "json",
+			initialMessage: "stream me",
+		});
+
+		expect(exitCode).toBe(0);
+		const updates = written
+			.join("")
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line) as Record<string, any>)
+			.filter((event) => event.type === "message_update");
+		expect(updates).toHaveLength(1);
+		expect(updates[0]).not.toHaveProperty("message");
+		expect(updates[0]?.assistantMessageEvent).toEqual({
+			type: "text_delta",
+			contentIndex: 0,
+			delta: "streamed answer",
+		});
+		writeSpy.mockRestore();
+	});
+
 	it("prints text-mode extension status only when REPI_PRINT_STATUS is set", async () => {
 		process.env.REPI_PRINT_STATUS = "1";
 		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "" }));
@@ -238,6 +297,22 @@ describe("runPrintMode", () => {
 		expect(errorSpy).toHaveBeenCalledWith("provider failure");
 		expect(session.extensionRunner.emit).toHaveBeenCalledTimes(1);
 		expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
+	});
+
+	it("returns non-zero on assistant error in JSON mode", async () => {
+		const runtimeHost = createRuntimeHost(
+			createAssistantMessage({ stopReason: "error", errorMessage: "provider failure" }),
+		);
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+			mode: "json",
+			initialMessage: "trigger provider failure",
+		});
+
+		expect(exitCode).toBe(1);
+		expect(errorSpy).not.toHaveBeenCalledWith("provider failure");
+		expect(runtimeHost.dispose).toHaveBeenCalledTimes(1);
 	});
 
 	it("allows a short assistant-output grace after print timeout", async () => {
@@ -404,24 +479,15 @@ describe("runPrintMode", () => {
 		errorSpy.mockRestore();
 	});
 
-	it("prints a guard summary when max-turn abort fires before assistant text", async () => {
+	it("delegates the print turn budget to a reserved final agent turn", async () => {
 		process.env.REPI_PRINT_MAX_TURNS = "1";
 		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "" }));
 		const { session } = runtimeHost;
-		let listener: ((event: any) => void) | undefined;
-		session.subscribe.mockImplementation((fn) => {
-			listener = fn;
-			return () => {};
+		session.prompt.mockImplementation(async () => {
+			expect(session.agent.maxTurns).toBe(1);
+			expect(session.agent.reserveFinalTurn).toBe(true);
+			session.state.messages = [createAssistantMessage({ text: "bounded final answer" })];
 		});
-		session.prompt.mockImplementation(
-			() =>
-				new Promise<void>(() => {
-					queueMicrotask(() => {
-						listener?.({ type: "turn_start", turnIndex: 0, timestamp: Date.now() });
-						listener?.({ type: "turn_start", turnIndex: 1, timestamp: Date.now() });
-					});
-				}),
-		);
 
 		const written: string[] = [];
 		const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: any, encOrCb?: any, cb?: any) => {
@@ -437,10 +503,12 @@ describe("runPrintMode", () => {
 			initialMessage: "loop until guard",
 		});
 
-		expect(exitCode).toBe(1);
-		expect(session.abort).toHaveBeenCalledTimes(1);
-		expect(written.join("")).toContain("[REPI print guard] aborted: max_turns_exceeded:2/1");
-		expect(errorSpy).toHaveBeenCalledWith("REPI print guard aborted: max_turns_exceeded:2/1");
+		expect(exitCode).toBe(0);
+		expect(session.abort).not.toHaveBeenCalled();
+		expect(written.join("")).toContain("bounded final answer");
+		expect(session.agent.maxTurns).toBeUndefined();
+		expect(session.agent.reserveFinalTurn).toBeUndefined();
+		expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("max_turns_exceeded"));
 
 		writeSpy.mockRestore();
 		errorSpy.mockRestore();

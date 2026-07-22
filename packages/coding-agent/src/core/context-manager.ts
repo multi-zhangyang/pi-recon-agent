@@ -1,5 +1,10 @@
 import type { AgentMessage } from "@pi-recon/repi-agent-core";
-import { compactionTriggerTokens, estimateTokens } from "./compaction/compaction.ts";
+import {
+	type CompactionSettings,
+	compactionTriggerTokens,
+	DEFAULT_COMPACTION_SETTINGS,
+	estimateTokens,
+} from "./compaction/compaction.ts";
 import type { Skill } from "./skills.ts";
 import { formatSkillsForPrompt } from "./skills.ts";
 
@@ -40,13 +45,7 @@ export interface BuildContextBreakdownOptions {
 	contextWindow?: number;
 	currentTokens?: number | null;
 	currentPercent?: number | null;
-	compactionSettings?: {
-		enabled: boolean;
-		reserveTokens: number;
-		keepRecentTokens: number;
-		triggerPercent?: number;
-		warningPercent?: number;
-	};
+	compactionSettings?: CompactionSettings;
 }
 
 function tokensFromText(text: string | undefined): number {
@@ -117,22 +116,10 @@ function categoryForMessage(message: AgentMessage): string {
 
 export function buildContextBreakdown(options: BuildContextBreakdownOptions): ContextBreakdown {
 	const contextWindow = options.contextWindow && options.contextWindow > 0 ? options.contextWindow : undefined;
-	const triggerTokens = contextWindow
-		? compactionTriggerTokens(
-				contextWindow,
-				options.compactionSettings ?? {
-					enabled: true,
-					reserveTokens: 16384,
-					keepRecentTokens: 36000,
-					triggerPercent: 85,
-					warningPercent: 80,
-				},
-			)
-		: undefined;
+	const compactionSettings = options.compactionSettings ?? DEFAULT_COMPACTION_SETTINGS;
+	const triggerTokens = contextWindow ? compactionTriggerTokens(contextWindow, compactionSettings) : undefined;
 	const triggerPercent =
-		contextWindow && triggerTokens
-			? (triggerTokens / contextWindow) * 100
-			: options.compactionSettings?.triggerPercent;
+		contextWindow && triggerTokens ? (triggerTokens / contextWindow) * 100 : compactionSettings.triggerPercent;
 
 	const contextFiles = options.contextFiles ?? [];
 	const skills = options.skills ?? [];
@@ -187,7 +174,7 @@ export function buildContextBreakdown(options: BuildContextBreakdownOptions): Co
 		currentPercent: options.currentPercent,
 		triggerTokens,
 		triggerPercent,
-		warningPercent: options.compactionSettings?.warningPercent,
+		warningPercent: compactionSettings.warningPercent,
 		prompt,
 		messages,
 		topConsumers: topConsumers.sort((a, b) => b.tokens - a.tokens).slice(0, 10),

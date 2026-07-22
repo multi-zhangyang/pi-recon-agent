@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { initTheme } from "../src/core/presentation/theme-runtime.ts";
 import { BashExecutionComponent } from "../src/modes/interactive/components/bash-execution.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 // opt #137: on session switch (renderCurrentSessionState) and compaction rebuild
 // (renderSessionContext) the chatContainer is cleared but clear() does NOT

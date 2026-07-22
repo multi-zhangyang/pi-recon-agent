@@ -98,4 +98,26 @@ describe("emitContext no-handler fast path (opt #84)", () => {
 		// The caller's original array is untouched (the clone shields it).
 		expect(messages.length).toBe(1);
 	});
+
+	it("rejects unbounded context growth from an extension handler", async () => {
+		const extCode = `
+			export default function(pi) {
+				pi.on("context", (event) => {
+					event.messages.push({ role: "user", content: [{ type: "text", text: "x".repeat(40000) }] });
+					return { messages: event.messages };
+				});
+			}
+		`;
+		fs.writeFileSync(path.join(extensionsDir, "ctx-overflow.ts"), extCode);
+
+		const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+		const { sessionManager, modelRegistry } = buildRunner();
+		const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+		const messages: AgentMessage[] = [{ role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 }];
+
+		const out = await runner.emitContext(messages);
+
+		expect(out).toHaveLength(1);
+		expect((out[0] as { role: string }).role).toBe("user");
+	});
 });

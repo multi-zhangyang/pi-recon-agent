@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-// opt #162: 8 swarm-runtime state writes in recon-profile.ts (runtimeManifest,
+// opt #162: 8 swarm-runtime state writes (runtimeManifest,
 // child-session transcript, worker runtime pool bridge, worker lease scheduler,
 // claim ledger, structured claim merge, subagent runtime manifest index, and
 // the swarm artifact itself) used bare writeFileSync (truncate-then-write). A
@@ -18,11 +18,14 @@ import { describe, expect, it } from "vitest";
 // is present and each old bare-writeFileSync pattern at the converted sites is
 // gone. Revert any site → its "absent" assertion fails (the old pattern returns).
 
-const source = readFileSync(fileURLToPath(new URL("../src/core/recon-profile.ts", import.meta.url)), "utf-8");
+const source = readFileSync(
+	fileURLToPath(new URL("../src/core/repi/swarm-supervisor-runtime.ts", import.meta.url)),
+	"utf-8",
+);
 
 describe("swarm runtime state writes route through atomicWriteFileSync (opt #162 routing pin)", () => {
 	it("imports atomicWriteFileSync (the routing target)", () => {
-		expect(source).toContain('import { atomicWriteFileSync } from "./tools/atomic-write.ts"');
+		expect(source).toContain('import { atomicWriteFileSync } from "../tools/atomic-write.ts"');
 	});
 
 	it("the old bare-writeFileSync patterns at the converted sites are gone", () => {

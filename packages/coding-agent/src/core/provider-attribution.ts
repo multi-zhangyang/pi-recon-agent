@@ -1,4 +1,4 @@
-import type { Api, Model } from "@pi-recon/repi-ai";
+import { type Api, type Model, mergeProviderHeaders, type ProviderHeaders } from "@pi-recon/repi-ai";
 import { APP_NAME, IS_REPI_PRODUCT } from "../config.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import { isInstallTelemetryEnabled } from "./telemetry.ts";
@@ -87,18 +87,11 @@ export function mergeProviderAttributionHeaders(
 	model: Model<Api>,
 	settingsManager: SettingsManager,
 	sessionId: string | undefined,
-	...headerSources: Array<Record<string, string> | undefined>
-): Record<string, string> | undefined {
-	const merged = {
-		...getSessionHeaders(model, sessionId),
-		...getDefaultAttributionHeaders(model, settingsManager),
-	};
-
-	for (const headers of headerSources) {
-		if (headers) {
-			Object.assign(merged, headers);
-		}
-	}
-
-	return Object.keys(merged).length > 0 ? merged : undefined;
+	...headerSources: Array<ProviderHeaders | undefined>
+): ProviderHeaders | undefined {
+	return mergeProviderHeaders(
+		getSessionHeaders(model, sessionId),
+		getDefaultAttributionHeaders(model, settingsManager),
+		...headerSources,
+	);
 }

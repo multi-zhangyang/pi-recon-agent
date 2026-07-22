@@ -72,7 +72,16 @@ export function formatFileOperations(readFiles: string[], modifiedFiles: string[
 	return `\n\n${sections.join("\n\n")}`;
 }
 
+/** Remove carried file-operation metadata before appending the canonical lists. */
+export function stripFileOperationSections(summary: string): string {
+	return summary
+		.replace(/\n*<read-files>[\s\S]*?<\/read-files>\n*/gi, "\n")
+		.replace(/\n*<modified-files>[\s\S]*?<\/modified-files>\n*/gi, "\n")
+		.trimEnd();
+}
+
 const TOOL_RESULT_MAX_CHARS = 2000;
+const IMAGE_PLACEHOLDER = "[image content omitted]";
 
 function safeJsonStringify(value: unknown): string {
 	try {
@@ -102,13 +111,20 @@ export function serializeConversation(messages: Message[]): string {
 
 	for (const msg of messages) {
 		if (msg.role === "user") {
-			const content =
-				typeof msg.content === "string"
-					? msg.content
-					: msg.content
-							.filter((c): c is { type: "text"; text: string } => c.type === "text")
-							.map((c) => c.text)
-							.join("");
+			let content: string;
+			if (typeof msg.content === "string") {
+				content = msg.content;
+			} else {
+				const pieces: string[] = [];
+				for (const block of msg.content) {
+					if (block.type === "text") {
+						pieces.push(block.text);
+					} else if (block.type === "image") {
+						pieces.push(IMAGE_PLACEHOLDER);
+					}
+				}
+				content = pieces.join("");
+			}
 			if (content) parts.push(`[User]: ${content}`);
 		} else if (msg.role === "assistant") {
 			const textParts: string[] = [];
@@ -121,7 +137,11 @@ export function serializeConversation(messages: Message[]): string {
 				} else if (block.type === "thinking") {
 					thinkingParts.push(block.thinking);
 				} else if (block.type === "toolCall") {
-					const args = block.arguments as Record<string, unknown>;
+					const args = block.arguments as Record<string, unknown> | null | undefined;
+					if (!args) {
+						toolCalls.push(`${block.name}()`);
+						continue;
+					}
 					const argsStr = Object.entries(args)
 						.map(([k, v]) => `${k}=${safeJsonStringify(v)}`)
 						.join(", ");
@@ -139,10 +159,15 @@ export function serializeConversation(messages: Message[]): string {
 				parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
 			}
 		} else if (msg.role === "toolResult") {
-			const content = msg.content
-				.filter((c): c is { type: "text"; text: string } => c.type === "text")
-				.map((c) => c.text)
-				.join("");
+			const pieces: string[] = [];
+			for (const block of msg.content) {
+				if (block.type === "text") {
+					pieces.push(block.text);
+				} else if (block.type === "image") {
+					pieces.push(IMAGE_PLACEHOLDER);
+				}
+			}
+			const content = pieces.join("");
 			if (content) {
 				parts.push(`[Tool result]: ${truncateForSummary(content, TOOL_RESULT_MAX_CHARS)}`);
 			}

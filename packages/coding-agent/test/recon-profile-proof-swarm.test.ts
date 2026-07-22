@@ -1,6 +1,10 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { discoverSwarmRuns } from "../../../scripts/reverse-agent/lib/swarm-run-catalog.mjs";
+import { readCurrentMission } from "../src/core/repi/mission.ts";
+import type { SwarmArtifact } from "../src/core/repi/swarm-runtime-types.ts";
+import { parseJsonCodeFence } from "../src/core/repi/text.ts";
 import { createRegisteredReconHarness } from "./recon-profile-harness.ts";
 
 vi.setConfig({ testTimeout: 60_000 });
@@ -73,11 +77,16 @@ describe("REPI kernel profile swarm flows", () => {
 					: { code: 0, stdout: "retry-ok\n", stderr: "", killed: false };
 			},
 		});
+		const missionTool = harness.tools.get("re_mission") as {
+			execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
+		};
+		await missionTool.execute("retry-mission", { action: "new", task: "exercise swarm retry fixture" });
 		const delegationDir = join(harness.agentDir, "recon", "evidence", "delegations");
 		mkdirSync(delegationDir, { recursive: true });
 		const fixturePath = join(delegationDir, "9999-12-31T23-59-59-retry-fixture-plan.md");
 		const fixtureDelegate = {
 			timestamp: "9999-12-31T23:59:59.000Z",
+			missionId: readCurrentMission()?.id,
 			route: "Retry fixture",
 			mode: "plan",
 			packets: [
@@ -120,14 +129,11 @@ describe("REPI kernel profile swarm flows", () => {
 				maxProofLoops: 1,
 				maxWorkerRetries: 1,
 				scoreDecay: [],
-				historicalScoreDecay: [],
 				demotionRules: [],
 				laneDemotions: [],
 				workerDemotions: [],
 				dispatcherDemotions: [],
 				promotionRules: [],
-				playbookPromotions: [],
-				ledgerRows: [],
 				nextActions: [],
 			},
 			dispatcherScoreDecay: [],
@@ -154,17 +160,46 @@ describe("REPI kernel profile swarm flows", () => {
 				maxWorkers: 1,
 				maxCommands: 1,
 			});
-			expect(swarm.content[0]?.text).toContain("retry_execution:");
-			expect(swarm.content[0]?.text).toContain("attempt=2/");
-			expect(swarm.content[0]?.text).toContain("retryRemaining=");
-			expect(swarm.content[0]?.text).toContain("retries=1");
-			expect(swarm.content[0]?.text).toContain("worker_retry_handoff_closure:");
-			expect(swarm.content[0]?.text).toContain("attempt=2/3");
-			expect(swarm.content[0]?.text).toContain("failed_workers_closed=pass");
-			expect(swarm.content[0]?.text).toContain("worker_retry_handoff_merge_summary:");
-			expect(swarm.content[0]?.text).toContain("worker_closures=1");
-			expect(swarm.content[0]?.text).toContain("closure=retry_queued");
-			expect(swarm.content[0]?.text).toContain("next=re_swarm retry");
+			const output = swarm.content[0]?.text ?? "";
+			expect(output).toContain("retry_execution:");
+			expect(output).toContain("attempt=2/");
+			expect(output).toContain("retryRemaining=");
+			expect(output).toContain("retries=1");
+			expect(output).toContain("historical_blocked=1");
+			expect(output).toContain("recovered=true");
+			expect(output).toContain("worker_retry_handoff_closure:");
+			expect(output).toContain("attempt=2/3");
+			expect(output).toContain("failed_workers_closed=pass");
+			expect(output).toContain("worker_retry_handoff_merge_summary:");
+			expect(output).toContain("worker_closures=1");
+			expect(output).toContain("closure=passed");
+			expect(output).not.toContain("closure=retry_queued");
+
+			const artifactPath = /^swarm_artifact:\s*(.+)$/m.exec(output)?.[1]?.trim();
+			expect(artifactPath).toBeDefined();
+			const persisted = parseJsonCodeFence<SwarmArtifact>(readFileSync(artifactPath!, "utf8"));
+			expect(persisted).toBeDefined();
+			expect(persisted?.workers).toHaveLength(1);
+			expect(persisted?.workers[0]?.status).toBe("done");
+			expect(persisted?.blocked).toEqual([]);
+			expect(persisted?.retryQueue).toEqual([]);
+			expect(persisted?.subagentRuntimeManifests[0]?.status).toBe("done");
+			expect(persisted?.structuredClaimMergeStatus).toBe("pass");
+			expect(persisted?.structuredClaimMerge?.promotionCheck.finalClaims.length).toBeGreaterThan(0);
+
+			const manifestPath = persisted?.subagentRuntimeManifests[0]?.runtimeManifestFile;
+			expect(manifestPath).toBeDefined();
+			expect(JSON.parse(readFileSync(manifestPath!, "utf8"))).toMatchObject({
+				attempt: 2,
+				status: "done",
+				exitCode: 0,
+				signal: null,
+			});
+
+			const catalogRun = discoverSwarmRuns({ agentDir: harness.agentDir }).find(
+				(run) => run.paths?.artifact === artifactPath,
+			);
+			expect(catalogRun).toMatchObject({ engine: "ts", state: "complete", status: "complete", ok: true });
 		} finally {
 			harness.restore();
 			if (previousRetryLimit === undefined) delete process.env.REPI_SWARM_RETRY_LIMIT;

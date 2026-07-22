@@ -3,14 +3,15 @@
  */
 
 import type { AgentMessage } from "@pi-recon/repi-agent-core";
-import type { ImageContent, Model } from "@pi-recon/repi-ai";
+import type { ImageContent, Model, Provider, TextContent } from "@pi-recon/repi-ai";
 import type { KeyId } from "@pi-recon/repi-tui";
-import { type Theme, theme } from "../../modes/interactive/theme/theme.ts";
 import type { ResourceDiagnostic } from "../diagnostics.ts";
 import type { KeybindingsConfig } from "../keybindings.ts";
 import type { ModelRegistry } from "../model-registry.ts";
+import type { Theme } from "../presentation/theme.ts";
 import type { SessionManager } from "../session-manager.ts";
 import type { BuildSystemPromptOptions } from "../system-prompt.ts";
+import { headlessTheme } from "./headless-theme.ts";
 import type {
 	BeforeAgentStartEvent,
 	BeforeAgentStartEventResult,
@@ -107,6 +108,114 @@ const buildBuiltinKeybindings = (resolvedKeybindings: KeybindingsConfig): BuiltI
 interface BeforeAgentStartCombinedResult {
 	messages?: NonNullable<BeforeAgentStartEventResult["message"]>[];
 	systemPrompt?: string;
+}
+
+// before_agent_start runs for every user turn. Keep extension-controlled data
+// bounded so one buggy or untrusted extension cannot turn a long session into
+// an unbounded transcript/system-prompt injection.
+const MAX_BEFORE_AGENT_START_MESSAGES = 16;
+const MAX_BEFORE_AGENT_START_MESSAGE_CHARS = 8_000;
+const MAX_BEFORE_AGENT_START_TOTAL_CHARS = 24_000;
+const MAX_EXTENSION_SYSTEM_PROMPT_DELTA_CHARS = 16_000;
+const MAX_CONTEXT_HOOK_GROWTH_CHARS = 32_000;
+const MAX_CONTEXT_HOOK_ADDED_MESSAGES = 32;
+const EXTENSION_TRUNCATION_MARKER = "\n\n[extension content truncated]\n\n";
+
+function estimateContextValue(value: unknown, seen = new WeakSet<object>(), limit = 100_000_000): number {
+	if (typeof value === "string") return Math.min(value.length, limit);
+	if (value === null || value === undefined || typeof value === "boolean" || typeof value === "number") return 8;
+	if (typeof value !== "object") return 16;
+	if (seen.has(value)) return 0;
+	seen.add(value);
+	let total = 0;
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			total += estimateContextValue(item, seen, Math.max(0, limit - total));
+			if (total >= limit) return limit;
+		}
+		return total;
+	}
+	for (const [key, item] of Object.entries(value)) {
+		if (key === "details" || key === "timestamp" || key === "display") continue;
+		total += key.length + estimateContextValue(item, seen, Math.max(0, limit - total));
+		if (total >= limit) return limit;
+	}
+	return total;
+}
+
+function estimateContextMessageChars(message: AgentMessage): number {
+	return estimateContextValue(message);
+}
+
+function estimateContextMessagesChars(messages: AgentMessage[]): number {
+	let total = 0;
+	for (const message of messages) {
+		total += estimateContextMessageChars(message);
+		if (total >= 100_000_000) return 100_000_000;
+	}
+	return total;
+}
+
+function truncateExtensionMiddle(value: string, maxChars: number): string {
+	if (value.length <= maxChars) return value;
+	const marker = `\n...<truncated ${value.length - maxChars} chars>...\n`;
+	if (marker.length >= maxChars) return value.slice(0, maxChars);
+	const available = maxChars - marker.length;
+	const head = Math.ceil(available / 2);
+	return `${value.slice(0, head)}${marker}${value.slice(value.length - (available - head))}`;
+}
+
+function boundExtensionText(value: string, maxChars: number): string {
+	if (value.length <= maxChars) return value;
+	const bounded = `${truncateExtensionMiddle(value, Math.max(1, maxChars - EXTENSION_TRUNCATION_MARKER.length))}${EXTENSION_TRUNCATION_MARKER}`;
+	return bounded.length <= maxChars ? bounded : bounded.slice(0, maxChars);
+}
+
+function boundBeforeAgentStartMessage(
+	message: NonNullable<BeforeAgentStartEventResult["message"]>,
+	remainingChars: number,
+): NonNullable<BeforeAgentStartEventResult["message"]> | undefined {
+	if (remainingChars <= 0) return undefined;
+	const maxChars = Math.min(MAX_BEFORE_AGENT_START_MESSAGE_CHARS, remainingChars);
+	if (typeof message.content === "string") {
+		return { ...message, content: boundExtensionText(message.content, maxChars) };
+	}
+	let used = 0;
+	const content: Array<TextContent | ImageContent> = [];
+	for (const part of message.content) {
+		const available = maxChars - used;
+		if (available <= 0) break;
+		if (part.type === "image") {
+			if (part.data.length <= available) {
+				content.push(part);
+				used += part.data.length;
+				continue;
+			}
+			const text = boundExtensionText(
+				`[extension image omitted: ${part.mimeType}, ${part.data.length} base64 chars]`,
+				available,
+			);
+			content.push({ type: "text", text });
+			used += text.length;
+			continue;
+		}
+		const text = boundExtensionText(part.text, available);
+		content.push({ ...part, text });
+		used += text.length;
+	}
+	if (content.length === 0) return undefined;
+	return { ...message, content };
+}
+
+function boundExtensionSystemPrompt(base: string, candidate: string): string {
+	const maxLength = base.length + MAX_EXTENSION_SYSTEM_PROMPT_DELTA_CHARS;
+	if (candidate.length <= maxLength) return candidate;
+	if (candidate.startsWith(base)) {
+		const suffixBudget = Math.max(1, maxLength - base.length - EXTENSION_TRUNCATION_MARKER.length);
+		const bounded = `${base}${EXTENSION_TRUNCATION_MARKER}${truncateExtensionMiddle(candidate.slice(base.length), suffixBudget)}`;
+		return bounded.length <= maxLength ? bounded : bounded.slice(0, maxLength);
+	}
+	return boundExtensionText(candidate, maxLength);
 }
 
 async function callContextHandlerAbortable<T>(fn: () => Promise<T> | T, signal: AbortSignal): Promise<T> {
@@ -232,7 +341,7 @@ const noOpUIContext: ExtensionUIContext = {
 	setEditorComponent: () => {},
 	getEditorComponent: () => undefined,
 	get theme() {
-		return theme;
+		return headlessTheme;
 	},
 	getAllThemes: () => [],
 	getTheme: () => undefined,
@@ -269,6 +378,8 @@ export class ExtensionRunner {
 	private shortcutDiagnostics: ResourceDiagnostic[] = [];
 	private commandDiagnostics: ResourceDiagnostic[] = [];
 	private staleMessage: string | undefined;
+	private providerOwners = new Map<string, string>();
+	private unregisterOwnedProviderAction: ((name: string, extensionPath: string) => void) | undefined;
 
 	constructor(
 		extensions: Extension[],
@@ -290,6 +401,7 @@ export class ExtensionRunner {
 		contextActions: ExtensionContextActions,
 		providerActions?: {
 			registerProvider?: (name: string, config: ProviderConfig) => void;
+			registerNativeProvider?: (provider: Provider) => void;
 			unregisterProvider?: (name: string) => void;
 		},
 	): void {
@@ -321,17 +433,56 @@ export class ExtensionRunner {
 		this.getSystemPromptFn = contextActions.getSystemPrompt;
 		this.getSystemPromptOptionsFn = contextActions.getSystemPromptOptions ?? (() => ({ cwd: this.cwd }));
 
-		// Flush provider registrations queued during extension loading
-		for (const { name, config, extensionPath } of this.runtime.pendingProviderRegistrations) {
+		const registerLegacyProvider = (name: string, config: ProviderConfig, extensionPath: string): void => {
+			if (providerActions?.registerProvider) providerActions.registerProvider(name, config);
+			else this.modelRegistry.registerProvider(name, config);
+			this.providerOwners.set(name, extensionPath);
+		};
+		const registerNativeProvider = (provider: Provider, extensionPath: string): void => {
+			if (!providerActions?.registerNativeProvider || !providerActions.unregisterProvider) {
+				throw new Error(
+					"Native provider registration requires registerNativeProvider and unregisterProvider runtime actions",
+				);
+			}
+			providerActions.registerNativeProvider(provider);
+			this.providerOwners.set(provider.id, extensionPath);
+		};
+		const unregisterOwnedProvider = (name: string, extensionPath: string): void => {
+			if (this.providerOwners.get(name) !== extensionPath) return;
+			if (providerActions?.unregisterProvider) providerActions.unregisterProvider(name);
+			else this.modelRegistry.unregisterProvider(name);
+			this.providerOwners.delete(name);
+		};
+		this.unregisterOwnedProviderAction = unregisterOwnedProvider;
+
+		// Preserve source order when native and legacy registrations are interleaved.
+		const pendingProviders = [
+			...this.runtime.pendingProviderRegistrations.map((registration) => ({
+				kind: "legacy" as const,
+				...registration,
+			})),
+			...this.runtime.pendingNativeProviderRegistrations.map((registration) => ({
+				kind: "native" as const,
+				...registration,
+			})),
+		].sort((left, right) => left.order - right.order);
+		for (const registration of pendingProviders) {
 			try {
-				if (providerActions?.registerProvider) {
-					providerActions.registerProvider(name, config);
+				if (registration.preApplied) {
+					this.providerOwners.set(
+						registration.kind === "native" ? registration.provider.id : registration.name,
+						registration.extensionPath,
+					);
+					continue;
+				}
+				if (registration.kind === "native") {
+					registerNativeProvider(registration.provider, registration.extensionPath);
 				} else {
-					this.modelRegistry.registerProvider(name, config);
+					registerLegacyProvider(registration.name, registration.config, registration.extensionPath);
 				}
 			} catch (err) {
 				this.emitError({
-					extensionPath,
+					extensionPath: registration.extensionPath,
 					event: "register_provider",
 					error: err instanceof Error ? err.message : String(err),
 					stack: err instanceof Error ? err.stack : undefined,
@@ -339,23 +490,36 @@ export class ExtensionRunner {
 			}
 		}
 		this.runtime.pendingProviderRegistrations = [];
+		this.runtime.pendingNativeProviderRegistrations = [];
 
 		// From this point on, provider registration/unregistration takes effect immediately
 		// without requiring a /reload.
-		this.runtime.registerProvider = (name, config) => {
-			if (providerActions?.registerProvider) {
-				providerActions.registerProvider(name, config);
-				return;
-			}
-			this.modelRegistry.registerProvider(name, config);
+		this.runtime.registerProvider = (name, config, extensionPath = "<unknown>") => {
+			registerLegacyProvider(name, config, extensionPath);
 		};
-		this.runtime.unregisterProvider = (name) => {
-			if (providerActions?.unregisterProvider) {
-				providerActions.unregisterProvider(name);
-				return;
-			}
-			this.modelRegistry.unregisterProvider(name);
+		this.runtime.registerNativeProvider = (provider, extensionPath = "<unknown>") => {
+			registerNativeProvider(provider, extensionPath);
 		};
+		this.runtime.unregisterProvider = (name, extensionPath = "<unknown>") => {
+			unregisterOwnedProvider(name, extensionPath);
+		};
+	}
+
+	unregisterOwnedProviders(): void {
+		const unregister = this.unregisterOwnedProviderAction;
+		if (!unregister) return;
+		for (const [name, extensionPath] of [...this.providerOwners]) {
+			try {
+				unregister(name, extensionPath);
+			} catch (error) {
+				this.emitError({
+					extensionPath,
+					event: "unregister_provider",
+					error: error instanceof Error ? error.message : String(error),
+					stack: error instanceof Error ? error.stack : undefined,
+				});
+			}
+		}
 	}
 
 	bindCommandContext(actions?: ExtensionCommandContextActions): void {
@@ -600,6 +764,11 @@ export class ExtensionRunner {
 		this.shutdownHandler();
 	}
 
+	getActiveTools(): string[] {
+		this.assertActive();
+		return this.runtime.getActiveTools();
+	}
+
 	/**
 	 * Create an ExtensionContext for use in event handlers and tool execution.
 	 * Context values are resolved at call time, so changes via bindCore/bindUI are reflected.
@@ -797,7 +966,12 @@ export class ExtensionRunner {
 
 	async emitToolResult(event: ToolResultEvent): Promise<ToolResultEventResult | undefined> {
 		const ctx = this.createContext();
-		const currentEvent: ToolResultEvent = { ...event };
+		const cloneContent = (content: ToolResultEvent["content"]): ToolResultEvent["content"] =>
+			content.map((part) => ({ ...part }));
+		// Isolate nested blocks from the executor-owned result. Extensions often
+		// mutate hook events in place; that must not silently rewrite the durable
+		// tool transcript unless they explicitly return replacement content.
+		const currentEvent: ToolResultEvent = { ...event, content: cloneContent(event.content) };
 		let modified = false;
 
 		for (const ext of this.extensions) {
@@ -810,7 +984,7 @@ export class ExtensionRunner {
 					if (!handlerResult) continue;
 
 					if (handlerResult.content !== undefined) {
-						currentEvent.content = handlerResult.content;
+						currentEvent.content = cloneContent(handlerResult.content);
 						modified = true;
 					}
 					if (handlerResult.details !== undefined) {
@@ -941,13 +1115,29 @@ export class ExtensionRunner {
 
 			for (const handler of handlers) {
 				try {
-					const event: ContextEvent = { type: "context", messages: currentMessages };
+					const previousChars = estimateContextMessagesChars(currentMessages);
+					const previousCount = currentMessages.length;
+					const event: ContextEvent = { type: "context", messages: structuredClone(currentMessages) };
 					const handlerResult = signal
 						? await callContextHandlerAbortable(() => handler(event, ctx), signal)
 						: await handler(event, ctx);
 
 					if (handlerResult && (handlerResult as ContextEventResult).messages) {
-						currentMessages = (handlerResult as ContextEventResult).messages!;
+						const candidate = (handlerResult as ContextEventResult).messages!;
+						const candidateChars = estimateContextMessagesChars(candidate);
+						const addedMessages = Math.max(0, candidate.length - previousCount);
+						if (
+							candidateChars > previousChars + MAX_CONTEXT_HOOK_GROWTH_CHARS ||
+							addedMessages > MAX_CONTEXT_HOOK_ADDED_MESSAGES
+						) {
+							this.emitError({
+								extensionPath: ext.path,
+								event: "context",
+								error: `context hook output rejected: growth=${Math.max(0, candidateChars - previousChars)} chars, addedMessages=${addedMessages}`,
+							});
+							continue;
+						}
+						currentMessages = candidate;
 					}
 				} catch (err) {
 					if (signal?.aborted) {
@@ -1008,6 +1198,7 @@ export class ExtensionRunner {
 		systemPrompt: string,
 		systemPromptOptions: BuildSystemPromptOptions,
 	): Promise<BeforeAgentStartCombinedResult | undefined> {
+		const baseSystemPrompt = systemPrompt;
 		let currentSystemPrompt = systemPrompt;
 		const ctx = Object.defineProperties(
 			{},
@@ -1018,6 +1209,7 @@ export class ExtensionRunner {
 			return currentSystemPrompt;
 		};
 		const messages: NonNullable<BeforeAgentStartEventResult["message"]>[] = [];
+		let messageChars = 0;
 		let systemPromptModified = false;
 
 		for (const ext of this.extensions) {
@@ -1037,11 +1229,24 @@ export class ExtensionRunner {
 
 					if (handlerResult) {
 						const result = handlerResult as BeforeAgentStartEventResult;
-						if (result.message) {
-							messages.push(result.message);
+						if (result.message && messages.length < MAX_BEFORE_AGENT_START_MESSAGES) {
+							const bounded = boundBeforeAgentStartMessage(
+								result.message,
+								MAX_BEFORE_AGENT_START_TOTAL_CHARS - messageChars,
+							);
+							if (bounded) {
+								messages.push(bounded);
+								messageChars +=
+									typeof bounded.content === "string"
+										? bounded.content.length
+										: bounded.content.reduce(
+												(total, part) => total + (part.type === "text" ? part.text.length : 0),
+												0,
+											);
+							}
 						}
 						if (result.systemPrompt !== undefined) {
-							currentSystemPrompt = result.systemPrompt;
+							currentSystemPrompt = boundExtensionSystemPrompt(baseSystemPrompt, result.systemPrompt);
 							systemPromptModified = true;
 						}
 					}

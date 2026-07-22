@@ -14,9 +14,9 @@ import {
 	visibleWidth,
 } from "@pi-recon/repi-tui";
 import { KeybindingsManager } from "../../../core/keybindings.ts";
+import { theme } from "../../../core/presentation/theme-runtime.ts";
 import type { SessionInfo, SessionListProgress } from "../../../core/session-manager.ts";
 import { canonicalizePath as _canonicalizePath } from "../../../utils/paths.ts";
-import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint, keyText } from "./keybinding-hints.ts";
 import { filterAndSortSessions, hasSessionName, type NameFilter, type SortMode } from "./session-selector-search.ts";

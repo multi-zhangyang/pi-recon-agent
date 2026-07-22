@@ -18,7 +18,7 @@ vi.mock("../src/core/output-guard.ts", () => ({
 	},
 }));
 
-vi.mock("../src/modes/interactive/theme/theme.ts", () => ({ theme: {} }));
+vi.mock("../src/core/presentation/theme-runtime.ts", () => ({ theme: {} }));
 
 vi.mock("../src/modes/rpc/jsonl.ts", () => ({
 	attachJsonlLineReader: vi.fn((_stream: NodeJS.ReadableStream, onLine: (line: string) => void) => {

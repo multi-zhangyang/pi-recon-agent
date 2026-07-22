@@ -6,11 +6,13 @@ import {
 	type AssistantMessage,
 	createAssistantMessageEventStream,
 	type Model,
+	type ProviderHeaders,
 	type SimpleStreamOptions,
 } from "@pi-recon/repi-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRegistry } from "../src/core/model-registry.ts";
+import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
@@ -149,5 +151,76 @@ describe("createAgentSession stream options", () => {
 		);
 
 		expect(options?.websocketConnectTimeoutMs).toBe(0);
+	});
+
+	it("routes runtime auth, scoped env, configured headers, and attribution through one stream assembly", async () => {
+		const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
+		const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
+		const modelRuntime = await ModelRuntime.create({
+			credentials: authStorage.asCredentialStore(),
+			modelsPath: null,
+			allowModelNetwork: false,
+		});
+		let capturedOptions: SimpleStreamOptions | undefined;
+		modelRuntime.registerProvider("openrouter", {
+			name: "Runtime OpenRouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			apiKey: "$CAPTURE_RUNTIME_KEY",
+			api: "openai-completions",
+			headers: { "X-Provider-Env": "$CAPTURE_PROVIDER_HEADER" },
+			streamSimple: (model, _context, options) => {
+				capturedOptions = options;
+				expect(options).not.toHaveProperty("transformHeaders");
+				return createDoneStream(model.api);
+			},
+			models: [
+				{
+					...createModel("openai-completions"),
+					id: "runtime-model",
+					name: "Runtime Model",
+					headers: { "X-Model-Env": "$CAPTURE_MODEL_HEADER" },
+				},
+			],
+		});
+		const model = modelRuntime.getModel("openrouter", "runtime-model")!;
+		const { session } = await createAgentSession({
+			cwd,
+			agentDir,
+			model,
+			authStorage,
+			modelRegistry,
+			modelRuntime,
+			settingsManager: SettingsManager.create(cwd, agentDir),
+			sessionManager: SessionManager.inMemory(cwd),
+		});
+
+		try {
+			const stream = await session.agent.streamFn(
+				model,
+				{ messages: [] },
+				{
+					env: {
+						CAPTURE_RUNTIME_KEY: "request-key",
+						CAPTURE_PROVIDER_HEADER: "provider-env",
+						CAPTURE_MODEL_HEADER: "model-env",
+					},
+					headers: { "X-Request": "request" },
+				},
+			);
+			await stream.result();
+
+			expect(capturedOptions?.apiKey).toBe("request-key");
+			expect(capturedOptions?.env).toMatchObject({ CAPTURE_RUNTIME_KEY: "request-key" });
+			expect(capturedOptions?.headers).toEqual({
+				"X-Provider-Env": "provider-env",
+				"X-Model-Env": "model-env",
+				"X-Request": "request",
+				"X-OpenRouter-Title": "repi",
+				"X-OpenRouter-Categories": "cli-agent",
+			} satisfies ProviderHeaders);
+		} finally {
+			session.dispose();
+			modelRuntime.unregisterProvider("openrouter");
+		}
 	});
 });

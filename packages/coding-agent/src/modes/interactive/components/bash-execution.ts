@@ -3,6 +3,8 @@
  */
 
 import { Container, Loader, Spacer, Text, type TUI } from "@pi-recon/repi-tui";
+import { theme } from "../../../core/presentation/theme-runtime.ts";
+import { truncateToVisualLines } from "../../../core/presentation/visual-truncate.ts";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -10,10 +12,8 @@ import {
 	truncateTail,
 } from "../../../core/tools/truncate.ts";
 import { stripAnsi } from "../../../utils/ansi.ts";
-import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint, keyText } from "./keybinding-hints.ts";
-import { truncateToVisualLines } from "./visual-truncate.ts";
 
 // Preview line limit when not expanded (matches tool execution behavior)
 const PREVIEW_LINES = 20;

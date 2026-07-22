@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { getModel } from "../src/models.ts";
 import { transformMessages } from "../src/providers/transform-messages.ts";
 import type { AssistantMessage, Message, Model, ToolResultMessage } from "../src/types.ts";
+import { registerAnthropicFixtures } from "./model-fixtures.ts";
+
+registerAnthropicFixtures();
 
 // opt #216: an assistant turn with stopReason "error"/"aborted" is skipped by
 // transform-messages (incomplete turn). Pre-fix, a toolResult in history for
@@ -20,7 +23,7 @@ const usage = {
 };
 
 function makeModel(): Model<"anthropic-messages"> {
-	return getModel("anthropic", "claude-sonnet-4-5") as Model<"anthropic-messages">;
+	return getModel<"anthropic-messages">("anthropic", "claude-sonnet-4-5")!;
 }
 
 function erroredAssistant(toolCallId: string): AssistantMessage {

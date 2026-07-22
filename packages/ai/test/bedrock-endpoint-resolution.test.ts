@@ -45,8 +45,11 @@ vi.mock("@aws-sdk/client-bedrock-runtime", () => {
 });
 
 import { getModel } from "../src/models.ts";
-import { streamBedrock } from "../src/providers/amazon-bedrock.ts";
+import { type BedrockOptions, streamBedrock } from "../src/providers/amazon-bedrock.ts";
 import type { Context, Model } from "../src/types.ts";
+import { registerBedrockFixtures } from "./model-fixtures.ts";
+
+registerBedrockFixtures();
 
 const context: Context = {
 	messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
@@ -83,8 +86,12 @@ afterEach(() => {
 	}
 });
 
-async function captureClientConfig(model: Model<"bedrock-converse-stream">): Promise<Record<string, unknown>> {
-	await streamBedrock(model, context, { cacheRetention: "none" }).result();
+async function captureClientConfig(
+	model: Model<"bedrock-converse-stream">,
+	options: BedrockOptions = {},
+): Promise<Record<string, unknown>> {
+	bedrockMock.constructorCalls.length = 0;
+	await streamBedrock(model, context, { cacheRetention: "none", ...options }).result();
 	expect(bedrockMock.constructorCalls).toHaveLength(1);
 	return bedrockMock.constructorCalls[0];
 }
@@ -113,6 +120,29 @@ describe("bedrock endpoint resolution", () => {
 
 		expect(config.endpoint).toBe("https://bedrock-runtime.eu-central-1.amazonaws.com");
 		expect(config.region).toBe("eu-central-1");
+	});
+
+	it("passes scoped profile, region, and IAM credentials to the SDK", async () => {
+		const model = getModel("amazon-bedrock", "eu.anthropic.claude-sonnet-4-5-20250929-v1:0");
+		const config = await captureClientConfig(model, {
+			env: {
+				AWS_PROFILE: "scoped-profile",
+				AWS_REGION: "ap-southeast-2",
+				AWS_ACCESS_KEY_ID: "scoped-access",
+				AWS_SECRET_ACCESS_KEY: "scoped-secret",
+				AWS_SESSION_TOKEN: "scoped-session",
+			},
+		});
+
+		expect(config).toMatchObject({
+			profile: "scoped-profile",
+			region: "ap-southeast-2",
+			credentials: {
+				accessKeyId: "scoped-access",
+				secretAccessKey: "scoped-secret",
+				sessionToken: "scoped-session",
+			},
+		});
 	});
 
 	it("still passes custom Bedrock endpoints through to the SDK client", async () => {

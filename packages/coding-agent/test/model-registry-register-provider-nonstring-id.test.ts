@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRegistry } from "../src/core/model-registry.ts";
+import { ModelRuntime } from "../src/core/model-runtime.ts";
 
 // Foundational opt #269: validateProviderConfig checked only `api` for each
 // model in an extension registerProvider config — NOT that `id` is a non-empty
@@ -118,5 +119,39 @@ describe("opt #269: registerProvider rejects a model with a non-string / empty i
 		// The model actually entered the table and is resolvable without crashing.
 		const all = registry.getAll();
 		expect(all.some((m) => m.id === "goodprov-x" && m.provider === "goodprov")).toBe(true);
+	});
+
+	it("rejects the same malformed id through a runtime-backed registry", async () => {
+		const runtime = await ModelRuntime.create({
+			credentials: authStorage.asCredentialStore(),
+			modelsPath: null,
+			allowModelNetwork: false,
+		});
+		const runtimeRegistry = ModelRegistry.fromRuntime(authStorage, runtime);
+
+		try {
+			expect(() =>
+				runtimeRegistry.registerProvider("runtime-badprov", {
+					baseUrl: "http://localhost:1",
+					apiKey: "fake-key",
+					api: "openai-completions",
+					models: [
+						{
+							id: undefined as unknown as string,
+							name: "x",
+							reasoning: false,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 4096,
+							maxTokens: 1024,
+						},
+					],
+				}),
+			).toThrow(/"id" must be a non-empty string/);
+			expect(runtime.getProvider("runtime-badprov")).toBeUndefined();
+			expect(() => runtimeRegistry.find("runtime-badprov", "anything")).not.toThrow();
+		} finally {
+			runtime.dispose();
+		}
 	});
 });

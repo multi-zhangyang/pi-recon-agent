@@ -218,7 +218,7 @@ export function printHelp(extensionFlags?: ExtensionFlag[]): void {
 		? "REPI reverse/pentest execution agent with read, bash, edit, write tools"
 		: "AI coding assistant with read, bash, edit, write tools";
 	const reconBanner = isReconPrimary
-		? `${chalk.bold("REPI:")} independent product; built-in reverse/pentest kernel is enabled. Runtime storage: ~/${CONFIG_DIR_NAME}/agent.\n\n`
+		? `${chalk.bold("REPI:")} independent product; built-in reverse/pentest kernel is enabled. Runtime storage: ~/${CONFIG_DIR_NAME}/agent.\n${chalk.bold("Models:")} default catalog is empty; configure REPI_* env, models.json, or extension providers.\n\n`
 		: "";
 	const extensionFlagsText =
 		extensionFlags && extensionFlags.length > 0
@@ -253,13 +253,11 @@ ${updateCommandLine}
   ${APP_NAME} smoke [--full|--json]
                                  Run fast REPI runtime checks
   ${APP_NAME} selfcheck [--deep|--json] [--provider <name>] [--model <id>]
-                                 End-to-end selfcheck for model/tool/memory/parallel/orchestration usability
+                                 End-to-end selfcheck for model/tool/parallel/orchestration usability
   ${APP_NAME} bugreport [--output <path>|--stdout|--json]
                                  Create a strictly redacted local diagnostic bundle
   ${APP_NAME} trust status|yes|no|clear [path]
                                  Show, save, or clear project trust decision
-  ${APP_NAME} memory status|list|show|diff|why|forget|quarantine|doctor|export|purge|consolidate
-                                 Inspect, explain, govern, export, purge, and consolidate scoped memory
   ${APP_NAME} model list|add|edit|remove|login|test|default|reset|doctor|cost|export|import
                                  Configure providers, store local credentials, test/reset models, export/import templates, and estimate cost
   ${APP_NAME} mcp status|list|probe [server-id]
@@ -275,7 +273,7 @@ ${updateCommandLine}
   ${APP_NAME} <command> --help          Show help for package/provider commands; wrapper commands support their own --help
 
 ${chalk.bold("Options:")}
-  --provider <name>              Provider name (default: configured provider/model)
+  --provider <name>              Explicitly configured provider id (default: resolved configured model)
   --model <pattern>              Model pattern or ID (supports "provider/id" and optional ":<thinking>")
   --api-key <key>                Runtime API key override (prefer env/model login; shell-history risk)
   --system-prompt <text>         System prompt (default: REPI reverse/pentest kernel prompt)
@@ -292,7 +290,7 @@ ${chalk.bold("Options:")}
   --no-session                   Don't save session (ephemeral)
   --name, -n <name>              Set session display name
   --models <patterns>            Comma-separated model patterns for Ctrl+P cycling
-                                 Supports globs (anthropic/*, *sonnet*) and fuzzy matching
+                                 Supports globs (gateway/*, *reasoning*) and fuzzy matching
   --no-tools, -nt                Disable all tools by default (built-in and extension)
   --no-builtin-tools, -nbt       Disable built-in tools by default but keep extension/custom tools enabled
   --tools, -t <tools>            Comma-separated allowlist of tool names to enable
@@ -342,26 +340,26 @@ ${chalk.bold("Examples:")}
   # Start a named investigation session
   ${APP_NAME} --name "firmware-auth-analysis"
 
-  # Use a configured OpenAI-compatible provider/model
-  ${APP_NAME} --provider openai-compatible --model provider/model-id "分析 Web/API 授权状态机"
+  # Use an explicitly configured OpenAI-compatible provider/model
+  ${APP_NAME} --provider gateway --model provider/model-id "分析 Web/API 授权状态机"
 
   # Diagnose a custom gateway and generate a REPI models.json template
   ${APP_NAME} provider-doctor --base-url https://gateway.example/v1 --model provider/model-id --api auto
 
   # Use model with provider prefix (no --provider needed)
-  ${APP_NAME} --model openai-compatible/provider-model "生成 exploit-lab 复现矩阵"
+  ${APP_NAME} --model gateway/provider-model "生成 exploit-lab 复现矩阵"
 
   # Use model with thinking level shorthand
-  ${APP_NAME} --model sonnet:high "构建 pwn 目标的 leak→primitive→proof 路线"
+  ${APP_NAME} --model gateway/provider-model:high "构建 pwn 目标的 leak→primitive→proof 路线"
 
   # Limit model cycling to specific models
-  ${APP_NAME} --models claude-sonnet,gpt-4o,provider/model-id
+  ${APP_NAME} --models gateway/*,local/model-id:low
 
   # Limit to a specific provider with glob pattern
-  ${APP_NAME} --models "openai-compatible/*"
+  ${APP_NAME} --models "gateway/*"
 
   # Cycle models with fixed thinking levels
-  ${APP_NAME} --models sonnet:high,gpt-4o:low
+  ${APP_NAME} --models gateway/reasoning:high,local/fast:low
 
   # Start with a specific thinking level
   ${APP_NAME} --thinking high "审计当前仓库的 REPI 运行时与 profile 缺口"
@@ -380,11 +378,28 @@ ${chalk.bold("Environment Variables:")}
   REPI_AUTH_TOKEN                  - Env-only model API key (preferred under REPI)
   REPI_BASE_URL                    - Env-only provider base URL; OpenAI-compatible usually https://host/v1, Anthropic-compatible usually https://host
   REPI_PROVIDER                    - Optional env-only provider id shown in the footer (default: repi-env)
+  REPI_PROVIDER_NAME               - Optional display name for the env-only provider
   REPI_MODEL                       - Env-only model id
+  REPI_MODEL_NAME                  - Optional display name for the primary env-only model
   REPI_MODEL_API                   - openai-compatible|openai-responses|anthropic (default: openai-compatible)
   REPI_CONTEXT_WINDOW              - Env-only model context window
   REPI_AUTO_COMPACT_WINDOW         - Alias of REPI_CONTEXT_WINDOW for Claude Code-style setup
+  REPI_MAX_TOKENS                  - Env-only model output-token cap
+  REPI_MODEL_INPUT                 - Comma-separated input modalities: text or text,image
+  REPI_MODEL_REASONING             - Whether the env-only model supports reasoning (true/false)
+  REPI_MODEL_THINKING_LEVEL_MAP    - JSON map of REPI thinking levels to provider values; null means unsupported
+  REPI_HEADERS                     - JSON provider request headers; values may reference $ENV_VAR
+  REPI_MODEL_HEADERS               - JSON model request headers merged over provider headers; null removes a header
+  REPI_COMPAT                      - JSON provider wire-compatibility overrides
+  REPI_MODEL_COMPAT                - JSON model wire-compatibility overrides merged over provider compat
+  REPI_AUTH_HEADER                 - Add Authorization: Bearer <token> from the resolved env-only token when true
+  REPI_MODEL_COST_INPUT            - Input price in USD per million tokens
+  REPI_MODEL_COST_OUTPUT           - Output price in USD per million tokens
+  REPI_MODEL_COST_CACHE_READ       - Cache-read price in USD per million tokens
+  REPI_MODEL_COST_CACHE_WRITE      - Cache-write price in USD per million tokens
+  REPI_MODEL_COST_TIERS            - JSON tiers; highest inputTokensAbove exceeded by total input usage applies
   REPI_SUBAGENT_MODEL              - Optional env-only worker/subagent model id
+  REPI_SUBAGENT_MODEL_NAME         - Optional display name for the env-only worker/subagent model
   REPI_PACKAGE_DIR                 - Override REPI package directory
   REPI_OFFLINE                     - Disable startup network operations when set to 1/true/yes
   REPI_TELEMETRY                   - Override REPI telemetry switch (default: 0 in product mode)
@@ -394,8 +409,9 @@ ${chalk.bold("Environment Variables:")}
   REPI_PRINT_TIMEOUT_MS            - Print-mode wall timeout before abort (default: 210000)
   REPI_PRINT_TIMEOUT_GRACE_MS      - Extra assistant-output grace after wall timeout (default: 30000)
   REPI_PRINT_TIMEOUT_TOOL_GRACE_MS - Extra grace when wall timeout fires mid-tool (e.g. long re_subagent); default 300000
-  REPI_PRINT_MAX_TURNS             - Print-mode assistant/tool loop cap (default: 40)
-  REPI_PRINT_MAX_TOOL_CALLS        - Print-mode total tool-call cap (default: 80)
+  REPI_RPC_EOF_DRAIN_TIMEOUT_MS    - Max wait for an active RPC prompt after stdin EOF before aborting (default: 210000)
+  REPI_PRINT_MAX_TURNS             - Print-mode assistant/tool loop cap (default: 10; final turn is tool-free synthesis)
+  REPI_PRINT_MAX_TOOL_CALLS        - Print-mode total tool-call cap (default: 48)
   REPI_STDIN_READ_TIMEOUT_MS       - Non-TTY stdin read guard when stdin is left open (default: 1500)
   REPI_READ_STDIN_WITH_PROMPT      - Set 1 to combine stdin with an explicit -p/message prompt
   REPI_BASH_DEFAULT_TIMEOUT_SECONDS - Default bash tool timeout when model omits timeout (default: 120)

@@ -8,9 +8,9 @@
 // throws on next read → agent treats all project-local files as untrusted (or
 // errors) until manually repaired. Silent-data-loss / correctness.
 //
-// Fix: route writeTrust through atomicWriteFile (the opt #176 helper, temp+
-// rename same-dir, mode 0o600 preserved, unlink-on-error) imported from
-// scripts/reverse-agent/lib/memory-purge-helpers.mjs. Post-write chmod enforces
+// Fix: route writeTrust through the shared atomicWriteFile helper (temp+rename
+// same-dir, mode 0o600 preserved, unlink-on-error) imported from
+// scripts/reverse-agent/lib/atomic-file.mjs. Post-write chmod enforces
 // 0o600 even if the existing-mode preservation branch kept a looser mode.
 //
 // Test type: two layers.
@@ -25,7 +25,7 @@
 //      temp is written+unlinked; the original is untouched until a successful
 //      rename, so it survives the failure. This exercises the EXACT helper
 //      trust-inspect now routes through (atomicWriteFile from
-//      memory-purge-helpers.mjs). Same proven pattern as opt #176/#41/#42/#43.
+//      atomic-file.mjs). Same proven pattern as opt #176/#41/#42/#43.
 
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -42,7 +42,7 @@ const source = readFileSync(
 
 describe("trust-inspect.mjs routes writeTrust through atomicWriteFile (opt #189 routing pin)", () => {
 	it("imports atomicWriteFile from the lib helper", () => {
-		expect(source).toContain('import { atomicWriteFile } from "./lib/memory-purge-helpers.mjs"');
+		expect(source).toContain('import { atomicWriteFile } from "./lib/atomic-file.mjs"');
 	});
 
 	it("the old bare-writeFileSync(trustPath,...) pattern is gone", () => {
@@ -61,8 +61,7 @@ describe("trust-inspect.mjs routes writeTrust through atomicWriteFile (opt #189 
 
 // Mock node:fs so we can flip renameSync to throw on demand (simulating a
 // mid-rename ENOSPC/EIO). atomicWriteFile imports renameSync as a named binding
-// from "node:fs", so the mock intercepts it at the source — same proven pattern
-// as memory-inspect-purge-atomic.test.ts / atomic-write-sync-temp-cleanup.test.ts.
+// from "node:fs", so the mock intercepts it at the source.
 vi.mock("node:fs", async (importActual) => {
 	const actual = await importActual<typeof import("node:fs")>();
 	return {
@@ -74,8 +73,8 @@ vi.mock("node:fs", async (importActual) => {
 // Route the .mjs specifier through a non-literal const so tsgo does not try to
 // resolve the plain JS module (TS7016 "no declaration file"). Matches the
 // report-write-guard.test.ts pattern. Runtime still loads the real helper.
-const PURGE_HELPER = "../../../scripts/reverse-agent/lib/memory-purge-helpers.mjs";
-const { atomicWriteFile } = await import(PURGE_HELPER);
+const ATOMIC_FILE_HELPER = "../../../scripts/reverse-agent/lib/atomic-file.mjs";
+const { atomicWriteFile } = await import(ATOMIC_FILE_HELPER);
 const fs = await import("node:fs");
 
 describe("atomicWriteFile (opt #189 trust-inspect atomicity — the helper trust-inspect routes through)", () => {

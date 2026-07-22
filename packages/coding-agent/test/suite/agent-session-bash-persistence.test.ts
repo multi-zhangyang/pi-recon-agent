@@ -175,6 +175,32 @@ describe("AgentSession bash and persistence characterization", () => {
 		]);
 	});
 
+	it("bounds custom message text before it reaches state and session storage", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+
+		await harness.session.sendCustomMessage({
+			customType: "large-note",
+			content: "x".repeat(80_000),
+			display: false,
+		});
+
+		const stateMessage = harness.session.messages.find(
+			(message) => message.role === "custom" && message.customType === "large-note",
+		);
+		const storedEntry = harness.sessionManager
+			.getBranch()
+			.find((entry) => entry.type === "custom_message" && entry.customType === "large-note");
+		expect(stateMessage?.role === "custom" && typeof stateMessage.content === "string").toBe(true);
+		expect(storedEntry?.type === "custom_message" && typeof storedEntry.content === "string").toBe(true);
+		if (stateMessage?.role === "custom" && typeof stateMessage.content === "string") {
+			expect(stateMessage.content.length).toBeLessThanOrEqual(24_000);
+		}
+		if (storedEntry?.type === "custom_message" && typeof storedEntry.content === "string") {
+			expect(storedEntry.content.length).toBeLessThanOrEqual(24_000);
+		}
+	});
+
 	it("does not emit message_end for bash execution messages", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);

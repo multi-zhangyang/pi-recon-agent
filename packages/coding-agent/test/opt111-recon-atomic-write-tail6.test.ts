@@ -1,10 +1,10 @@
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import { createReconExtensionFactory } from "../src/core/recon-profile.ts";
-import { evidenceCampaignsDir, evidenceGraphsDir, evidenceToolchainDir, memoryPath } from "../src/core/repi/storage.ts";
+import { evidenceCampaignsDir, evidenceGraphsDir, evidenceToolchainDir } from "../src/core/repi/storage.ts";
 
 // opt #111: sixth tail pass of the repi atomic-write audit. Converts remaining
 // bare-writeFileSync(..., "utf-8") REPI state writers in recon-profile.ts whose
@@ -30,10 +30,6 @@ type RegisteredTool = {
 	name: string;
 	execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
 };
-
-function reconMemoryDir(): string {
-	return dirname(memoryPath("x"));
-}
 
 function latestMarkdown(dir: string): string | undefined {
 	const files = readdirSync(dir)
@@ -93,7 +89,6 @@ describe("recon-profile atomic writes tail6 (opt #111)", () => {
 			expect(tool, "re_graph tool registered").toBeDefined();
 
 			const graphsDir = evidenceGraphsDir();
-			const memDir = reconMemoryDir();
 
 			await (tool as RegisteredTool).execute("g-1", { action: "build" });
 
@@ -114,7 +109,6 @@ describe("recon-profile atomic writes tail6 (opt #111)", () => {
 			);
 
 			noTmpLeftover(graphsDir);
-			noTmpLeftover(memDir);
 		},
 		testTimeout,
 	);
@@ -127,7 +121,6 @@ describe("recon-profile atomic writes tail6 (opt #111)", () => {
 			expect(tool, "re_campaign tool registered").toBeDefined();
 
 			const campaignsDir = evidenceCampaignsDir();
-			const memDir = reconMemoryDir();
 
 			await (tool as RegisteredTool).execute("c-1", { action: "plan" });
 
@@ -148,7 +141,6 @@ describe("recon-profile atomic writes tail6 (opt #111)", () => {
 			);
 
 			noTmpLeftover(campaignsDir);
-			noTmpLeftover(memDir);
 		},
 		testTimeout,
 	);
@@ -161,7 +153,6 @@ describe("recon-profile atomic writes tail6 (opt #111)", () => {
 			expect(tool, "re_runtime_bridge tool registered").toBeDefined();
 
 			const toolchainDir = evidenceToolchainDir();
-			const memDir = reconMemoryDir();
 
 			await (tool as RegisteredTool).execute("rb-1", { action: "show" });
 
@@ -184,7 +175,6 @@ describe("recon-profile atomic writes tail6 (opt #111)", () => {
 			).toBe(0o600);
 
 			noTmpLeftover(toolchainDir);
-			noTmpLeftover(memDir);
 		},
 		testTimeout,
 	);
@@ -197,7 +187,6 @@ describe("recon-profile atomic writes tail6 (opt #111)", () => {
 			expect(tool, "re_runtime_adapter tool registered").toBeDefined();
 
 			const toolchainDir = evidenceToolchainDir();
-			const memDir = reconMemoryDir();
 
 			await (tool as RegisteredTool).execute("ra-1", { action: "show" });
 
@@ -220,7 +209,6 @@ describe("recon-profile atomic writes tail6 (opt #111)", () => {
 			).toBe(0o600);
 
 			noTmpLeftover(toolchainDir);
-			noTmpLeftover(memDir);
 		},
 		testTimeout,
 	);
@@ -233,7 +221,6 @@ describe("recon-profile atomic writes tail6 (opt #111)", () => {
 			expect(tool, "re_toolchain_domain tool registered").toBeDefined();
 
 			const toolchainDir = evidenceToolchainDir();
-			const memDir = reconMemoryDir();
 
 			await (tool as RegisteredTool).execute("td-1", { action: "show" });
 
@@ -256,7 +243,6 @@ describe("recon-profile atomic writes tail6 (opt #111)", () => {
 			).toBe(0o600);
 
 			noTmpLeftover(toolchainDir);
-			noTmpLeftover(memDir);
 		},
 		testTimeout,
 	);
@@ -269,7 +255,6 @@ describe("recon-profile atomic writes tail6 (opt #111)", () => {
 			expect(tool, "re_domain_proof_exit tool registered").toBeDefined();
 
 			const toolchainDir = evidenceToolchainDir();
-			const memDir = reconMemoryDir();
 
 			await (tool as RegisteredTool).execute("dpe-1", { action: "write" });
 
@@ -292,7 +277,6 @@ describe("recon-profile atomic writes tail6 (opt #111)", () => {
 			).toBe(0o600);
 
 			noTmpLeftover(toolchainDir);
-			noTmpLeftover(memDir);
 		},
 		testTimeout,
 	);

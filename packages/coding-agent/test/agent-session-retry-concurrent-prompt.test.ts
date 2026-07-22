@@ -79,16 +79,19 @@ describe("AgentSession prompt() during auto-retry backoff (opt #118)", () => {
 	function createSession(options?: { failCount?: number; baseDelayMs?: number }): {
 		session: AgentSession;
 		getCallCount: () => number;
+		getStreamingStates: () => boolean[];
 	} {
 		const failCount = options?.failCount ?? 99;
 		const baseDelayMs = options?.baseDelayMs ?? 5000;
 		let callCount = 0;
+		const streamingStates: boolean[] = [];
 		const model = getModel("anthropic", "claude-sonnet-4-5")!;
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: { model, systemPrompt: "Test", tools: [] },
 			streamFn: () => {
 				callCount++;
+				streamingStates.push(session?.isStreaming ?? false);
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {
 					if (callCount <= failCount) {
@@ -126,7 +129,7 @@ describe("AgentSession prompt() during auto-retry backoff (opt #118)", () => {
 			resourceLoader: createTestResourceLoader(),
 		});
 
-		return { session, getCallCount: () => callCount };
+		return { session, getCallCount: () => callCount, getStreamingStates: () => [...streamingStates] };
 	}
 
 	it("rejects a concurrent prompt() with no streamingBehavior during retry backoff (no race)", async () => {
@@ -152,7 +155,7 @@ describe("AgentSession prompt() during auto-retry backoff (opt #118)", () => {
 		// failCount=1: the retry itself succeeds, so the loop terminates instead
 		// of re-sleeping (a steered message triggers a continuation → another
 		// agent run; with failCount=99 that would re-enter retry and re-sleep).
-		const { session, getCallCount } = createSession({ failCount: 1, baseDelayMs: 1000 });
+		const { session, getCallCount, getStreamingStates } = createSession({ failCount: 1, baseDelayMs: 1000 });
 		const firstPromise = session.prompt("first");
 		await waitForRetry(session);
 
@@ -163,6 +166,9 @@ describe("AgentSession prompt() during auto-retry backoff (opt #118)", () => {
 		await firstPromise;
 		// The retried run + the steered continuation both ran.
 		expect(getCallCount()).toBeGreaterThanOrEqual(2);
+		// The controller only represents backoff. Once the retry request starts it
+		// has been cleared, so active provider work must be observable as streaming.
+		expect(getStreamingStates().slice(0, 2)).toEqual([true, true]);
 		expect(session.isRetrying).toBe(false);
 	}, 15000);
 });

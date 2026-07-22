@@ -18,8 +18,8 @@ jobs:
     env:
       # Hermetic REPI runtime dir so doctor/smoke don't depend on the
       # runner's ~/.repi/agent being pre-provisioned. init-repi-profile
-      # writes settings.json (scoped memory defaults) here; smoke/doctor
-      # read the same env var.
+      # writes the minimal runtime settings/profile here; smoke/doctor read
+      # the same env var.
       REPI_CODING_AGENT_DIR: ${{ github.workspace }}/.repi-agent-ci
     steps:
       - name: Checkout

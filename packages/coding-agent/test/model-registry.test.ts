@@ -1,7 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AnthropicMessagesCompat, Api, Context, Model, OpenAICompletionsCompat } from "@pi-recon/repi-ai";
+import type {
+	AnthropicMessagesCompat,
+	Api,
+	Context,
+	Model,
+	OpenAICompletionsCompat,
+	OpenAIResponsesCompat,
+} from "@pi-recon/repi-ai";
 import { getApiProvider } from "@pi-recon/repi-ai";
 import { getOAuthProvider } from "@pi-recon/repi-ai/oauth";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -93,38 +100,13 @@ describe("ModelRegistry", () => {
 	};
 
 	async function withRepiModelEnv<T>(values: Record<string, string>, fn: () => T | Promise<T>): Promise<T> {
-		const names = [
-			"REPI_AUTH_TOKEN",
-			"REPI_API_KEY",
-			"REPI_MODEL_API_KEY",
-			"REPI_BASE_URL",
-			"REPI_MODEL_BASE_URL",
-			"REPI_MODEL",
-			"REPI_MODEL_ID",
-			"REPI_MODEL_API",
-			"REPI_API",
-			"REPI_PROVIDER",
-			"REPI_MODEL_PROVIDER",
-			"REPI_PROVIDER_ID",
-			"REPI_CONTEXT_WINDOW",
-			"REPI_MODEL_CONTEXT_WINDOW",
-			"REPI_AUTO_COMPACT_WINDOW",
-			"REPI_MODEL_AUTO_COMPACT_WINDOW",
-			"REPI_MAX_TOKENS",
-			"REPI_MODEL_MAX_TOKENS",
-			"REPI_MAX_OUTPUT_TOKENS",
-			"REPI_MODEL_INPUT",
-			"REPI_INPUT",
-			"REPI_MODEL_REASONING",
-			"REPI_REASONING",
-			"REPI_SUBAGENT_MODEL",
-			"REPI_PRODUCT",
-			"REPI_PRIMARY",
-			"REPI_CODING_AGENT_APP_NAME",
+		const names = new Set([
+			...Object.keys(process.env).filter((name) => name.startsWith("REPI_")),
+			...Object.keys(values),
 			"OPENAI_API_KEY",
 			"ANTHROPIC_API_KEY",
-		];
-		const originals = new Map(names.map((name) => [name, process.env[name]]));
+		]);
+		const originals = new Map([...names].map((name) => [name, process.env[name]]));
 		for (const name of names) delete process.env[name];
 		for (const [name, value] of Object.entries(values)) process.env[name] = value;
 		try {
@@ -216,6 +198,103 @@ describe("ModelRegistry", () => {
 				() => {
 					const registry = ModelRegistry.create(authStorage, modelsJsonPath);
 					expect(registry.find("repi-env", "env-auto-window-model")?.contextWindow).toBe(524288);
+				},
+			);
+		});
+
+		test("accepts endpoint, protocol, token, context, and output aliases", async () => {
+			await withRepiModelEnv(
+				{
+					REPI_TOKEN: "alias-runtime-key",
+					REPI_ENDPOINT: "https://alias-gateway.example.invalid/v1",
+					REPI_MODEL_ID: "alias-model",
+					REPI_PROTOCOL: "openai-responses",
+					REPI_CONTEXT_LENGTH: "200000",
+					REPI_OUTPUT_TOKEN_LIMIT: "24000",
+				},
+				async () => {
+					const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+					const model = registry.find("repi-env", "alias-model");
+					expect(model).toMatchObject({
+						api: "openai-responses",
+						baseUrl: "https://alias-gateway.example.invalid/v1",
+						contextWindow: 200000,
+						maxTokens: 24000,
+					});
+					expect(await registry.getApiKeyAndHeaders(model!)).toMatchObject({
+						ok: true,
+						apiKey: "alias-runtime-key",
+					});
+				},
+			);
+		});
+
+		test("loads rich env-only metadata, request headers, and tiered pricing", async () => {
+			await withRepiModelEnv(
+				{
+					REPI_AUTH_TOKEN: "env-runtime-key",
+					REPI_BASE_URL: "https://gateway.example.invalid/v1",
+					REPI_MODEL: "env-rich-model",
+					REPI_MODEL_API: "openai-compatible",
+					REPI_MODEL_INPUT: '["text", "image"]',
+					REPI_MODEL_REASONING: "true",
+					REPI_CONTEXT_WINDOW: "262144",
+					REPI_MAX_TOKENS: "32768",
+					REPI_TENANT_ID: "tenant-header",
+					REPI_HEADERS: '{"X-Provider":"$REPI_TENANT_ID"}',
+					REPI_MODEL_HEADERS: '{"X-Model":"model-header"}',
+					REPI_COMPAT: '{"supportsDeveloperRole":false,"maxTokensField":"max_tokens"}',
+					REPI_MODEL_COMPAT: '{"supportsUsageInStreaming":false}',
+					REPI_MODEL_THINKING_LEVEL_MAP: '{"high":"max","xhigh":null}',
+					REPI_AUTH_HEADER: "1",
+					REPI_MODEL_COST_INPUT: "0.25",
+					REPI_MODEL_COST_OUTPUT: "1.5",
+					REPI_MODEL_COST_CACHE_READ: "0.05",
+					REPI_MODEL_COST_CACHE_WRITE: "0.4",
+					REPI_MODEL_COST_TIERS:
+						'[{"inputTokensAbove":100000,"input":0.2,"output":1.2,"cacheRead":0.04,"cacheWrite":0.3}]',
+				},
+				async () => {
+					const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+					const model = registry.find("repi-env", "env-rich-model");
+					expect(registry.getError()).toBeUndefined();
+					expect(model).toMatchObject({
+						input: ["text", "image"],
+						reasoning: true,
+						contextWindow: 262144,
+						maxTokens: 32768,
+						thinkingLevelMap: { high: "max", xhigh: null },
+						compat: {
+							supportsDeveloperRole: false,
+							supportsUsageInStreaming: false,
+							maxTokensField: "max_tokens",
+						},
+						cost: {
+							input: 0.25,
+							output: 1.5,
+							cacheRead: 0.05,
+							cacheWrite: 0.4,
+							tiers: [
+								{
+									inputTokensAbove: 100000,
+									input: 0.2,
+									output: 1.2,
+									cacheRead: 0.04,
+									cacheWrite: 0.3,
+								},
+							],
+						},
+					});
+					const auth = await registry.getApiKeyAndHeaders(model!);
+					expect(auth).toEqual({
+						ok: true,
+						apiKey: "env-runtime-key",
+						headers: {
+							"X-Provider": "tenant-header",
+							"X-Model": "model-header",
+							Authorization: "Bearer env-runtime-key",
+						},
+					});
 				},
 			);
 		});
@@ -434,7 +513,7 @@ describe("ModelRegistry", () => {
 			expect(compat?.cacheControlFormat).toBe("anthropic");
 		});
 
-		test("compat schema accepts Anthropic eager tool input streaming flag", () => {
+		test("compat schema accepts Anthropic eager input and tool reference flags", () => {
 			writeRawModelsJson({
 				demo: {
 					baseUrl: "https://example.com",
@@ -442,6 +521,7 @@ describe("ModelRegistry", () => {
 					api: "anthropic-messages",
 					compat: {
 						supportsEagerToolInputStreaming: false,
+						supportsToolReferences: true,
 					},
 					models: [
 						{
@@ -461,6 +541,36 @@ describe("ModelRegistry", () => {
 
 			expect(registry.getError()).toBeUndefined();
 			expect(compat?.supportsEagerToolInputStreaming).toBe(false);
+			expect(compat?.supportsToolReferences).toBe(true);
+		});
+
+		test("compat schema accepts OpenAI Responses tool search flag", () => {
+			writeRawModelsJson({
+				demo: {
+					baseUrl: "https://example.com/v1",
+					apiKey: "DEMO_KEY",
+					api: "openai-responses",
+					compat: {
+						supportsToolSearch: true,
+					},
+					models: [
+						{
+							id: "demo-model",
+							reasoning: false,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 1000,
+							maxTokens: 100,
+						},
+					],
+				},
+			});
+
+			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+			const compat = registry.find("demo", "demo-model")?.compat as OpenAIResponsesCompat | undefined;
+
+			expect(registry.getError()).toBeUndefined();
+			expect(compat?.supportsToolSearch).toBe(true);
 		});
 
 		test("model-level baseUrl overrides provider-level baseUrl for custom models", () => {
@@ -529,30 +639,11 @@ describe("ModelRegistry", () => {
 		});
 	});
 
-	describe("modelOverrides legacy config", () => {
-		test("rejects modelOverrides because implicit catalogs are not loaded", () => {
-			writeRawModelsJson({
-				openrouter: {
-					modelOverrides: {
-						"anthropic/claude-sonnet-4": {
-							name: "Custom Sonnet Name",
-						},
-					},
-				},
-			});
-
-			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
-
-			expect(getModelsForProvider(registry, "openrouter")).toHaveLength(0);
-			expect(registry.getError()).toContain('"modelOverrides" targets a removed implicit model catalog');
-		});
-	});
-
 	describe("dynamic provider lifecycle", () => {
-		test("getProviderDisplayName resolves registered, OAuth, built-in, and fallback names", () => {
+		test("getProviderDisplayName resolves registered, OAuth, and fallback names", () => {
 			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
 
-			expect(registry.getProviderDisplayName("openai")).toBe("OpenAI");
+			expect(registry.getProviderDisplayName("openai")).toBe("openai");
 			expect(registry.getProviderDisplayName("github-copilot")).toBe("GitHub Copilot");
 			expect(registry.getProviderDisplayName("unknown-provider")).toBe("unknown-provider");
 
@@ -733,6 +824,51 @@ describe("ModelRegistry", () => {
 					error instanceof Error && error.message === "custom streamSimple override";
 			}
 			expect(threwCustomOverrideAfterUnregister).toBe(false);
+		});
+
+		test("refresh only rebuilds this registry's global provider layers", () => {
+			const first = ModelRegistry.inMemory(AuthStorage.inMemory());
+			const second = ModelRegistry.inMemory(AuthStorage.inMemory());
+			const api = "openai-completions";
+			const model = { ...openAiModel, api };
+			const register = (registry: ModelRegistry, providerId: string, marker: string) => {
+				registry.registerProvider(providerId, {
+					api,
+					streamSimple: () => {
+						throw new Error(marker);
+					},
+					oauth: {
+						name: marker,
+						login: async () => ({ access: marker, refresh: marker, expires: Date.now() + 60_000 }),
+						refreshToken: async (credentials) => credentials,
+						getApiKey: (credentials) => credentials.access,
+					},
+				});
+			};
+			const invokeActiveApi = () => getApiProvider(api)?.streamSimple(model, emptyContext);
+
+			register(first, "first-layered-provider", "first-layer");
+			register(second, "second-layered-provider", "second-layer");
+			try {
+				expect(invokeActiveApi).toThrow("second-layer");
+
+				first.refresh();
+				expect(getOAuthProvider("first-layered-provider")?.name).toBe("first-layer");
+				expect(getOAuthProvider("second-layered-provider")?.name).toBe("second-layer");
+				expect(invokeActiveApi).toThrow("first-layer");
+
+				first.unregisterProvider("first-layered-provider");
+				expect(getOAuthProvider("first-layered-provider")).toBeUndefined();
+				expect(getOAuthProvider("second-layered-provider")?.name).toBe("second-layer");
+				expect(invokeActiveApi).toThrow("second-layer");
+
+				second.refresh();
+				expect(getOAuthProvider("second-layered-provider")?.name).toBe("second-layer");
+				expect(invokeActiveApi).toThrow("second-layer");
+			} finally {
+				first.unregisterProvider("first-layered-provider");
+				second.unregisterProvider("second-layered-provider");
+			}
 		});
 
 		describe("dynamic provider override persistence", () => {
@@ -1074,6 +1210,31 @@ describe("ModelRegistry", () => {
 		});
 
 		describe("request-time resolution", () => {
+			test("preserves null header suppression with case-insensitive precedence", async () => {
+				const baseProvider = providerWithApiKey("test-key");
+				writeRawModelsJson({
+					"custom-provider": {
+						...baseProvider,
+						headers: { "X-Default": "provider", "X-Provider": "kept" },
+						models: [
+							{
+								...baseProvider.models[0],
+								headers: { "x-default": null, "X-Model": "kept" },
+							},
+						],
+					},
+				});
+
+				const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+				const model = registry.find("custom-provider", "test-model");
+				expect(model).toBeDefined();
+				expect(await registry.getApiKeyAndHeaders(model!)).toEqual({
+					ok: true,
+					apiKey: "test-key",
+					headers: { "X-Provider": "kept", "x-default": null, "X-Model": "kept" },
+				});
+			});
+
 			test("command is executed on every provider lookup", async () => {
 				const counterFile = join(tempDir, "counter");
 				writeFileSync(counterFile, "0");

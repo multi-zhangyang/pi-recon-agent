@@ -28,8 +28,9 @@ const compat = {
 	cacheControlFormat: undefined,
 	sendSessionAffinityHeaders: false,
 	supportsLongCacheRetention: true,
-} satisfies Required<Omit<OpenAICompletionsCompat, "cacheControlFormat">> & {
+} satisfies Omit<Required<OpenAICompletionsCompat>, "cacheControlFormat" | "deferredToolsMode"> & {
 	cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
+	deferredToolsMode?: OpenAICompletionsCompat["deferredToolsMode"];
 };
 
 function buildModel(): Model<"openai-completions"> {

@@ -2,10 +2,10 @@ import * as os from "node:os";
 import { pathToFileURL } from "node:url";
 import type { ImageContent, TextContent } from "@pi-recon/repi-ai";
 import { getCapabilities, getImageDimensions, hyperlink, imageFallback } from "@pi-recon/repi-tui";
-import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../utils/ansi.ts";
 import { resolvePath } from "../../utils/paths.ts";
 import { sanitizeBinaryOutput } from "../../utils/shell.ts";
+import type { Theme } from "../presentation/theme.ts";
 
 export function shortenPath(path: unknown): string {
 	if (typeof path !== "string") return "";

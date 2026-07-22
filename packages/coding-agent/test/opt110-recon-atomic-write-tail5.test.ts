@@ -1,33 +1,21 @@
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import { createReconExtensionFactory } from "../src/core/recon-profile.ts";
-import {
-	compactionResumeTelemetryPath,
-	evidenceAutofixDir,
-	evidenceProofLoopsDir,
-	evidenceReplayersDir,
-	memoryPath,
-} from "../src/core/repi/storage.ts";
+import { evidenceAutofixDir, evidenceProofLoopsDir, evidenceReplayersDir } from "../src/core/repi/storage.ts";
 
 // opt #110: fifth tail pass of the repi atomic-write audit. Converts remaining
 // bare-writeFileSync(..., "utf-8") REPI state writers in recon-profile.ts whose
-// output is LATER read via readText (show action / parseReconCompactionResume*
-// JSON.parse(readText(path))) so a crash-torn write silently degrades state:
-//   writeReconCompactionResumeTelemetry → memory/compaction-auto-resume-board.md
-//                                          (REWRITE-same-path: inode-change)
+// output is later read via readText, so a crash-torn write silently degrades state:
 //   writeReplayerArtifact             → evidence/replayers/<ts>.md (NEW: 0o600)
 //   writeAutofixArtifact (1st + 2nd)  → evidence/autofix/<ts>.md  (NEW: 0o600;
 //                                        2nd write rewrites same path in-call)
 //   writeProofLoopArtifact            → evidence/proof-loops/<ts>.md (NEW: 0o600)
 // Drives re_replayer plan ×2, re_autofix plan ×2, re_proof_loop plan ×2 via the
 // fakePi harness and probes mode 0o600 on the new timestamped artifacts (bare
-// writeFileSync yields 0o644 under default umask) AND no .tmp leftover. The
-// compaction-auto-resume-board.md rewrite-same-path is driven via re_proof_loop
-// run ×2 against a pre-seeded telemetry board → inode-change probe (atomic
-// temp+rename swaps the inode; truncate-then-write keeps it).
+// writeFileSync yields 0o644 under default umask) and no .tmp leftovers.
 
 const ENV_AGENT_DIR = "REPI_CODING_AGENT_DIR";
 
@@ -37,10 +25,6 @@ type RegisteredTool = {
 	name: string;
 	execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
 };
-
-function reconMemoryDir(): string {
-	return dirname(memoryPath("x"));
-}
 
 function latestMarkdown(dir: string): string | undefined {
 	const files = readdirSync(dir)
@@ -54,33 +38,6 @@ function noTmpLeftover(dir: string): void {
 		readdirSync(dir).filter((f) => f.endsWith(".tmp")),
 		`no .tmp leftover in ${dir}`,
 	).toEqual([]);
-}
-
-function seedCompactionResumeBoard(): void {
-	const telemetry = {
-		kind: "repi-compaction-resume-telemetry",
-		version: 1,
-		timestamp: new Date().toISOString(),
-		compactionEntryId: "seed-entry",
-		contextPath: "none",
-		contractVerified: true,
-		autoResumeTriggered: true,
-		commandStatus: [{ command: "re_proof_loop run", status: "queued", enteredProofLoop: true }],
-		checkStatus: [] as string[],
-		proofLoopEntered: false,
-		sourceArtifacts: [] as string[],
-	};
-	const body = [
-		"# REPI Compaction Auto Resume Board",
-		"",
-		"## JSON",
-		"",
-		"```json",
-		JSON.stringify(telemetry, null, 2),
-		"```",
-		"",
-	].join("\n");
-	writeFileSync(compactionResumeTelemetryPath(), body, "utf-8");
 }
 
 describe("recon-profile atomic writes tail5 (opt #110)", () => {
@@ -127,8 +84,6 @@ describe("recon-profile atomic writes tail5 (opt #110)", () => {
 			expect(tool, "re_replayer tool registered").toBeDefined();
 
 			const replayersDir = evidenceReplayersDir();
-			const memDir = reconMemoryDir();
-
 			await (tool as RegisteredTool).execute("rep-1", { action: "plan" });
 
 			const artifactAfter1 = latestMarkdown(replayersDir);
@@ -148,7 +103,6 @@ describe("recon-profile atomic writes tail5 (opt #110)", () => {
 			);
 
 			noTmpLeftover(replayersDir);
-			noTmpLeftover(memDir);
 		},
 		testTimeout,
 	);
@@ -161,8 +115,6 @@ describe("recon-profile atomic writes tail5 (opt #110)", () => {
 			expect(tool, "re_autofix tool registered").toBeDefined();
 
 			const autofixDir = evidenceAutofixDir();
-			const memDir = reconMemoryDir();
-
 			await (tool as RegisteredTool).execute("af-1", { action: "plan" });
 
 			const artifactAfter1 = latestMarkdown(autofixDir);
@@ -182,7 +134,6 @@ describe("recon-profile atomic writes tail5 (opt #110)", () => {
 			);
 
 			noTmpLeftover(autofixDir);
-			noTmpLeftover(memDir);
 		},
 		testTimeout,
 	);
@@ -195,8 +146,6 @@ describe("recon-profile atomic writes tail5 (opt #110)", () => {
 			expect(tool, "re_proof_loop tool registered").toBeDefined();
 
 			const proofLoopsDir = evidenceProofLoopsDir();
-			const memDir = reconMemoryDir();
-
 			await (tool as RegisteredTool).execute("pl-1", { action: "plan" });
 
 			const artifactAfter1 = latestMarkdown(proofLoopsDir);
@@ -218,39 +167,6 @@ describe("recon-profile atomic writes tail5 (opt #110)", () => {
 			).toBe(0o600);
 
 			noTmpLeftover(proofLoopsDir);
-			noTmpLeftover(memDir);
-		},
-		testTimeout,
-	);
-
-	it(
-		"re_proof_loop run ×2 rewrites compaction-auto-resume-board.md atomically (inode-change, no .tmp)",
-		async () => {
-			const tools = registerTools();
-			const tool = tools.get("re_proof_loop");
-			expect(tool, "re_proof_loop tool registered").toBeDefined();
-
-			const memDir = reconMemoryDir();
-			const boardPath = compactionResumeTelemetryPath();
-
-			// Pre-seed a valid telemetry board so updateReconCompactionTelemetryFromExecutions
-			// finds a `current` telemetry and proceeds to rewrite the board.
-			seedCompactionResumeBoard();
-			const inodeBefore = statSync(boardPath).ino;
-
-			await (tool as RegisteredTool).execute("cr-1", { action: "run", maxSteps: 1, replaySteps: 1 });
-
-			const inodeAfter1 = statSync(boardPath).ino;
-			expect(inodeAfter1, "compaction board inode changed after 1st run").not.toBe(inodeBefore);
-
-			await new Promise((resolve) => setTimeout(resolve, 5));
-
-			await (tool as RegisteredTool).execute("cr-2", { action: "run", maxSteps: 1, replaySteps: 1 });
-
-			const inodeAfter2 = statSync(boardPath).ino;
-			expect(inodeAfter2, "compaction board inode changed between runs").not.toBe(inodeAfter1);
-
-			noTmpLeftover(memDir);
 		},
 		testTimeout,
 	);

@@ -21,9 +21,12 @@ import { getModels } from "../src/models.ts";
 import { complete } from "../src/stream.ts";
 import type { Context } from "../src/types.ts";
 import { hasBedrockCredentials } from "./bedrock-utils.ts";
+import { registerBedrockFixtures } from "./model-fixtures.ts";
+
+registerBedrockFixtures();
 
 describe("Amazon Bedrock Models", () => {
-	const models = getModels("amazon-bedrock");
+	const models = getModels<"bedrock-converse-stream">("amazon-bedrock");
 
 	it("should get all available Bedrock models", () => {
 		expect(models.length).toBeGreaterThan(0);

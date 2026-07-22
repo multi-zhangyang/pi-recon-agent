@@ -8,7 +8,7 @@ The runtime example shows how to build a recreate function that closes over proc
 
 | File | Description |
 |------|-------------|
-| `01-minimal.ts` | Simplest usage with all defaults |
+| `01-minimal.ts` | Simplest usage with models.json/REPI_* runtime configuration |
 | `02-custom-model.ts` | Select model and thinking level |
 | `03-custom-prompt.ts` | Replace or modify system prompt |
 | `04-skills.ts` | Discover, filter, or replace skills |
@@ -32,48 +32,72 @@ npx tsx examples/sdk/01-minimal.ts
 ## Quick Reference
 
 ```typescript
-import { getModel } from "@pi-recon/repi-ai";
+import type { Model } from "@pi-recon/repi-ai";
 import {
   AuthStorage,
   createAgentSession,
   DefaultResourceLoader,
   ModelRegistry,
+  ModelRuntime,
   SessionManager,
   SettingsManager,
 } from "@pi-recon/repi-coding-agent";
 
-// Auth and models setup
+// Auth and models setup. The runtime model set contains only entries supplied by
+// ~/.repi/agent/models.json, a complete REPI_* config, or extensions.
 const authStorage = AuthStorage.create();
-const modelRegistry = ModelRegistry.create(authStorage);
+const modelRuntime = await ModelRuntime.create({ credentials: authStorage.asCredentialStore() });
 
 // Minimal
-const { session } = await createAgentSession({ authStorage, modelRegistry });
+const { session } = await createAgentSession({ authStorage, modelRuntime });
 
-// Custom model
-const model = getModel("anthropic", "claude-opus-4-5");
-const { session } = await createAgentSession({ model, thinkingLevel: "high", authStorage, modelRegistry });
+// Select an explicitly configured model
+const configuredModel = modelRuntime.getModel("my-provider", "my-model");
+if (!configuredModel) throw new Error("Configure my-provider/my-model first");
+const { session } = await createAgentSession({
+  model: configuredModel,
+  thinkingLevel: "high",
+  authStorage,
+  modelRuntime,
+});
 
 // Modify prompt
 const loader = new DefaultResourceLoader({
   systemPromptOverride: (base) => `${base}\n\nBe concise.`,
 });
 await loader.reload();
-const { session } = await createAgentSession({ resourceLoader: loader, authStorage, modelRegistry });
+const { session } = await createAgentSession({ resourceLoader: loader, authStorage, modelRuntime });
 
 // Read-only
-const { session } = await createAgentSession({ tools: ["read", "grep", "find", "ls"], authStorage, modelRegistry });
+const { session } = await createAgentSession({
+  tools: ["read", "grep", "find", "ls"],
+  authStorage,
+  modelRuntime,
+});
 
 // In-memory
 const { session } = await createAgentSession({
   sessionManager: SessionManager.inMemory(),
   authStorage,
-  modelRegistry,
+  modelRuntime,
 });
 
 // Full control
 const customAuth = AuthStorage.create("/my/app/auth.json");
 customAuth.setRuntimeApiKey("anthropic", process.env.MY_KEY!);
-const customRegistry = ModelRegistry.create(customAuth);
+const customRegistry = ModelRegistry.inMemory(customAuth);
+const model: Model<"anthropic-messages"> = {
+  id: "claude-sonnet-4-5",
+  name: "Claude Sonnet 4.5",
+  api: "anthropic-messages",
+  provider: "anthropic",
+  baseUrl: "https://api.anthropic.com",
+  reasoning: true,
+  input: ["text", "image"],
+  cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  contextWindow: 200000,
+  maxTokens: 64000,
+};
 
 const resourceLoader = new DefaultResourceLoader({
   systemPromptOverride: () => "You are helpful.",
@@ -109,10 +133,11 @@ await session.prompt("Hello");
 | Option | Default | Description |
 |--------|---------|-------------|
 | `authStorage` | `AuthStorage.create()` | Credential storage |
-| `modelRegistry` | `ModelRegistry.create(authStorage)` | Model registry |
+| `modelRuntime` | `ModelRuntime.create(...)` | Canonical provider/auth/stream runtime; loads explicit models.json and REPI_* configuration |
+| `modelRegistry` | Facade over `modelRuntime` | Compatibility model registry; pass one only for legacy/custom dispatch |
 | `cwd` | `process.cwd()` | Working directory |
-| `agentDir` | `~/.pi/agent` | Config directory |
-| `model` | From settings/first available | Model to use |
+| `agentDir` | `~/.repi/agent` | Config directory |
+| `model` | From settings/first explicitly configured available model | Model to use |
 | `thinkingLevel` | From settings/"off" | off, low, medium, high |
 | `tools` | `["read", "bash", "edit", "write"]` built-ins | Allowlist tool names across built-in, extension, and custom tools |
 | `customTools` | `[]` | Additional tool definitions |

@@ -10,7 +10,7 @@ import {
 	Spacer,
 	Text,
 } from "@pi-recon/repi-tui";
-import { theme } from "../theme/theme.ts";
+import { theme } from "../../../core/presentation/theme-runtime.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyText } from "./keybinding-hints.ts";
 

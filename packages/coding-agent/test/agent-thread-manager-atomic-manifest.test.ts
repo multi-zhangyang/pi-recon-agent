@@ -65,6 +65,15 @@ describe("atomicWriteFileSync", () => {
 		expect(statSync(target).mode & 0o777).toBe(0o600);
 	});
 
+	it("creates a missing private parent directory", () => {
+		tempDir = mkdtempSync(join(tmpdir(), "atomic-sync-parent-"));
+		const target = join(tempDir, "lazy", "nested", "manifest.json");
+		atomicWriteFileSync(target, `{"status":"queued"}\n`);
+
+		expect(readFileSync(target, "utf8")).toBe(`{"status":"queued"}\n`);
+		expect(statSync(dirname(target)).mode & 0o777).toBe(0o700);
+	});
+
 	it("preserves a non-default existing mode (0o644) across rewrites", () => {
 		tempDir = mkdtempSync(join(tmpdir(), "atomic-sync-mode-preserve-"));
 		const target = join(tempDir, "custom.json");

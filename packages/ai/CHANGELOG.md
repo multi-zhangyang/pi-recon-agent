@@ -2,9 +2,22 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed generated text/image model catalogs and provider presets from the package. Model lookup is empty by default; hosts must register catalogs explicitly or load models from their own configuration.
+
+### Changed
+
+- Changed model discovery and metadata ownership to the host: applications now supply models directly or load them from application configuration, environment metadata, or extensions while the package retains wire-level API adapters.
+
 ### Added
 
 - Added `@pi-recon/repi-ai/compat` as an upstream-compatible subpath for pi ecosystem extensions loaded by REPI.
+- Added provider-owned runtime catalogs, auth resolution, dynamic refresh/storage, explicit catalog registration, and tiered token pricing primitives.
+
+### Removed
+
+- Removed build-time model-catalog generation and the package-wide default provider/model directory.
 
 ### Fixed
 

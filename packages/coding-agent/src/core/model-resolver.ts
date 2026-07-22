@@ -9,6 +9,7 @@ import { minimatch } from "minimatch";
 import { isValidThinkingLevel } from "../cli/args.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import type { ModelRegistry } from "./model-registry.ts";
+import { REPI_MODEL_BASE_URL_ENV_NAMES } from "./repi-env-provider.ts";
 
 export interface ScopedModel {
 	model: Model<Api>;
@@ -441,7 +442,7 @@ function firstEnvValue(names: string[]): string | undefined {
 
 export function repiEnvPreferredModel(): { provider: string; modelId: string } | undefined {
 	const modelId = firstEnvValue(["REPI_MODEL", "REPI_MODEL_ID"]);
-	const baseUrl = firstEnvValue(["REPI_BASE_URL", "REPI_MODEL_BASE_URL"]);
+	const baseUrl = firstEnvValue([...REPI_MODEL_BASE_URL_ENV_NAMES]);
 	if (!modelId || !baseUrl) return undefined;
 	return {
 		provider: firstEnvValue(["REPI_PROVIDER", "REPI_MODEL_PROVIDER", "REPI_PROVIDER_ID"]) ?? "repi-env",

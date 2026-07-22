@@ -6,7 +6,9 @@ import {
 	mkdirSync,
 	openSync,
 	readFileSync,
+	readdirSync,
 	renameSync,
+	rmSync,
 	statSync,
 	unlinkSync,
 	writeFileSync,
@@ -79,54 +81,107 @@ const copyIfMissing = (from, to, mode) => {
 	return true;
 };
 
+// Only inspect profile roots created by REPI's worker/session isolation code.
+// Evidence can contain arbitrary user fixtures named settings.json, so do not
+// recursively discover files by name.
+const knownIsolatedProfileSettings = (root) => {
+	const paths = [join(root, "settings.json")];
+	const add = (path) => paths.push(path);
+	const threadRoot = join(root, "recon", "agent-threads");
+	try {
+		for (const entry of readdirSync(threadRoot, { withFileTypes: true })) {
+			if (entry.isDirectory()) add(join(threadRoot, entry.name, "agent-home", "settings.json"));
+		}
+	} catch {}
+	const swarmsRoot = join(root, "recon", "evidence", "swarms");
+	try {
+		for (const entry of readdirSync(swarmsRoot, { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			if (/-sessions$/.test(entry.name)) add(join(swarmsRoot, entry.name, ".repi", "agent", "settings.json"));
+			if (/-worker-child-session-runtime-child-process$/.test(entry.name)) {
+				add(join(swarmsRoot, entry.name, "home", ".repi", "agent", "settings.json"));
+			}
+		}
+	} catch {}
+	return [...new Set(paths)];
+};
+const removeRetiredMemorySetting = (path) => {
+	const settings = readJson(path);
+	if (!settings || Array.isArray(settings) || !Object.prototype.hasOwnProperty.call(settings, "memory")) return;
+	delete settings.memory;
+	writeJson(path, settings, 0o600);
+};
+
+// Remove state written by the retired persistent-memory/file-profile runtime.
+// Keep session transcripts, mission state, and ordinary evidence intact.
+const removeRetiredRuntimeState = (root) => {
+	const remove = (path) => {
+		try {
+			rmSync(path, { recursive: true, force: true });
+		} catch {
+			// Best effort: stale locked state must not block startup.
+		}
+	};
+	for (const path of [
+		join(root, "memory"),
+		join(root, "SYSTEM.md"),
+		join(root, "APPEND_SYSTEM.md"),
+		join(root, "prompts", "memory.md"),
+		join(root, "skills", "reverse-pentest-orchestrator"),
+		join(root, "recon", "memory"),
+		join(root, "recon", "builtin"),
+		join(root, "recon", "evidence", "knowledge"),
+		join(root, "recon", "evidence", "tool-calls"),
+	]) remove(path);
+	try {
+		for (const entry of readdirSync(join(root, "extensions"), { withFileTypes: true })) {
+			if (entry.isDirectory() && /^(?:legacy-tools|legacy-hooks)-/.test(entry.name)) {
+				remove(join(root, "extensions", entry.name));
+			}
+		}
+	} catch {}
+	try {
+		const runsDir = join(root, "recon", "evidence", "runs");
+		for (const entry of readdirSync(runsDir, { withFileTypes: true })) {
+			if (/(?:case-memory|knowledge-graph)/i.test(entry.name)) remove(join(runsDir, entry.name));
+		}
+	} catch {}
+	const archiveDir = join(root, "recon", "archive");
+	try {
+		for (const entry of readdirSync(archiveDir, { withFileTypes: true })) {
+			if (entry.isDirectory() && /^(?:legacy-file-profile|poison-cleanup-runtime)-/.test(entry.name)) {
+				remove(join(archiveDir, entry.name));
+			}
+		}
+	} catch {}
+	const threadRoot = join(root, "recon", "agent-threads");
+	try {
+		for (const entry of readdirSync(threadRoot, { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			const worker = join(threadRoot, entry.name, "agent-home");
+			for (const path of [
+				join(worker, "memory"),
+				join(worker, "SYSTEM.md"),
+				join(worker, "APPEND_SYSTEM.md"),
+				join(worker, "prompts", "memory.md"),
+				join(worker, "skills", "reverse-pentest-orchestrator"),
+				join(worker, "recon", "memory"),
+				join(worker, "recon", "builtin"),
+				join(worker, "recon", "evidence", "knowledge"),
+				join(worker, "recon", "evidence", "tool-calls"),
+			]) remove(path);
+		}
+	} catch {}
+	for (const settingsPath of knownIsolatedProfileSettings(root)) removeRetiredMemorySetting(settingsPath);
+};
+
 mkdir(agentDir);
 mkdir(join(agentDir, "sessions"));
-mkdir(join(agentDir, "recon", "memory"));
-mkdir(join(agentDir, "recon", "mission"));
-mkdir(join(agentDir, "recon", "tools"));
-for (const sub of [
-	"runs",
-	"maps",
-	"browser",
-	"web-authz",
-	"chains",
-	"decisions",
-	"exploit-lab",
-	"mobile-runtime",
-	"native-runtime",
-	"graphs",
-	"proof-loops",
-	"knowledge",
-	"profile-checks",
-	"swarms",
-	"supervisor",
-	"contexts",
-	"operators",
-	"verifiers",
-	"compilers",
-	"replayers",
-	"autofix",
-	"failures",
-	"repairs",
-	"claim-release",
-]) {
-	mkdir(join(agentDir, "recon", "evidence", sub));
-}
-for (const dir of [
-	agentDir,
-	join(agentDir, "sessions"),
-	join(agentDir, "recon"),
-	join(agentDir, "recon", "memory"),
-	join(agentDir, "recon", "evidence"),
-	join(agentDir, "recon", "mission"),
-	join(agentDir, "recon", "tools"),
-]) {
-	try {
-		chmodSync(dir, 0o700);
-	} catch {
-		// Best-effort on non-POSIX filesystems.
-	}
-}
+// Keep install-time bootstrap minimal. Mission/evidence/tool directories are
+// created by the first operation that needs them, so a fresh profile has no
+// empty artifact tree to carry around.
+mkdir(join(agentDir, "recon"));
+removeRetiredRuntimeState(agentDir);
 
 const copiedModels = importLegacyPiProfile
 	? copyIfMissing(join(legacyPiAgentDir, "models.json"), join(agentDir, "models.json"), 0o600)
@@ -137,7 +192,7 @@ const copiedAuth = importLegacyPiProfile
 
 const settingsPath = join(agentDir, "settings.json");
 const settings = readJson(settingsPath) || {};
-settings.defaultThinkingLevel = settings.defaultThinkingLevel ?? "high";
+settings.defaultThinkingLevel = settings.defaultThinkingLevel ?? "medium";
 settings.enableSkillCommands = true;
 settings.quietStartup = settings.quietStartup ?? false;
 settings.collapseChangelog = settings.collapseChangelog ?? true;
@@ -156,35 +211,7 @@ settings.compaction = {
 	reserveTokens: migratedLegacyReserveTokens ?? 16384,
 	keepRecentTokens: existingCompaction.keepRecentTokens ?? 36000,
 };
-const existingMemory =
-	settings.memory && typeof settings.memory === "object" && !Array.isArray(settings.memory) ? settings.memory : {};
-const migrateMemoryV1 = Number(existingMemory.schemaVersion ?? 0) < 2;
-const legacyAutoDeposit =
-	migrateMemoryV1 && existingMemory.autoDeposit === false ? "high-value" : existingMemory.autoDeposit;
-const legacyStartupDigest =
-	migrateMemoryV1 && existingMemory.startupDigest === "status" ? "scoped" : existingMemory.startupDigest;
-const legacyScopePolicy =
-	migrateMemoryV1 && existingMemory.scopePolicy === "session" ? "mission+workspace+target" : existingMemory.scopePolicy;
-settings.memory = {
-	...existingMemory,
-	schemaVersion: 2,
-	mode: existingMemory.mode ?? "scoped",
-	autoRecall: existingMemory.autoRecall ?? true,
-	autoInject: existingMemory.autoInject ?? false,
-	rawAutoInject: existingMemory.rawAutoInject ?? false,
-	autoDeposit: legacyAutoDeposit ?? "high-value",
-	startupDigest: legacyStartupDigest ?? "scoped",
-	scopePolicy: legacyScopePolicy ?? "mission+workspace+target",
-	contextMemoryMode: existingMemory.contextMemoryMode ?? "scoped",
-	includeGlobalMemoryInContextPack: existingMemory.includeGlobalMemoryInContextPack ?? false,
-	activeRecall: existingMemory.activeRecall ?? false,
-	maxInjectedTokens: existingMemory.maxInjectedTokens ?? 1200,
-	startupBudgetTokens: existingMemory.startupBudgetTokens ?? 800,
-	contextPackBudgetTokens: existingMemory.contextPackBudgetTokens ?? 1200,
-	maxStartupItems: existingMemory.maxStartupItems ?? 5,
-	minRecallScore: existingMemory.minRecallScore ?? 0.35,
-	rawTranscriptRetention: existingMemory.rawTranscriptRetention ?? "external-only",
-};
+delete settings["memory"];
 settings.branchSummary = { reserveTokens: 24576, skipPrompt: true, ...(settings.branchSummary ?? {}) };
 settings.retry = {
 	enabled: true,
@@ -196,24 +223,12 @@ settings.retry = {
 // repi uses the built-in --recon kernel and wrapper-level --no-extensions/--no-skills/--no-prompt-templates.
 // Keep the isolated profile free of file-based reverse extensions/prompts so it cannot collide with normal pi.
 for (const key of ["extensions", "skills", "prompts", "enabledModels"]) {
-	if (Array.isArray(settings[key]) && settings[key].some((x) => String(x).includes("reverse-pentest") || String(x) === "prompts")) {
-		delete settings[key];
-	}
+	if (!Array.isArray(settings[key])) continue;
+	const filtered = settings[key].filter((x) => !String(x).includes("reverse-pentest") && String(x) !== "prompts");
+	if (filtered.length === 0) delete settings[key];
+	else if (filtered.length !== settings[key].length) settings[key] = filtered;
 }
 writeJson(settingsPath, settings, 0o600);
-
-for (const [rel, body] of [
-	["recon/evidence/ledger.md", "# REPI Evidence Ledger\n\n"],
-	["recon/tools/tool-index.md", "# REPI Tool Index\n\n"],
-]) {
-	const path = join(agentDir, rel);
-	if (!existsSync(path)) atomicWriteFile(path, body, 0o600);
-	try {
-		chmodSync(path, 0o600);
-	} catch {
-		// Best-effort on non-POSIX filesystems.
-	}
-}
 
 const manifestPath = join(agentDir, "recon", "profile.json");
 writeJson(manifestPath, {

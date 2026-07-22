@@ -37,7 +37,8 @@
 	],
 	"scripts": {
 		"clean": "npm run clean --workspaces",
-		"build": "cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../coding-agent && npm run build",
+		"clean:production-dist": "node scripts/clean-production-dist.mjs .",
+		"build": "npm run clean:production-dist && node scripts/reverse-agent/mark-repi-runtime.mjs . --invalidate && cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../coding-agent && npm run build && cd ../.. && node scripts/reverse-agent/mark-repi-runtime.mjs .",
 		"check": "biome check --write --error-on-warnings . && npm run check:pinned-deps && npm run check:ts-imports && npm run check:shrinkwrap && tsgo --noEmit && npm run contract:repi && npm run check:browser-smoke",
 		"check:browser-smoke": "node scripts/check-browser-smoke.mjs",
 		"check:pinned-deps": "node scripts/check-pinned-deps.mjs",
@@ -65,18 +66,13 @@
 		"smoke:repi": "node scripts/reverse-agent/repi-smoke.mjs .",
 		"smoke:install-path": "node scripts/reverse-agent/repi-install-path-smoke.mjs .",
 		"selfcheck:repi": "node scripts/reverse-agent/repi-selfcheck.mjs .",
-		"memory:consolidate": "node scripts/reverse-agent/memory-consolidate.mjs .",
 		"clean:repi-legacy-profile": "bash scripts/reverse-agent/clean-global-repi-profile.sh",
 		"clean:repi-legacy-profile:apply": "bash scripts/reverse-agent/clean-global-repi-profile.sh --apply",
 		"clean:repi-legacy-profile:force-tools": "bash scripts/reverse-agent/clean-global-repi-profile.sh --apply --force-tools",
-		"memory:status": "node scripts/reverse-agent/memory-inspect.mjs . status",
-		"memory:diff": "node scripts/reverse-agent/memory-inspect.mjs . diff",
 		"model:doctor": "node scripts/reverse-agent/model-inspect.mjs . doctor",
 		"model:cost": "node scripts/reverse-agent/model-inspect.mjs . cost",
 		"doctor:repi:fix": "node scripts/reverse-agent/repi-doctor.mjs . --fix",
 		"bugreport:repi": "node scripts/reverse-agent/repi-bugreport.mjs .",
-		"memory:list": "node scripts/reverse-agent/memory-inspect.mjs . list",
-		"memory:doctor": "node scripts/reverse-agent/memory-inspect.mjs . doctor",
 		"model:list": "node scripts/reverse-agent/model-inspect.mjs . list",
 		"model:export": "node scripts/reverse-agent/model-inspect.mjs . export",
 		"setup:repi": "bash install.sh",
@@ -85,10 +81,11 @@
 		"mission:repi": "node scripts/reverse-agent/repi-mission.mjs . status",
 		"engage:repi": "node scripts/reverse-agent/repi-engage.mjs . . --json",
 		"smoke:release": "node scripts/reverse-agent/repi-release-tarball-smoke.mjs",
+		"smoke:live-model": "node scripts/reverse-agent/repi-live-model-contract.mjs .",
 		"smoke:extensions": "node scripts/reverse-agent/repi-extension-compat-smoke.mjs"
 	},
 	"devDependencies": {
-		"@anthropic-ai/sandbox-runtime": "0.0.26",
+		"@anthropic-ai/sandbox-runtime": "0.0.66",
 		"@biomejs/biome": "2.3.5",
 		"@types/node": "22.19.19",
 		"@typescript/native-preview": "7.0.0-dev.20260120.1",
@@ -104,7 +101,7 @@
 		"gaxios": {
 			"rimraf": "6.1.2"
 		},
-		"shell-quote": "1.8.4",
+		"brace-expansion": "5.0.7",
 		"undici": "8.7.0",
 		"@earendil-works/gondolin": {
 			"undici": "6.27.0"

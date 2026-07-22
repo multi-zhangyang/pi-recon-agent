@@ -1,4 +1,4 @@
-import { type AssistantMessage, type AssistantMessageEvent, EventStream, getModel } from "@pi-recon/repi-ai";
+import { type AssistantMessage, type AssistantMessageEvent, EventStream, type Model } from "@pi-recon/repi-ai";
 import { describe, expect, it } from "vitest";
 import { Agent } from "../src/index.ts";
 
@@ -36,6 +36,21 @@ function createAssistantMessage(text: string): AssistantMessage {
 	};
 }
 
+function createTestModel(id: string): Model<"openai-responses"> {
+	return {
+		id,
+		name: id,
+		api: "openai-responses",
+		provider: "openai",
+		baseUrl: "https://example.invalid",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 8192,
+		maxTokens: 2048,
+	};
+}
+
 function createDeferred(): {
 	promise: Promise<void>;
 	resolve: () => void;
@@ -64,7 +79,7 @@ describe("Agent", () => {
 	});
 
 	it("should create an agent instance with custom initial state", () => {
-		const customModel = getModel("openai", "gpt-4o-mini");
+		const customModel = createTestModel("custom-model");
 		const agent = new Agent({
 			initialState: {
 				systemPrompt: "You are a helpful assistant.",
@@ -250,7 +265,7 @@ describe("Agent", () => {
 		expect(agent.state.systemPrompt).toBe("Custom prompt");
 
 		// Test setModel
-		const newModel = getModel("google", "gemini-2.5-flash");
+		const newModel = createTestModel("replacement-model");
 		agent.state.model = newModel;
 		expect(agent.state.model).toBe(newModel);
 

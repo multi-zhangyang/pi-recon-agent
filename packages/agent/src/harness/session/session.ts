@@ -19,18 +19,27 @@ import type {
 } from "../types.ts";
 import { SessionError } from "../types.ts";
 
-export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionContext {
+export type ContextEntryTransform = (entries: readonly SessionTreeEntry[]) => readonly SessionTreeEntry[];
+
+export type CustomEntryContextMessageProjector = (
+	entry: CustomEntry,
+	index: number,
+	entries: readonly SessionTreeEntry[],
+) => readonly AgentMessage[] | undefined;
+
+export interface SessionContextBuildOptions {
+	/** Additional entry transforms applied after compaction selects the active context. */
+	entryTransforms?: readonly ContextEntryTransform[];
+	/** Custom persisted entries are omitted unless their type has an explicit projector. */
+	entryProjectors?: Readonly<Record<string, CustomEntryContextMessageProjector>>;
+}
+
+function deriveSessionContextState(pathEntries: readonly SessionTreeEntry[]): Omit<SessionContext, "messages"> {
 	let thinkingLevel = "off";
 	let model: { provider: string; modelId: string } | null = null;
 	let activeToolNames: string[] | null = null;
-	let compaction: CompactionEntry | null = null;
-	// Capture the LAST compaction entry's index in the same pass that finds it,
-	// instead of a second O(n) findIndex below (buildSessionContext runs per turn
-	// on a pathEntries array whose length ≈ total session entries).
-	let compactionIdx = -1;
 
-	for (let i = 0; i < pathEntries.length; i++) {
-		const entry = pathEntries[i]!;
+	for (const entry of pathEntries) {
 		if (entry.type === "thinking_level_change") {
 			thinkingLevel = entry.thinkingLevel;
 		} else if (entry.type === "model_change") {
@@ -39,56 +48,106 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
 			model = { provider: entry.message.provider, modelId: entry.message.model };
 		} else if (entry.type === "active_tools_change") {
 			activeToolNames = [...entry.activeToolNames];
-		} else if (entry.type === "compaction") {
+		}
+	}
+
+	return { thinkingLevel, model, activeToolNames };
+}
+
+export function defaultContextEntryTransform(pathEntries: readonly SessionTreeEntry[]): SessionTreeEntry[] {
+	let compaction: CompactionEntry | null = null;
+	let compactionIndex = -1;
+	for (let index = 0; index < pathEntries.length; index++) {
+		const entry = pathEntries[index]!;
+		if (entry.type === "compaction") {
 			compaction = entry;
-			compactionIdx = i;
+			compactionIndex = index;
 		}
 	}
+	if (!compaction) return [...pathEntries];
 
-	const messages: AgentMessage[] = [];
-	const appendMessage = (entry: SessionTreeEntry) => {
-		if (entry.type === "message") {
-			messages.push(entry.message as AgentMessage);
-		} else if (entry.type === "custom_message") {
-			messages.push(
-				createCustomMessage(
-					entry.customType,
-					entry.content as string | (TextContent | ImageContent)[],
-					entry.display,
-					entry.details,
-					entry.timestamp,
-				),
-			);
-		} else if (entry.type === "branch_summary" && entry.summary) {
-			messages.push(createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp));
-		}
-	};
-
-	if (compaction) {
-		messages.push(createCompactionSummaryMessage(compaction.summary, compaction.tokensBefore, compaction.timestamp));
-		let foundFirstKept = false;
-		for (let i = 0; i < compactionIdx; i++) {
-			const entry = pathEntries[i]!;
-			if (entry.id === compaction.firstKeptEntryId) foundFirstKept = true;
-			if (foundFirstKept) appendMessage(entry);
-		}
-		for (let i = compactionIdx + 1; i < pathEntries.length; i++) {
-			appendMessage(pathEntries[i]!);
-		}
-	} else {
-		for (const entry of pathEntries) {
-			appendMessage(entry);
+	const entries: SessionTreeEntry[] = [compaction];
+	let foundFirstKept = false;
+	for (let index = 0; index < compactionIndex; index++) {
+		const entry = pathEntries[index]!;
+		if (entry.id === compaction.firstKeptEntryId) foundFirstKept = true;
+		// Older compaction entries are already represented by the latest summary.
+		// Including them again duplicates history after repeated compaction.
+		if (foundFirstKept && entry.type !== "compaction") entries.push(entry);
+	}
+	if (!foundFirstKept) {
+		// Preserve context from corrupt/legacy boundaries instead of silently
+		// returning only the latest summary.
+		for (let index = 0; index < compactionIndex; index++) {
+			const entry = pathEntries[index]!;
+			if (entry.type !== "compaction") entries.push(entry);
 		}
 	}
+	for (let index = compactionIndex + 1; index < pathEntries.length; index++) {
+		entries.push(pathEntries[index]!);
+	}
+	return entries;
+}
 
-	return { messages, thinkingLevel, model, activeToolNames };
+export function buildContextEntries(
+	pathEntries: readonly SessionTreeEntry[],
+	options: SessionContextBuildOptions = {},
+): SessionTreeEntry[] {
+	let entries = defaultContextEntryTransform(pathEntries);
+	for (const transform of options.entryTransforms ?? []) entries = [...transform(entries)];
+	return entries;
+}
+
+export function sessionEntryToContextMessages(
+	entry: SessionTreeEntry,
+	index: number,
+	entries: readonly SessionTreeEntry[],
+	options: SessionContextBuildOptions = {},
+): AgentMessage[] {
+	if (entry.type === "message") return [entry.message as AgentMessage];
+	if (entry.type === "custom_message") {
+		return [
+			createCustomMessage(
+				entry.customType,
+				entry.content as string | (TextContent | ImageContent)[],
+				entry.display,
+				entry.details,
+				entry.timestamp,
+			),
+		];
+	}
+	if (entry.type === "compaction") {
+		return [createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp)];
+	}
+	if (entry.type === "branch_summary" && entry.summary) {
+		return [createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp)];
+	}
+	if (entry.type === "custom") {
+		return [...(options.entryProjectors?.[entry.customType]?.(entry, index, entries) ?? [])];
+	}
+	return [];
+}
+
+export function buildSessionContext(
+	pathEntries: readonly SessionTreeEntry[],
+	options: SessionContextBuildOptions = {},
+): SessionContext {
+	const state = deriveSessionContextState(pathEntries);
+	const contextEntries = buildContextEntries(pathEntries, options);
+	const messages = contextEntries.flatMap((entry, index) =>
+		sessionEntryToContextMessages(entry, index, contextEntries, options),
+	);
+	return { ...state, messages };
 }
 
 export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 	private storage: SessionStorage<TMetadata>;
+	private contextBuildOptions: SessionContextBuildOptions;
+	private mutationQueue: Promise<void> = Promise.resolve();
 
-	constructor(storage: SessionStorage<TMetadata>) {
+	constructor(storage: SessionStorage<TMetadata>, contextBuildOptions: SessionContextBuildOptions = {}) {
 		this.storage = storage;
+		this.contextBuildOptions = contextBuildOptions;
 	}
 
 	getMetadata(): Promise<TMetadata> {
@@ -116,8 +175,22 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		return this.storage.getPathToRoot(leafId);
 	}
 
-	async buildContext(): Promise<SessionContext> {
-		return buildSessionContext(await this.getBranch());
+	async buildContextEntries(options: SessionContextBuildOptions = {}): Promise<SessionTreeEntry[]> {
+		return buildContextEntries(await this.getBranch(), this.mergeContextBuildOptions(options));
+	}
+
+	async buildContext(options: SessionContextBuildOptions = {}): Promise<SessionContext> {
+		return buildSessionContext(await this.getBranch(), this.mergeContextBuildOptions(options));
+	}
+
+	private mergeContextBuildOptions(options: SessionContextBuildOptions): SessionContextBuildOptions {
+		return {
+			entryTransforms: [...(this.contextBuildOptions.entryTransforms ?? []), ...(options.entryTransforms ?? [])],
+			entryProjectors: {
+				...(this.contextBuildOptions.entryProjectors ?? {}),
+				...(options.entryProjectors ?? {}),
+			},
+		};
 	}
 
 	getLabel(id: string): Promise<string | undefined> {
@@ -129,50 +202,70 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		return entries[entries.length - 1]?.name?.trim() || undefined;
 	}
 
-	private async appendTypedEntry<TEntry extends SessionTreeEntry>(entry: TEntry): Promise<string> {
+	private enqueueMutation<TResult>(mutation: () => Promise<TResult>): Promise<TResult> {
+		const result = this.mutationQueue.then(mutation);
+		// A failed write rejects its caller but must not poison later mutations.
+		this.mutationQueue = result.then(
+			() => undefined,
+			() => undefined,
+		);
+		return result;
+	}
+
+	// Queue-owning compound mutations call this directly; it must not enqueue itself.
+	private async appendEntryWithinMutation<TEntry extends SessionTreeEntry>(
+		createEntry: (id: string, parentId: string | null, timestamp: string) => TEntry,
+	): Promise<string> {
+		const id = await this.storage.createEntryId();
+		const parentId = await this.storage.getLeafId();
+		const entry = createEntry(id, parentId, new Date().toISOString());
 		await this.storage.appendEntry(entry);
 		return entry.id;
 	}
 
+	private appendEntry<TEntry extends SessionTreeEntry>(
+		createEntry: (id: string, parentId: string | null, timestamp: string) => TEntry,
+	): Promise<string> {
+		return this.enqueueMutation(() => this.appendEntryWithinMutation(createEntry));
+	}
+
 	async appendMessage(message: AgentMessage): Promise<string> {
-		return this.appendTypedEntry({
-			type: "message",
-			id: await this.storage.createEntryId(),
-			parentId: await this.storage.getLeafId(),
-			timestamp: new Date().toISOString(),
-			message,
-		} satisfies MessageEntry);
+		return this.appendEntry(
+			(id, parentId, timestamp) => ({ type: "message", id, parentId, timestamp, message }) satisfies MessageEntry,
+		);
 	}
 
 	async appendThinkingLevelChange(thinkingLevel: string): Promise<string> {
-		return this.appendTypedEntry({
-			type: "thinking_level_change",
-			id: await this.storage.createEntryId(),
-			parentId: await this.storage.getLeafId(),
-			timestamp: new Date().toISOString(),
-			thinkingLevel,
-		} satisfies ThinkingLevelChangeEntry);
+		return this.appendEntry(
+			(id, parentId, timestamp) =>
+				({
+					type: "thinking_level_change",
+					id,
+					parentId,
+					timestamp,
+					thinkingLevel,
+				}) satisfies ThinkingLevelChangeEntry,
+		);
 	}
 
 	async appendModelChange(provider: string, modelId: string): Promise<string> {
-		return this.appendTypedEntry({
-			type: "model_change",
-			id: await this.storage.createEntryId(),
-			parentId: await this.storage.getLeafId(),
-			timestamp: new Date().toISOString(),
-			provider,
-			modelId,
-		} satisfies ModelChangeEntry);
+		return this.appendEntry(
+			(id, parentId, timestamp) =>
+				({ type: "model_change", id, parentId, timestamp, provider, modelId }) satisfies ModelChangeEntry,
+		);
 	}
 
 	async appendActiveToolsChange(activeToolNames: string[]): Promise<string> {
-		return this.appendTypedEntry({
-			type: "active_tools_change",
-			id: await this.storage.createEntryId(),
-			parentId: await this.storage.getLeafId(),
-			timestamp: new Date().toISOString(),
-			activeToolNames: [...activeToolNames],
-		} satisfies ActiveToolsChangeEntry);
+		return this.appendEntry(
+			(id, parentId, timestamp) =>
+				({
+					type: "active_tools_change",
+					id,
+					parentId,
+					timestamp,
+					activeToolNames: [...activeToolNames],
+				}) satisfies ActiveToolsChangeEntry,
+		);
 	}
 
 	async appendCompaction<T = unknown>(
@@ -182,28 +275,27 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		details?: T,
 		fromHook?: boolean,
 	): Promise<string> {
-		return this.appendTypedEntry({
-			type: "compaction",
-			id: await this.storage.createEntryId(),
-			parentId: await this.storage.getLeafId(),
-			timestamp: new Date().toISOString(),
-			summary,
-			firstKeptEntryId,
-			tokensBefore,
-			details,
-			fromHook,
-		} satisfies CompactionEntry<T>);
+		return this.appendEntry(
+			(id, parentId, timestamp) =>
+				({
+					type: "compaction",
+					id,
+					parentId,
+					timestamp,
+					summary,
+					firstKeptEntryId,
+					tokensBefore,
+					details,
+					fromHook,
+				}) satisfies CompactionEntry<T>,
+		);
 	}
 
 	async appendCustomEntry(customType: string, data?: unknown): Promise<string> {
-		return this.appendTypedEntry({
-			type: "custom",
-			id: await this.storage.createEntryId(),
-			parentId: await this.storage.getLeafId(),
-			timestamp: new Date().toISOString(),
-			customType,
-			data,
-		} satisfies CustomEntry);
+		return this.appendEntry(
+			(id, parentId, timestamp) =>
+				({ type: "custom", id, parentId, timestamp, customType, data }) satisfies CustomEntry,
+		);
 	}
 
 	async appendCustomMessageEntry<T = unknown>(
@@ -212,60 +304,63 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		display: boolean,
 		details?: T,
 	): Promise<string> {
-		return this.appendTypedEntry({
-			type: "custom_message",
-			id: await this.storage.createEntryId(),
-			parentId: await this.storage.getLeafId(),
-			timestamp: new Date().toISOString(),
-			customType,
-			content,
-			display,
-			details,
-		} satisfies CustomMessageEntry<T>);
+		return this.appendEntry(
+			(id, parentId, timestamp) =>
+				({
+					type: "custom_message",
+					id,
+					parentId,
+					timestamp,
+					customType,
+					content,
+					display,
+					details,
+				}) satisfies CustomMessageEntry<T>,
+		);
 	}
 
 	async appendLabel(targetId: string, label: string | undefined): Promise<string> {
-		if (!(await this.storage.getEntry(targetId))) {
-			throw new SessionError("not_found", `Entry ${targetId} not found`);
-		}
-		return this.appendTypedEntry({
-			type: "label",
-			id: await this.storage.createEntryId(),
-			parentId: await this.storage.getLeafId(),
-			timestamp: new Date().toISOString(),
-			targetId,
-			label,
-		} satisfies LabelEntry);
+		return this.enqueueMutation(async () => {
+			if (!(await this.storage.getEntry(targetId))) {
+				throw new SessionError("not_found", `Entry ${targetId} not found`);
+			}
+			return this.appendEntryWithinMutation(
+				(id, parentId, timestamp) =>
+					({ type: "label", id, parentId, timestamp, targetId, label }) satisfies LabelEntry,
+			);
+		});
 	}
 
 	async appendSessionName(name: string): Promise<string> {
-		return this.appendTypedEntry({
-			type: "session_info",
-			id: await this.storage.createEntryId(),
-			parentId: await this.storage.getLeafId(),
-			timestamp: new Date().toISOString(),
-			name: name.trim(),
-		} satisfies SessionInfoEntry);
+		return this.appendEntry(
+			(id, parentId, timestamp) =>
+				({ type: "session_info", id, parentId, timestamp, name: name.trim() }) satisfies SessionInfoEntry,
+		);
 	}
 
 	async moveTo(
 		entryId: string | null,
 		summary?: { summary: string; details?: unknown; fromHook?: boolean },
 	): Promise<string | undefined> {
-		if (entryId !== null && !(await this.storage.getEntry(entryId))) {
-			throw new SessionError("not_found", `Entry ${entryId} not found`);
-		}
-		await this.storage.setLeafId(entryId);
-		if (!summary) return undefined;
-		return this.appendTypedEntry({
-			type: "branch_summary",
-			id: await this.storage.createEntryId(),
-			parentId: entryId,
-			timestamp: new Date().toISOString(),
-			fromId: entryId ?? "root",
-			summary: summary.summary,
-			details: summary.details,
-			fromHook: summary.fromHook,
-		} satisfies BranchSummaryEntry);
+		return this.enqueueMutation(async () => {
+			if (entryId !== null && !(await this.storage.getEntry(entryId))) {
+				throw new SessionError("not_found", `Entry ${entryId} not found`);
+			}
+			await this.storage.setLeafId(entryId);
+			if (!summary) return undefined;
+			return this.appendEntryWithinMutation(
+				(id, parentId, timestamp) =>
+					({
+						type: "branch_summary",
+						id,
+						parentId,
+						timestamp,
+						fromId: entryId ?? "root",
+						summary: summary.summary,
+						details: summary.details,
+						fromHook: summary.fromHook,
+					}) satisfies BranchSummaryEntry,
+			);
+		});
 	}
 }

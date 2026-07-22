@@ -4,9 +4,15 @@ import { describe, expect, it } from "vitest";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import { JsonlSessionStorage } from "../../src/harness/session/jsonl-storage.ts";
 import { InMemorySessionStorage } from "../../src/harness/session/memory-storage.ts";
-import { Session } from "../../src/harness/session/session.ts";
+import { type ContextEntryTransform, Session } from "../../src/harness/session/session.ts";
 import type { SessionStorage } from "../../src/harness/types.ts";
 import { createAssistantMessage, createTempDir, createUserMessage, getLatestTempDir } from "./session-test-utils.ts";
+
+function getTextData(data: unknown): string {
+	if (typeof data !== "object" || data === null || !("text" in data)) return "";
+	const value = (data as { text?: unknown }).text;
+	return typeof value === "string" ? value : "";
+}
 
 async function runSessionSuite(
 	name: string,
@@ -84,6 +90,59 @@ async function runSessionSuite(
 			await session.appendCustomMessageEntry("custom", "hello", true, { ok: true });
 			const context = await session.buildContext();
 			expect(context.messages[1]?.role).toBe("custom");
+		});
+
+		it("keeps custom entries selectable but omits them from messages by default", async () => {
+			const session = new Session(await createStorage());
+			await session.appendMessage(createUserMessage("one"));
+			await session.appendCustomEntry("chat_message", { text: "hello" });
+
+			expect((await session.buildContextEntries()).map((entry) => entry.type)).toEqual(["message", "custom"]);
+			expect((await session.buildContext()).messages).toHaveLength(1);
+		});
+
+		it("projects configured custom entry types into model messages", async () => {
+			const session = new Session(await createStorage(), {
+				entryProjectors: {
+					chat_message: (entry) => [createUserMessage(`chat: ${getTextData(entry.data)}`)],
+				},
+			});
+			await session.appendMessage(createUserMessage("one"));
+			await session.appendCustomEntry("chat_message", { text: "hello" });
+
+			const context = await session.buildContext();
+			expect(context.messages.map((message) => message.role)).toEqual(["user", "user"]);
+			expect(context.messages[1]).toMatchObject({ content: [{ type: "text", text: "chat: hello" }] });
+		});
+
+		it("applies stacked entry transforms after default compaction selection", async () => {
+			let observedFirstEntryType: string | undefined;
+			const dropCompaction: ContextEntryTransform = (entries) => {
+				observedFirstEntryType = entries[0]?.type;
+				return entries.filter((entry) => entry.type !== "compaction");
+			};
+			const session = new Session(await createStorage(), { entryTransforms: [dropCompaction] });
+			await session.appendMessage(createUserMessage("one"));
+			const kept = await session.appendMessage(createUserMessage("two"));
+			await session.appendCompaction("summary", kept, 1234);
+			await session.appendMessage(createUserMessage("three"));
+
+			const context = await session.buildContext({ entryTransforms: [(entries) => entries.slice(-1)] });
+			expect(observedFirstEntryType).toBe("compaction");
+			expect(context.messages.map((message) => message.role)).toEqual(["user"]);
+		});
+
+		it("derives runtime state from the full branch before entry transforms", async () => {
+			const session = new Session(await createStorage(), { entryTransforms: [() => []] });
+			await session.appendModelChange("openai", "gpt-4.1");
+			await session.appendThinkingLevelChange("high");
+			await session.appendActiveToolsChange(["read", "bash"]);
+
+			const context = await session.buildContext();
+			expect(context.messages).toEqual([]);
+			expect(context.model).toEqual({ provider: "openai", modelId: "gpt-4.1" });
+			expect(context.thinkingLevel).toBe("high");
+			expect(context.activeToolNames).toEqual(["read", "bash"]);
 		});
 
 		it("supports labels and session info entries without affecting context", async () => {

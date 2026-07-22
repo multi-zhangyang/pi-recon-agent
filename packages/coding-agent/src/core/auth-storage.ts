@@ -7,13 +7,21 @@
  */
 
 import {
+	type Credential,
+	type CredentialInfo,
+	type CredentialStore,
 	findEnvKeys,
 	getEnvApiKey,
 	type OAuthCredentials,
 	type OAuthLoginCallbacks,
 	type OAuthProviderId,
 } from "@pi-recon/repi-ai";
-import { getOAuthApiKey, getOAuthProvider, getOAuthProviders } from "@pi-recon/repi-ai/oauth";
+import {
+	getOAuthApiKey,
+	getOAuthProvider,
+	getOAuthProviders,
+	registerBuiltInOAuthProviders,
+} from "@pi-recon/repi-ai/oauth";
 import { existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
@@ -41,6 +49,21 @@ export type AuthStatus = {
 	label?: string;
 };
 
+export type CredentialStoreChangeSource = "stored" | "runtime";
+
+/** Non-secret metadata published after the effective credential changes. */
+export interface CredentialStoreChange {
+	providerId: string;
+	credentialType?: Credential["type"];
+	source?: CredentialStoreChangeSource;
+}
+
+/** Optional live extension used by the runtime without widening pi-ai's store contract. */
+export interface ObservableCredentialStore extends CredentialStore {
+	getCredentialSource(providerId: string): CredentialStoreChangeSource | undefined;
+	subscribe(listener: (change: CredentialStoreChange) => void): () => void;
+}
+
 type AuthLookupOptions = {
 	includeFallback?: boolean;
 	includeEnvironment?: boolean;
@@ -67,15 +90,6 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 		const dir = dirname(this.authPath);
 		if (!existsSync(dir)) {
 			mkdirSync(dir, { recursive: true, mode: 0o700 });
-		}
-	}
-
-	private ensureFileExists(): void {
-		if (!existsSync(this.authPath)) {
-			// Atomic create: temp+rename (mode 0o600). A plain writeFileSync here is
-			// create-only and would self-heal on reload, but using the atomic helper
-			// keeps the create path consistent with the rewrite path below.
-			atomicWriteFileSync(this.authPath, "{}", 0o600);
 		}
 	}
 
@@ -108,7 +122,6 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 
 	withLock<T>(fn: (current: string | undefined) => LockResult<T>): T {
 		this.ensureParentDir();
-		this.ensureFileExists();
 
 		let release: (() => void) | undefined;
 		try {
@@ -135,7 +148,6 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 
 	async withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T> {
 		this.ensureParentDir();
-		this.ensureFileExists();
 
 		let release: (() => Promise<void>) | undefined;
 		let lockCompromised = false;
@@ -148,6 +160,7 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 
 		try {
 			release = await lockfile.lock(this.authPath, {
+				realpath: false,
 				retries: {
 					retries: 10,
 					factor: 2,
@@ -210,12 +223,14 @@ export class InMemoryAuthStorageBackend implements AuthStorageBackend {
 export class AuthStorage {
 	private data: AuthStorageData = {};
 	private runtimeOverrides: Map<string, string> = new Map();
+	private credentialChangeListeners = new Set<(change: CredentialStoreChange) => void>();
 	private fallbackResolver?: (provider: string) => string | undefined;
 	private loadError: Error | null = null;
 	private errors: Error[] = [];
 	private storage: AuthStorageBackend;
 
 	private constructor(storage: AuthStorageBackend) {
+		registerBuiltInOAuthProviders();
 		this.storage = storage;
 		this.reload();
 	}
@@ -239,14 +254,40 @@ export class AuthStorage {
 	 * Used for CLI --api-key flag.
 	 */
 	setRuntimeApiKey(provider: string, apiKey: string): void {
+		if (apiKey.length === 0) throw new Error("Runtime API key must not be empty");
 		this.runtimeOverrides.set(provider, apiKey);
+		this.emitCredentialChange(provider);
 	}
 
 	/**
 	 * Remove a runtime API key override.
 	 */
 	removeRuntimeApiKey(provider: string): void {
-		this.runtimeOverrides.delete(provider);
+		if (this.runtimeOverrides.delete(provider)) this.emitCredentialChange(provider);
+	}
+
+	subscribe(listener: (change: CredentialStoreChange) => void): () => void {
+		this.credentialChangeListeners.add(listener);
+		return () => this.credentialChangeListeners.delete(listener);
+	}
+
+	private currentCredentialChange(providerId: string): CredentialStoreChange {
+		if (this.runtimeOverrides.has(providerId)) {
+			return { providerId, credentialType: "api_key", source: "runtime" };
+		}
+		const credential = this.data[providerId];
+		return credential ? { providerId, credentialType: credential.type, source: "stored" } : { providerId };
+	}
+
+	private emitCredentialChange(providerId: string): void {
+		const change = this.currentCredentialChange(providerId);
+		for (const listener of [...this.credentialChangeListeners]) {
+			try {
+				listener(change);
+			} catch {
+				// Credential persistence must not depend on observer health.
+			}
+		}
 	}
 
 	/**
@@ -321,6 +362,7 @@ export class AuthStorage {
 	set(provider: string, credential: AuthCredential): void {
 		this.data[provider] = credential;
 		this.persistProviderChange(provider, credential);
+		this.emitCredentialChange(provider);
 	}
 
 	/**
@@ -329,6 +371,7 @@ export class AuthStorage {
 	remove(provider: string): void {
 		delete this.data[provider];
 		this.persistProviderChange(provider, undefined);
+		this.emitCredentialChange(provider);
 	}
 
 	/**
@@ -369,12 +412,12 @@ export class AuthStorage {
 		provider: string,
 		options?: Pick<AuthLookupOptions, "includeEnvironment" | "includeFallback">,
 	): AuthStatus {
-		if (this.data[provider]) {
-			return { configured: true, source: "stored" };
-		}
-
 		if (this.runtimeOverrides.has(provider)) {
 			return { configured: true, source: "runtime", label: "--api-key" };
+		}
+
+		if (this.data[provider]) {
+			return { configured: true, source: "stored" };
 		}
 
 		if (options?.includeEnvironment !== false) {
@@ -396,6 +439,101 @@ export class AuthStorage {
 	 */
 	getAll(): AuthStorageData {
 		return { ...this.data };
+	}
+
+	/**
+	 * Expose the existing locked, atomic auth.json backend through pi-ai's
+	 * asynchronous CredentialStore contract. The legacy synchronous surface is
+	 * intentionally retained until ModelRegistry and AgentSession migrate.
+	 */
+	asCredentialStore(): ObservableCredentialStore {
+		const parse = (content: string | undefined): Record<string, Credential> =>
+			this.parseStorageData(content) as Record<string, Credential>;
+		const publish = (data: Record<string, Credential>): void => {
+			this.data = data as AuthStorageData;
+			this.loadError = null;
+		};
+		const chains = new Map<string, Promise<unknown>>();
+		const enqueue = <T>(providerId: string, task: () => Promise<T>): Promise<T> => {
+			const previous = chains.get(providerId) ?? Promise.resolve();
+			const next = (async () => {
+				await previous.catch(() => {});
+				return task();
+			})();
+			chains.set(
+				providerId,
+				next.catch(() => {}),
+			);
+			return next;
+		};
+
+		return {
+			read: async (providerId) => {
+				const data = this.storage.withLock((content) => ({ result: parse(content) }));
+				publish(data);
+				const runtimeKey = this.runtimeOverrides.get(providerId);
+				if (runtimeKey !== undefined) return { type: "api_key", key: runtimeKey };
+				const credential = data[providerId];
+				if (credential?.type !== "api_key" || credential.key === undefined) {
+					return credential ? structuredClone(credential) : undefined;
+				}
+				return {
+					...structuredClone(credential),
+					key: resolveConfigValue(credential.key, credential.env),
+				};
+			},
+			list: async (): Promise<readonly CredentialInfo[]> => {
+				const data = this.storage.withLock((content) => ({ result: parse(content) }));
+				publish(data);
+				const entries = new Map(
+					Object.entries(data).map(([providerId, credential]) => [
+						providerId,
+						{ providerId, type: credential.type },
+					]),
+				);
+				for (const providerId of this.runtimeOverrides.keys()) {
+					entries.set(providerId, { providerId, type: "api_key" });
+				}
+				return [...entries.values()];
+			},
+			modify: (providerId, fn) =>
+				enqueue(providerId, async () => {
+					const transaction = await this.storage.withLockAsync(async (content) => {
+						const current = parse(content);
+						const next = await fn(current[providerId] ? structuredClone(current[providerId]) : undefined);
+						if (next === undefined) {
+							return {
+								result: {
+									credential: current[providerId] ? structuredClone(current[providerId]) : undefined,
+									data: current,
+									changed: false,
+								},
+							};
+						}
+						const updated = { ...current, [providerId]: structuredClone(next) };
+						return {
+							result: { credential: structuredClone(next), data: updated, changed: true },
+							next: JSON.stringify(updated, null, 2),
+						};
+					});
+					publish(transaction.data);
+					if (transaction.changed) this.emitCredentialChange(providerId);
+					return transaction.credential;
+				}),
+			delete: (providerId) =>
+				enqueue(providerId, async () => {
+					const current = await this.storage.withLockAsync(async (content) => {
+						const updated = parse(content);
+						delete updated[providerId];
+						return { result: updated, next: JSON.stringify(updated, null, 2) };
+					});
+					publish(current);
+					this.runtimeOverrides.delete(providerId);
+					this.emitCredentialChange(providerId);
+				}),
+			getCredentialSource: (providerId) => this.currentCredentialChange(providerId).source,
+			subscribe: (listener) => this.subscribe(listener),
+		};
 	}
 
 	drainErrors(): Error[] {

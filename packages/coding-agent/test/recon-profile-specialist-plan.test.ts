@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -69,7 +69,13 @@ describe("REPI kernel profile specialist runtime planning", () => {
 		const planFor = async (task: string, lane: string, target: string) => {
 			await missionTool.execute("tool-call-id", { action: "new", task });
 			const result = await laneTool.execute("tool-call-id", { action: "plan", lane, target });
-			return result.content[0]?.text ?? "";
+			const summary = result.content[0]?.text ?? "";
+			expect(summary.length).toBeLessThanOrEqual(4096);
+			expect(summary).toContain("lane_plan:");
+			expect(summary).not.toContain("```bash");
+			const path = /^artifact:\s*(.+)$/m.exec(summary)?.[1]?.trim();
+			expect(path).toBeDefined();
+			return readFileSync(path!, "utf-8");
 		};
 
 		const webPlan = await planFor("Web API JWT auth websocket replay", "surface", "https://target.local/app");

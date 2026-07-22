@@ -9,7 +9,10 @@ type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.ts";
 import { hasBedrockCredentials } from "./bedrock-utils.ts";
 import { hasCloudflareAiGatewayCredentials, hasCloudflareWorkersAICredentials } from "./cloudflare-utils.ts";
+import { registerProviderIntegrationFixtures } from "./model-fixtures.ts";
 import { resolveApiKey } from "./oauth.ts";
+
+registerProviderIntegrationFixtures();
 
 // Resolve OAuth tokens at module level (async, runs before tests)
 const oauthTokens = await Promise.all([
@@ -256,7 +259,7 @@ describe("Tool Call Without Result Tests", () => {
 	});
 
 	describe.skipIf(!process.env.KIMI_API_KEY)("Kimi For Coding Provider", () => {
-		const model = getModel("kimi-coding", "kimi-k2-thinking");
+		const model = getModel("kimi-coding", "k2p7");
 
 		it("should filter out tool calls without corresponding tool results", { retry: 3, timeout: 30000 }, async () => {
 			await testToolCallWithoutResult(model);

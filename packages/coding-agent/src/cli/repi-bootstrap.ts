@@ -1,23 +1,8 @@
+import { REPI_MODEL_API_ENV_NAMES, REPI_MODEL_BASE_URL_ENV_NAMES } from "../core/repi-env-provider.ts";
 import { initializeRepiProfile } from "../core/repi-profile-init.ts";
+import { isRepiProductCommand, repiFlagConsumesNextToken } from "./repi-product-commands.ts";
 
 const PACKAGE_COMMANDS = new Set([
-	"health",
-	"status",
-	"doctor",
-	"smoke",
-	"selfcheck",
-	"dogfood",
-	"bugreport",
-	"trust",
-	"mission",
-	"engage",
-	"attack",
-	"reverse",
-	"web",
-	"memory",
-	"model",
-	"models",
-	"swarm",
 	"install",
 	"remove",
 	"uninstall",
@@ -35,12 +20,10 @@ const CLEAN_ROOM_FLAGS = [
 	"--no-context-files",
 ];
 const REPI_ENV_MODEL_CONFIG_KEYS = [
-	"REPI_BASE_URL",
-	"REPI_MODEL_BASE_URL",
+	...REPI_MODEL_BASE_URL_ENV_NAMES,
 	"REPI_MODEL",
 	"REPI_MODEL_ID",
-	"REPI_MODEL_API",
-	"REPI_API",
+	...REPI_MODEL_API_ENV_NAMES,
 ] as const;
 const REPI_MODEL_API_ALIASES = new Set([
 	"openai-compatible",
@@ -66,33 +49,12 @@ function firstPositional(args: readonly string[]): string | undefined {
 	for (let index = 0; index < args.length; index++) {
 		const arg = args[index];
 		if (arg === "--") return args[index + 1];
-		if (!arg.startsWith("-")) return arg;
-		if (
-			[
-				"--provider",
-				"--model",
-				"--api-key",
-				"--mode",
-				"--name",
-				"--session",
-				"--session-id",
-				"--fork",
-				"--session-dir",
-				"--models",
-				"--tools",
-				"--exclude-tools",
-				"--system-prompt",
-				"--append-system-prompt",
-				"--extension",
-				"--skill",
-				"--prompt-template",
-				"--theme",
-				"--export",
-				"--thinking",
-			].includes(arg)
-		) {
+		if (arg === "--print" || arg === "-p") return undefined;
+		if (repiFlagConsumesNextToken(args, index)) {
 			index++;
+			continue;
 		}
+		if (!arg.startsWith("-")) return arg;
 	}
 	return undefined;
 }
@@ -136,14 +98,14 @@ export function missingRepiEnvModelConfig(
 	if (!hasEnvModelConfig) return [];
 	const missing: string[] = [];
 	if (!env.REPI_MODEL && !env.REPI_MODEL_ID) missing.push("REPI_MODEL");
-	if (!env.REPI_BASE_URL && !env.REPI_MODEL_BASE_URL) missing.push("REPI_BASE_URL");
+	if (!REPI_MODEL_BASE_URL_ENV_NAMES.some((key) => Boolean(env[key]))) missing.push("REPI_BASE_URL");
 	return missing;
 }
 
 export function invalidRepiEnvModelApi(
-	env: Partial<Record<"REPI_MODEL_API" | "REPI_API", string | undefined>> = process.env,
+	env: Partial<Record<(typeof REPI_MODEL_API_ENV_NAMES)[number], string | undefined>> = process.env,
 ): string | undefined {
-	const raw = env.REPI_MODEL_API || env.REPI_API;
+	const raw = REPI_MODEL_API_ENV_NAMES.map((key) => env[key]).find((value) => Boolean(value));
 	if (!raw?.trim()) return undefined;
 	const normalized = raw.trim().toLowerCase().replace(/_/g, "-");
 	return REPI_MODEL_API_ALIASES.has(normalized) ? undefined : raw;
@@ -184,8 +146,8 @@ export function bootstrapRepiCli(args: readonly string[]): string[] {
 	process.env.REPI_PRINT_TIMEOUT_MS = process.env.REPI_PRINT_TIMEOUT_MS || "210000";
 	process.env.REPI_PRINT_TIMEOUT_GRACE_MS = process.env.REPI_PRINT_TIMEOUT_GRACE_MS || "30000";
 	process.env.REPI_PRINT_TIMEOUT_TOOL_GRACE_MS = process.env.REPI_PRINT_TIMEOUT_TOOL_GRACE_MS || "300000";
-	process.env.REPI_PRINT_MAX_TURNS = process.env.REPI_PRINT_MAX_TURNS || "40";
-	process.env.REPI_PRINT_MAX_TOOL_CALLS = process.env.REPI_PRINT_MAX_TOOL_CALLS || "80";
+	process.env.REPI_PRINT_MAX_TURNS = process.env.REPI_PRINT_MAX_TURNS || "10";
+	process.env.REPI_PRINT_MAX_TOOL_CALLS = process.env.REPI_PRINT_MAX_TOOL_CALLS || "48";
 	process.env.REPI_STDIN_READ_TIMEOUT_MS = process.env.REPI_STDIN_READ_TIMEOUT_MS || "1500";
 	process.env.REPI_BASH_DEFAULT_TIMEOUT_SECONDS = process.env.REPI_BASH_DEFAULT_TIMEOUT_SECONDS || "120";
 	process.env.PI_SKIP_VERSION_CHECK = process.env.PI_SKIP_VERSION_CHECK || process.env.REPI_SKIP_VERSION_CHECK;
@@ -198,6 +160,9 @@ export function bootstrapRepiCli(args: readonly string[]): string[] {
 	}
 
 	const stripped = stripRepiWrapperFlags(args);
+	if (stripped.projectContext) {
+		process.env.REPI_CONTEXT_FILES = "1";
+	}
 	const profile = initializeRepiProfile();
 	process.env.REPI_CODING_AGENT_DIR = process.env.REPI_CODING_AGENT_DIR || profile.agentDir;
 	process.env.REPI_CODING_AGENT_SESSION_DIR =
@@ -207,7 +172,7 @@ export function bootstrapRepiCli(args: readonly string[]): string[] {
 		process.env.PI_CODING_AGENT_SESSION_DIR || process.env.REPI_CODING_AGENT_SESSION_DIR;
 
 	const command = firstPositional(stripped.args);
-	if (command && PACKAGE_COMMANDS.has(command)) {
+	if (command && (PACKAGE_COMMANDS.has(command) || isRepiProductCommand(command))) {
 		return stripped.args;
 	}
 

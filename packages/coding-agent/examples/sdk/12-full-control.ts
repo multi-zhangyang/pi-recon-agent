@@ -4,7 +4,7 @@
  * Replace everything - no discovery, explicit configuration.
  */
 
-import { getModel } from "@pi-recon/repi-ai";
+import type { Model } from "@pi-recon/repi-ai";
 import {
 	AuthStorage,
 	createAgentSession,
@@ -23,11 +23,21 @@ if (process.env.MY_ANTHROPIC_KEY) {
 	authStorage.setRuntimeApiKey("anthropic", process.env.MY_ANTHROPIC_KEY);
 }
 
-// Model registry with no custom models.json
+// The empty registry resolves credentials for the explicit application-owned model.
 const modelRegistry = ModelRegistry.inMemory(authStorage);
 
-const model = getModel("anthropic", "claude-sonnet-4-5");
-if (!model) throw new Error("Model not found");
+const model: Model<"anthropic-messages"> = {
+	id: "claude-sonnet-4-5",
+	name: "Claude Sonnet 4.5",
+	api: "anthropic-messages",
+	provider: "anthropic",
+	baseUrl: "https://api.anthropic.com",
+	reasoning: true,
+	input: ["text", "image"],
+	cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+	contextWindow: 200_000,
+	maxTokens: 64_000,
+};
 
 // In-memory settings with overrides
 const settingsManager = SettingsManager.inMemory({

@@ -68,8 +68,8 @@ const mockSummaryResponse: AssistantMessage = {
 	timestamp: Date.now(),
 };
 
-describe("opt #240: compact() non-split branch carries previousSummary when nothing new to summarize", () => {
-	it("previousSummary is preserved and no LLM call is made (not replaced with a fresh summary)", async () => {
+describe("compact() non-split no-op guard", () => {
+	it("rejects a preparation that would remove no history", async () => {
 		completeSimpleMock.mockResolvedValue(mockSummaryResponse);
 
 		// Non-split preparation: nothing to summarize, no turn prefix, but a
@@ -85,16 +85,9 @@ describe("opt #240: compact() non-split branch carries previousSummary when noth
 			settings: DEFAULT_COMPACTION_SETTINGS,
 		};
 
-		const result = await compact(preparation, createModel(), "test-key");
-
-		// Post-fix: previousSummary carried forward → summary contains it.
-		// Pre-fix: generateSummary([]) ran → summary is the mock's text.
-		expect(result.summary).toContain("SECRET PRIOR HISTORY");
-		expect(result.summary).not.toContain("HALLUCINATED SUMMARY OF NOTHING");
-
-		// Post-fix: no LLM call issued (nothing to summarize). Pre-fix:
-		// generateSummary called completeSimple once.
+		await expect(compact(preparation, createModel(), "test-key")).rejects.toThrow(
+			"Nothing to compact: no history would be removed",
+		);
 		expect(completeSimpleMock).toHaveBeenCalledTimes(0);
-		expect(result.firstKeptEntryId).toBe("kept-uuid");
 	});
 });

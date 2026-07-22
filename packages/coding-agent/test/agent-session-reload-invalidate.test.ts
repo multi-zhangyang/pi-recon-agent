@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@pi-recon/repi-agent-core";
-import { getModel } from "@pi-recon/repi-ai";
+import { getApiProvider, getModel } from "@pi-recon/repi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
@@ -78,5 +78,27 @@ describe("AgentSession reload() invalidates the replaced ExtensionRunner (opt #2
 		// The NEW runner is live.
 		expect(session.extensionRunner).not.toBe(previousRunner);
 		expect(() => session.extensionRunner.createContext().cwd).not.toThrow();
+	}, 15000);
+
+	it("does not clear another model registry's API layer during reload()", async () => {
+		const otherRegistry = ModelRegistry.inMemory(AuthStorage.inMemory());
+		const marker = "other-registry-survived-session-reload";
+		otherRegistry.registerProvider("other-registry-provider", {
+			api: "openai-completions",
+			streamSimple: () => {
+				throw new Error(marker);
+			},
+		});
+		const model = getModel("anthropic", "claude-sonnet-4-5")!;
+		const context = { messages: [] };
+
+		try {
+			await session.reload();
+			expect(() =>
+				getApiProvider("openai-completions")?.streamSimple({ ...model, api: "openai-completions" }, context),
+			).toThrow(marker);
+		} finally {
+			otherRegistry.unregisterProvider("other-registry-provider");
+		}
 	}, 15000);
 });

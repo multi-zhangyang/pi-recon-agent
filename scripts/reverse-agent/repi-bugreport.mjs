@@ -22,7 +22,7 @@ function usage() {
   repi bugreport [--output <path>] [--json]
   repi bugreport --stdout
 
-Creates a strictly redacted local diagnostic bundle: doctor/model/memory summaries, swarm latest status, git/node/npm versions and runtime paths. It does not export auth.json, raw memory events, API keys, GitHub tokens, Authorization headers or base URLs.
+Creates a strictly redacted local diagnostic bundle: doctor/model summaries, swarm latest status, git/node/npm versions and runtime paths. It does not export auth.json, API keys, GitHub tokens, Authorization headers or base URLs.
 `;
 }
 
@@ -168,33 +168,6 @@ function compactModelDoctor(parsed) {
 	};
 }
 
-function compactMemoryDoctor(parsed) {
-	if (!parsed || typeof parsed !== "object") return parsed;
-	const status = parsed.status ?? {};
-	return {
-		kind: parsed.kind,
-		ok: parsed.ok,
-		agentDir: parsed.agentDir,
-		memoryDir: parsed.memoryDir,
-		diagnostics: parsed.diagnostics,
-		posture: status.posture,
-		pollutionGuardOk: status.pollutionGuardOk,
-		eventStore: status.eventStore
-			? {
-				path: status.eventStore.path,
-				missing: status.eventStore.missing,
-				invalidLines: status.eventStore.invalidLines,
-				total: status.eventStore.total,
-				highValue: status.eventStore.highValue,
-				pendingHighValue: status.eventStore.pendingHighValue,
-			}
-			: undefined,
-		consolidation: status.consolidation,
-		governance: status.governance,
-		files: status.files,
-	};
-}
-
 function scanSecrets(serialized) {
 	const findings = [];
 	const patterns = [
@@ -216,7 +189,6 @@ if (rawArgs.includes("--help") || rawArgs.includes("-h")) {
 
 const doctor = fileExists(repi) ? run(repi, ["doctor", "--json"], { timeout: 60_000 }) : { exit: 1, error: "missing repi launcher" };
 const modelDoctor = fileExists(repi) ? run(repi, ["model", "doctor", "--json"], { timeout: 60_000 }) : { exit: 1, error: "missing repi launcher" };
-const memoryDoctor = fileExists(repi) ? run(repi, ["memory", "doctor", "--json"], { timeout: 60_000 }) : { exit: 1, error: "missing repi launcher" };
 const swarmStatus = fileExists(repi) ? run(repi, ["swarm", "status", "latest", "--json"], { timeout: 30_000 }) : { exit: 1, error: "missing repi launcher" };
 
 const report = {
@@ -225,7 +197,7 @@ const report = {
 	generatedAt: new Date().toISOString(),
 	redaction: {
 		strict: true,
-		policy: "no auth.json export; no raw memory event export; API keys/tokens/Authorization/base URLs are redacted; model ids are hashed in model doctor summary",
+		policy: "no auth.json export; API keys/tokens/Authorization/base URLs are redacted; model ids are hashed in model doctor summary",
 	},
 	runtime: {
 		root,
@@ -244,7 +216,6 @@ const report = {
 	commands: {
 		doctor: { exit: doctor.exit, signal: doctor.signal, error: doctor.error, stderrTail: doctor.stderrTail, summary: compactDoctor(doctor.parsed) },
 		modelDoctor: { exit: modelDoctor.exit, signal: modelDoctor.signal, error: modelDoctor.error, stderrTail: modelDoctor.stderrTail, summary: compactModelDoctor(modelDoctor.parsed) },
-		memoryDoctor: { exit: memoryDoctor.exit, signal: memoryDoctor.signal, error: memoryDoctor.error, stderrTail: memoryDoctor.stderrTail, summary: compactMemoryDoctor(memoryDoctor.parsed) },
 		swarmStatus: { exit: swarmStatus.exit, signal: swarmStatus.signal, error: swarmStatus.error, stderrTail: swarmStatus.stderrTail, summary: swarmStatus.parsed },
 	},
 };
@@ -279,7 +250,7 @@ if (json || stdoutOnly || !outputPath) {
 } else {
 	console.log("REPI Bugreport");
 	console.log(`output=${outputPath}`);
-	console.log(`doctor=${finalReport.commands.doctor.exit} modelDoctor=${finalReport.commands.modelDoctor.exit} memoryDoctor=${finalReport.commands.memoryDoctor.exit} swarmStatus=${finalReport.commands.swarmStatus.exit}`);
+	console.log(`doctor=${finalReport.commands.doctor.exit} modelDoctor=${finalReport.commands.modelDoctor.exit} swarmStatus=${finalReport.commands.swarmStatus.exit}`);
 	console.log(`secretScan=${finalReport.secretScan.ok ? "pass" : `fail:${finalReport.secretScan.findings.join(",")}`}`);
 }
 

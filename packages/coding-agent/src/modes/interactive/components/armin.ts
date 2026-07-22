@@ -3,7 +3,7 @@
  */
 
 import type { Component, TUI } from "@pi-recon/repi-tui";
-import { theme } from "../theme/theme.ts";
+import { theme } from "../../../core/presentation/theme-runtime.ts";
 
 // XBM image: 31x36 pixels, LSB first, 1=background, 0=foreground
 const WIDTH = 31;

@@ -1,5 +1,5 @@
 import { Container, type SelectItem, SelectList, type SelectListLayoutOptions } from "@pi-recon/repi-tui";
-import { getSelectListTheme } from "../theme/theme.ts";
+import { getSelectListTheme } from "../../../core/presentation/theme-runtime.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 
 const SHOW_IMAGES_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {

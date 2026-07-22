@@ -18,7 +18,7 @@ vi.mock("../src/core/output-guard.ts", () => ({
 	},
 }));
 
-vi.mock("../src/modes/interactive/theme/theme.ts", () => ({ theme: {} }));
+vi.mock("../src/core/presentation/theme-runtime.ts", () => ({ theme: {} }));
 
 vi.mock("../src/modes/rpc/jsonl.ts", () => ({
 	attachJsonlLineReader: vi.fn((_stream: NodeJS.ReadableStream, onLine: (line: string) => void) => {
@@ -47,6 +47,9 @@ type FakeSession = {
 	autoCompactionEnabled: boolean;
 	messages: unknown[];
 	pendingMessageCount: number;
+	prompt: ReturnType<typeof vi.fn>;
+	abort: ReturnType<typeof vi.fn>;
+	waitForIdle: ReturnType<typeof vi.fn>;
 	agent: { waitForIdle: ReturnType<typeof vi.fn>; subscribe: ReturnType<typeof vi.fn> };
 	extensionRunner: {
 		getRegisteredCommands: () => never[];
@@ -75,6 +78,11 @@ function makeFakeSession(id: string, opts?: { bindExtensionsThrow?: boolean }): 
 		autoCompactionEnabled: false,
 		messages: [],
 		pendingMessageCount: 0,
+		prompt: vi.fn(async (_message: string, options?: { preflightResult?: (success: boolean) => void }) => {
+			options?.preflightResult?.(true);
+		}),
+		abort: vi.fn(async () => {}),
+		waitForIdle: vi.fn(async () => {}),
 		agent: {
 			waitForIdle: vi.fn(async () => {}),
 			subscribe: vi.fn(() => () => {}),
@@ -102,22 +110,30 @@ interface FakeRuntime {
 	fork: ReturnType<typeof vi.fn>;
 	dispose: ReturnType<typeof vi.fn>;
 	setRebindSession: ReturnType<typeof vi.fn>;
+	invokeRebind: () => Promise<void>;
 }
 
 function createFakeRuntime(startSession?: FakeSession): { runtime: FakeRuntime; holder: { current: FakeSession } } {
 	const holder: { current: FakeSession } = { current: startSession ?? makeFakeSession("s1") };
+	let rebindSession: ((session: FakeSession) => Promise<void>) | undefined;
 	const runtime: FakeRuntime = {
 		get session(): FakeSession {
 			return holder.current;
 		},
 		newSession: vi.fn(async () => {
 			holder.current = makeFakeSession("s-after-new");
+			await runtime.invokeRebind();
 			return { cancelled: false };
 		}),
 		switchSession: vi.fn(async () => ({ cancelled: false })),
 		fork: vi.fn(async () => ({ cancelled: false, selectedText: "" })),
 		dispose: vi.fn(async () => {}),
-		setRebindSession: vi.fn(),
+		setRebindSession: vi.fn((callback?: (session: FakeSession) => Promise<void>) => {
+			rebindSession = callback;
+		}),
+		invokeRebind: async () => {
+			await rebindSession?.(holder.current);
+		},
 	};
 	return { runtime, holder };
 }
@@ -168,6 +184,7 @@ describe("F3: rebindSession subscribes even when bindExtensions throws", () => {
 		const s2 = makeFakeSession("s2", { bindExtensionsThrow: true });
 		runtime.newSession.mockImplementation(async () => {
 			holder.current = s2;
+			await runtime.invokeRebind();
 			return { cancelled: false };
 		});
 
@@ -243,6 +260,7 @@ describe("F5: pending extension UI requests rejected on rebind/shutdown; editor 
 		const { runtime, holder } = createFakeRuntime(s1);
 		runtime.newSession.mockImplementation(async () => {
 			holder.current = makeFakeSession("s2");
+			await runtime.invokeRebind();
 			return { cancelled: false };
 		});
 
@@ -328,6 +346,7 @@ describe("F6: mutating session-replacement commands are serialized", () => {
 			await new Promise((r) => setTimeout(r, 20));
 			counter += 1;
 			holder.current = makeFakeSession(`s-${counter}`);
+			await runtime.invokeRebind();
 			concurrent -= 1;
 			return { cancelled: false };
 		});
@@ -349,5 +368,133 @@ describe("F6: mutating session-replacement commands are serialized", () => {
 		expect(runtime.newSession).toHaveBeenCalledTimes(2);
 		// The final live session is the second replacement's session (consistent).
 		expect(holder.current.sessionId).toBe("s-2");
+	});
+});
+
+describe("F7: runtime-owned session replacement rebinds exactly once", () => {
+	it("does not bind the replacement session a second time in the RPC command handler", async () => {
+		const { runtime, holder } = createFakeRuntime();
+		const lineHandler = await startRpc(runtime);
+
+		lineHandler(JSON.stringify({ id: "single-rebind", type: "new_session" }));
+
+		await vi.waitFor(() => {
+			expect(responsesFor("new_session", "single-rebind")).toHaveLength(1);
+		});
+		expect(holder.current.sessionId).toBe("s-after-new");
+		expect(holder.current.bindExtensions).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("F8: stdin EOF drains accepted commands before shutdown", () => {
+	it("emits a queued new_session response before disposing the runtime", async () => {
+		const { runtime, holder } = createFakeRuntime();
+		let releaseReplacement!: () => void;
+		const replacementGate = new Promise<void>((resolve) => {
+			releaseReplacement = resolve;
+		});
+		runtime.newSession.mockImplementation(async () => {
+			await replacementGate;
+			holder.current = makeFakeSession("s-after-eof");
+			await runtime.invokeRebind();
+			return { cancelled: false };
+		});
+
+		const exitSpy = vi
+			.spyOn(process, "exit")
+			.mockImplementation((() => undefined) as (code?: string | number | null | undefined) => never);
+		try {
+			const lineHandler = await startRpc(runtime);
+			lineHandler(JSON.stringify({ id: "eof-new", type: "new_session" }));
+			process.stdin.emit("end");
+
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			expect(runtime.dispose).not.toHaveBeenCalled();
+			expect(responsesFor("new_session", "eof-new")).toHaveLength(0);
+
+			releaseReplacement();
+			await vi.waitFor(() => {
+				expect(responsesFor("new_session", "eof-new")).toHaveLength(1);
+				expect(runtime.dispose).toHaveBeenCalledTimes(1);
+			});
+		} finally {
+			exitSpy.mockRestore();
+		}
+	});
+
+	it("waits for a fire-and-forget prompt to settle before disposing the runtime", async () => {
+		const session = makeFakeSession("prompt-session");
+		const { runtime } = createFakeRuntime(session);
+		let releasePrompt!: () => void;
+		const promptGate = new Promise<void>((resolve) => {
+			releasePrompt = resolve;
+		});
+		session.prompt.mockImplementation(
+			async (_message: string, options?: { preflightResult?: (success: boolean) => void }) => {
+				options?.preflightResult?.(true);
+				await promptGate;
+			},
+		);
+		session.waitForIdle.mockImplementation(() => promptGate);
+
+		const exitSpy = vi
+			.spyOn(process, "exit")
+			.mockImplementation((() => undefined) as (code?: string | number | null | undefined) => never);
+		try {
+			const lineHandler = await startRpc(runtime);
+			lineHandler(JSON.stringify({ id: "eof-prompt", type: "prompt", message: "finish before EOF" }));
+			await vi.waitFor(() => {
+				expect(responsesFor("prompt", "eof-prompt")).toHaveLength(1);
+			});
+			process.stdin.emit("end");
+
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			expect(runtime.dispose).not.toHaveBeenCalled();
+
+			releasePrompt();
+			await vi.waitFor(() => {
+				expect(runtime.dispose).toHaveBeenCalledTimes(1);
+			});
+		} finally {
+			exitSpy.mockRestore();
+		}
+	});
+
+	it("aborts a stalled prompt when the configurable EOF drain timeout elapses", async () => {
+		const session = makeFakeSession("stalled-session");
+		const { runtime } = createFakeRuntime(session);
+		session.prompt.mockImplementation(
+			async (_message: string, options?: { preflightResult?: (success: boolean) => void }) => {
+				options?.preflightResult?.(true);
+				await new Promise<void>(() => {});
+			},
+		);
+		session.waitForIdle.mockImplementation(() => new Promise<void>(() => {}));
+		const previousTimeout = process.env.REPI_RPC_EOF_DRAIN_TIMEOUT_MS;
+		process.env.REPI_RPC_EOF_DRAIN_TIMEOUT_MS = "20";
+
+		const exitSpy = vi
+			.spyOn(process, "exit")
+			.mockImplementation((() => undefined) as (code?: string | number | null | undefined) => never);
+		const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		try {
+			const lineHandler = await startRpc(runtime);
+			lineHandler(JSON.stringify({ id: "stalled-prompt", type: "prompt", message: "never settles" }));
+			await vi.waitFor(() => {
+				expect(responsesFor("prompt", "stalled-prompt")).toHaveLength(1);
+			});
+			process.stdin.emit("end");
+
+			await vi.waitFor(() => {
+				expect(session.abort).toHaveBeenCalledTimes(1);
+				expect(runtime.dispose).toHaveBeenCalledTimes(1);
+			});
+			expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("RPC EOF drain timed out after 20ms"));
+		} finally {
+			if (previousTimeout === undefined) delete process.env.REPI_RPC_EOF_DRAIN_TIMEOUT_MS;
+			else process.env.REPI_RPC_EOF_DRAIN_TIMEOUT_MS = previousTimeout;
+			stderrSpy.mockRestore();
+			exitSpy.mockRestore();
+		}
 	});
 });

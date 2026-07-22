@@ -14,7 +14,6 @@ export type RepiProofLoopDelegateWorker =
 	| "general";
 
 export type RepiProofLoopGapSource =
-	| "compact_resume"
 	| "failure_signature"
 	| "operator_feedback"
 	| "verifier"
@@ -42,7 +41,6 @@ export type RepiProofLoopGapClass =
 	| "proof_spine_seed"
 	| "weak_evidence"
 	| "timeout_or_flake"
-	| "compact_resume"
 	| "unknown";
 
 export type RepiProofLoopGapClassification = {
@@ -54,7 +52,6 @@ export type RepiProofLoopGapClassification = {
 export type RepiProofLoopQuickPlanPhaseV1 = {
 	phase:
 		| "attack_graph_refresh"
-		| "compact_resume_reentry"
 		| "toolchain_repair"
 		| "target_state_refresh"
 		| "runtime_adapter_frontload"
@@ -141,13 +138,6 @@ export function repiProofLoopWorkerForText(
 
 export function classifyRepiProofLoopGap(item: RepiProofLoopGapItem): RepiProofLoopGapClassification {
 	const text = `${item.source} ${item.text}`;
-	if (/compact resume|resume command|proof loop has not been entered/i.test(text)) {
-		return {
-			klass: "compact_resume",
-			priority: 1,
-			action: "re_context resume -> re_operator plan -> re_proof_loop run",
-		};
-	}
 	if (/contradiction|counter[_ -]?evidence|refute|conflict/i.test(text)) {
 		return { klass: "contradiction", priority: 1, action: "re_supervisor repair -> re_verifier matrix" };
 	}
@@ -225,11 +215,18 @@ export function classifyRepiProofLoopGap(item: RepiProofLoopGapItem): RepiProofL
 	return { klass: "unknown", priority: 4, action: "re_delegate plan -> re_swarm run -> re_supervisor review" };
 }
 
-export function formatRepiProofLoopGapClassifier(items: RepiProofLoopGapItem[]): string[] {
+export function formatRepiProofLoopGapClassifier(
+	items: RepiProofLoopGapItem[],
+	options: { parallelRequired?: boolean } = {},
+): string[] {
 	return items
 		.map((item, index) => {
 			const classified = classifyRepiProofLoopGap(item);
-			return `priority=${classified.priority} class=${classified.klass} worker=${item.worker} source=${item.source} gap=${index + 1} action="${classified.action}" evidence=${item.sourceArtifacts.slice(0, 3).join(" | ") || "none"} :: ${truncateMiddle(item.text, 520)}`;
+			const action =
+				classified.klass === "unknown" && options.parallelRequired !== true
+					? "re_operator dispatch -> re_verifier matrix"
+					: classified.action;
+			return `priority=${classified.priority} class=${classified.klass} worker=${item.worker} source=${item.source} gap=${index + 1} action="${action}" evidence=${item.sourceArtifacts.slice(0, 3).join(" | ") || "none"} :: ${truncateMiddle(item.text, 520)}`;
 		})
 		.sort((left, right) => {
 			const leftPriority = Number(/priority=(\d+)/.exec(left)?.[1] ?? "9");
@@ -415,14 +412,6 @@ export function repiProofLoopQuickPlanFromItems(
 	};
 	if (items.some((item) => item.source === "attack_graph")) {
 		addPhase("attack_graph_refresh", "refresh task tree before closing attack-graph gaps", [], ["re_graph build"]);
-	}
-	if (classes.has("compact_resume")) {
-		addPhase(
-			"compact_resume_reentry",
-			"resume the packed proof state before dispatching more tools",
-			["compact_resume"],
-			["re_context resume", `re_operator plan ${targetRef}`],
-		);
 	}
 	if (classes.has("tool_or_dependency")) {
 		addPhase(

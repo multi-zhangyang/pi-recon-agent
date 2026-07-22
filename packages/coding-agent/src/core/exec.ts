@@ -4,6 +4,7 @@
 
 import { spawn } from "node:child_process";
 import { waitForChildProcess } from "../utils/child-process.ts";
+import { missionScopedEnvironment } from "./repi/session-scope.ts";
 import { safeTailStart } from "./tools/truncate.ts";
 
 /**
@@ -122,6 +123,7 @@ export async function execCommand(
 	return new Promise((resolve) => {
 		const proc = spawn(command, args, {
 			cwd,
+			env: missionScopedEnvironment(process.env),
 			shell: false,
 			stdio: ["ignore", "pipe", "pipe"],
 		});

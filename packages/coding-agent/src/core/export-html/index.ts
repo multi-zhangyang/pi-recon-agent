@@ -2,9 +2,9 @@ import type { AgentState } from "@pi-recon/repi-agent-core";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { basename, join } from "path";
 import { APP_NAME, getExportTemplateDir } from "../../config.ts";
-import { getResolvedThemeColors, getThemeExportColors } from "../../modes/interactive/theme/theme.ts";
 import { normalizePath, resolvePath } from "../../utils/paths.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
+import { getResolvedThemeColors, getThemeExportColors } from "../presentation/theme-runtime.ts";
 import type { SessionEntry } from "../session-manager.ts";
 import { SessionManager } from "../session-manager.ts";
 

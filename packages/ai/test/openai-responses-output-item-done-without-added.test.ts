@@ -64,6 +64,10 @@ async function* createDroppedAddedEvents(): AsyncIterable<ResponseStreamEvent> {
 			arguments: argumentsJson,
 		},
 	} as ResponseStreamEvent;
+	yield {
+		type: "response.completed",
+		response: { id: "resp_test", status: "completed" },
+	} as ResponseStreamEvent;
 }
 
 describe("openai responses output_item.done without added keeps the tool call (opt #206)", () => {

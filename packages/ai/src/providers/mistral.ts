@@ -12,6 +12,7 @@ import type {
 	Context,
 	Message,
 	Model,
+	ProviderHeaders,
 	SimpleStreamOptions,
 	StopReason,
 	StreamFunction,
@@ -23,6 +24,7 @@ import type {
 } from "../types.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
+import { hasProviderHeader, mergeProviderHeaders, providerHeadersToRecord } from "../utils/headers.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { buildBaseOptions } from "./simple-options.ts";
@@ -231,17 +233,16 @@ function buildRequestOptions(model: Model<"mistral-conversations">, options?: Mi
 	};
 	if (options?.signal) requestOptions.signal = options.signal;
 
-	const headers: Record<string, string> = {};
-	if (model.headers) Object.assign(headers, model.headers);
-	if (options?.headers) Object.assign(headers, options.headers);
+	let providerHeaders: ProviderHeaders | undefined = mergeProviderHeaders(model.headers, options?.headers);
 
 	// Mistral infrastructure uses `x-affinity` for KV-cache reuse (prefix caching).
-	// Respect explicit caller-provided header values.
-	if (options?.sessionId && !headers["x-affinity"]) {
-		headers["x-affinity"] = options.sessionId;
+	// Respect explicit caller-provided values, including null suppression.
+	if (options?.sessionId && !hasProviderHeader(providerHeaders, "x-affinity")) {
+		providerHeaders = mergeProviderHeaders(providerHeaders, { "x-affinity": options.sessionId });
 	}
 
-	if (Object.keys(headers).length > 0) {
+	const headers = providerHeadersToRecord(providerHeaders);
+	if (headers) {
 		requestOptions.headers = headers;
 	}
 

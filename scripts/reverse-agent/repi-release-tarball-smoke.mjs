@@ -1,27 +1,30 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { findPackedOutputsWithoutSources } from "./lib/packed-source-closure.mjs";
 
 const root = resolve(process.argv[2] && !process.argv[2].startsWith("--") ? process.argv[2] : process.cwd());
 const skipBuild = process.argv.includes("--skip-build");
 const keep = process.argv.includes("--keep");
 const json = process.argv.includes("--json");
+const help = process.argv.includes("--help") || process.argv.includes("-h");
 const packages = [
 	{ directory: "packages/ai", name: "@pi-recon/repi-ai" },
 	{ directory: "packages/tui", name: "@pi-recon/repi-tui" },
 	{ directory: "packages/agent", name: "@pi-recon/repi-agent-core" },
 	{ directory: "packages/coding-agent", name: "@pi-recon/repi-coding-agent" },
 ];
+
+if (help) {
+	console.log(
+		"Usage: node scripts/reverse-agent/repi-release-tarball-smoke.mjs [root] [--skip-build] [--keep] [--json]",
+	);
+	process.exit(0);
+}
+
 const rootPackageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-const generatedModelFiles = ["packages/ai/src/models.generated.ts", "packages/ai/src/image-models.generated.ts"];
-const generatedModelSnapshots = generatedModelFiles
-	.map((file) => {
-		const path = join(root, file);
-		return existsSync(path) ? { file, path, content: readFileSync(path, "utf8") } : undefined;
-	})
-	.filter(Boolean);
 
 function commandForPlatform(command) {
 	return process.platform === "win32" ? `${command}.cmd` : command;
@@ -65,11 +68,6 @@ function run(id, command, args, options = {}) {
 	return row;
 }
 
-function fileSpecifier(fromDirectory, file) {
-	const rel = relative(fromDirectory, file).replaceAll("\\", "/");
-	return `file:${rel.startsWith(".") ? rel : `./${rel}`}`;
-}
-
 function packPackage(pkg, tarballDirectory) {
 	const row = run(`pack:${pkg.name}`, "npm", ["pack", "--json", "--pack-destination", tarballDirectory], {
 		cwd: join(root, pkg.directory),
@@ -80,13 +78,21 @@ function packPackage(pkg, tarballDirectory) {
 	delete row.stdout;
 	if (row.exit !== 0) throw new Error(`npm pack failed for ${pkg.name}: ${row.stderrTail || row.stdoutTail}`);
 	const packed = JSON.parse(stdout.trim())[0];
-	return join(tarballDirectory, packed.filename);
-}
-
-function restoreGeneratedModelSnapshots() {
-	for (const snapshot of generatedModelSnapshots) {
-		writeFileSync(snapshot.path, snapshot.content);
+	const packedSourceMaps = (packed?.files ?? [])
+		.map((file) => file.path)
+		.filter((path) => path.endsWith(".map"));
+	if (packedSourceMaps.length > 0) {
+		row.exit = 1;
+		row.forbidden.push(...packedSourceMaps.map((path) => `packed source map: ${path}`));
+		throw new Error(`${pkg.name} tarball contains source maps: ${packedSourceMaps.join(", ")}`);
 	}
+	const staleOutputs = findPackedOutputsWithoutSources(join(root, pkg.directory), packed?.files ?? []);
+	if (staleOutputs.length > 0) {
+		row.exit = 1;
+		row.forbidden.push(...staleOutputs.map((path) => `packed output has no source: ${path}`));
+		throw new Error(`${pkg.name} tarball contains stale compiled outputs: ${staleOutputs.join(", ")}`);
+	}
+	return join(tarballDirectory, packed.filename);
 }
 
 const repiEnvModelUnset = Object.fromEntries(
@@ -129,16 +135,27 @@ const rows = [];
 let ok = false;
 try {
 	if (!skipBuild) {
+		rows.push(
+			run("clean:production-dist", process.execPath, [join(root, "scripts", "clean-production-dist.mjs"), root], {
+				cwd: root,
+			}),
+		);
+		if (rows.some((row) => row.exit !== 0)) throw new Error("production dist cleanup failed");
 		for (const pkg of packages) rows.push(run(`build:${pkg.name}`, "npm", ["run", "build"], { cwd: join(root, pkg.directory), capture: false, timeout: 180_000 }));
 		if (rows.some((row) => row.exit !== 0)) throw new Error("build failed");
 	}
 	rows.push(run("mkdir:install", process.execPath, ["-e", `require('node:fs').mkdirSync(${JSON.stringify(tarballDir)}, {recursive:true}); require('node:fs').mkdirSync(${JSON.stringify(installDir)}, {recursive:true})`], { cwd: root }));
 	const tarballs = new Map();
 	for (const pkg of packages) tarballs.set(pkg.name, packPackage(pkg, tarballDir));
-	const dependencies = Object.fromEntries(packages.map((pkg) => [pkg.name, fileSpecifier(installDir, tarballs.get(pkg.name))]));
-	writeFileSync(join(installDir, "package.json"), `${JSON.stringify({ private: true, dependencies, overrides: dependencies }, null, "\t")}\n`);
-	rows.push(run("npm-install:tarballs", "npm", ["install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: installDir, timeout: 180_000 }));
-	const repiBin = join(installDir, "node_modules", ".bin", process.platform === "win32" ? "repi.cmd" : "repi");
+	rows.push(
+		run(
+			"npm-install:four-tarballs-global",
+			"npm",
+			["install", "--global", "--prefix", installDir, "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", ...tarballs.values()],
+			{ cwd: installDir, timeout: 180_000 },
+		),
+	);
+	const repiBin = process.platform === "win32" ? join(installDir, "repi.cmd") : join(installDir, "bin", "repi");
 	const freshAgentDir = join(outDir, "fresh-agent");
 	const envAgentDir = join(outDir, "env-agent");
 	const rpcAgentDir = join(outDir, "rpc-agent");
@@ -152,6 +169,11 @@ try {
 		REPI_AUTO_COMPACT_WINDOW: "262144",
 	};
 	rows.push(run("package-bin:help", repiBin, ["--offline", "--help"], { cwd: installDir, expectOutput: ["REPI reverse/pentest", "REPI_AUTH_TOKEN", "REPI_MODEL_API"] }));
+	rows.push(run("package-bin:mcp-help", repiBin, ["mcp", "--help"], { cwd: installDir, expectOutput: ["REPI MCP manager", "repi mcp status"], rejectOutput: ["Usage:\n  repi [options]"] }));
+	rows.push(run("package-bin:bootstrap-help", repiBin, ["bootstrap", "--help"], { cwd: installDir, expectOutput: ["repi bootstrap", "--dry-run", "--only a,b"] }));
+	rows.push(run("package-bin:commands-help", repiBin, ["commands", "--help"], { cwd: installDir, expectOutput: ["REPI command quick reference", "repi mcp status"] }));
+	rows.push(run("package-bin:uninstall-help", repiBin, ["uninstall", "--help"], { cwd: installDir, expectOutput: ["repi uninstall", "--apply", "--purge"] }));
+	rows.push(run("package-bin:uninstall-package-route", repiBin, ["uninstall", "npm:release-smoke-fixture"], { cwd: installDir, env: { ...repiEnvModelUnset, REPI_CODING_AGENT_DIR: join(outDir, "uninstall-package-agent") }, expectExit: 1, expectOutput: ["No matching package found for npm:release-smoke-fixture"], rejectOutput: ["Launcher symlink(s):"] }));
 	rows.push(run("package-bin:path-command", "repi", ["--version"], { cwd: installDir, env: { PATH: `${dirname(repiBin)}:${process.env.PATH ?? ""}` }, expectOutput: [rootPackageJson.version] }));
 	rows.push(run("package-bin:fresh-list-models", repiBin, ["--offline", "--list-models"], { cwd: installDir, env: { ...repiEnvModelUnset, REPI_CODING_AGENT_DIR: freshAgentDir }, expectOutput: ["No models available"], rejectOutput: ["kimchi", "aigateway"] }));
 	rows.push(run("package-bin:goal-help-print", repiBin, ["--offline", "-p", "/goal help"], { cwd: installDir, env: { ...repiEnvModelUnset, REPI_CODING_AGENT_DIR: join(outDir, "goal-help-agent"), REPI_PRINT_PROGRESS: "0" }, expectOutput: ["REPI /goal runs a task until verified completion.", "Completion:"], rejectOutput: ["kimchi", "aigateway"] }));
@@ -169,7 +191,7 @@ try {
 	rows.push(run("package-bin:env-model", repiBin, ["--offline", "--list-models"], { cwd: installDir, env: { ...envModel, REPI_CODING_AGENT_DIR: envAgentDir }, expectOutput: ["repi-env", "release-smoke-env-model", "262.1K"], rejectOutput: ["kimchi", "aigateway"] }));
 	rows.push(run("package-bin:model-status-env", repiBin, ["model", "status", "--json"], { cwd: installDir, env: { ...envModel, REPI_CODING_AGENT_DIR: join(outDir, "model-status-agent") }, expectOutput: ['"source": "REPI_* environment"', '"provider": "repi-env"', '"model": "release-smoke-env-model"'], rejectOutput: ["https://release-smoke.invalid"] }));
 	rows.push(run("package-bin:doctor-env-model", repiBin, ["doctor", "--json"], { cwd: installDir, env: { ...envModel, REPI_CODING_AGENT_DIR: join(outDir, "doctor-agent") }, timeout: 120_000, expectOutput: ['"ok": true', '"launcher:path-command-resolution"', '"launcher:shell-rc-path-activation"', '"goal:built-in-mode"', '"goal:footer-status-contract"', '"goal:rpc-runtime-registration"', '"models:env-only-contract"', '"models:env-rpc-runtime"', '"models:env-overrides-saved-default"', '"repi:launch-readiness"'] }));
-	rows.push(run("package-bin:doctor-fix-fresh-profile", repiBin, ["doctor", "--fix", "--json"], { cwd: installDir, env: { ...envModel, REPI_CODING_AGENT_DIR: join(outDir, "doctor-fix-agent") }, timeout: 120_000, expectOutput: ['"ok": true', '"id": "profile-init"', '"exit": 0', '"runtime:settings"', '"memory:scoped-defaults"', '"repi:launch-readiness"'], rejectOutput: ['"provider":"kimchi"', '"id":"kimi-k2.7"'] }));
+	rows.push(run("package-bin:doctor-fix-fresh-profile", repiBin, ["doctor", "--fix", "--json"], { cwd: installDir, env: { ...envModel, REPI_CODING_AGENT_DIR: join(outDir, "doctor-fix-agent") }, timeout: 120_000, expectOutput: ['"ok": true', '"id": "profile-init"', '"exit": 0', '"runtime:settings"', '"repi:launch-readiness"'], rejectOutput: ['"provider":"kimchi"', '"id":"kimi-k2.7"'] }));
 	rows.push(
 		run("package-bin:rpc-fresh-env-footer", repiBin, ["--offline", "--mode", "rpc", "--no-session"], {
 			cwd: installDir,
@@ -263,7 +285,6 @@ try {
 	rows.push({ id: "exception", exit: 1, processExit: 1, missing: [], forbidden: [], ms: 0, stdoutTail: "", stderrTail: error instanceof Error ? error.message : String(error) });
 	ok = false;
 } finally {
-	restoreGeneratedModelSnapshots();
 	if (!keep) rmSync(outDir, { recursive: true, force: true });
 }
 

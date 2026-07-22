@@ -353,6 +353,33 @@ describe("AgentSession queue characterization", () => {
 		expect(harness.session.messages.map((message) => message.role)).toEqual(["user", "custom", "assistant"]);
 	});
 
+	it("does not carry nextTurn custom messages across a tree navigation", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		harness.setResponses([fauxAssistantMessage("first"), fauxAssistantMessage("second")]);
+		await harness.session.prompt("first prompt");
+		await harness.session.prompt("second prompt");
+
+		const firstUser = harness.sessionManager
+			.getEntries()
+			.find((entry) => entry.type === "message" && entry.message.role === "user");
+		expect(firstUser).toBeDefined();
+		await harness.session.sendCustomMessage(
+			{ customType: "stale-next-turn", content: "must not cross branch", display: true, details: {} },
+			{ deliverAs: "nextTurn" },
+		);
+		await harness.session.navigateTree(firstUser!.id, { summarize: false });
+
+		harness.setResponses([fauxAssistantMessage("new branch")]);
+		await harness.session.prompt("new branch prompt");
+
+		expect(
+			harness.session.messages.some(
+				(message) => message.role === "custom" && message.customType === "stale-next-turn",
+			),
+		).toBe(false);
+	});
+
 	it("updates pendingMessageCount and removes queued text before message_start is emitted", async () => {
 		const waiting = await createWaitingHarness();
 		const { harness, waitForToolStart, promptPromise, releaseToolExecution } = waiting;

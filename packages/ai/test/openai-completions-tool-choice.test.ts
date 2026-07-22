@@ -4,6 +4,10 @@ import { getModel, getModels } from "../src/models.ts";
 import { convertMessages } from "../src/providers/openai-completions.ts";
 import { stream, streamSimple } from "../src/stream.ts";
 import type { AssistantMessage, Model, Tool, ToolResultMessage } from "../src/types.ts";
+import { registerOpenAICompletionsRegressionFixtures, registerOpenAIFixtures } from "./model-fixtures.ts";
+
+registerOpenAIFixtures();
+registerOpenAICompletionsRegressionFixtures();
 
 const mockState = vi.hoisted(() => ({
 	lastParams: undefined as unknown,

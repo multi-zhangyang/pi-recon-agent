@@ -11,13 +11,13 @@ npm install
 npm run build
 ```
 
-Run from source:
+Run from the checkout:
 
 ```bash
 /path/to/pi-recon-agent/repi
 ```
 
-The source launcher can be run from any directory. REPI keeps the caller's current working directory.
+The checkout launcher can be run from any directory. It uses `node packages/coding-agent/dist/cli.js` when a successful runtime manifest covers all four workspace entrypoints and remains newer than their sources, and falls back to the local `tsx` source runner for an unbuilt, failed, or modified development tree. Set `REPI_USE_SOURCE=1` to force the source runner while debugging. REPI keeps the caller's current working directory.
 
 ## Product metadata
 
@@ -36,7 +36,7 @@ For REPI releases, keep `name: "repi"`, `configDir: ".repi"`, and the `bin.repi`
 
 ## Path Resolution
 
-Three execution modes: npm install, standalone binary, tsx from source.
+Three execution modes: npm install, standalone binary, and a source checkout. A source install builds the production workspace runtime before linking `repi`; the checkout launcher retains `tsx` as the development fallback.
 
 **Always use `src/config.ts`** for package assets:
 

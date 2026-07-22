@@ -1,16 +1,12 @@
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@pi-recon/repi-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ToolResultEvent } from "../../src/core/extensions/types.ts";
 import {
-	appendMemoryEventTransaction,
-	buildPerTurnMemoryRecall,
 	createReconExtensionFactory,
 	parsePlannerDecision,
 	parseSupervisorCritique,
-	type ReconStats,
 	swarmWorkerSpec,
 } from "../../src/core/recon-profile.ts";
 import { laneSpec, type MissionLane } from "../../src/core/repi/mission.ts";
@@ -55,7 +51,11 @@ function writeStubBin(): string {
 	const path = join(tmpdir(), `repi-reason-stub-${Date.now()}-${Math.random().toString(36).slice(2)}.sh`);
 	writeFileSync(
 		path,
-		"#!/bin/sh\nprintf 'PLANNER_HANDOFF_PROOF: next_action=re_map; rationale=passive-first\\nfindings: ok\\n'\nexit 0\n",
+		"#!/bin/sh\n" +
+			'if [ -n "$REPI_WORKER_HANDOFF_PATH" ]; then\n' +
+			'  { printf \'run_id: %s\\nmission_id: %s\\nlineage_sha256: %s\\n\' "$REPI_WORKER_RUN_ID" "$REPI_WORKER_MISSION_ID" "$REPI_WORKER_LINEAGE_SHA256"; printf \'PLANNER_HANDOFF_PROOF: next_action=re_map; rationale=passive-first\\nfindings: ok\\n\'; } > "$REPI_WORKER_HANDOFF_PATH"\n' +
+			"fi\n" +
+			"printf 'PLANNER_HANDOFF_PROOF: next_action=re_map; rationale=passive-first\\nfindings: ok\\n'\nexit 0\n",
 		"utf-8",
 	);
 	chmodSync(path, 0o755);
@@ -66,7 +66,11 @@ function writeVerifierStubBin(): string {
 	const path = join(tmpdir(), `repi-challenge-stub-${Date.now()}-${Math.random().toString(36).slice(2)}.sh`);
 	writeFileSync(
 		path,
-		"#!/bin/sh\nprintf 'verdict: proved\\nrepro: id; echo ok\\ncounter_evidence: none\\nnotes: stable repro\\n'\nexit 0\n",
+		"#!/bin/sh\n" +
+			'if [ -n "$REPI_WORKER_HANDOFF_PATH" ]; then\n' +
+			'  { printf \'run_id: %s\\nmission_id: %s\\nlineage_sha256: %s\\n\' "$REPI_WORKER_RUN_ID" "$REPI_WORKER_MISSION_ID" "$REPI_WORKER_LINEAGE_SHA256"; printf \'verdict: proved\\nrepro: id; echo ok\\ncounter_evidence: none\\nnotes: stable repro\\n\'; } > "$REPI_WORKER_HANDOFF_PATH"\n' +
+			"fi\n" +
+			"printf 'verdict: proved\\nrepro: id; echo ok\\ncounter_evidence: none\\nnotes: stable repro\\n'\nexit 0\n",
 		"utf-8",
 	);
 	chmodSync(path, 0o755);
@@ -77,7 +81,11 @@ function writeSupervisorStubBin(): string {
 	const path = join(tmpdir(), `repi-supervisor-stub-${Date.now()}-${Math.random().toString(36).slice(2)}.sh`);
 	writeFileSync(
 		path,
-		"#!/bin/sh\nprintf 'supervisor_verdict: repair\\ncritique: worker handoff attempted-as-proved without repro\\nrepair_queue: re_challenge claim, re_swarm run target 1 1\\nredispatch: spec=verifier; task=falsify flag leak claim\\nnotes: stable repro required before promotion\\n'\nexit 0\n",
+		"#!/bin/sh\n" +
+			'if [ -n "$REPI_WORKER_HANDOFF_PATH" ]; then\n' +
+			'  { printf \'run_id: %s\\nmission_id: %s\\nlineage_sha256: %s\\n\' "$REPI_WORKER_RUN_ID" "$REPI_WORKER_MISSION_ID" "$REPI_WORKER_LINEAGE_SHA256"; printf \'supervisor_verdict: repair\\ncritique: worker handoff attempted-as-proved without repro\\nrepair_queue: re_challenge claim, re_swarm run target 1 1\\nredispatch: spec=verifier; task=falsify flag leak claim\\nnotes: stable repro required before promotion\\n\'; } > "$REPI_WORKER_HANDOFF_PATH"\n' +
+			"fi\n" +
+			"printf 'supervisor_verdict: repair\\ncritique: worker handoff attempted-as-proved without repro\\nrepair_queue: re_challenge claim, re_swarm run target 1 1\\nredispatch: spec=verifier; task=falsify flag leak claim\\nnotes: stable repro required before promotion\\n'\nexit 0\n",
 		"utf-8",
 	);
 	chmodSync(path, 0o755);
@@ -319,6 +327,10 @@ describe("re_reason tool", () => {
 			const resultText = getToolResultText(harness);
 			expect(resultText).toContain("spec=verifier");
 			expect(resultText).toContain("verdict: proved");
+			const ledger = readFileSync(join(agentDir, "recon", "evidence", "ledger.md"), "utf8");
+			expect(ledger).toContain("challenge-proved");
+			expect(ledger).toContain("Independent verifier verdict=proved");
+			expect(ledger).toContain("domain runtime proof still required");
 		});
 	});
 
@@ -360,142 +372,5 @@ describe("re_reason tool", () => {
 			expect(resultText).toContain("supervisor_verdict: repair");
 			expect(resultText).toContain("redispatch: spec=verifier");
 		});
-	});
-});
-
-const ENV_PER_TURN = "REPI_PER_TURN_MEMORY";
-const ENV_SCOPE_POLICY = "REPI_MEMORY_SCOPE_POLICY";
-
-function makeToolResultEvent(toolName: string, command: string, output: string): ToolResultEvent {
-	return {
-		type: "tool_result",
-		toolCallId: `call-${Math.random().toString(36).slice(2)}`,
-		toolName,
-		input: { command },
-		content: [{ type: "text", text: output }],
-		isError: false,
-		details: undefined,
-	} as ToolResultEvent;
-}
-
-function activeStats(): ReconStats {
-	return {
-		calls: 1,
-		bashCalls: 1,
-		failures: 0,
-		repeatedCommandCount: 0,
-		lastCommands: [],
-		active: true,
-		selfReviewDue: false,
-		noSession: false,
-	};
-}
-
-describe("per-turn scoped memory recall (gap #7)", () => {
-	const tempDirs: string[] = [];
-	let envSnapshot: EnvSnapshot;
-	let perTurnSnapshot: string | undefined;
-	let scopeSnapshot: string | undefined;
-
-	beforeEach(() => {
-		envSnapshot = snapshotEnv();
-		perTurnSnapshot = process.env[ENV_PER_TURN];
-		scopeSnapshot = process.env[ENV_SCOPE_POLICY];
-	});
-
-	afterEach(() => {
-		for (const dir of tempDirs) {
-			if (dir && existsSync(dir)) rmSync(dir, { recursive: true, force: true });
-		}
-		tempDirs.length = 0;
-		restoreEnv(envSnapshot);
-		if (perTurnSnapshot === undefined) delete process.env[ENV_PER_TURN];
-		else process.env[ENV_PER_TURN] = perTurnSnapshot;
-		if (scopeSnapshot === undefined) delete process.env[ENV_SCOPE_POLICY];
-		else process.env[ENV_SCOPE_POLICY] = scopeSnapshot;
-	});
-
-	it("returns undefined when REPI_PER_TURN_MEMORY=0 (explicit opt-out wins even with a matching store)", () => {
-		const agentDir = makeTempAgentDir("re-per-turn-optout");
-		tempDirs.push(agentDir);
-		process.env[ENV_AGENT_DIR] = agentDir;
-		delete process.env[ENV_AGENT_THREAD];
-		process.env[ENV_PER_TURN] = "0";
-		process.env[ENV_SCOPE_POLICY] = "global";
-
-		appendMemoryEventTransaction({
-			source: "deposition",
-			task: "nmap service version scan",
-			route: "Web / API",
-			lessons: ["nmap -p- 10.0.0.1 found 8080 open"],
-			commands: ["nmap -p- 10.0.0.1"],
-			confidence: 0.8,
-		});
-
-		const recall = buildPerTurnMemoryRecall(
-			makeToolResultEvent("bash", "nmap -p- 10.0.0.1", "8080 open"),
-			activeStats(),
-		);
-		expect(recall).toBeUndefined();
-	});
-
-	it("default-on: returns undefined on an empty store (no noise when there is nothing to recall)", () => {
-		const agentDir = makeTempAgentDir("re-per-turn-default-on");
-		tempDirs.push(agentDir);
-		process.env[ENV_AGENT_DIR] = agentDir;
-		delete process.env[ENV_AGENT_THREAD];
-		delete process.env[ENV_PER_TURN];
-		process.env[ENV_SCOPE_POLICY] = "global";
-
-		const recall = buildPerTurnMemoryRecall(
-			makeToolResultEvent("bash", "nmap -p- 10.0.0.1", "open ports"),
-			activeStats(),
-		);
-		expect(recall).toBeUndefined();
-	});
-
-	it("appends a scoped recall block when a matching memory event exists", () => {
-		const agentDir = makeTempAgentDir("re-per-turn-memory");
-		tempDirs.push(agentDir);
-		process.env[ENV_AGENT_DIR] = agentDir;
-		delete process.env[ENV_AGENT_THREAD];
-		process.env[ENV_PER_TURN] = "1";
-		process.env[ENV_SCOPE_POLICY] = "global";
-
-		appendMemoryEventTransaction({
-			source: "deposition",
-			task: "nmap service version scan",
-			route: "Web / API",
-			lessons: ["nmap -p- 10.0.0.1 found 8080 open"],
-			commands: ["nmap -p- 10.0.0.1"],
-			confidence: 0.8,
-		});
-
-		const recall = buildPerTurnMemoryRecall(
-			makeToolResultEvent("bash", "nmap -p- 10.0.0.1", "8080 open"),
-			activeStats(),
-		);
-		expect(recall).toBeDefined();
-		expect(recall).toContain("per-turn scoped memory recall");
-		expect(recall).toContain("nmap");
-		expect(recall).toContain("cards=1");
-		expect(recall).not.toContain("memory_runtime:");
-		expect(recall).not.toContain("startup_budget_tokens=");
-		expect(recall!.length).toBeLessThan(1100);
-	});
-
-	it("returns undefined when no matching memory exists (no noise on empty store)", () => {
-		const agentDir = makeTempAgentDir("re-per-turn-empty");
-		tempDirs.push(agentDir);
-		process.env[ENV_AGENT_DIR] = agentDir;
-		delete process.env[ENV_AGENT_THREAD];
-		process.env[ENV_PER_TURN] = "1";
-		process.env[ENV_SCOPE_POLICY] = "global";
-
-		const recall = buildPerTurnMemoryRecall(
-			makeToolResultEvent("bash", "nmap -p- 10.0.0.1", "open ports"),
-			activeStats(),
-		);
-		expect(recall).toBeUndefined();
 	});
 });

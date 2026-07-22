@@ -3,7 +3,10 @@ import { getModel } from "../src/models.ts";
 import { complete } from "../src/stream.ts";
 import type { Api, Context, Model, StreamOptions } from "../src/types.ts";
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.ts";
+import { registerProviderIntegrationFixtures } from "./model-fixtures.ts";
 import { resolveApiKey } from "./oauth.ts";
+
+registerProviderIntegrationFixtures();
 
 type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 

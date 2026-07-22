@@ -52,6 +52,23 @@ describe("AgentSession retry and event characterization", () => {
 		expect(harness.session.isRetrying).toBe(false);
 	});
 
+	it("retries an OpenAI Responses stream that ends before a terminal event", async () => {
+		const harness = await createHarness({ settings: { retry: { enabled: true, maxRetries: 2, baseDelayMs: 1 } } });
+		harnesses.push(harness);
+		harness.setResponses([
+			fauxAssistantMessage("", {
+				stopReason: "error",
+				errorMessage: "OpenAI Responses stream ended before a terminal response event",
+			}),
+			fauxAssistantMessage("recovered"),
+		]);
+
+		await harness.session.prompt("test");
+
+		expect(harness.faux.state.callCount).toBe(2);
+		expect(harness.eventsOfType("auto_retry_start")).toHaveLength(1);
+	});
+
 	it("retries multiple transient failures and succeeds on the final attempt", async () => {
 		const harness = await createHarness({ settings: { retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } } });
 		harnesses.push(harness);
@@ -253,6 +270,7 @@ describe("AgentSession retry and event characterization", () => {
 			"message_end:assistant",
 			"turn_end",
 			"agent_end",
+			"agent_settled",
 		]);
 	});
 
@@ -298,6 +316,7 @@ describe("AgentSession retry and event characterization", () => {
 			"message_end:assistant",
 			"turn_end",
 			"agent_end",
+			"agent_settled",
 		]);
 	});
 
@@ -328,7 +347,8 @@ describe("AgentSession retry and event characterization", () => {
 
 		await harness.session.prompt("hi");
 
-		expect(harness.events[harness.events.length - 1]?.type).toBe("agent_end");
+		expect(harness.eventsOfType("agent_end")).toHaveLength(1);
+		expect(harness.events[harness.events.length - 1]?.type).toBe("agent_settled");
 	});
 
 	it("emits agent_end for aborted runs and persists the aborted assistant message", async () => {
@@ -350,7 +370,8 @@ describe("AgentSession retry and event characterization", () => {
 		await harness.session.abort();
 		await promptPromise;
 
-		expect(harness.events[harness.events.length - 1]?.type).toBe("agent_end");
+		expect(harness.eventsOfType("agent_end")).toHaveLength(1);
+		expect(harness.events[harness.events.length - 1]?.type).toBe("agent_settled");
 		const lastMessage = harness.session.messages[harness.session.messages.length - 1];
 		expect(lastMessage?.role).toBe("assistant");
 		if (lastMessage?.role === "assistant") {

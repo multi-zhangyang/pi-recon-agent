@@ -38,7 +38,10 @@ vi.mock("../src/core/compaction/index.js", () => ({
 	},
 	estimateContextTokens: () => ({ tokens: 0, usageTokens: 0, trailingTokens: 0, lastUsageIndex: null }),
 	generateBranchSummary: async () => ({ summary: "", aborted: false, readFiles: [], modifiedFiles: [] }),
-	prepareCompaction: () => ({ messagesToSummarize: [], turnPrefixMessages: [] }),
+	prepareCompaction: () => ({
+		messagesToSummarize: [{ role: "user", content: "history", timestamp: 1 }],
+		turnPrefixMessages: [],
+	}),
 	shouldCompact: () => true,
 	stripTrailingErrorAssistants: (messages: Array<{ role: string }>) => messages,
 }));
@@ -103,8 +106,7 @@ describe("opt100 F3: auto-compaction abort reports aborted, not failed", () => {
 			}
 		)._runAutoCompaction.bind(session);
 
-		// Reason="threshold" so the hasSummarizableHistory guard (overflow-only)
-		// does not short-circuit before compact() is called.
+		// The mocked preparation contains real history, so compact() is reached.
 		const result = await runAutoCompaction("threshold", false);
 
 		// Auto-compaction returns false (did not complete / no retry).

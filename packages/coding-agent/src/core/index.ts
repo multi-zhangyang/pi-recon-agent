@@ -40,6 +40,7 @@ export { createEventBus, type EventBus, type EventBusController } from "./event-
 // Extensions system
 export {
 	type AgentEndEvent,
+	type AgentSettledEvent,
 	type AgentStartEvent,
 	type AgentToolResult,
 	type AgentToolUpdateCallback,
@@ -92,4 +93,16 @@ export {
 	type McpServerEntry,
 	type McpToolSummary,
 } from "./mcp-manager.ts";
+export {
+	type CreateModelRuntimeOptions,
+	ModelRuntime,
+	type ModelRuntimeAuthOverrides,
+} from "./model-runtime.ts";
+export { FileModelsStore, getModelsStorePath, InMemoryCodingAgentModelsStore } from "./models-store.ts";
+export type {
+	Theme as ThemeContract,
+	ThemeBg,
+	ThemeColor,
+	ThemeColorMode,
+} from "./presentation/theme.ts";
 export { createSyntheticSourceInfo } from "./source-info.ts";

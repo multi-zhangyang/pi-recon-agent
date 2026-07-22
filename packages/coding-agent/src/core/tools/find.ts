@@ -4,10 +4,10 @@ import { Text } from "@pi-recon/repi-tui";
 import { spawn } from "child_process";
 import path from "path";
 import { type Static, Type } from "typebox";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
-import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { ensureTool } from "../../utils/tools-manager.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
+import { themedKeyHint } from "../presentation/keybinding-hints.ts";
+import type { Theme } from "../presentation/theme.ts";
 import { pathExists, resolveToCwd } from "./path-utils.ts";
 import { getTextOutput, invalidArgText, shortenPath, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -125,7 +125,7 @@ function formatFindResult(
 		const remaining = lines.length - maxLines;
 		text += `\n${displayLines.map((line) => theme.fg("toolOutput", line)).join("\n")}`;
 		if (remaining > 0) {
-			text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+			text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${themedKeyHint(theme, "app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 		}
 	}
 
@@ -150,6 +150,10 @@ export function createFindToolDefinition(
 		label: "find",
 		description: `Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is truncated to ${DEFAULT_LIMIT} results or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first).`,
 		promptSnippet: "Find files by glob pattern (respects .gitignore)",
+		promptGuidelines: [
+			"Batch independent read-only probes in one turn and do not repeat identical probes unless state changed.",
+		],
+		readOnly: true,
 		parameters: findSchema,
 		async execute(
 			_toolCallId,

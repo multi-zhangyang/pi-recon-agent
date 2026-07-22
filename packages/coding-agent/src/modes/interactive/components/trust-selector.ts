@@ -1,6 +1,6 @@
 import { Container, getKeybindings, Spacer, Text } from "@pi-recon/repi-tui";
+import { theme } from "../../../core/presentation/theme-runtime.ts";
 import type { ProjectTrustDecision } from "../../../core/trust-manager.ts";
-import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint, rawKeyHint } from "./keybinding-hints.ts";
 

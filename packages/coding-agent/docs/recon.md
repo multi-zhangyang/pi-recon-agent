@@ -24,7 +24,6 @@ repi doctor
 |---|---|---|
 | Evidence | `~/.repi/agent/recon/evidence/` | Runtime artifacts, maps, browser captures, replay output, reports. |
 | Mission | `~/.repi/agent/recon/mission/` | Mission state, lane plan, checkpoints, next actions. |
-| Memory | `~/.repi/agent/recon/memory/` | Scoped memories, playbooks, quality/recall metadata. |
 | Tool index | `~/.repi/agent/recon/tools/tool-index.md` | Available reverse/pentest tools and bootstrap hints. |
 
 ## Core operator commands
@@ -41,15 +40,12 @@ repi doctor
 /re-delegate              split work into specialist packets
 /re-swarm                 parallel worker plan/run/merge
 /re-supervisor            review worker evidence and repair queue
-/re-context               context pack/resume
 /re-operator              bounded operator queue
 /re-verifier              evidence assertions and contradictions
 /re-compiler              report compiler
 /re-replayer              replay matrix
 /re-autofix               repair queue
 /re-proof-loop            verifier→compiler→replayer→autofix loop
-/re-knowledge-graph       reusable case knowledge
-/re-memory                scoped memory inspection/governance
 /re-profile-check         local profile/install sanity check
 /re-complete              completion audit/report scaffold
 ```
@@ -68,7 +64,7 @@ Runtime threshold:
 min(contextWindow * triggerPercent / 100, contextWindow - reserveTokens)
 ```
 
-普通 OpenAI-compatible / Anthropic-compatible 流式接口不能在模型已经开始输出 token 后由客户端强行改写本次请求上下文；REPI 会在安全 turn boundary 生成 context pack、执行 compact/resume，再继续后续任务链。
+普通 OpenAI-compatible / Anthropic-compatible 流式接口不能在模型已经开始输出 token 后由客户端强行改写本次请求上下文；REPI 会在安全 turn boundary 压缩已消费的历史，再继续后续任务链。
 
 ## Model/provider validation
 

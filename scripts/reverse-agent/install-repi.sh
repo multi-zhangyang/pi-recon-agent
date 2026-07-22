@@ -77,6 +77,63 @@ print_done_bar() {
   printf '■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 100%%\n'
 }
 
+build_repi_runtime() {
+  local relative tsgo
+  if [ "${REPI_SKIP_RUNTIME_BUILD:-0}" = "1" ]; then
+    echo "INFO: Skipping REPI production runtime build (REPI_SKIP_RUNTIME_BUILD=1)"
+    return 0
+  fi
+
+  # A packaged launcher may contain `repi` plus an already-built runtime without
+  # the monorepo source tree. The build contract only applies to a source
+  # checkout; do not make launcher/path installation depend on a compiler that
+  # cannot be used in that layout.
+  if [ ! -f "$ROOT/package.json" ] || [ ! -d "$ROOT/packages/coding-agent" ]; then
+    echo "INFO: Skipping REPI production runtime build (source workspace not present)"
+    return 0
+  fi
+
+  command -v npm >/dev/null 2>&1 || {
+    echo "npm is required to build the REPI production runtime" >&2
+    exit 1
+  }
+  tsgo="$ROOT/node_modules/.bin/tsgo"
+  if [ ! -x "$tsgo" ]; then
+    echo "missing TypeScript compiler at $tsgo; run npm install --ignore-scripts first" >&2
+    exit 1
+  fi
+  echo "INFO: Building REPI production runtime"
+  node "$ROOT/scripts/reverse-agent/mark-repi-runtime.mjs" "$ROOT" --invalidate
+  for relative in packages/tui packages/ai packages/agent packages/coding-agent; do
+    (cd "$ROOT/$relative" && npm run clean)
+  done
+  (cd "$ROOT/packages/tui" && "$tsgo" -p tsconfig.build.json)
+  (cd "$ROOT/packages/ai" && "$tsgo" -p tsconfig.build.json)
+  (cd "$ROOT/packages/agent" && "$tsgo" -p tsconfig.build.json)
+  (cd "$ROOT/packages/coding-agent" && npm run build)
+
+  for relative in \
+    packages/tui/dist/index.js \
+    packages/ai/dist/index.js \
+    packages/agent/dist/index.js \
+    packages/coding-agent/dist/cli.js \
+    packages/coding-agent/dist/modes/interactive/theme/dark.json \
+    packages/coding-agent/dist/modes/interactive/theme/light.json; do
+    if [ ! -f "$ROOT/$relative" ]; then
+      echo "REPI runtime build did not produce $relative" >&2
+      exit 1
+    fi
+  done
+  node "$ROOT/scripts/reverse-agent/mark-repi-runtime.mjs" "$ROOT"
+  if [ ! -f "$ROOT/packages/coding-agent/dist/repi-runtime.json" ]; then
+    echo "REPI runtime build did not produce packages/coding-agent/dist/repi-runtime.json" >&2
+    exit 1
+  fi
+  print_done_bar
+}
+
+build_repi_runtime
+
 shell_name() {
   basename "${SHELL:-}" 2>/dev/null || true
 }

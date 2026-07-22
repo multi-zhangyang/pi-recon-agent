@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 // Routing pin for opt #203. `buildRepairRollbackPolicyFromAutofix` (baseline
 // snapshot) and `writeAutofixRepairRollbackPolicy` (policy report) in
-// recon-profile.ts used bare non-atomic `writeFileSync` — a crash (SIGKILL/OOM)
+// failure-runtime.ts used bare non-atomic `writeFileSync` — a crash (SIGKILL/OOM)
 // mid-write left truncated JSON that readers silently skip, losing the
 // rollback baseline / policy. The fix routes both through `writePrivateTextFile`
 // (atomic temp+rename 0o600, the same helper the surrounding autofix state
@@ -19,12 +19,12 @@ import { describe, expect, it } from "vitest";
 // `writeFileSync(baselinePath` / `writeFileSync(reportPath` "absent" assertion
 // fails.
 describe("autofix repair-rollback writes are atomic (opt #203 routing pin)", () => {
-	const src = readFileSync(resolve(import.meta.dirname, "../src/core/recon-profile.ts"), "utf8");
+	const src = readFileSync(resolve(import.meta.dirname, "../src/core/repi/failure-runtime.ts"), "utf8");
 
 	it("writes the rollback baseline snapshot via writePrivateTextFile (not writeFileSync)", () => {
-		expect(src).toContain("writePrivateTextFile(\n\t\tbaselinePath,");
+		expect(src).toMatch(/writePrivateTextFile\(\s*baselinePath,/);
 		// The bare writeFileSync call at this site must be gone.
-		expect(src).not.toContain("writeFileSync(\n\t\tbaselinePath,");
+		expect(src).not.toMatch(/writeFileSync\(\s*baselinePath,/);
 	});
 
 	it("writes the rollback policy report via writePrivateTextFile (not writeFileSync)", () => {

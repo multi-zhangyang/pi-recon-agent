@@ -8,25 +8,32 @@ import {
 	type AssistantMessageEventStream,
 	type Context,
 	type Model,
+	mergeProviderHeaders,
 	type OAuthProviderInterface,
 	type OpenAICompletionsCompat,
 	type OpenAIResponsesCompat,
+	type ProviderHeaders,
 	registerApiProvider,
-	resetApiProviders,
+	registerBuiltInApiProviders,
 	type SimpleStreamOptions,
+	unregisterApiProviders,
 } from "@pi-recon/repi-ai";
-import { registerOAuthProvider, resetOAuthProviders } from "@pi-recon/repi-ai/oauth";
+import {
+	registerBuiltInOAuthProviders,
+	registerOAuthProvider,
+	unregisterOAuthProviders,
+} from "@pi-recon/repi-ai/oauth";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
-import { type Static, Type } from "typebox";
-import { Compile } from "typebox/compile";
-import type { TLocalizedValidationError } from "typebox/error";
 import { getAgentDir } from "../config.ts";
 import { warnDeprecation } from "../utils/deprecation.ts";
 import { stripJsonComments } from "../utils/json.ts";
 import { normalizePath } from "../utils/paths.ts";
 import type { AuthStatus, AuthStorage } from "./auth-storage.ts";
-import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.ts";
+import { formatModelConfigValidationPath, type ModelsJson, validateModelsConfig } from "./model-config.ts";
+import type { ModelRuntime } from "./model-runtime.ts";
+import type { ProviderConfigInput as RuntimeProviderConfigInput } from "./provider-composer.ts";
+import { getRepiEnvProviderConfig } from "./repi-env-provider.ts";
 import {
 	clearConfigValueCache,
 	getConfigValueEnvVarNames,
@@ -38,333 +45,19 @@ import {
 	resolveHeadersOrThrow,
 } from "./resolve-config-value.ts";
 
-// Schema for OpenRouter routing preferences
-const PercentileCutoffsSchema = Type.Object({
-	p50: Type.Optional(Type.Number()),
-	p75: Type.Optional(Type.Number()),
-	p90: Type.Optional(Type.Number()),
-	p99: Type.Optional(Type.Number()),
-});
+type ModelsConfig = ModelsJson;
 
-const OpenRouterRoutingSchema = Type.Object({
-	allow_fallbacks: Type.Optional(Type.Boolean()),
-	require_parameters: Type.Optional(Type.Boolean()),
-	data_collection: Type.Optional(Type.Union([Type.Literal("deny"), Type.Literal("allow")])),
-	zdr: Type.Optional(Type.Boolean()),
-	enforce_distillable_text: Type.Optional(Type.Boolean()),
-	order: Type.Optional(Type.Array(Type.String())),
-	only: Type.Optional(Type.Array(Type.String())),
-	ignore: Type.Optional(Type.Array(Type.String())),
-	quantizations: Type.Optional(Type.Array(Type.String())),
-	sort: Type.Optional(
-		Type.Union([
-			Type.String(),
-			Type.Object({
-				by: Type.Optional(Type.String()),
-				partition: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-			}),
-		]),
-	),
-	max_price: Type.Optional(
-		Type.Object({
-			prompt: Type.Optional(Type.Union([Type.Number(), Type.String()])),
-			completion: Type.Optional(Type.Union([Type.Number(), Type.String()])),
-			image: Type.Optional(Type.Union([Type.Number(), Type.String()])),
-			audio: Type.Optional(Type.Union([Type.Number(), Type.String()])),
-			request: Type.Optional(Type.Union([Type.Number(), Type.String()])),
-		}),
-	),
-	preferred_min_throughput: Type.Optional(Type.Union([Type.Number(), PercentileCutoffsSchema])),
-	preferred_max_latency: Type.Optional(Type.Union([Type.Number(), PercentileCutoffsSchema])),
-});
-
-// Schema for Vercel AI Gateway routing preferences
-const VercelGatewayRoutingSchema = Type.Object({
-	only: Type.Optional(Type.Array(Type.String())),
-	order: Type.Optional(Type.Array(Type.String())),
-});
-
-// Schema for thinking level support and provider-specific values
-const ThinkingLevelMapValueSchema = Type.Union([Type.String(), Type.Null()]);
-const ThinkingLevelMapSchema = Type.Object({
-	off: Type.Optional(ThinkingLevelMapValueSchema),
-	minimal: Type.Optional(ThinkingLevelMapValueSchema),
-	low: Type.Optional(ThinkingLevelMapValueSchema),
-	medium: Type.Optional(ThinkingLevelMapValueSchema),
-	high: Type.Optional(ThinkingLevelMapValueSchema),
-	xhigh: Type.Optional(ThinkingLevelMapValueSchema),
-});
-
-const OpenAICompletionsCompatSchema = Type.Object({
-	supportsStore: Type.Optional(Type.Boolean()),
-	supportsDeveloperRole: Type.Optional(Type.Boolean()),
-	supportsReasoningEffort: Type.Optional(Type.Boolean()),
-	supportsUsageInStreaming: Type.Optional(Type.Boolean()),
-	maxTokensField: Type.Optional(Type.Union([Type.Literal("max_completion_tokens"), Type.Literal("max_tokens")])),
-	requiresToolResultName: Type.Optional(Type.Boolean()),
-	requiresAssistantAfterToolResult: Type.Optional(Type.Boolean()),
-	requiresThinkingAsText: Type.Optional(Type.Boolean()),
-	requiresReasoningContentOnAssistantMessages: Type.Optional(Type.Boolean()),
-	thinkingFormat: Type.Optional(
-		Type.Union([
-			Type.Literal("openai"),
-			Type.Literal("openrouter"),
-			Type.Literal("together"),
-			Type.Literal("deepseek"),
-			Type.Literal("zai"),
-			Type.Literal("qwen"),
-			Type.Literal("qwen-chat-template"),
-		]),
-	),
-	cacheControlFormat: Type.Optional(Type.Literal("anthropic")),
-	openRouterRouting: Type.Optional(OpenRouterRoutingSchema),
-	vercelGatewayRouting: Type.Optional(VercelGatewayRoutingSchema),
-	supportsStrictMode: Type.Optional(Type.Boolean()),
-	supportsLongCacheRetention: Type.Optional(Type.Boolean()),
-});
-
-const OpenAIResponsesCompatSchema = Type.Object({
-	supportsStore: Type.Optional(Type.Boolean()),
-	supportsDeveloperRole: Type.Optional(Type.Boolean()),
-	sendSessionIdHeader: Type.Optional(Type.Boolean()),
-	supportsLongCacheRetention: Type.Optional(Type.Boolean()),
-});
-
-const AnthropicMessagesCompatSchema = Type.Object({
-	supportsEagerToolInputStreaming: Type.Optional(Type.Boolean()),
-	supportsLongCacheRetention: Type.Optional(Type.Boolean()),
-	sendSessionAffinityHeaders: Type.Optional(Type.Boolean()),
-	supportsCacheControlOnTools: Type.Optional(Type.Boolean()),
-	forceAdaptiveThinking: Type.Optional(Type.Boolean()),
-});
-
-const ProviderCompatSchema = Type.Union([
-	OpenAICompletionsCompatSchema,
-	OpenAIResponsesCompatSchema,
-	AnthropicMessagesCompatSchema,
-]);
-
-// Schema for custom model definition
-// Most fields are optional with sensible defaults for local models (Ollama, LM Studio, etc.)
-const ModelDefinitionSchema = Type.Object({
-	id: Type.String({ minLength: 1 }),
-	name: Type.Optional(Type.String({ minLength: 1 })),
-	api: Type.Optional(Type.String({ minLength: 1 })),
-	baseUrl: Type.Optional(Type.String({ minLength: 1 })),
-	reasoning: Type.Optional(Type.Boolean()),
-	thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
-	input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
-	cost: Type.Optional(
-		Type.Object({
-			input: Type.Number(),
-			output: Type.Number(),
-			cacheRead: Type.Number(),
-			cacheWrite: Type.Number(),
-		}),
-	),
-	contextWindow: Type.Optional(Type.Number()),
-	maxTokens: Type.Optional(Type.Number()),
-	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
-	compat: Type.Optional(ProviderCompatSchema),
-});
-
-// Schema for legacy per-model overrides. REPI keeps the schema only to surface a
-// precise migration error; runtime model catalogs are not loaded implicitly.
-const ModelOverrideSchema = Type.Object({
-	name: Type.Optional(Type.String({ minLength: 1 })),
-	reasoning: Type.Optional(Type.Boolean()),
-	thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
-	input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
-	cost: Type.Optional(
-		Type.Object({
-			input: Type.Optional(Type.Number()),
-			output: Type.Optional(Type.Number()),
-			cacheRead: Type.Optional(Type.Number()),
-			cacheWrite: Type.Optional(Type.Number()),
-		}),
-	),
-	contextWindow: Type.Optional(Type.Number()),
-	maxTokens: Type.Optional(Type.Number()),
-	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
-	compat: Type.Optional(ProviderCompatSchema),
-});
-
-type ModelOverride = Static<typeof ModelOverrideSchema>;
-
-const ProviderConfigSchema = Type.Object({
-	name: Type.Optional(Type.String({ minLength: 1 })),
-	baseUrl: Type.Optional(Type.String({ minLength: 1 })),
-	apiKey: Type.Optional(Type.String({ minLength: 1 })),
-	api: Type.Optional(Type.String({ minLength: 1 })),
-	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
-	compat: Type.Optional(ProviderCompatSchema),
-	authHeader: Type.Optional(Type.Boolean()),
-	models: Type.Optional(Type.Array(ModelDefinitionSchema)),
-	modelOverrides: Type.Optional(Type.Record(Type.String(), ModelOverrideSchema)),
-});
-
-const ModelsConfigSchema = Type.Object({
-	providers: Type.Record(Type.String(), ProviderConfigSchema),
-});
-
-const validateModelsConfig = Compile(ModelsConfigSchema);
-
-type ModelsConfig = Static<typeof ModelsConfigSchema>;
-
-function formatValidationPath(error: TLocalizedValidationError): string {
-	if (error.keyword === "required") {
-		const requiredProperties = (error.params as { requiredProperties?: string[] }).requiredProperties;
-		const requiredProperty = requiredProperties?.[0];
-		if (requiredProperty) {
-			const basePath = error.instancePath.replace(/^\//, "").replace(/\//g, ".");
-			return basePath ? `${basePath}.${requiredProperty}` : requiredProperty;
-		}
-	}
-	const path = error.instancePath.replace(/^\//, "").replace(/\//g, ".");
-	return path || "root";
-}
+let nextModelRegistrySourceId = 0;
 
 /** Provider request auth/headers resolved outside the static model metadata. */
 interface ProviderRequestConfig {
 	apiKey?: string;
-	headers?: Record<string, string>;
+	headers?: ProviderHeaders;
 	authHeader?: boolean;
 }
 
-const envModelApis = new Set<Api>(["openai-completions", "openai-responses", "anthropic-messages"]);
-const envModelApiAliases = new Set([
-	"openai-compatible",
-	"openai-chat",
-	"chat",
-	"chat-completions",
-	"openai-completions",
-	"response",
-	"responses",
-	"openai-response",
-	"openai-responses",
-	"anthropic",
-	"claude",
-	"anthropic-compatible",
-	"anthropic-messages",
-]);
-
-function normalizeEnvModelApi(value: string | undefined): Api {
-	const normalized = String(value ?? "openai-completions")
-		.trim()
-		.toLowerCase()
-		.replace(/_/g, "-");
-	if (["openai-compatible", "openai-chat", "chat", "chat-completions", "openai-completions"].includes(normalized)) {
-		return "openai-completions";
-	}
-	if (["response", "responses", "openai-response", "openai-responses"].includes(normalized)) {
-		return "openai-responses";
-	}
-	if (["anthropic", "claude", "anthropic-compatible", "anthropic-messages"].includes(normalized)) {
-		return "anthropic-messages";
-	}
-	return envModelApis.has(normalized as Api) ? (normalized as Api) : "openai-completions";
-}
-
-function invalidEnvModelApi(value: string | undefined): string | undefined {
-	if (!value?.trim()) return undefined;
-	const normalized = value.trim().toLowerCase().replace(/_/g, "-");
-	return envModelApiAliases.has(normalized) ? undefined : value;
-}
-
-function firstEnvValue(names: string[]): string | undefined {
-	for (const name of names) {
-		const value = process.env[name]?.trim();
-		if (value) return value;
-	}
-	return undefined;
-}
-
-function envInt(names: string[], fallback: number, min: number, max: number): number {
-	const value = firstEnvValue(names);
-	const parsed = value ? Number.parseInt(value, 10) : fallback;
-	if (!Number.isFinite(parsed)) return fallback;
-	return Math.max(min, Math.min(max, parsed));
-}
-
-function envBool(names: string[], fallback = false): boolean {
-	const value = firstEnvValue(names);
-	if (!value) return fallback;
-	if (/^(?:1|true|yes|y|on)$/i.test(value)) return true;
-	if (/^(?:0|false|no|n|off)$/i.test(value)) return false;
-	return fallback;
-}
-
-function envInputList(value: string | undefined): ("text" | "image")[] {
-	const items = (value || "text")
-		.split(",")
-		.map((item) => item.trim())
-		.filter((item): item is "text" | "image" => item === "text" || item === "image");
-	return items.length ? items : ["text"];
-}
-
-function envProviderId(): string {
-	return firstEnvValue(["REPI_PROVIDER", "REPI_MODEL_PROVIDER", "REPI_PROVIDER_ID"]) ?? "repi-env";
-}
-
 function repiEnvProviderConfig(): { providerName: string; config: ProviderConfigInput } | undefined {
-	const baseUrl = firstEnvValue(["REPI_BASE_URL", "REPI_MODEL_BASE_URL"]);
-	const primaryModel = firstEnvValue(["REPI_MODEL", "REPI_MODEL_ID"]);
-	if (!baseUrl || !primaryModel) return undefined;
-
-	const rawApi = firstEnvValue(["REPI_MODEL_API", "REPI_API"]);
-	const invalidApi = invalidEnvModelApi(rawApi);
-	if (invalidApi) {
-		throw new Error(
-			`invalid REPI_MODEL_API=${JSON.stringify(invalidApi)}; allowed openai-compatible|openai-responses|anthropic`,
-		);
-	}
-	const api = normalizeEnvModelApi(rawApi);
-	const apiKeyEnv = firstEnvValue(["REPI_AUTH_TOKEN"])
-		? "REPI_AUTH_TOKEN"
-		: firstEnvValue(["REPI_API_KEY"])
-			? "REPI_API_KEY"
-			: firstEnvValue(["REPI_MODEL_API_KEY"])
-				? "REPI_MODEL_API_KEY"
-				: "REPI_AUTH_TOKEN";
-	const modelIds = [primaryModel, firstEnvValue(["REPI_SUBAGENT_MODEL"])].filter(
-		(value, index, values): value is string => Boolean(value) && values.indexOf(value) === index,
-	);
-	const input = envInputList(firstEnvValue(["REPI_MODEL_INPUT", "REPI_INPUT"]));
-	const contextWindow = envInt(
-		[
-			"REPI_CONTEXT_WINDOW",
-			"REPI_MODEL_CONTEXT_WINDOW",
-			"REPI_AUTO_COMPACT_WINDOW",
-			"REPI_MODEL_AUTO_COMPACT_WINDOW",
-		],
-		262144,
-		1024,
-		1048576,
-	);
-	const maxTokens = envInt(["REPI_MAX_TOKENS", "REPI_MODEL_MAX_TOKENS", "REPI_MAX_OUTPUT_TOKENS"], 16384, 64, 131072);
-	const reasoning = envBool(["REPI_MODEL_REASONING", "REPI_REASONING"], false);
-	const providerName = envProviderId();
-	return {
-		providerName,
-		config: {
-			name: firstEnvValue(["REPI_PROVIDER_NAME", "REPI_MODEL_PROVIDER_NAME"]) ?? "REPI environment model",
-			baseUrl,
-			apiKey: `$${apiKeyEnv}`,
-			api,
-			models: modelIds.map((id) => ({
-				id,
-				name:
-					id === primaryModel
-						? (firstEnvValue(["REPI_MODEL_NAME"]) ?? id)
-						: (firstEnvValue(["REPI_SUBAGENT_MODEL_NAME"]) ?? id),
-				reasoning,
-				input,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				contextWindow,
-				maxTokens,
-			})),
-		},
-	};
+	return getRepiEnvProviderConfig();
 }
 
 function migrateLegacyRegisterProviderConfigValue(providerName: string, field: string, value: string): string {
@@ -378,11 +71,12 @@ function migrateLegacyRegisterProviderConfigValue(providerName: string, field: s
 function migrateLegacyRegisterProviderHeaders(
 	providerName: string,
 	field: string,
-	headers: Record<string, string> | undefined,
-): Record<string, string> | undefined {
+	headers: ProviderHeaders | undefined,
+): ProviderHeaders | undefined {
 	if (!headers) return undefined;
-	let migratedHeaders: Record<string, string> | undefined;
+	let migratedHeaders: ProviderHeaders | undefined;
 	for (const [key, value] of Object.entries(headers)) {
+		if (value === null) continue;
 		const migratedValue = migrateLegacyRegisterProviderConfigValue(providerName, `${field} header "${key}"`, value);
 		if (migratedValue === value) continue;
 		migratedHeaders ??= { ...headers };
@@ -442,7 +136,7 @@ export type ResolvedRequestAuth =
 	| {
 			ok: true;
 			apiKey?: string;
-			headers?: Record<string, string>;
+			headers?: ProviderHeaders;
 	  }
 	| {
 			ok: false;
@@ -461,7 +155,7 @@ function emptyCustomModelsResult(error?: string): CustomModelsResult {
 
 function mergeCompat(
 	baseCompat: Model<Api>["compat"],
-	overrideCompat: Model<Api>["compat"] | ModelOverride["compat"] | undefined,
+	overrideCompat: Model<Api>["compat"],
 ): Model<Api>["compat"] | undefined {
 	if (!overrideCompat) return baseCompat;
 
@@ -492,6 +186,21 @@ function mergeCompat(
 
 const defaultModelCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
+function toRuntimeProviderConfig(config: ProviderConfigInput): RuntimeProviderConfigInput {
+	return {
+		...config,
+		models: config.models?.map((model) => ({
+			...model,
+			name: model.name ?? model.id,
+			reasoning: model.reasoning ?? false,
+			input: model.input ?? ["text"],
+			cost: model.cost ?? defaultModelCost,
+			contextWindow: model.contextWindow ?? 128000,
+			maxTokens: model.maxTokens ?? 16384,
+		})),
+	};
+}
+
 /** Clear the config value command cache. Exported for testing. */
 export const clearApiKeyCache = clearConfigValueCache;
 
@@ -501,16 +210,30 @@ export const clearApiKeyCache = clearConfigValueCache;
 export class ModelRegistry {
 	private models: Model<Api>[] = [];
 	private providerRequestConfigs: Map<string, ProviderRequestConfig> = new Map();
-	private modelRequestHeaders: Map<string, Record<string, string>> = new Map();
+	private modelRequestHeaders: Map<string, ProviderHeaders> = new Map();
 	private registeredProviders: Map<string, ProviderConfigInput> = new Map();
 	private loadError: string | undefined = undefined;
 	readonly authStorage: AuthStorage;
 	private modelsJsonPath: string | undefined;
+	private readonly runtime: ModelRuntime | undefined;
+	private readonly globalRegistrationSource: string;
 
-	private constructor(authStorage: AuthStorage, modelsJsonPath: string | undefined) {
+	/**
+	 * Runtime-backed sessions can still receive an explicit model object from an
+	 * SDK caller that is not part of the runtime catalog (for example a faux/test
+	 * provider). Keep those models on the legacy AuthStorage/API-registry path;
+	 * known runtime providers use the canonical provider/auth path below.
+	 */
+	private hasRuntimeProvider(provider: string): boolean {
+		return this.runtime?.getProvider(provider) !== undefined;
+	}
+
+	private constructor(authStorage: AuthStorage, modelsJsonPath: string | undefined, runtime?: ModelRuntime) {
 		this.authStorage = authStorage;
 		this.modelsJsonPath = modelsJsonPath ? normalizePath(modelsJsonPath) : undefined;
-		this.loadModels();
+		this.runtime = runtime;
+		this.globalRegistrationSource = `coding-agent:model-registry:${++nextModelRegistrySourceId}`;
+		if (!runtime) this.loadModels();
 	}
 
 	static create(authStorage: AuthStorage, modelsJsonPath: string = join(getAgentDir(), "models.json")): ModelRegistry {
@@ -521,27 +244,41 @@ export class ModelRegistry {
 		return new ModelRegistry(authStorage, undefined);
 	}
 
+	/** Compatibility facade backed by the canonical ModelRuntime. */
+	static fromRuntime(authStorage: AuthStorage, runtime: ModelRuntime): ModelRegistry {
+		return new ModelRegistry(authStorage, undefined, runtime);
+	}
+
+	isBackedBy(runtime: ModelRuntime): boolean {
+		return this.runtime === runtime;
+	}
+
 	/**
 	 * Reload models from disk/env (explicit models.json + REPI_* env-only provider).
 	 */
-	refresh(): void {
+	refresh(): void | Promise<void> {
+		if (this.runtime) {
+			this.loadError = undefined;
+			return this.runtime.reloadConfig().catch((error) => {
+				this.loadError = error instanceof Error ? error.message : String(error);
+			});
+		}
 		this.providerRequestConfigs.clear();
 		this.modelRequestHeaders.clear();
 		this.loadError = undefined;
 
-		// Ensure dynamic API/OAuth registrations are rebuilt from current provider state.
-		resetApiProviders();
-		resetOAuthProviders();
+		// Rebuild only registrations owned by this instance. Other sessions and SDK
+		// registries share the process-level compatibility tables and must survive.
+		unregisterApiProviders(this.globalRegistrationSource);
+		unregisterOAuthProviders(this.globalRegistrationSource);
+		registerBuiltInApiProviders();
+		registerBuiltInOAuthProviders();
 
 		this.loadModels();
 
 		for (const [providerName, config] of this.registeredProviders.entries()) {
-			// opt #244: refresh() already resetApiProviders()/resetOAuthProviders()
-			// + cleared the config maps BEFORE this loop. Pre-fix one throwing
-			// applyProviderConfig aborted the loop: the global registries stayed
-			// wiped, this.models was only partially rebuilt, and every remaining
-			// registered provider was never reapplied — one bad extension
-			// provider poisoned ALL dynamic providers. Continue so the rest apply.
+			// One bad extension provider must not prevent the remaining registrations
+			// from being restored after this instance refreshes its owned layers.
 			try {
 				this.applyProviderConfig(providerName, config);
 			} catch (error) {
@@ -556,7 +293,10 @@ export class ModelRegistry {
 	 * Get any error from loading models.json (undefined if no error).
 	 */
 	getError(): string | undefined {
-		return this.loadError;
+		const runtimeError = this.runtime?.getError();
+		return (
+			[this.loadError, runtimeError].filter((error): error is string => Boolean(error)).join("\n\n") || undefined
+		);
 	}
 
 	private loadModels(): void {
@@ -627,7 +367,7 @@ export class ModelRegistry {
 				const errors =
 					validateModelsConfig
 						.Errors(parsed)
-						.map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
+						.map((error) => `  - ${formatModelConfigValidationPath(error)}: ${error.message}`)
 						.join("\n") || "Unknown schema error";
 				return emptyCustomModelsResult(`Invalid models.json schema:\n${errors}\n\nFile: ${modelsJsonPath}`);
 			}
@@ -656,16 +396,6 @@ export class ModelRegistry {
 		for (const [providerName, providerConfig] of Object.entries(config.providers)) {
 			const hasProviderApi = !!providerConfig.api;
 			const models = providerConfig.models ?? [];
-			const modelOverrideCount = providerConfig.modelOverrides
-				? Object.keys(providerConfig.modelOverrides).length
-				: 0;
-
-			if (modelOverrideCount > 0) {
-				throw new Error(
-					`Provider ${providerName}: "modelOverrides" targets a removed implicit model catalog. Define explicit "models" entries instead.`,
-				);
-			}
-
 			if (models.length === 0) {
 				throw new Error(
 					`Provider ${providerName}: must define explicit "models". REPI only loads env, models.json, and extension-registered models.`,
@@ -741,7 +471,7 @@ export class ModelRegistry {
 	 * If models.json had errors, returns the remaining loadable model sources.
 	 */
 	getAll(): Model<Api>[] {
-		return this.models;
+		return this.runtime ? [...this.runtime.getModels()] : this.models;
 	}
 
 	/**
@@ -749,14 +479,17 @@ export class ModelRegistry {
 	 * This is a fast check that doesn't refresh OAuth tokens.
 	 */
 	getAvailable(): Model<Api>[] {
-		return this.models.filter((m) => this.hasConfiguredAuth(m));
+		return this.getAll().filter((model) => this.hasConfiguredAuth(model));
 	}
 
 	/**
 	 * Find a model by provider and ID.
 	 */
 	find(provider: string, modelId: string): Model<Api> | undefined {
-		return this.models.find((m) => m.provider === provider && m.id === modelId);
+		return (
+			this.runtime?.getModel(provider, modelId) ??
+			this.models.find((m) => m.provider === provider && m.id === modelId)
+		);
 	}
 
 	/**
@@ -770,12 +503,15 @@ export class ModelRegistry {
 	 * base URL until the user reloads or switches models.
 	 */
 	resolveActiveModel<TApi extends Api>(model: Model<TApi>): Model<TApi> {
+		const runtimeModel = this.runtime?.getModel(model.provider, model.id);
+		if (runtimeModel) return runtimeModel as Model<TApi>;
 		const registeredModel = this.find(model.provider, model.id);
 		if (registeredModel) {
 			return registeredModel as Model<TApi>;
 		}
 
-		const providerConfig = this.registeredProviders.get(model.provider);
+		const providerConfig =
+			this.runtime?.getRegisteredProviderConfig(model.provider) ?? this.registeredProviders.get(model.provider);
 		if (!providerConfig) {
 			return model;
 		}
@@ -802,6 +538,21 @@ export class ModelRegistry {
 	 * Get API key for a model.
 	 */
 	hasConfiguredAuth(model: Model<Api>): boolean {
+		if (this.runtime && this.hasRuntimeProvider(model.provider)) {
+			const provider = this.runtime.getProvider(model.provider);
+			if (!provider) return false;
+			const runtimeStatus = this.runtime.getProviderAuthStatus(model.provider);
+			if (runtimeStatus.source === "runtime") return runtimeStatus.configured;
+			const directStatus = this.authStorage.getAuthStatus(model.provider, {
+				includeEnvironment: false,
+				includeFallback: false,
+			});
+			if (directStatus.source === "runtime") return Boolean(provider.auth.apiKey);
+			const credential = this.authStorage.get(model.provider);
+			if (credential?.type === "api_key") return Boolean(provider.auth.apiKey);
+			if (credential?.type === "oauth") return Boolean(provider.auth.oauth);
+			return this.runtime.hasConfiguredAuth(model.provider);
+		}
 		const providerApiKey = this.providerRequestConfigs.get(model.provider)?.apiKey;
 		return (
 			this.authStorage.hasAuth(model.provider, { includeEnvironment: false, includeFallback: false }) ||
@@ -817,7 +568,7 @@ export class ModelRegistry {
 		providerName: string,
 		config: {
 			apiKey?: string;
-			headers?: Record<string, string>;
+			headers?: ProviderHeaders;
 			authHeader?: boolean;
 		},
 	): void {
@@ -832,7 +583,7 @@ export class ModelRegistry {
 		});
 	}
 
-	private storeModelHeaders(providerName: string, modelId: string, headers?: Record<string, string>): void {
+	private storeModelHeaders(providerName: string, modelId: string, headers?: ProviderHeaders): void {
 		const key = this.getModelRequestKey(providerName, modelId);
 		if (!headers || Object.keys(headers).length === 0) {
 			this.modelRequestHeaders.delete(key);
@@ -846,6 +597,16 @@ export class ModelRegistry {
 	 */
 	async getApiKeyAndHeaders(model: Model<Api>): Promise<ResolvedRequestAuth> {
 		try {
+			if (this.runtime && this.hasRuntimeProvider(model.provider)) {
+				const runtimeModel = this.runtime.getModel(model.provider, model.id) ?? model;
+				const resolution = await this.runtime.getAuth(runtimeModel);
+				if (!resolution) return { ok: false, error: `No API key found for "${model.provider}"` };
+				return {
+					ok: true,
+					apiKey: resolution.auth.apiKey,
+					headers: resolution.auth.headers,
+				};
+			}
 			const providerConfig = this.providerRequestConfigs.get(model.provider);
 			const apiKeyFromAuthStorage = await this.authStorage.getApiKey(model.provider, {
 				includeEnvironment: false,
@@ -863,16 +624,13 @@ export class ModelRegistry {
 				`model "${model.provider}/${model.id}"`,
 			);
 
-			let headers =
-				model.headers || providerHeaders || modelHeaders
-					? { ...model.headers, ...providerHeaders, ...modelHeaders }
-					: undefined;
+			let headers = mergeProviderHeaders(model.headers, providerHeaders, modelHeaders);
 
 			if (providerConfig?.authHeader) {
 				if (!apiKey) {
 					return { ok: false, error: `No API key found for "${model.provider}"` };
 				}
-				headers = { ...headers, Authorization: `Bearer ${apiKey}` };
+				headers = mergeProviderHeaders(headers, { Authorization: `Bearer ${apiKey}` });
 			}
 
 			return {
@@ -893,6 +651,24 @@ export class ModelRegistry {
 	 * This intentionally does not execute command-backed config values.
 	 */
 	getProviderAuthStatus(provider: string): AuthStatus {
+		if (this.runtime && this.hasRuntimeProvider(provider)) {
+			const runtimeStatus = this.runtime.getProviderAuthStatus(provider);
+			const runtimeProvider = this.runtime.getProvider(provider);
+			if (!runtimeProvider) return runtimeStatus;
+			if (runtimeStatus.source === "runtime") return runtimeStatus;
+			const directStatus = this.authStorage.getAuthStatus(provider, {
+				includeEnvironment: false,
+				includeFallback: false,
+			});
+			if (directStatus.source === "runtime") {
+				return runtimeProvider.auth.apiKey ? directStatus : { configured: false };
+			}
+			const credential = this.authStorage.get(provider);
+			if (credential?.type === "api_key" && runtimeProvider.auth.apiKey) return directStatus;
+			if (credential?.type === "oauth" && runtimeProvider.auth.oauth) return directStatus;
+			if (credential) return { configured: false };
+			return runtimeStatus;
+		}
 		const authStatus = this.authStorage.getAuthStatus(provider, {
 			includeEnvironment: false,
 			includeFallback: false,
@@ -924,16 +700,12 @@ export class ModelRegistry {
 	 * Get display name for a provider.
 	 */
 	getProviderDisplayName(provider: string): string {
+		const runtimeProvider = this.runtime?.getProvider(provider);
+		if (runtimeProvider) return runtimeProvider.name;
 		const registeredProvider = this.registeredProviders.get(provider);
 		const oauthProvider = this.authStorage.getOAuthProviders().find((p) => p.id === provider);
 
-		return (
-			registeredProvider?.name ??
-			registeredProvider?.oauth?.name ??
-			oauthProvider?.name ??
-			BUILT_IN_PROVIDER_DISPLAY_NAMES[provider] ??
-			provider
-		);
+		return registeredProvider?.name ?? registeredProvider?.oauth?.name ?? oauthProvider?.name ?? provider;
 	}
 
 	/**
@@ -947,6 +719,9 @@ export class ModelRegistry {
 		// propagated to the caller as an unhandled rejection. Mirror the
 		// "resolution failed → undefined" contract the rest of the file uses.
 		try {
+			if (this.runtime && this.hasRuntimeProvider(provider)) {
+				return (await this.runtime.getAuth(provider))?.auth.apiKey;
+			}
 			const apiKey = await this.authStorage.getApiKey(provider, {
 				includeEnvironment: false,
 				includeFallback: false,
@@ -966,6 +741,7 @@ export class ModelRegistry {
 	 * Check if a model is using OAuth credentials (subscription).
 	 */
 	isUsingOAuth(model: Model<Api>): boolean {
+		if (this.runtime && this.hasRuntimeProvider(model.provider)) return this.runtime.isUsingOAuth(model.provider);
 		const cred = this.authStorage.get(model.provider);
 		return cred?.type === "oauth";
 	}
@@ -978,6 +754,13 @@ export class ModelRegistry {
 	 * If provider has oauth: registers OAuth provider for /login support.
 	 */
 	registerProvider(providerName: string, config: ProviderConfigInput): void {
+		if (this.runtime) {
+			this.runtime.registerProvider(
+				providerName,
+				toRuntimeProviderConfig(migrateLegacyRegisterProviderConfigValues(providerName, config)),
+			);
+			return;
+		}
 		const migratedConfig = migrateLegacyRegisterProviderConfigValues(providerName, config);
 		this.validateProviderConfig(providerName, migratedConfig);
 		this.applyProviderConfig(providerName, migratedConfig);
@@ -993,6 +776,10 @@ export class ModelRegistry {
 	 * Has no effect if the provider was never registered.
 	 */
 	unregisterProvider(providerName: string): void {
+		if (this.runtime) {
+			this.runtime.unregisterProvider(providerName);
+			return;
+		}
 		if (!this.registeredProviders.has(providerName)) return;
 		this.registeredProviders.delete(providerName);
 		this.refresh();
@@ -1037,8 +824,8 @@ export class ModelRegistry {
 
 		for (const modelDef of config.models) {
 			// Foundational opt #269: validate that modelDef.id is a non-empty
-			// string. The schema-validated models.json path (ModelDefinitionSchema)
-			// already requires `id: Type.String({ minLength: 1 })`, but the
+			// string. The schema-validated models.json path already requires a
+			// non-empty model id, but the
 			// extension registerProvider path flows through THIS validator only —
 			// it previously checked only `api`. A model with `id: undefined` (an
 			// extension that forgot the field) or `id: 123` (typed wrong) entered
@@ -1078,7 +865,7 @@ export class ModelRegistry {
 				...config.oauth,
 				id: providerName,
 			};
-			registerOAuthProvider(oauthProvider);
+			registerOAuthProvider(oauthProvider, this.globalRegistrationSource);
 		}
 
 		if (config.streamSimple) {
@@ -1089,7 +876,7 @@ export class ModelRegistry {
 					stream: (model, context, options) => streamSimple(model, context, options as SimpleStreamOptions),
 					streamSimple,
 				},
-				`provider:${providerName}`,
+				this.globalRegistrationSource,
 			);
 		}
 
@@ -1158,7 +945,7 @@ export interface ProviderConfigInput {
 	/** Provider-level compatibility metadata. Model-level compat overrides these fields. */
 	compat?: Model<Api>["compat"];
 	streamSimple?: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
-	headers?: Record<string, string>;
+	headers?: ProviderHeaders;
 	authHeader?: boolean;
 	/** OAuth provider for /login support */
 	oauth?: Omit<OAuthProviderInterface, "id">;
@@ -1173,7 +960,7 @@ export interface ProviderConfigInput {
 		cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
 		contextWindow?: number;
 		maxTokens?: number;
-		headers?: Record<string, string>;
+		headers?: ProviderHeaders;
 		compat?: Model<Api>["compat"];
 	}>;
 }

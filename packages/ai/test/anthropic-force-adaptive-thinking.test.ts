@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { getModel } from "../src/models.ts";
 import { streamSimple } from "../src/stream.ts";
 import type { Context, Model, SimpleStreamOptions } from "../src/types.ts";
 
@@ -83,11 +82,8 @@ describe("Anthropic forceAdaptiveThinking compat override", () => {
 		expect(payload.output_config).toEqual({ effort: "medium" });
 	});
 
-	it("allows built-in adaptive models to opt out with compat.forceAdaptiveThinking false", async () => {
-		const model: Model<"anthropic-messages"> = {
-			...getModel("anthropic", "claude-opus-4-8"),
-			compat: { forceAdaptiveThinking: false },
-		};
+	it("allows explicitly configured adaptive models to opt out with compat.forceAdaptiveThinking false", async () => {
+		const model = makeCustomModel({ forceAdaptiveThinking: false });
 		const payload = await capturePayload(model, { reasoning: "medium" });
 
 		expect(payload.thinking?.type).toBe("enabled");

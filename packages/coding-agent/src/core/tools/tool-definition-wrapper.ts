@@ -13,6 +13,8 @@ export function wrapToolDefinition<TDetails = unknown>(
 		parameters: definition.parameters,
 		prepareArguments: definition.prepareArguments,
 		executionMode: definition.executionMode,
+		readOnly: definition.readOnly,
+		readOnlyProbeCovers: definition.readOnlyProbeCovers,
 		execute: (toolCallId, params, signal, onUpdate) =>
 			definition.execute(toolCallId, params, signal, onUpdate, ctxFactory?.() as ExtensionContext),
 	};
@@ -40,6 +42,8 @@ export function createToolDefinitionFromAgentTool(tool: AgentTool<any>): ToolDef
 		parameters: tool.parameters as any,
 		prepareArguments: tool.prepareArguments,
 		executionMode: tool.executionMode,
+		readOnly: tool.readOnly,
+		readOnlyProbeCovers: tool.readOnlyProbeCovers,
 		execute: async (toolCallId, params, signal, onUpdate) => tool.execute(toolCallId, params, signal, onUpdate),
 	};
 }

@@ -12,8 +12,8 @@ import {
 	Text,
 } from "@pi-recon/repi-tui";
 import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
+import { getSelectListTheme, getSettingsListTheme, theme } from "../../../core/presentation/theme-runtime.ts";
 import type { WarningSettings } from "../../../core/settings-manager.ts";
-import { getSelectListTheme, getSettingsListTheme, theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyDisplayText } from "./keybinding-hints.ts";
 
@@ -47,6 +47,7 @@ export interface SettingsConfig {
 	currentTheme: string;
 	availableThemes: string[];
 	hideThinkingBlock: boolean;
+	showCacheMissNotices: boolean;
 	collapseChangelog: boolean;
 	enableInstallTelemetry: boolean;
 	doubleEscapeAction: "fork" | "tree" | "none";
@@ -75,6 +76,7 @@ export interface SettingsCallbacks {
 	onThemeChange: (theme: string) => void;
 	onThemePreview?: (theme: string) => void;
 	onHideThinkingBlockChange: (hidden: boolean) => void;
+	onShowCacheMissNoticesChange: (shown: boolean) => void;
 	onCollapseChangelogChange: (collapsed: boolean) => void;
 	onEnableInstallTelemetryChange: (enabled: boolean) => void;
 	onDoubleEscapeActionChange: (action: "fork" | "tree" | "none") => void;
@@ -254,6 +256,13 @@ export class SettingsSelectorComponent extends Container {
 				label: "Hide thinking",
 				description: "Hide thinking blocks in assistant responses",
 				currentValue: config.hideThinkingBlock ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
+				id: "cache-miss-notices",
+				label: "Cache miss notices",
+				description: "Show transcript notices for significant prompt-cache misses",
+				currentValue: config.showCacheMissNotices ? "true" : "false",
 				values: ["true", "false"],
 			},
 			{
@@ -502,6 +511,9 @@ export class SettingsSelectorComponent extends Container {
 					}
 					case "hide-thinking":
 						callbacks.onHideThinkingBlockChange(newValue === "true");
+						break;
+					case "cache-miss-notices":
+						callbacks.onShowCacheMissNoticesChange(newValue === "true");
 						break;
 					case "collapse-changelog":
 						callbacks.onCollapseChangelogChange(newValue === "true");

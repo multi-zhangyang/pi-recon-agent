@@ -18,10 +18,10 @@ import { UserMessageSelectorComponent } from "../src/modes/interactive/component
 //    component. Fix: track the timer + clearTimeout in dispose (added dispose
 //    override calling super.dispose() so child propagation is preserved).
 //
-// armin/daxnuts `setInterval(...).unref()` additions (defense-in-depth: a
-// missed dispose can't keep the event loop alive) are NOT per-site tested —
-// `.unref()` is a no-op semantically and the pattern is already proven by opt
-// #47's bash interval. The two tests below cover the two observable gaps.
+// The armin `setInterval(...).unref()` addition (defense-in-depth: a missed
+// dispose can't keep the event loop alive) is not per-site tested — `.unref()`
+// is a no-op semantically and the pattern is already proven by opt #47's bash
+// interval. The two tests below cover the two observable gaps.
 
 describe("BorderedLoader.dispose aborts the non-cancellable signal (opt #152)", () => {
 	it("dispose() aborts signalController so an awaiter resolves instead of hanging", () => {

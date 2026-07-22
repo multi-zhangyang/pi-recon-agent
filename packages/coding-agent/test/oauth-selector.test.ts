@@ -2,10 +2,9 @@ import { setKeybindings } from "@pi-recon/repi-tui";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
-import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "../src/core/provider-display-names.ts";
+import { initTheme } from "../src/core/presentation/theme-runtime.ts";
 import { OAuthSelectorComponent } from "../src/modes/interactive/components/oauth-selector.ts";
 import { isApiKeyLoginProvider } from "../src/modes/interactive/interactive-mode.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
@@ -27,17 +26,13 @@ describe("OAuthSelectorComponent", () => {
 		}
 	});
 
-	it("keeps built-in API key providers separate from OAuth-only providers", () => {
-		const oauthProviderIds = new Set(["anthropic", "github-copilot", "custom-oauth"]);
-		const builtInProviderIds = new Set(["anthropic", "github-copilot", "amazon-bedrock", "openai"]);
+	it("derives API-key login providers from runtime OAuth registration", () => {
+		const oauthProviderIds = new Set(["subscription-provider", "custom-oauth"]);
 
-		expect(isApiKeyLoginProvider("anthropic", oauthProviderIds, builtInProviderIds)).toBe(true);
-		expect(BUILT_IN_PROVIDER_DISPLAY_NAMES.anthropic).toBe("Anthropic");
-		expect(isApiKeyLoginProvider("openai", oauthProviderIds, builtInProviderIds)).toBe(true);
-		expect(isApiKeyLoginProvider("github-copilot", oauthProviderIds, builtInProviderIds)).toBe(false);
-		expect(isApiKeyLoginProvider("amazon-bedrock", oauthProviderIds, builtInProviderIds)).toBe(true);
-		expect(isApiKeyLoginProvider("custom-oauth", oauthProviderIds, builtInProviderIds)).toBe(false);
-		expect(isApiKeyLoginProvider("custom-api", oauthProviderIds, builtInProviderIds)).toBe(true);
+		expect(isApiKeyLoginProvider("subscription-provider", oauthProviderIds)).toBe(false);
+		expect(isApiKeyLoginProvider("custom-oauth", oauthProviderIds)).toBe(false);
+		expect(isApiKeyLoginProvider("custom-api", oauthProviderIds)).toBe(true);
+		expect(isApiKeyLoginProvider("local-gateway", oauthProviderIds)).toBe(true);
 	});
 
 	it("shows stored OAuth auth distinctly in the API key selector", () => {

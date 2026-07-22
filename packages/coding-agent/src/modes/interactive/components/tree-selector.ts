@@ -9,8 +9,8 @@ import {
 	TruncatedText,
 	truncateToWidth,
 } from "@pi-recon/repi-tui";
+import { theme } from "../../../core/presentation/theme-runtime.ts";
 import type { SessionTreeNode } from "../../../core/session-manager.ts";
-import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint, keyText } from "./keybinding-hints.ts";
 

@@ -4,9 +4,6 @@ import type { AgentTool } from "@pi-recon/repi-agent-core";
 import { Container, Text, truncateToWidth } from "@pi-recon/repi-tui";
 import { spawn } from "child_process";
 import { type Static, Type } from "typebox";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
-import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.ts";
-import { theme } from "../../modes/interactive/theme/theme.ts";
 import { waitForChildProcess } from "../../utils/child-process.ts";
 import {
 	getShellConfig,
@@ -16,6 +13,10 @@ import {
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
+import { themedKeyHint } from "../presentation/keybinding-hints.ts";
+import type { Theme } from "../presentation/theme.ts";
+import { truncateToVisualLines } from "../presentation/visual-truncate.ts";
+import { missionScopedEnvironment } from "../repi/session-scope.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { getTextOutput, invalidArgText, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -160,7 +161,8 @@ export interface BashSpawnContext {
 export type BashSpawnHook = (context: BashSpawnContext) => BashSpawnContext;
 
 function resolveSpawnContext(command: string, cwd: string, spawnHook?: BashSpawnHook): BashSpawnContext {
-	const baseContext: BashSpawnContext = { command, cwd, env: { ...getShellEnv() } };
+	const env = missionScopedEnvironment(getShellEnv());
+	const baseContext: BashSpawnContext = { command, cwd, env };
 	return spawnHook ? spawnHook(baseContext) : baseContext;
 }
 
@@ -202,7 +204,7 @@ function formatDuration(ms: number): string {
 	return `${(ms / 1000).toFixed(1)}s`;
 }
 
-function formatBashCall(args: { command?: string; timeout?: number } | undefined): string {
+function formatBashCall(args: { command?: string; timeout?: number } | undefined, theme: Theme): string {
 	const command = str(args?.command);
 	const timeout = args?.timeout as number | undefined;
 	const timeoutSuffix = timeout ? theme.fg("muted", ` (timeout ${timeout}s)`) : "";
@@ -220,6 +222,7 @@ function rebuildBashResultRenderComponent(
 	showImages: boolean,
 	startedAt: number | undefined,
 	endedAt: number | undefined,
+	theme: Theme,
 ): void {
 	const state = component.state;
 	component.clear();
@@ -254,7 +257,7 @@ function rebuildBashResultRenderComponent(
 					if (state.cachedSkipped && state.cachedSkipped > 0) {
 						const hint =
 							theme.fg("muted", `... (${state.cachedSkipped} earlier lines,`) +
-							` ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+							` ${themedKeyHint(theme, "app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 						return ["", truncateToWidth(hint, width, "..."), ...(state.cachedLines ?? [])];
 					}
 					return ["", ...(state.cachedLines ?? [])];
@@ -459,17 +462,17 @@ export function createBashToolDefinition(
 				clearUpdateTimer();
 			}
 		},
-		renderCall(args, _theme, context) {
+		renderCall(args, theme, context) {
 			const state = context.state;
 			if (context.executionStarted && state.startedAt === undefined) {
 				state.startedAt = Date.now();
 				state.endedAt = undefined;
 			}
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			text.setText(formatBashCall(args));
+			text.setText(formatBashCall(args, theme));
 			return text;
 		},
-		renderResult(result, options, _theme, context) {
+		renderResult(result, options, theme, context) {
 			const state = context.state;
 			if (state.startedAt !== undefined && options.isPartial && !state.interval) {
 				const interval = setInterval(() => context.invalidate(), 1000);
@@ -498,6 +501,7 @@ export function createBashToolDefinition(
 				context.showImages,
 				state.startedAt,
 				state.endedAt,
+				theme,
 			);
 			component.invalidate();
 			return component;

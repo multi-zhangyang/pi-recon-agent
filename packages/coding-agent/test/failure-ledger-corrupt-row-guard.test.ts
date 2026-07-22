@@ -1,4 +1,4 @@
-import { rmSync, writeFileSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -8,7 +8,12 @@ import {
 	readRuntimeFailureLedgerRows,
 	readRuntimeRepairQueueRows,
 } from "../src/core/recon-profile.ts";
-import { ensureRepiStorage, runtimeFailureLedgerPath, runtimeRepairQueuePath } from "../src/core/repi/storage.ts";
+import {
+	ensureRepiStorage,
+	runtimeFailureLedgerPath,
+	runtimeRepairQueuePath,
+	writePrivateTextFile,
+} from "../src/core/repi/storage.ts";
 
 // Regression guard for opt #51: the runtime failure + repair ledger readers previously
 // validated only `row?.signature && row?.id` / `row?.repairId && row?.signature`. The
@@ -90,7 +95,7 @@ describe("runtime failure/repair ledger corrupt-row guards (opt #51)", () => {
 		agentDir = join(tempDir, "agent");
 		previousAgentDir = process.env[ENV_AGENT_DIR];
 		process.env[ENV_AGENT_DIR] = agentDir;
-		// Create the recon/evidence/{failures,repairs} dir tree the ledger paths resolve into.
+		// Runtime state is lazy; the shared writer creates each ledger's parent on first use.
 		ensureRepiStorage();
 	});
 
@@ -135,10 +140,9 @@ describe("runtime failure/repair ledger corrupt-row guards (opt #51)", () => {
 		// A line that doesn't even parse is still dropped (unchanged behavior).
 		const unparseable = "{not json";
 
-		writeFileSync(
+		writePrivateTextFile(
 			runtimeFailureLedgerPath(),
 			`${[corruptMissingTs, corruptMissingBudget, corruptMissingFailedChecks, JSON.stringify(valid), unparseable].join("\n")}\n`,
-			{ encoding: "utf-8", mode: 0o600 },
 		);
 
 		const rows = readRuntimeFailureLedgerRows();
@@ -170,10 +174,9 @@ describe("runtime failure/repair ledger corrupt-row guards (opt #51)", () => {
 			expectedChecks: [],
 		});
 
-		writeFileSync(
+		writePrivateTextFile(
 			runtimeRepairQueuePath(),
 			`${[corruptMissingCommands, corruptMissingExpectedChecks, corruptMissingPaused, JSON.stringify(valid)].join("\n")}\n`,
-			{ encoding: "utf-8", mode: 0o600 },
 		);
 
 		const rows = readRuntimeRepairQueueRows();
@@ -202,17 +205,13 @@ describe("runtime failure/repair ledger corrupt-row guards (opt #51)", () => {
 			failedChecks: [],
 		});
 
-		writeFileSync(
+		writePrivateTextFile(
 			runtimeFailureLedgerPath(),
 			`${[corruptMissingTs, corruptMissingBudget, JSON.stringify(valid)].join("\n")}\n`,
-			{ encoding: "utf-8", mode: 0o600 },
 		);
 		// A valid repair referencing the valid failure's signature so the repair-queue map
 		// path is exercised too.
-		writeFileSync(runtimeRepairQueuePath(), `${[JSON.stringify(makeRepair("sig-valid"))].join("\n")}\n`, {
-			encoding: "utf-8",
-			mode: 0o600,
-		});
+		writePrivateTextFile(runtimeRepairQueuePath(), `${JSON.stringify(makeRepair("sig-valid"))}\n`);
 
 		// Must not throw — the corrupt rows are dropped at the read boundary, so the sort's
 		// `right.ts.localeCompare(...)` and `left.budget.remainingAttempts` never see undefined.

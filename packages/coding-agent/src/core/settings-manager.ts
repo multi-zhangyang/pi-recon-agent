@@ -1,3 +1,7 @@
+import {
+	DEFAULT_COMPACTION_SETTINGS,
+	type CompactionSettings as RuntimeCompactionSettings,
+} from "@pi-recon/repi-agent-core";
 import type { Transport } from "@pi-recon/repi-ai";
 import { existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
@@ -7,13 +11,7 @@ import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import { atomicWriteFileSync } from "./tools/atomic-write.ts";
 
-export interface CompactionSettings {
-	enabled?: boolean; // default: true
-	reserveTokens?: number; // default: 16384
-	keepRecentTokens?: number; // default: 36000
-	triggerPercent?: number; // default: 85; compact when context reaches this percentage of contextWindow
-	warningPercent?: number; // default: 80; UI/docs warning threshold for long-running harnesses
-}
+export type CompactionSettings = Partial<RuntimeCompactionSettings>;
 
 export interface BranchSummarySettings {
 	reserveTokens?: number; // default: 16384 (tokens reserved for prompt + LLM response)
@@ -90,6 +88,7 @@ export interface Settings {
 	branchSummary?: BranchSummarySettings;
 	retry?: RetrySettings;
 	hideThinkingBlock?: boolean;
+	showCacheMissNotices?: boolean; // default: false
 	shellPath?: string; // Custom shell path (e.g., for Cygwin users on Windows)
 	quietStartup?: boolean;
 	shellCommandPrefix?: string; // Prefix prepended to every bash command (e.g., "shopt -s expand_aliases" for alias support)
@@ -755,7 +754,7 @@ export class SettingsManager {
 	}
 
 	getCompactionEnabled(): boolean {
-		return this.settings.compaction?.enabled ?? true;
+		return this.settings.compaction?.enabled ?? DEFAULT_COMPACTION_SETTINGS.enabled;
 	}
 
 	setCompactionEnabled(enabled: boolean): void {
@@ -768,21 +767,21 @@ export class SettingsManager {
 	}
 
 	getCompactionReserveTokens(): number {
-		return this.settings.compaction?.reserveTokens ?? 16384;
+		return this.settings.compaction?.reserveTokens ?? DEFAULT_COMPACTION_SETTINGS.reserveTokens;
 	}
 
 	getCompactionKeepRecentTokens(): number {
-		return this.settings.compaction?.keepRecentTokens ?? 36000;
+		return this.settings.compaction?.keepRecentTokens ?? DEFAULT_COMPACTION_SETTINGS.keepRecentTokens;
 	}
 
 	getCompactionTriggerPercent(): number | undefined {
 		const value = this.settings.compaction?.triggerPercent;
-		return typeof value === "number" && value > 0 && value < 100 ? value : 85;
+		return typeof value === "number" && value > 0 && value < 100 ? value : DEFAULT_COMPACTION_SETTINGS.triggerPercent;
 	}
 
 	getCompactionWarningPercent(): number | undefined {
 		const value = this.settings.compaction?.warningPercent;
-		return typeof value === "number" && value > 0 && value < 100 ? value : 80;
+		return typeof value === "number" && value > 0 && value < 100 ? value : DEFAULT_COMPACTION_SETTINGS.warningPercent;
 	}
 
 	getCompactionSettings(): {
@@ -862,14 +861,25 @@ export class SettingsManager {
 		return this.settings.hideThinkingBlock ?? false;
 	}
 
+	getShowCacheMissNotices(): boolean {
+		return this.settings.showCacheMissNotices ?? false;
+	}
+
 	setHideThinkingBlock(hide: boolean): void {
 		this.globalSettings.hideThinkingBlock = hide;
 		this.markModified("hideThinkingBlock");
 		this.save();
 	}
 
+	setShowCacheMissNotices(show: boolean): void {
+		this.globalSettings.showCacheMissNotices = show;
+		this.markModified("showCacheMissNotices");
+		this.save();
+	}
+
 	getShellPath(): string | undefined {
-		return this.settings.shellPath;
+		const shellPath = this.settings.shellPath;
+		return shellPath ? normalizePath(shellPath) : shellPath;
 	}
 
 	setShellPath(path: string | undefined): void {

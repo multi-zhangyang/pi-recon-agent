@@ -12,8 +12,12 @@ name: "re_delegate"
 name: "re_swarm"
 name: "re_operator"
 function buildDelegate() {}
-function runSwarm() {}
 function dispatchOperatorQueue() {}
+createSwarmSupervisorRuntime({})
+`;
+
+const SWARM_RUNTIME_MARKERS = `
+function runSwarm() {}
 `;
 
 const FAKE_REPI = String.raw`#!/usr/bin/env node
@@ -23,8 +27,6 @@ if (parallel) {
 	console.log(parallel[0]);
 } else if (args.includes("model list")) {
 	console.log("repi-model-list-report");
-} else if (args.includes("memory doctor")) {
-	console.log("repi-memory-doctor-report");
 } else if (args.includes("bugreport")) {
 	console.log("repi-bugreport");
 } else if (args.includes("swarm plan")) {
@@ -33,39 +35,8 @@ if (parallel) {
 	console.log("REPI_MODEL_OK");
 } else if (args.includes("REPI_TOOL_OK")) {
 	console.log("REPI_TOOL_OK");
-} else if (args.includes("YES or NO")) {
-	console.log("NO");
 } else if (args.includes("/re-swarm")) {
 	console.log("re_swarm worker ok");
-} else {
-	console.log("ok");
-}
-`;
-
-const FAKE_REPI_MEMORY_SECRET_WARN = String.raw`#!/usr/bin/env node
-const args = process.argv.slice(2).join(" ");
-const parallel = args.match(/REPI_PARALLEL_WORKER_(\d+)_OK/);
-if (parallel) {
-	console.log(parallel[0]);
-} else if (args.includes("model list")) {
-	console.log("repi-model-list-report");
-} else if (args.includes("memory doctor")) {
-	console.log(JSON.stringify({
-		kind: "repi-memory-doctor-report",
-		ok: false,
-		diagnostics: [{ level: "fail", id: "memory-secret-scan", message: "local memory needs sanitize" }]
-	}));
-	process.exit(1);
-} else if (args.includes("bugreport")) {
-	console.log("repi-bugreport");
-} else if (args.includes("swarm plan")) {
-	console.log("SwarmPlannerV1");
-} else if (args.includes("REPI_MODEL_OK")) {
-	console.log("REPI_MODEL_OK");
-} else if (args.includes("REPI_TOOL_OK")) {
-	console.log("REPI_TOOL_OK");
-} else if (args.includes("YES or NO")) {
-	console.log("NO");
 } else {
 	console.log("ok");
 }
@@ -83,15 +54,12 @@ if (parallel) {
 } else if (args === "doctor" && !fs.existsSync(fixedPath)) {
 	console.log("REPI Doctor");
 	console.log("FAIL runtime:settings :: settings=/tmp/fresh/settings.json");
-	console.log("FAIL memory:scoped-defaults :: memory={}");
 	process.exit(1);
 } else if (args === "doctor --fix --json") {
 	fs.writeFileSync(fixedPath, "1");
-	console.log(JSON.stringify({ kind: "repi-doctor-report", ok: true, fixActions: [{ id: "profile-init", exit: 0 }], checks: [{ id: "runtime:settings", status: "pass" }, { id: "memory:scoped-defaults", status: "pass" }] }));
+	console.log(JSON.stringify({ kind: "repi-doctor-report", ok: true, fixActions: [{ id: "profile-init", exit: 0 }], checks: [{ id: "runtime:settings", status: "pass" }] }));
 } else if (args.includes("model list")) {
 	console.log("repi-model-list-report");
-} else if (args.includes("memory doctor")) {
-	console.log("repi-memory-doctor-report");
 } else if (args.includes("bugreport")) {
 	console.log("repi-bugreport");
 } else if (args.includes("swarm plan")) {
@@ -100,8 +68,6 @@ if (parallel) {
 	console.log("REPI_MODEL_OK");
 } else if (args.includes("REPI_TOOL_OK")) {
 	console.log("REPI_TOOL_OK");
-} else if (args.includes("YES or NO")) {
-	console.log("NO");
 } else {
 	console.log("ok");
 }
@@ -122,12 +88,16 @@ describe("repi-selfcheck --deep temporary profile cleanup", () => {
 		const fakeRepo = join(tempRoot, "repo");
 		const fakeTmp = join(tempRoot, "tmp");
 		const sourceAgentDir = join(tempRoot, "source-agent");
-		mkdirSync(join(fakeRepo, "packages", "coding-agent", "src", "core"), { recursive: true });
+		mkdirSync(join(fakeRepo, "packages", "coding-agent", "src", "core", "repi"), { recursive: true });
 		mkdirSync(fakeTmp, { recursive: true });
 		mkdirSync(sourceAgentDir, { recursive: true });
 		writeFileSync(
 			join(fakeRepo, "packages", "coding-agent", "src", "core", "recon-profile.ts"),
 			RECON_PROFILE_MARKERS,
+		);
+		writeFileSync(
+			join(fakeRepo, "packages", "coding-agent", "src", "core", "repi", "swarm-supervisor-runtime.ts"),
+			SWARM_RUNTIME_MARKERS,
 		);
 		writeFileSync(join(sourceAgentDir, "models.json"), "{}\n");
 		const fakeRepiPath = join(fakeRepo, "repi");
@@ -154,12 +124,16 @@ describe("repi-selfcheck --deep temporary profile cleanup", () => {
 		const fakeRepo = join(tempRoot, "repo");
 		const sourceAgentDir = join(tempRoot, "source-agent");
 		const stateDir = join(tempRoot, "state");
-		mkdirSync(join(fakeRepo, "packages", "coding-agent", "src", "core"), { recursive: true });
+		mkdirSync(join(fakeRepo, "packages", "coding-agent", "src", "core", "repi"), { recursive: true });
 		mkdirSync(sourceAgentDir, { recursive: true });
 		mkdirSync(stateDir, { recursive: true });
 		writeFileSync(
 			join(fakeRepo, "packages", "coding-agent", "src", "core", "recon-profile.ts"),
 			RECON_PROFILE_MARKERS,
+		);
+		writeFileSync(
+			join(fakeRepo, "packages", "coding-agent", "src", "core", "repi", "swarm-supervisor-runtime.ts"),
+			SWARM_RUNTIME_MARKERS,
 		);
 		const fakeRepiPath = join(fakeRepo, "repi");
 		writeFileSync(fakeRepiPath, FAKE_REPI_FRESH_PROFILE);
@@ -195,63 +169,42 @@ describe("repi-selfcheck --deep temporary profile cleanup", () => {
 		expect(report.warnings.some((row) => row.warning === "fresh-profile-bootstrap-required")).toBe(true);
 	});
 
-	it("downgrades existing memory secret-scan drift to a selfcheck warning unless strict memory is requested", () => {
-		const fakeRepo = join(tempRoot, "repo");
-		const sourceAgentDir = join(tempRoot, "source-agent");
-		mkdirSync(join(fakeRepo, "packages", "coding-agent", "src", "core"), { recursive: true });
+	it("keeps --offline structural and skips model/worker probes", () => {
+		const fakeRepo = join(tempRoot, "offline-repo");
+		const sourceAgentDir = join(tempRoot, "offline-source-agent");
+		mkdirSync(join(fakeRepo, "packages", "coding-agent", "src", "core", "repi"), { recursive: true });
 		mkdirSync(sourceAgentDir, { recursive: true });
 		writeFileSync(
 			join(fakeRepo, "packages", "coding-agent", "src", "core", "recon-profile.ts"),
 			RECON_PROFILE_MARKERS,
 		);
+		writeFileSync(
+			join(fakeRepo, "packages", "coding-agent", "src", "core", "repi", "swarm-supervisor-runtime.ts"),
+			SWARM_RUNTIME_MARKERS,
+		);
 		const fakeRepiPath = join(fakeRepo, "repi");
-		writeFileSync(fakeRepiPath, FAKE_REPI_MEMORY_SECRET_WARN);
+		writeFileSync(fakeRepiPath, FAKE_REPI);
 		chmodSync(fakeRepiPath, 0o755);
 
-		const result = spawnSync(
-			process.execPath,
-			[SELFCHECK, fakeRepo, "--provider=kimchi", "--model=kimi-k2.7", "--json", "--timeout-ms=1000"],
-			{
-				encoding: "utf8",
-				env: {
-					...process.env,
-					REPI_CODING_AGENT_DIR: sourceAgentDir,
-				},
-				timeout: 10_000,
-			},
-		);
+		const result = spawnSync(process.execPath, [SELFCHECK, fakeRepo, "--offline", "--json", "--timeout-ms", "1000"], {
+			encoding: "utf8",
+			env: { ...process.env, REPI_CODING_AGENT_DIR: sourceAgentDir },
+			timeout: 10_000,
+		});
 
 		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
 		const report = JSON.parse(result.stdout) as {
 			ok: boolean;
-			provider: string;
-			model: string;
-			warnings: Array<{ id: string; severity: string; warning: string }>;
-			rows: Array<{ id: string; ok: boolean; severity?: string; warning?: string }>;
+			offline: boolean;
+			rows: Array<{ id: string; skipped?: boolean }>;
 		};
 		expect(report.ok).toBe(true);
-		expect(report.provider).toBe("kimchi");
-		expect(report.model).toBe("kimi-k2.7");
-		expect(report.rows.find((row) => row.id === "memory-doctor")).toMatchObject({
-			ok: true,
-			severity: "warn",
-			warning: "memory-secret-scan",
-		});
-		expect(report.warnings).toHaveLength(1);
-
-		const strict = spawnSync(
-			process.execPath,
-			[SELFCHECK, fakeRepo, "--strict-memory", "--json", "--timeout-ms=1000"],
-			{
-				encoding: "utf8",
-				env: {
-					...process.env,
-					REPI_CODING_AGENT_DIR: sourceAgentDir,
-				},
-				timeout: 10_000,
-			},
-		);
-		expect(strict.status).toBe(1);
-		expect((JSON.parse(strict.stdout) as { ok: boolean }).ok).toBe(false);
+		expect(report.offline).toBe(true);
+		expect(report.rows.find((row) => row.id === "offline-model-probes")).toMatchObject({ skipped: true });
+		expect(
+			report.rows.some(
+				(row) => row.id === "model-min" || row.id === "tool-min" || row.id.startsWith("parallel-worker"),
+			),
+		).toBe(false);
 	});
 });

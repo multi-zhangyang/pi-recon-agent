@@ -99,10 +99,12 @@ WORKDIR /workspace
 ENTRYPOINT ["repi"]
 ```
 
-After the npm package is published, the install step can be replaced with:
+For a tarball-based image, put the four files from one GitHub Release beside the Dockerfile. They must be installed by one command because the internal packages are not published to the npm registry:
 
 ```dockerfile
-RUN npm install -g @pi-recon/repi-coding-agent
+COPY pi-recon-repi-*.tgz /tmp/repi-release/
+RUN npm install -g /tmp/repi-release/*.tgz \
+  && rm -rf /tmp/repi-release
 ```
 
 Build and run:

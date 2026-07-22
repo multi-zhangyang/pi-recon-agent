@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import { getModel } from "../src/models.ts";
 import { convertResponsesMessages } from "../src/providers/openai-responses-shared.ts";
 import type { AssistantMessage, Context, Usage } from "../src/types.ts";
+import { registerOpenAIFixtures } from "./model-fixtures.ts";
+
+registerOpenAIFixtures();
 
 const usage: Usage = {
 	input: 0,
@@ -15,7 +18,7 @@ const usage: Usage = {
 
 describe("OpenAI Responses message ID conversion", () => {
 	it("generates unique fallback message IDs for multiple text blocks in one assistant turn", () => {
-		const model = getModel("openai-codex", "gpt-5.5");
+		const model = getModel<"openai-codex-responses">("openai-codex", "gpt-5.5")!;
 		const assistant: AssistantMessage = {
 			role: "assistant",
 			content: [

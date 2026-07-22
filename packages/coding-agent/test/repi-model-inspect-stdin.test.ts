@@ -72,22 +72,39 @@ describe("repi model bounded stdin reads", () => {
 	});
 
 	it("still accepts closed stdin for model login and writes private auth", () => {
+		const apiKey = "opaque-provider-secret-value";
 		const result = spawnSync(
 			process.execPath,
 			[MODEL_INSPECT, workspace, "login", "--provider", "alpha", "--api-key-stdin", "--json"],
 			{
 				encoding: "utf8",
 				env: { ...process.env, REPI_CODING_AGENT_DIR: agentDir },
-				input: "sk-teststdin1234567890\n",
+				input: `${apiKey}\n`,
 				timeout: 10_000,
 			},
 		);
 
 		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		expect(result.stdout).not.toContain(apiKey);
 		expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, provider: "alpha" });
+		expect(JSON.parse(result.stdout)).not.toHaveProperty("keyPreview");
 		expect(JSON.parse(readFileSync(join(agentDir, "auth.json"), "utf8"))).toMatchObject({
-			alpha: { type: "api_key", key: "sk-teststdin1234567890" },
+			alpha: { type: "api_key", key: apiKey },
 		});
+
+		const humanResult = spawnSync(
+			process.execPath,
+			[MODEL_INSPECT, workspace, "login", "--provider", "beta", "--api-key-stdin"],
+			{
+				encoding: "utf8",
+				env: { ...process.env, REPI_CODING_AGENT_DIR: agentDir },
+				input: `${apiKey}\n`,
+				timeout: 10_000,
+			},
+		);
+		expect(humanResult.status, `${humanResult.stderr}\n${humanResult.stdout}`).toBe(0);
+		expect(humanResult.stdout).not.toContain(apiKey);
+		expect(humanResult.stdout).not.toContain("key=");
 	});
 
 	it("caps model import stdin size before parsing", () => {

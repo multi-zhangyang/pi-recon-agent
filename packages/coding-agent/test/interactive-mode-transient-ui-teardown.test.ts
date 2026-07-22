@@ -1,9 +1,9 @@
 import type { TUI } from "@pi-recon/repi-tui";
 import { Loader } from "@pi-recon/repi-tui";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { initTheme } from "../src/core/presentation/theme-runtime.ts";
 import { CountdownTimer } from "../src/modes/interactive/components/countdown-timer.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 // opt #143: compaction_start / auto_retry_start swap defaultEditor.onEscape to a
 // transient abort fn (abortCompaction / abortRetry) and create a Loader (80ms

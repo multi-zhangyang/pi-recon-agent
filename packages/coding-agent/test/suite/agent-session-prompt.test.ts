@@ -260,6 +260,24 @@ describe("AgentSession prompt characterization", () => {
 		expect(getMessageText(harness.session.messages[0]!)).toBe("from extension");
 	});
 
+	it("bounds oversized extension sendUserMessage content", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		let providerText = "";
+		harness.setResponses([
+			(context) => {
+				const user = context.messages.find((message) => message.role === "user");
+				providerText = getMessageText(user);
+				return fauxAssistantMessage("response");
+			},
+		]);
+
+		await harness.session.sendUserMessage("x".repeat(80_000));
+
+		expect(providerText.length).toBeLessThanOrEqual(32_000);
+		expect(getMessageText(harness.session.messages[0]!)).toHaveLength(providerText.length);
+	});
+
 	it("does not report streamingBehavior to input handlers while idle", async () => {
 		const inputEvents: InputEvent[] = [];
 		const harness = await createHarness({

@@ -65,6 +65,19 @@ describe("substituteArgs", () => {
 		expect(substituteArgs("Test: $1", [])).toBe("Test: ");
 	});
 
+	test("should support positional and all-argument defaults", () => {
+		expect(substituteArgs(`\${1:-fallback}`, [])).toBe("fallback");
+		expect(substituteArgs(`\${1:-fallback}`, ["value"])).toBe("value");
+		expect(substituteArgs(`\${@:-all fallback}`, [])).toBe("all fallback");
+		expect(substituteArgs(`\${ARGUMENTS:-all fallback}`, ["one", "two"])).toBe("one two");
+	});
+
+	test("should keep placeholder-looking default and argument values literal", () => {
+		expect(substituteArgs(`\${1:-$ARGUMENTS}`, [])).toBe("$ARGUMENTS");
+		expect(substituteArgs(`\${@:-$1}`, [])).toBe("$1");
+		expect(substituteArgs(`\${1:-fallback}`, ["$2"])).toBe("$2");
+	});
+
 	test("should handle multiple occurrences of $ARGUMENTS", () => {
 		expect(substituteArgs("$ARGUMENTS and $ARGUMENTS", ["a", "b"])).toBe("a b and a b");
 	});

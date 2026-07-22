@@ -8,6 +8,7 @@ import {
 	readFileSync,
 	rmSync,
 	statSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1264,6 +1265,261 @@ describe("repi-swarm-llm-run evidence artifact writes", () => {
 		});
 		expect(defaultTarget.status, `${defaultTarget.stderr}\n${defaultTarget.stdout}`).toBe(0);
 		expect((JSON.parse(defaultTarget.stdout) as { plan: { target: string } }).plan.target).toBe("local-selfcheck");
+	});
+
+	it("keeps latest bound to run creation order after merging an older run", () => {
+		const run = (args: string[]) =>
+			spawnSync(process.execPath, [SWARM, fakeRoot, ...args, "--json"], {
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			});
+		const plan = (target: string) => {
+			const result = run(["plan", target, "--workers", "1"]);
+			expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+			return JSON.parse(result.stdout) as { plan: { runId: string } };
+		};
+
+		const older = plan("older-run");
+		const newer = plan("newer-run");
+		const beforeMerge = run(["status", "latest"]);
+		expect(beforeMerge.status, `${beforeMerge.stderr}\n${beforeMerge.stdout}`).toBe(0);
+		expect((JSON.parse(beforeMerge.stdout) as { runId: string }).runId).toBe(newer.plan.runId);
+
+		const merge = run(["merge", older.plan.runId]);
+		expect(merge.status, `${merge.stderr}\n${merge.stdout}`).toBe(1);
+		expect(statSync(join(agentDir, "recon", "evidence", "llm-swarms", older.plan.runId)).mtimeMs).toBeGreaterThan(
+			statSync(join(agentDir, "recon", "evidence", "llm-swarms", newer.plan.runId)).mtimeMs,
+		);
+
+		const afterMerge = run(["status", "latest"]);
+		expect(afterMerge.status, `${afterMerge.stderr}\n${afterMerge.stdout}`).toBe(0);
+		expect((JSON.parse(afterMerge.stdout) as { runId: string }).runId).toBe(newer.plan.runId);
+	});
+
+	it("rejects unknown, ambiguous, and traversal refs without mutating any run", () => {
+		const run = (args: string[]) =>
+			spawnSync(process.execPath, [SWARM, fakeRoot, ...args, "--json"], {
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			});
+		const plan = (target: string) => {
+			const result = run(["plan", target, "--workers", "1"]);
+			expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+			return JSON.parse(result.stdout) as { plan: { runId: string } };
+		};
+		const older = plan("ref-a");
+		const newer = plan("ref-b");
+		const runRoot = join(agentDir, "recon", "evidence", "llm-swarms");
+		const latestBefore = run(["status", "latest"]);
+		expect(latestBefore.status, `${latestBefore.stderr}\n${latestBefore.stdout}`).toBe(0);
+		expect((JSON.parse(latestBefore.stdout) as { runId: string }).runId).toBe(newer.plan.runId);
+		const snapshot = (runId: string) => {
+			const dir = join(runRoot, runId);
+			return readdirSync(dir)
+				.sort()
+				.map((name) => {
+					const stat = statSync(join(dir, name));
+					return [name, stat.size, stat.mtimeMs];
+				});
+		};
+		const before = [snapshot(older.plan.runId), snapshot(newer.plan.runId)];
+
+		const unknownStatus = run(["status", "definitely-not-a-run"]);
+		expect(unknownStatus.status).toBe(1);
+		expect(JSON.parse(unknownStatus.stdout)).toMatchObject({ ok: false, error: "run-not-found", matches: [] });
+		const unknownMerge = run(["merge", "definitely-not-a-run"]);
+		expect(unknownMerge.status).toBe(1);
+		expect(JSON.parse(unknownMerge.stdout)).toMatchObject({ ok: false, error: "run-not-found", matches: [] });
+
+		let commonLength = 0;
+		while (
+			commonLength < older.plan.runId.length &&
+			commonLength < newer.plan.runId.length &&
+			older.plan.runId[commonLength] === newer.plan.runId[commonLength]
+		) {
+			commonLength += 1;
+		}
+		const ambiguousRef = older.plan.runId.slice(0, commonLength);
+		expect(ambiguousRef.length).toBeGreaterThan(0);
+		expect(ambiguousRef).not.toBe(older.plan.runId);
+		const ambiguousStatus = run(["status", ambiguousRef]);
+		expect(ambiguousStatus.status).toBe(1);
+		expect(JSON.parse(ambiguousStatus.stdout)).toMatchObject({ ok: false, error: "run-ref-ambiguous" });
+		const ambiguousMerge = run(["merge", ambiguousRef]);
+		expect(ambiguousMerge.status).toBe(1);
+		expect(JSON.parse(ambiguousMerge.stdout)).toMatchObject({ ok: false, error: "run-ref-ambiguous" });
+
+		const traversal = run(["status", `../${older.plan.runId}`]);
+		expect(traversal.status).toBe(1);
+		expect(JSON.parse(traversal.stdout)).toMatchObject({ ok: false, error: "run-not-found" });
+		const latestAfter = run(["status", "latest"]);
+		expect(latestAfter.status, `${latestAfter.stderr}\n${latestAfter.stdout}`).toBe(0);
+		expect((JSON.parse(latestAfter.stdout) as { runId: string }).runId).toBe(newer.plan.runId);
+		expect([snapshot(older.plan.runId), snapshot(newer.plan.runId)]).toEqual(before);
+	});
+
+	it("catalogs TS runtime artifacts beside CLI runs and refuses cross-engine merge", () => {
+		const run = (args: string[]) =>
+			spawnSync(process.execPath, [SWARM, fakeRoot, ...args, "--json"], {
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 10_000,
+			});
+		const cliPlan = run(["plan", "cli-catalog-target", "--workers", "1"]);
+		expect(cliPlan.status, `${cliPlan.stderr}\n${cliPlan.stdout}`).toBe(0);
+		const cliRunId = (JSON.parse(cliPlan.stdout) as { plan: { runId: string } }).plan.runId;
+		const tsRoot = join(agentDir, "recon", "evidence", "swarms");
+		mkdirSync(tsRoot, { recursive: true });
+		const tsRunId = "2099-01-02T03-04-05-006Z-web-api-run";
+		const tsArtifact = {
+			timestamp: "2099-01-02T03:04:05.006Z",
+			route: "web-api",
+			target: "ts-catalog-target",
+			mode: "run",
+			workers: [{ id: "swarm:1:web-authz", worker: "web-authz", status: "done" }],
+			executions: [{ workerId: "swarm:1:web-authz", status: "done", exitCode: 0, elapsedMs: 4 }],
+			blocked: [],
+			structuredClaimMergeStatus: "pass",
+			structuredClaimMerge: { promotionCheck: { finalClaims: [{ claimId: "proof-1" }] } },
+		};
+		const tsArtifactPath = join(tsRoot, `${tsRunId}.md`);
+		writeFileSync(
+			tsArtifactPath,
+			`# REPI Swarm Artifact\n\n## JSON\n\n\`\`\`json\n${JSON.stringify(tsArtifact, null, 2)}\n\`\`\`\n`,
+		);
+
+		const listed = run(["list"]);
+		expect(listed.status, `${listed.stderr}\n${listed.stdout}`).toBe(0);
+		const listReport = JSON.parse(listed.stdout) as { runs: Array<{ engine: string; runId: string }> };
+		expect(listReport.runs).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ engine: "cli", runId: cliRunId }),
+				expect.objectContaining({ engine: "ts", runId: tsRunId }),
+			]),
+		);
+
+		const latest = run(["status", "latest"]);
+		expect(latest.status, `${latest.stderr}\n${latest.stdout}`).toBe(0);
+		expect(JSON.parse(latest.stdout)).toMatchObject({ engine: "ts", runId: tsRunId, state: "complete", ok: true });
+
+		const resolvedTs = run(["resolve", `ts:${tsRunId}`]);
+		expect(resolvedTs.status, `${resolvedTs.stderr}\n${resolvedTs.stdout}`).toBe(0);
+		expect(JSON.parse(resolvedTs.stdout)).toMatchObject({ ok: true, run: { engine: "ts", runId: tsRunId } });
+		const resolvedCli = run(["resolve", `cli:${cliRunId}`]);
+		expect(resolvedCli.status, `${resolvedCli.stderr}\n${resolvedCli.stdout}`).toBe(0);
+		expect(JSON.parse(resolvedCli.stdout)).toMatchObject({ ok: true, run: { engine: "cli", runId: cliRunId } });
+
+		const before = readFileSync(tsArtifactPath, "utf8");
+		const merge = run(["merge", "latest"]);
+		expect(merge.status).toBe(1);
+		expect(JSON.parse(merge.stdout)).toMatchObject({
+			ok: false,
+			error: "cross-engine-merge-unsupported",
+			engine: "ts",
+			runId: tsRunId,
+		});
+		expect(readFileSync(tsArtifactPath, "utf8")).toBe(before);
+	});
+
+	it("reports a failed merge instead of the earlier successful CLI run", () => {
+		const runId = "2026-07-20T04-05-06-007Z-status-merge-failed";
+		const evidenceRoot = join(agentDir, "recon", "evidence", "llm-swarms", runId);
+		mkdirSync(evidenceRoot, { recursive: true });
+		writeFileSync(
+			join(evidenceRoot, "plan.json"),
+			JSON.stringify({
+				kind: "repi-swarm-plan-report",
+				generatedAt: "2026-07-20T04:05:06.007Z",
+				runId,
+				target: "merge-failure-target",
+				workers: 1,
+			}),
+		);
+		writeFileSync(
+			join(evidenceRoot, "report.json"),
+			JSON.stringify({
+				kind: "repi-swarm-run-report",
+				generatedAt: "2026-07-20T04:05:07.000Z",
+				runId,
+				target: "merge-failure-target",
+				workers: 1,
+				workersReport: [{ workerId: 1, role: "worker", status: "pass", exit: 0, ms: 2 }],
+				ok: true,
+			}),
+		);
+		writeFileSync(
+			join(evidenceRoot, "merge-report.json"),
+			JSON.stringify({
+				kind: "repi-swarm-merge-report",
+				generatedAt: "2026-07-20T04:05:08.000Z",
+				runId,
+				target: "merge-failure-target",
+				workerCount: 1,
+				promotedClaims: [],
+				ok: false,
+			}),
+		);
+
+		const status = spawnSync(process.execPath, [SWARM, fakeRoot, "status", `cli:${runId}`, "--json"], {
+			encoding: "utf8",
+			env: { ...process.env, REPI_CODING_AGENT_DIR: agentDir },
+			timeout: 10_000,
+		});
+		expect(status.status, `${status.stderr}\n${status.stdout}`).toBe(1);
+		expect(JSON.parse(status.stdout)).toMatchObject({
+			ok: false,
+			engine: "cli",
+			runId,
+			state: "failed",
+			merge: { ok: false, promotedClaims: 0 },
+		});
+	});
+
+	it("does not follow catalog child symlinks outside the swarm roots", () => {
+		if (process.platform === "win32") return;
+		const run = (args: string[]) =>
+			spawnSync(process.execPath, [SWARM, fakeRoot, ...args, "--json"], {
+				encoding: "utf8",
+				env: { ...process.env, REPI_CODING_AGENT_DIR: agentDir },
+				timeout: 10_000,
+			});
+		const outsideCli = join(agentDir, "outside-cli-run");
+		mkdirSync(outsideCli, { recursive: true });
+		writeFileSync(
+			join(outsideCli, "plan.json"),
+			JSON.stringify({ kind: "repi-swarm-plan-report", runId: "linked-cli", target: "outside" }),
+		);
+		const cliRoot = join(agentDir, "recon", "evidence", "llm-swarms");
+		mkdirSync(cliRoot, { recursive: true });
+		symlinkSync(outsideCli, join(cliRoot, "linked-cli"), "dir");
+
+		const outsideTs = join(agentDir, "outside-ts.md");
+		writeFileSync(
+			outsideTs,
+			`# REPI Swarm Artifact\n\n## JSON\n\n\`\`\`json\n${JSON.stringify({ timestamp: "2099-01-02T03:04:05.006Z", mode: "plan", workers: [], executions: [] })}\n\`\`\`\n`,
+		);
+		const tsRoot = join(agentDir, "recon", "evidence", "swarms");
+		mkdirSync(tsRoot, { recursive: true });
+		symlinkSync(outsideTs, join(tsRoot, "linked-ts.md"), "file");
+
+		const listed = run(["list"]);
+		expect(listed.status, `${listed.stderr}\n${listed.stdout}`).toBe(0);
+		expect(JSON.parse(listed.stdout).runs).toEqual([]);
+		const merge = run(["merge", "linked-cli"]);
+		expect(merge.status).toBe(1);
+		expect(JSON.parse(merge.stdout)).toMatchObject({ ok: false, error: "run-not-found" });
+		expect(existsSync(join(outsideCli, "merge-report.json"))).toBe(false);
 	});
 
 	it("supports command-first direct invocation and routes specialist worker contracts", () => {

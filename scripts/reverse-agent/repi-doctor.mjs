@@ -10,6 +10,7 @@ import {
 	readlinkSync,
 	realpathSync,
 	renameSync,
+	rmSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
@@ -23,7 +24,6 @@ const json = args.includes("--json");
 const fix = args.includes("--fix");
 const agentDir = process.env.REPI_CODING_AGENT_DIR || process.env.REPI_AGENT_DIR || join(homedir(), ".repi", "agent");
 const repiBin = process.env.REPI_BIN_PATH || join(root, "repi");
-const runtimeMemory = join(agentDir, "recon", "memory");
 const probeTimeoutMs = (() => {
 	const raw = process.env.REPI_DOCTOR_PROBE_TIMEOUT_MS;
 	const value = Number(raw);
@@ -66,14 +66,6 @@ function readFirstExistingText(candidates) {
 		}
 	}
 	return "";
-}
-
-function lineCount(path) {
-	try {
-		return readFileSync(path, "utf8").split(/\r?\n/).filter((line) => line.trim()).length;
-	} catch {
-		return 0;
-	}
 }
 
 function check(id, pass, evidence, fix) {
@@ -341,7 +333,6 @@ function legacyFileProfileEntries() {
 		{ rel: "prompts/websec.md", markerPath: "prompts/websec.md" },
 		{ rel: "prompts/wr.md", markerPath: "prompts/wr.md" },
 		{ rel: "prompts/audit-agent.md", markerPath: "prompts/audit-agent.md" },
-		{ rel: "prompts/memory.md", markerPath: "prompts/memory.md" },
 	];
 	const entries = [];
 	for (const candidate of candidates) {
@@ -366,6 +357,84 @@ function legacyExtensionLayout() {
 		customToolEntries,
 		legacyProfileEntries,
 	};
+}
+
+// Mirror the runtime's explicit isolated-profile layouts. Do not recursively
+// scan evidence for arbitrary settings.json fixtures.
+function knownIsolatedProfileSettings(root = agentDir) {
+	const paths = [join(root, "settings.json")];
+	const add = (path) => paths.push(path);
+	const threadRoot = join(root, "recon", "agent-threads");
+	try {
+		for (const entry of readdirSync(threadRoot, { withFileTypes: true })) {
+			if (entry.isDirectory()) add(join(threadRoot, entry.name, "agent-home", "settings.json"));
+		}
+	} catch {}
+	const swarmsRoot = join(root, "recon", "evidence", "swarms");
+	try {
+		for (const entry of readdirSync(swarmsRoot, { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			if (/-sessions$/.test(entry.name)) add(join(swarmsRoot, entry.name, ".repi", "agent", "settings.json"));
+			if (/-worker-child-session-runtime-child-process$/.test(entry.name)) {
+				add(join(swarmsRoot, entry.name, "home", ".repi", "agent", "settings.json"));
+			}
+		}
+	} catch {}
+	return [...new Set(paths)];
+}
+
+function retiredRuntimeState() {
+	const paths = [];
+	const add = (path) => {
+		if (existsSync(path)) paths.push(path);
+	};
+	for (const settingsPath of knownIsolatedProfileSettings()) {
+		const settings = readJson(settingsPath);
+		if (settings && !Array.isArray(settings) && Object.prototype.hasOwnProperty.call(settings, "memory")) {
+			paths.push(`${settingsPath}#memory`);
+		}
+	}
+	for (const path of [
+		join(agentDir, "memory"),
+		join(agentDir, "SYSTEM.md"),
+		join(agentDir, "APPEND_SYSTEM.md"),
+		join(agentDir, "prompts", "memory.md"),
+		join(agentDir, "skills", "reverse-pentest-orchestrator"),
+		join(agentDir, "recon", "memory"),
+		join(agentDir, "recon", "evidence", "tool-calls"),
+		join(agentDir, "recon", "evidence", "knowledge"),
+		join(agentDir, "recon", "builtin", "prompts", "memory.md"),
+	]) add(path);
+	try {
+		for (const entry of readdirSync(join(agentDir, "recon", "evidence", "runs"), { withFileTypes: true })) {
+			if (/(?:case-memory|knowledge-graph)/i.test(entry.name)) add(join(agentDir, "recon", "evidence", "runs", entry.name));
+		}
+	} catch {}
+	try {
+		for (const entry of readdirSync(join(agentDir, "recon", "archive"), { withFileTypes: true })) {
+			if (entry.isDirectory() && /^(?:legacy-file-profile|poison-cleanup-runtime)-/.test(entry.name)) {
+				add(join(agentDir, "recon", "archive", entry.name));
+			}
+		}
+	} catch {}
+	try {
+		for (const entry of readdirSync(join(agentDir, "recon", "agent-threads"), { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			const worker = join(agentDir, "recon", "agent-threads", entry.name, "agent-home");
+			for (const path of [
+				join(worker, "memory"),
+				join(worker, "SYSTEM.md"),
+				join(worker, "APPEND_SYSTEM.md"),
+				join(worker, "prompts", "memory.md"),
+				join(worker, "skills", "reverse-pentest-orchestrator"),
+				join(worker, "recon", "memory"),
+				join(worker, "recon", "evidence", "tool-calls"),
+				join(worker, "recon", "evidence", "knowledge"),
+				join(worker, "recon", "builtin", "prompts", "memory.md"),
+			]) add(path);
+		}
+	} catch {}
+	return { clean: paths.length === 0, paths };
 }
 
 function timestampSuffix() {
@@ -417,16 +486,11 @@ function repairLegacyExtensionLayout() {
 	const stamp = timestampSuffix();
 	const moved = [];
 	const errors = [];
-	const archiveRoot = join(agentDir, "recon", "archive", `legacy-file-profile-${stamp}`);
-
 	if (before.legacyProfileEntries.length > 0) {
-		ensurePrivateDir(archiveRoot);
 		for (const entry of before.legacyProfileEntries) {
-			const dest = uniquePath(join(archiveRoot, entry.rel));
-			ensurePrivateDir(dirname(dest));
 			try {
-				renameSync(entry.path, dest);
-				moved.push({ from: entry.path, to: dest });
+				rmSync(entry.path, { recursive: true, force: true });
+				moved.push({ from: entry.path, removed: true });
 			} catch (error) {
 				errors.push(`${entry.rel}: ${error instanceof Error ? error.message : String(error)}`);
 			}
@@ -508,22 +572,6 @@ if (fix) {
 		stderrTail: profileInit.stderr.slice(-1200),
 		error: profileInit.error,
 	});
-	const memoryRepair = run(process.execPath, [resolveScript("memory-inspect.mjs"), root, "repair", "--apply", "--yes", "--json"], { timeout: 60_000 });
-	fixActions.push({
-		id: "memory-repair",
-		exit: memoryRepair.code,
-		stdoutTail: memoryRepair.stdout.slice(-1200),
-		stderrTail: memoryRepair.stderr.slice(-1200),
-		error: memoryRepair.error,
-	});
-	const memorySanitize = run(process.execPath, [resolveScript("memory-inspect.mjs"), root, "sanitize", "--apply", "--yes", "--json"], { timeout: 90_000 });
-	fixActions.push({
-		id: "memory-sanitize",
-		exit: memorySanitize.code,
-		stdoutTail: memorySanitize.stdout.slice(-1200),
-		stderrTail: memorySanitize.stderr.slice(-1200),
-		error: memorySanitize.error,
-	});
 	const modelFix = run(process.execPath, [resolveScript("model-inspect.mjs"), root, "doctor", "--fix", "--json"], { timeout: 60_000 });
 	fixActions.push({
 		id: "model-config-fix",
@@ -536,7 +584,6 @@ if (fix) {
 }
 
 const settings = readJson(join(agentDir, "settings.json"));
-const memory = settings?.memory ?? {};
 const models = readJson(join(agentDir, "models.json"));
 const help = existsSync(repiBin) ? run(repiBin, ["--offline", "--help"], { timeout: probeTimeoutMs }) : { code: 1, stdout: "", stderr: "missing repi", timedOut: false };
 const listModels = existsSync(repiBin) ? run(repiBin, ["--offline", "--list-models"], { timeout: probeTimeoutMs }) : { code: 1, stdout: "", stderr: "missing repi", timedOut: false };
@@ -585,6 +632,10 @@ const reconProfileSource = readFirstExistingText([
 	"packages/coding-agent/src/core/recon-profile.ts",
 	"dist/core/recon-profile.js",
 ]);
+const sessionLifecycleSource = readFirstExistingText([
+	"packages/coding-agent/src/core/repi/session-lifecycle-runtime.ts",
+	"dist/core/repi/session-lifecycle-runtime.js",
+]);
 const resourceSource = readFirstExistingText([
 	"packages/coding-agent/src/core/repi/resources.ts",
 	"dist/core/repi/resources.js",
@@ -592,6 +643,14 @@ const resourceSource = readFirstExistingText([
 const modelRegistrySource = readFirstExistingText([
 	"packages/coding-agent/src/core/model-registry.ts",
 	"dist/core/model-registry.js",
+]);
+const modelRuntimeSource = readFirstExistingText([
+	"packages/coding-agent/src/core/model-runtime.ts",
+	"dist/core/model-runtime.js",
+]);
+const repiEnvProviderSource = readFirstExistingText([
+	"packages/coding-agent/src/core/repi-env-provider.ts",
+	"dist/core/repi-env-provider.js",
 ]);
 const modelInspectSource = readFirstExistingText([
 	"scripts/reverse-agent/model-inspect.mjs",
@@ -615,7 +674,7 @@ const goalModeBuiltInOk =
 	goalSource.includes("goal_complete") &&
 	goalSource.includes("REPI_GOAL_STATE_ENTRY_TYPE") &&
 	goalSource.includes("formatGoalFooterStatus") &&
-	reconProfileSource.includes("installRepiGoalMode(pi)");
+	(reconProfileSource.includes("installRepiGoalMode(pi)") || sessionLifecycleSource.includes("installRepiGoalMode(pi)"));
 const goalFooterStatusOk =
 	goalSource.includes("formatGoalFooterStatus") &&
 	goalSource.includes("formatGoalStatus") &&
@@ -643,8 +702,9 @@ const envModelContractOk =
 	envModelGuardOk &&
 	envModelSource.includes("REPI_MODEL_API") &&
 	modelRegistrySource.includes("repiEnvProviderConfig") &&
-	modelRegistrySource.includes("REPI_AUTO_COMPACT_WINDOW") &&
-	modelRegistrySource.includes("openai-compatible") &&
+	modelRuntimeSource.includes("getRepiEnvProviderConfig") &&
+	repiEnvProviderSource.includes("REPI_AUTO_COMPACT_WINDOW") &&
+	repiEnvProviderSource.includes("openai-compatible") &&
 	modelInspectSource.includes("buildStatusReport") &&
 	modelInspectSource.includes("repi model status");
 const envModelRpcMatchesExpected =
@@ -669,15 +729,7 @@ const launchReadinessOk =
 const savedDefaultProvider = typeof settings?.defaultProvider === "string" ? settings.defaultProvider : undefined;
 const savedDefaultModel = typeof settings?.defaultModel === "string" ? settings.defaultModel : undefined;
 const legacyExtensions = legacyExtensionLayout();
-const scopedMemoryDefaultsOk =
-	memory.schemaVersion === 2 &&
-	memory.mode === "scoped" &&
-	memory.autoRecall === true &&
-	memory.autoDeposit === "high-value" &&
-	memory.startupDigest === "scoped" &&
-	memory.rawAutoInject === false;
-const globalMemoryLazyOk = scopedMemoryDefaultsOk;
-
+const retiredState = retiredRuntimeState();
 const checks = [
 	check("repo:root", existsSync(join(root, "package.json")) && existsSync(repiBin), `root=${root}`),
 	check("launcher:local", existsSync(repiBin), `path=${repiBin}`, "run npm run install:repi"),
@@ -704,40 +756,16 @@ const checks = [
 	check("runtime:agent-dir", existsSync(agentDir), `agentDir=${agentDir}`, "run npm run install:repi"),
 	check("runtime:settings", Boolean(settings), `settings=${join(agentDir, "settings.json")}`, "run npm run install:repi"),
 	check(
-		"memory:scoped-defaults",
-		scopedMemoryDefaultsOk,
-		`memory=${JSON.stringify({ schemaVersion: memory.schemaVersion, mode: memory.mode, autoRecall: memory.autoRecall, autoDeposit: memory.autoDeposit, startupDigest: memory.startupDigest, rawAutoInject: memory.rawAutoInject })}`,
-		"run npm run install:repi or edit ~/.repi/agent/settings.json",
-	),
-	check(
-		"memory:core-file",
-		existsSync(join(runtimeMemory, "core-memory.md")) || globalMemoryLazyOk,
-		`path=${join(runtimeMemory, "core-memory.md")} lazyScoped=${globalMemoryLazyOk}`,
-		"run npm run install:repi",
-	),
-	check(
-		"memory:project-file",
-		existsSync(join(runtimeMemory, "project-memory.md")) || globalMemoryLazyOk,
-		`path=${join(runtimeMemory, "project-memory.md")} lazyScoped=${globalMemoryLazyOk}`,
-		"run npm run install:repi",
-	),
-	check(
-		"memory:procedural-file",
-		existsSync(join(runtimeMemory, "procedural-memory.md")) || globalMemoryLazyOk,
-		`path=${join(runtimeMemory, "procedural-memory.md")} lazyScoped=${globalMemoryLazyOk}`,
-		"run npm run install:repi",
-	),
-	check(
-		"memory:event-store",
-		existsSync(join(runtimeMemory, "events.jsonl")) || globalMemoryLazyOk,
-		`events=${lineCount(join(runtimeMemory, "events.jsonl"))} lazyScoped=${globalMemoryLazyOk}`,
-		"run repi doctor --fix",
-	),
-	check(
 		"runtime:legacy-extension-layout",
 		legacyExtensions.clean,
 		`hooks=${legacyExtensions.hooksPresent ? 1 : 0} customTools=${legacyExtensions.customToolEntries.length} legacyProfile=${legacyExtensions.legacyProfileEntries.length}`,
 		"run repi doctor --fix",
+	),
+	check(
+		"runtime:retired-state-absent",
+		retiredState.clean,
+		retiredState.clean ? "memory/trace/file-profile state absent" : `paths=${retiredState.paths.slice(0, 8).join(",")}`,
+		"run repi doctor --fix to remove retired memory, trace, and legacy profile state",
 	),
 	check("models:parse", listModels.code === 0, `exit=${listModels.code} stdout=${listModels.stdout.slice(0, 120).replace(/\s+/g, " ")} stderr=${listModels.stderr.slice(0, 120).replace(/\s+/g, " ")}`, "fix ~/.repi/agent/models.json"),
 	check("models:config-present", Boolean(models) || listModels.code === 0, `modelsJson=${Boolean(models)} listModelsExit=${listModels.code}`, "configure ~/.repi/agent/models.json if no provider exists"),
@@ -762,7 +790,7 @@ const checks = [
 	check(
 		"goal:built-in-mode",
 		goalModeBuiltInOk,
-		`goalSource=${Boolean(goalSource)} profileInstall=${reconProfileSource.includes("installRepiGoalMode(pi)")}`,
+		`goalSource=${Boolean(goalSource)} profileInstall=${reconProfileSource.includes("installRepiGoalMode(pi)")} lifecycleInstall=${sessionLifecycleSource.includes("installRepiGoalMode(pi)")}`,
 		"update REPI so /goal and goal_complete are built into the inline profile",
 	),
 	check(
@@ -799,7 +827,7 @@ const checks = [
 	check(
 		"models:env-only-contract",
 		envModelContractOk,
-		`envGuard=${envModelGuardOk} envApi=${envModelSource.includes("REPI_MODEL_API")} registryEnv=${modelRegistrySource.includes("repiEnvProviderConfig")} modelStatus=${modelInspectSource.includes("buildStatusReport")}`,
+		`envGuard=${envModelGuardOk} envApi=${envModelSource.includes("REPI_MODEL_API")} registryEnv=${modelRegistrySource.includes("repiEnvProviderConfig")} runtimeEnv=${modelRuntimeSource.includes("getRepiEnvProviderConfig")} modelStatus=${modelInspectSource.includes("buildStatusReport")}`,
 		"keep Claude-Code-style REPI_* env model config as the default path",
 	),
 	check(

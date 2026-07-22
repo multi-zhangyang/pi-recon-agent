@@ -28,7 +28,7 @@ vi.mock("../src/core/output-guard.js", () => ({
 	},
 }));
 
-vi.mock("../src/modes/interactive/theme/theme.js", () => ({ theme: {} }));
+vi.mock("../src/core/presentation/theme-runtime.js", () => ({ theme: {} }));
 
 vi.mock("../src/modes/rpc/jsonl.js", () => ({
 	attachJsonlLineReader: vi.fn((_stream: NodeJS.ReadableStream, onLine: (line: string) => void) => {
@@ -179,7 +179,7 @@ describe("REPI goal mode over RPC", () => {
 				expect.arrayContaining(["Goal started: rpc status smoke", "Goal complete: rpc status smoke"]),
 			);
 			expect(JSON.stringify(harness.faux.contexts[0]?.messages ?? [])).toContain("rpc status smoke");
-			expect(JSON.stringify(harness.faux.contexts[0] ?? {})).toContain("Active REPI /goal");
+			expect(JSON.stringify(harness.faux.contexts[0] ?? {})).toContain("Active REPI goal:");
 			expect(
 				harness.sessionManager
 					.getEntries()
@@ -350,6 +350,53 @@ describe("REPI goal mode over RPC", () => {
 					.filter((entry) => entry.type === "custom" && entry.customType === REPI_GOAL_STATE_ENTRY_TYPE)
 					.at(-1),
 			).toMatchObject({ type: "custom", customType: REPI_GOAL_STATE_ENTRY_TYPE, data: { goal: null } });
+		} finally {
+			await harness.cleanup();
+		}
+	});
+
+	it("projects append-only session entries and tree state over RPC", async () => {
+		const harness = await startGoalRpcHarness();
+		try {
+			const firstId = harness.sessionManager.appendCustomEntry("rpc-projection", { sequence: 1 });
+			const secondId = harness.sessionManager.appendCustomEntry("rpc-projection", { sequence: 2 });
+
+			harness.lineHandler(JSON.stringify({ id: "entries", type: "get_entries" }));
+			await vi.waitFor(() => expect(responseById("entries")).toBeDefined());
+			const all = responseById("entries")?.data as
+				| { entries?: Array<{ id: string }>; leafId?: string | null }
+				| undefined;
+			expect(all?.entries?.map((entry) => entry.id)).toEqual([firstId, secondId]);
+			expect(all?.leafId).toBe(secondId);
+
+			harness.lineHandler(JSON.stringify({ id: "since", type: "get_entries", since: firstId }));
+			await vi.waitFor(() => expect(responseById("since")).toBeDefined());
+			const since = responseById("since")?.data as
+				| { entries?: Array<{ id: string }>; leafId?: string | null }
+				| undefined;
+			expect(since?.entries?.map((entry) => entry.id)).toEqual([secondId]);
+			expect(since?.leafId).toBe(secondId);
+
+			harness.lineHandler(JSON.stringify({ id: "missing", type: "get_entries", since: "missing-id" }));
+			await vi.waitFor(() => expect(responseById("missing")).toBeDefined());
+			expect(responseById("missing")).toMatchObject({
+				command: "get_entries",
+				success: false,
+				error: "Entry not found: missing-id",
+			});
+
+			harness.lineHandler(JSON.stringify({ id: "tree", type: "get_tree" }));
+			await vi.waitFor(() => expect(responseById("tree")).toBeDefined());
+			const tree = responseById("tree")?.data as
+				| {
+						tree?: Array<{ entry: { id: string }; children: Array<{ entry: { id: string } }> }>;
+						leafId?: string | null;
+				  }
+				| undefined;
+			expect(tree?.leafId).toBe(secondId);
+			expect(tree?.tree).toHaveLength(1);
+			expect(tree?.tree?.[0]?.entry.id).toBe(firstId);
+			expect(tree?.tree?.[0]?.children[0]?.entry.id).toBe(secondId);
 		} finally {
 			await harness.cleanup();
 		}

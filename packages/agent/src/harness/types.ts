@@ -1,6 +1,9 @@
-import type { ImageContent, Model, SimpleStreamOptions, TextContent, Transport } from "@pi-recon/repi-ai";
+import type { ImageContent, Model, Models, SimpleStreamOptions, TextContent, Transport } from "@pi-recon/repi-ai";
 import type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../index.ts";
+import type { CompactionSettings } from "./compaction/policy.ts";
 import type { Session } from "./session/session.ts";
+
+export type { CompactionSettings } from "./compaction/policy.ts";
 
 /** Result of a fallible operation. Expected failures are returned as `ok: false` instead of thrown. */
 export type Result<TValue, TError> = { ok: true; value: TValue } | { ok: false; error: TError };
@@ -587,6 +590,8 @@ export interface ToolResultEvent {
 	content: Array<TextContent | ImageContent>;
 	details: unknown;
 	isError: boolean;
+	/** Current early-termination hint after prior tool-result reducers. */
+	terminate?: boolean;
 }
 
 export interface SessionBeforeCompactEvent {
@@ -762,12 +767,6 @@ export interface NavigateTreeResult {
 	summaryEntry?: BranchSummaryEntry;
 }
 
-export interface CompactionSettings {
-	enabled: boolean;
-	reserveTokens: number;
-	keepRecentTokens: number;
-}
-
 export interface CompactionPreparation {
 	firstKeptEntryId: string;
 	messagesToSummarize: AgentMessage[];
@@ -812,6 +811,23 @@ export interface BranchSummaryResult {
 	modifiedFiles: string[];
 }
 
+/** Existing core-loop controls exposed as one immutable harness policy. */
+export interface AgentHarnessRunPolicy {
+	/** Defaults to 20. Set to 0 to opt out of the harness safety cap. */
+	maxTurns?: number;
+	reserveFinalTurn?: boolean;
+	finalTurnPrompt?: string;
+	lengthContinueMaxTurns?: number;
+	lengthContinuePrompt?: string;
+	streamMaxRetries?: number;
+	streamRetryBaseDelayMs?: number;
+	streamRetryMaxDelayMs?: number;
+	maxToolResultChars?: number;
+	maxConsumedToolResultChars?: number;
+	deduplicateReadOnlyToolCalls?: boolean;
+	onBudgetExceeded?: (info: { turns: number; maxTurns: number }) => void;
+}
+
 export interface AgentHarnessOptions<
 	TSkill extends Skill = Skill,
 	TPromptTemplate extends PromptTemplate = PromptTemplate,
@@ -819,6 +835,12 @@ export interface AgentHarnessOptions<
 > {
 	env: ExecutionEnv;
 	session: Session;
+	/**
+	 * Provider collection used for model requests, compaction, and branch
+	 * summaries. When omitted, the legacy global API plus getApiKeyAndHeaders
+	 * compatibility path is used.
+	 */
+	models?: Models;
 	tools?: TTool[];
 	/**
 	 * Concrete resources available to explicit invocation methods and system-prompt callbacks.
@@ -834,6 +856,8 @@ export interface AgentHarnessOptions<
 				thinkingLevel: ThinkingLevel;
 				activeTools: TTool[];
 				resources: AgentHarnessResources<TSkill, TPromptTemplate>;
+				/** Aborts preflight work when the owning harness run is cancelled. */
+				signal?: AbortSignal;
 		  }) => string | Promise<string>);
 	getApiKeyAndHeaders?: (
 		model: Model<any>,
@@ -845,6 +869,8 @@ export interface AgentHarnessOptions<
 	activeToolNames?: string[];
 	steeringMode?: QueueMode;
 	followUpMode?: QueueMode;
+	/** Core turn, continuation, retry, and tool-result budgets for each run. */
+	runPolicy?: Readonly<AgentHarnessRunPolicy>;
 }
 
 export type { AgentHarness } from "./agent-harness.ts";

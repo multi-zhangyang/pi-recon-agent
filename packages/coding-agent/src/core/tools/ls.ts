@@ -3,9 +3,9 @@ import type { AgentTool } from "@pi-recon/repi-agent-core";
 import { Text } from "@pi-recon/repi-tui";
 import nodePath from "path";
 import { type Static, Type } from "typebox";
-import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
-import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
+import { themedKeyHint } from "../presentation/keybinding-hints.ts";
+import type { Theme } from "../presentation/theme.ts";
 import { pathExists, resolveToCwd } from "./path-utils.ts";
 import { getTextOutput, renderToolPath, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -77,7 +77,7 @@ function formatLsResult(
 		const remaining = lines.length - maxLines;
 		text += `\n${displayLines.map((line) => theme.fg("toolOutput", line)).join("\n")}`;
 		if (remaining > 0) {
-			text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+			text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${themedKeyHint(theme, "app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 		}
 	}
 
@@ -102,6 +102,10 @@ export function createLsToolDefinition(
 		label: "ls",
 		description: `List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output is truncated to ${DEFAULT_LIMIT} entries or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first).`,
 		promptSnippet: "List directory contents",
+		promptGuidelines: [
+			"Batch independent read-only probes in one turn and do not repeat identical probes unless state changed.",
+		],
+		readOnly: true,
 		parameters: lsSchema,
 		async execute(
 			_toolCallId,

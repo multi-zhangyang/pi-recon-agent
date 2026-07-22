@@ -4,9 +4,9 @@
 
 import { ProcessTerminal, TUI } from "@pi-recon/repi-tui";
 import type { ResolvedPaths } from "../core/package-manager.ts";
+import { initTheme, stopThemeWatcher } from "../core/presentation/theme-runtime.ts";
 import type { SettingsManager } from "../core/settings-manager.ts";
 import { ConfigSelectorComponent } from "../modes/interactive/components/config-selector.ts";
-import { initTheme, stopThemeWatcher } from "../modes/interactive/theme/theme.ts";
 
 export interface ConfigSelectorOptions {
 	resolvedPaths: ResolvedPaths;

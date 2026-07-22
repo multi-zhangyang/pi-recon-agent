@@ -15,7 +15,7 @@ import {
 	type TextContent,
 } from "@pi-recon/repi-ai";
 import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRegistry } from "../src/core/model-registry.ts";
@@ -147,6 +147,151 @@ describe("AgentSession concurrent prompt guard", () => {
 		// Cleanup
 		await session.abort();
 		await firstPrompt.catch(() => {}); // Ignore abort error
+	});
+
+	it("admits only one prompt when concurrent calls overlap in preflight", async () => {
+		createSession();
+
+		let releaseFirstPreflight = () => {};
+		const firstPreflightBlocked = new Promise<void>((resolve) => {
+			releaseFirstPreflight = resolve;
+		});
+		let firstPreflightEntered = () => {};
+		const firstPreflightStarted = new Promise<void>((resolve) => {
+			firstPreflightEntered = resolve;
+		});
+		const originalBeforeAgentStart = session.extensionRunner.emitBeforeAgentStart.bind(session.extensionRunner);
+		let beforeAgentStartCalls = 0;
+		vi.spyOn(session.extensionRunner, "emitBeforeAgentStart").mockImplementation(async (...args) => {
+			beforeAgentStartCalls++;
+			if (beforeAgentStartCalls === 1) {
+				firstPreflightEntered();
+				await firstPreflightBlocked;
+			}
+			return originalBeforeAgentStart(...args);
+		});
+
+		const settledEvents: string[] = [];
+		session.subscribe((event) => {
+			if (event.type === "agent_settled") settledEvents.push(event.type);
+		});
+		const firstPreflightResults: boolean[] = [];
+		const secondPreflightResults: boolean[] = [];
+
+		const firstPrompt = session.prompt("First message", {
+			preflightResult: (success) => firstPreflightResults.push(success),
+		});
+		await firstPreflightStarted;
+		expect(session.isStreaming).toBe(false);
+		expect(session.isIdle).toBe(false);
+		let idleWaitResolved = false;
+		const idleWait = session.waitForIdle().then(() => {
+			idleWaitResolved = true;
+		});
+		await Promise.resolve();
+		expect(idleWaitResolved).toBe(false);
+
+		await expect(
+			session.prompt("Second message", {
+				preflightResult: (success) => secondPreflightResults.push(success),
+			}),
+		).rejects.toThrow(
+			"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+		);
+
+		expect(beforeAgentStartCalls).toBe(1);
+		expect(secondPreflightResults).toEqual([false]);
+		expect(settledEvents).toEqual([]);
+		expect(session.isIdle).toBe(false);
+		expect(idleWaitResolved).toBe(false);
+
+		releaseFirstPreflight();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(firstPreflightResults).toEqual([true]);
+		expect(session.isStreaming).toBe(true);
+		expect(settledEvents).toEqual([]);
+
+		await session.abort();
+		await firstPrompt.catch(() => {});
+		await idleWait;
+		expect(idleWaitResolved).toBe(true);
+		expect(settledEvents).toEqual(["agent_settled"]);
+	});
+
+	it("does not strand a queued prompt when the active preflight fails", async () => {
+		createSession();
+
+		let releaseFirstPreflight = () => {};
+		const firstPreflightBlocked = new Promise<void>((resolve) => {
+			releaseFirstPreflight = resolve;
+		});
+		let firstPreflightEntered = () => {};
+		const firstPreflightStarted = new Promise<void>((resolve) => {
+			firstPreflightEntered = resolve;
+		});
+		const originalBeforeAgentStart = session.extensionRunner.emitBeforeAgentStart.bind(session.extensionRunner);
+		let beforeAgentStartCalls = 0;
+		vi.spyOn(session.extensionRunner, "emitBeforeAgentStart").mockImplementation(async (...args) => {
+			beforeAgentStartCalls++;
+			if (beforeAgentStartCalls === 1) {
+				firstPreflightEntered();
+				await firstPreflightBlocked;
+				throw new Error("first preflight failed");
+			}
+			return originalBeforeAgentStart(...args);
+		});
+
+		const settledEvents: string[] = [];
+		session.subscribe((event) => {
+			if (event.type === "agent_settled") settledEvents.push(event.type);
+		});
+		const firstPreflightResults: boolean[] = [];
+		const secondPreflightResults: boolean[] = [];
+		const firstPrompt = session.prompt("First message", {
+			preflightResult: (success) => firstPreflightResults.push(success),
+		});
+		await firstPreflightStarted;
+
+		let secondPromptResolved = false;
+		const secondPrompt = session
+			.prompt("Second message", {
+				streamingBehavior: "followUp",
+				preflightResult: (success) => secondPreflightResults.push(success),
+			})
+			.then(() => {
+				secondPromptResolved = true;
+			});
+		await Promise.resolve();
+		expect(secondPromptResolved).toBe(false);
+		expect(secondPreflightResults).toEqual([]);
+		expect(session.pendingMessageCount).toBe(0);
+		let idleWaitResolved = false;
+		const idleWait = session.waitForIdle().then(() => {
+			idleWaitResolved = true;
+		});
+
+		releaseFirstPreflight();
+		await expect(firstPrompt).rejects.toThrow("first preflight failed");
+		for (let attempt = 0; attempt < 50 && secondPreflightResults.length === 0; attempt++) {
+			await new Promise((resolve) => setTimeout(resolve, 1));
+		}
+
+		expect(firstPreflightResults).toEqual([false]);
+		expect(secondPreflightResults).toEqual([true]);
+		expect(beforeAgentStartCalls).toBe(2);
+		expect(session.pendingMessageCount).toBe(0);
+		expect(session.isStreaming).toBe(true);
+		expect(session.isIdle).toBe(false);
+		expect(idleWaitResolved).toBe(false);
+		expect(settledEvents).toEqual([]);
+
+		await session.abort();
+		await secondPrompt.catch(() => {});
+		await idleWait;
+		expect(secondPromptResolved).toBe(true);
+		expect(idleWaitResolved).toBe(true);
+		expect(settledEvents).toEqual(["agent_settled"]);
 	});
 
 	it("should allow steer() while streaming", async () => {

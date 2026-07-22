@@ -2,7 +2,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { atomicWriteFile } from "./lib/memory-purge-helpers.mjs";
+import { atomicWriteFile } from "./lib/atomic-file.mjs";
 
 const argv = process.argv.slice(2);
 const rootArg = argv[0] && !argv[0].startsWith("-") ? argv.shift() : process.cwd();

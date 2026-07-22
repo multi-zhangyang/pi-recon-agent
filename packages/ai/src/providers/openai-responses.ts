@@ -8,19 +8,28 @@ import type {
 	Context,
 	Model,
 	OpenAIResponsesCompat,
+	ProviderEnv,
+	ProviderHeaders,
 	SimpleStreamOptions,
 	StreamFunction,
 	StreamOptions,
 	Usage,
 } from "../types.ts";
+import { splitDeferredTools } from "../utils/deferred-tools.ts";
 import { terminalErrorMessage } from "../utils/error-stringify.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
-import { headersToRecord } from "../utils/headers.ts";
+import { headersToRecord, mergeProviderHeaders } from "../utils/headers.ts";
+import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { callOnResponseWithDrain } from "../utils/response-drain.ts";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
-import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.ts";
+import {
+	convertResponsesMessages,
+	convertResponsesTools,
+	defaultSupportsOpenAIToolSearch,
+	processResponsesStream,
+} from "./openai-responses-shared.ts";
 import { buildBaseOptions } from "./simple-options.ts";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
@@ -29,11 +38,11 @@ const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"
  * Resolve cache retention preference.
  * Defaults to "short" and uses PI_CACHE_RETENTION for backward compatibility.
  */
-function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
+function resolveCacheRetention(cacheRetention?: CacheRetention, env?: ProviderEnv): CacheRetention {
 	if (cacheRetention) {
 		return cacheRetention;
 	}
-	if (typeof process !== "undefined" && process.env.PI_CACHE_RETENTION === "long") {
+	if (getProviderEnvValue("PI_CACHE_RETENTION", env) === "long") {
 		return "long";
 	}
 	return "short";
@@ -45,6 +54,7 @@ function getCompat(model: Model<"openai-responses">): Required<OpenAIResponsesCo
 		supportsDeveloperRole: model.compat?.supportsDeveloperRole ?? true,
 		sendSessionIdHeader: model.compat?.sendSessionIdHeader ?? true,
 		supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? false,
+		supportsToolSearch: model.compat?.supportsToolSearch ?? defaultSupportsOpenAIToolSearch(model),
 	};
 }
 
@@ -73,7 +83,7 @@ function formatOpenAIResponsesError(error: unknown): string {
 
 // OpenAI Responses-specific options
 export interface OpenAIResponsesOptions extends StreamOptions {
-	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
 	serviceTier?: ResponseCreateParamsStreaming["service_tier"];
 }
@@ -114,9 +124,9 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 			if (!apiKey) {
 				throw new Error(`No API key for provider: ${model.provider}`);
 			}
-			const cacheRetention = resolveCacheRetention(options?.cacheRetention);
+			const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
 			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-			const client = createClient(model, context, apiKey, options?.headers, cacheSessionId);
+			const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, options?.env);
 			let params = buildParams(model, context, options);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
@@ -191,54 +201,53 @@ function createClient(
 	model: Model<"openai-responses">,
 	context: Context,
 	apiKey: string,
-	optionsHeaders?: Record<string, string>,
+	optionsHeaders?: ProviderHeaders,
 	sessionId?: string,
+	env?: ProviderEnv,
 ) {
 	const compat = getCompat(model);
-	const headers = { ...model.headers };
+	const dynamicHeaders: ProviderHeaders = {};
 	if (model.provider === "github-copilot") {
 		const hasImages = hasCopilotVisionInput(context.messages);
 		const copilotHeaders = buildCopilotDynamicHeaders({
 			messages: context.messages,
 			hasImages,
 		});
-		Object.assign(headers, copilotHeaders);
+		Object.assign(dynamicHeaders, copilotHeaders);
 	}
 
 	if (sessionId) {
 		if (compat.sendSessionIdHeader) {
-			headers.session_id = sessionId;
+			dynamicHeaders.session_id = sessionId;
 		}
-		headers["x-client-request-id"] = sessionId;
+		dynamicHeaders["x-client-request-id"] = sessionId;
 	}
 
-	// Merge options headers last so they can override defaults
-	if (optionsHeaders) {
-		Object.assign(headers, optionsHeaders);
-	}
-
-	const defaultHeaders =
+	const providerHeaders: ProviderHeaders | undefined =
 		model.provider === "cloudflare-ai-gateway"
 			? {
-					...headers,
-					Authorization: headers.Authorization ?? null,
+					Authorization: null,
 					"cf-aig-authorization": `Bearer ${apiKey}`,
 				}
-			: headers;
+			: undefined;
+	const defaultHeaders = mergeProviderHeaders(model.headers, dynamicHeaders, providerHeaders, optionsHeaders) ?? {};
 
 	return new OpenAI({
 		apiKey,
-		baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
+		baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model, env) : model.baseUrl,
 		dangerouslyAllowBrowser: true,
 		defaultHeaders,
 	});
 }
 
 function buildParams(model: Model<"openai-responses">, context: Context, options?: OpenAIResponsesOptions) {
-	const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS);
-
-	const cacheRetention = resolveCacheRetention(options?.cacheRetention);
 	const compat = getCompat(model);
+	const toolPlacement = splitDeferredTools(context, compat.supportsToolSearch);
+	const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
+		deferredTools: toolPlacement.deferred,
+	});
+
+	const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
 	const params: ResponseCreateParamsStreaming = {
 		model: model.id,
 		input: messages,
@@ -270,8 +279,8 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 		params.service_tier = options.serviceTier;
 	}
 
-	if (context.tools && context.tools.length > 0) {
-		params.tools = convertResponsesTools(context.tools);
+	if (toolPlacement.immediate.length > 0) {
+		params.tools = convertResponsesTools(toolPlacement.immediate);
 	}
 
 	if (model.reasoning) {

@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.ts";
 import { streamAnthropic } from "../src/providers/anthropic.ts";
 import type { Context } from "../src/types.ts";
+import { registerGitHubCopilotFixtures } from "./model-fixtures.ts";
+
+registerGitHubCopilotFixtures();
 
 const mockState = vi.hoisted(() => ({
 	constructorOpts: undefined as Record<string, unknown> | undefined,
@@ -55,7 +58,7 @@ describe("Copilot Claude via Anthropic Messages", () => {
 	};
 
 	it("uses Bearer auth, Copilot headers, and valid Anthropic Messages payload", async () => {
-		const model = getModel("github-copilot", "claude-sonnet-4.6");
+		const model = getModel<"anthropic-messages">("github-copilot", "claude-sonnet-4.6");
 		expect(model.api).toBe("anthropic-messages");
 
 		const s = streamAnthropic(model, context, { apiKey: "tid_copilot_session_test_token" });
@@ -92,7 +95,7 @@ describe("Copilot Claude via Anthropic Messages", () => {
 	});
 
 	it("omits interleaved-thinking beta for adaptive-thinking models", async () => {
-		const model = getModel("github-copilot", "claude-sonnet-4.6");
+		const model = getModel<"anthropic-messages">("github-copilot", "claude-sonnet-4.6");
 		const s = streamAnthropic(model, context, {
 			apiKey: "tid_copilot_session_test_token",
 			interleavedThinking: true,

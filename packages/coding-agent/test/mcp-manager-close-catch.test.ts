@@ -77,4 +77,52 @@ describe("McpManager schedulePooledClientClose swallows close rejection (opt #12
 
 		expect(unhandled).toHaveLength(0);
 	});
+
+	it("closeAll waits for every client before reporting aggregated close failures", async () => {
+		const root = tempRoot!;
+		const manager = createMcpManager({ cwd: root, agentDir: join(root, "agent") });
+		const internals = manager as unknown as {
+			clientPool: Map<string, { key: string; client: { close: () => Promise<void> }; idleTimer?: NodeJS.Timeout }>;
+			_exitReapHook?: () => void;
+		};
+		let releaseSlowClose!: () => void;
+		let slowCloseStarted = false;
+		const slowClose = new Promise<void>((resolve) => {
+			releaseSlowClose = resolve;
+		});
+
+		internals.clientPool.set("failing", {
+			key: "failing",
+			client: { close: () => Promise.reject(new Error("close boom")) },
+		});
+		internals.clientPool.set("slow", {
+			key: "slow",
+			client: {
+				close: async () => {
+					slowCloseStarted = true;
+					await slowClose;
+				},
+			},
+		});
+
+		let outcome: "resolved" | "rejected" | undefined;
+		const closing = manager.closeAll().then(
+			() => {
+				outcome = "resolved";
+			},
+			() => {
+				outcome = "rejected";
+			},
+		);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const outcomeBeforeSlowClose = outcome;
+		releaseSlowClose();
+		await closing;
+
+		expect(slowCloseStarted).toBe(true);
+		expect(outcomeBeforeSlowClose).toBeUndefined();
+		expect(outcome).toBe("rejected");
+		expect(internals.clientPool.size).toBe(0);
+		expect(internals._exitReapHook).toBeUndefined();
+	});
 });

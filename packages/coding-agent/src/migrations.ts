@@ -189,20 +189,6 @@ export function migrateModelsJsonConfigValues(agentDir: string): ConfigValueMigr
 					migrateHeadersConfig(modelRecord.headers, `${providerLocation}.models[${modelKey}].headers`, migrations);
 				}
 			}
-
-			const modelOverrides = providerRecord.modelOverrides;
-			if (typeof modelOverrides === "object" && modelOverrides !== null && !Array.isArray(modelOverrides)) {
-				for (const [modelId, modelOverride] of Object.entries(modelOverrides)) {
-					if (typeof modelOverride !== "object" || modelOverride === null || Array.isArray(modelOverride))
-						continue;
-					const modelOverrideRecord = modelOverride as Record<string, unknown>;
-					migrateHeadersConfig(
-						modelOverrideRecord.headers,
-						`${providerLocation}.modelOverrides[${JSON.stringify(modelId)}].headers`,
-						migrations,
-					);
-				}
-			}
 		}
 
 		if (migrations.length === 0) return [];

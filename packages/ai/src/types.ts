@@ -1,3 +1,12 @@
+import type { BedrockOptions } from "./providers/amazon-bedrock.ts";
+import type { AnthropicOptions } from "./providers/anthropic.ts";
+import type { AzureOpenAIResponsesOptions } from "./providers/azure-openai-responses.ts";
+import type { GoogleOptions } from "./providers/google.ts";
+import type { GoogleVertexOptions } from "./providers/google-vertex.ts";
+import type { MistralOptions } from "./providers/mistral.ts";
+import type { OpenAICodexResponsesOptions } from "./providers/openai-codex-responses.ts";
+import type { OpenAICompletionsOptions } from "./providers/openai-completions.ts";
+import type { OpenAIResponsesOptions } from "./providers/openai-responses.ts";
 import type { AssistantMessageDiagnostic } from "./utils/diagnostics.ts";
 import type { AssistantMessageEventStream } from "./utils/event-stream.ts";
 
@@ -16,53 +25,64 @@ export type KnownApi =
 
 export type Api = KnownApi | (string & {});
 
+/**
+ * Optional transport hints for legacy typed lookup calls. This metadata-only
+ * map contains no model IDs, endpoints, credentials, pricing, or registrations;
+ * provider IDs remain open strings at runtime.
+ */
+export interface ProviderApiMap {
+	"amazon-bedrock": "bedrock-converse-stream";
+	"ant-ling": "openai-completions";
+	anthropic: "anthropic-messages";
+	google: "google-generative-ai";
+	"google-vertex": "google-vertex";
+	openai: "openai-responses";
+	"azure-openai-responses": "azure-openai-responses";
+	"openai-codex": "openai-codex-responses";
+	nvidia: "openai-completions";
+	deepseek: "openai-completions";
+	"github-copilot": "anthropic-messages" | "openai-completions" | "openai-responses";
+	xai: "openai-completions";
+	groq: "openai-completions";
+	cerebras: "openai-completions";
+	openrouter: "openai-completions";
+	"vercel-ai-gateway": "openai-completions";
+	zai: "openai-completions";
+	"zai-coding-cn": "openai-completions";
+	mistral: "mistral-conversations";
+	minimax: "anthropic-messages";
+	"minimax-cn": "anthropic-messages";
+	moonshotai: "openai-completions";
+	"moonshotai-cn": "openai-completions";
+	huggingface: "openai-completions";
+	fireworks: "anthropic-messages";
+	together: "openai-completions";
+	opencode: "anthropic-messages" | "google-generative-ai" | "openai-completions" | "openai-responses";
+	"opencode-go": "anthropic-messages" | "openai-completions";
+	"kimi-coding": "anthropic-messages";
+	"cloudflare-workers-ai": "openai-completions";
+	"cloudflare-ai-gateway": "anthropic-messages" | "openai-completions" | "openai-responses";
+	xiaomi: "openai-completions";
+	"xiaomi-token-plan-cn": "openai-completions";
+	"xiaomi-token-plan-ams": "openai-completions";
+	"xiaomi-token-plan-sgp": "openai-completions";
+}
+
+export type ProviderApi<TProvider extends string> = TProvider extends keyof ProviderApiMap
+	? ProviderApiMap[TProvider]
+	: Api;
+
 export type KnownImagesApi = "openrouter-images";
 
 export type ImagesApi = KnownImagesApi | (string & {});
 
-export type KnownProvider =
-	| "amazon-bedrock"
-	| "ant-ling"
-	| "anthropic"
-	| "google"
-	| "google-vertex"
-	| "openai"
-	| "azure-openai-responses"
-	| "openai-codex"
-	| "nvidia"
-	| "deepseek"
-	| "github-copilot"
-	| "xai"
-	| "groq"
-	| "cerebras"
-	| "openrouter"
-	| "vercel-ai-gateway"
-	| "zai"
-	| "zai-coding-cn"
-	| "mistral"
-	| "minimax"
-	| "minimax-cn"
-	| "moonshotai"
-	| "moonshotai-cn"
-	| "huggingface"
-	| "fireworks"
-	| "together"
-	| "opencode"
-	| "opencode-go"
-	| "kimi-coding"
-	| "cloudflare-workers-ai"
-	| "cloudflare-ai-gateway"
-	| "xiaomi"
-	| "xiaomi-token-plan-cn"
-	| "xiaomi-token-plan-ams"
-	| "xiaomi-token-plan-sgp";
-export type Provider = KnownProvider | string;
+/** Provider identifiers are runtime data, not a closed catalog. */
+export type ProviderId = string;
 
-export type KnownImagesProvider = "openrouter";
+/** Image provider identifiers are runtime data, not a closed catalog. */
+export type ImagesProvider = string;
 
-export type ImagesProvider = KnownImagesProvider | string;
-
-export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type ModelThinkingLevel = "off" | ThinkingLevel;
 export type ThinkingLevelMap = Partial<Record<ModelThinkingLevel, string | null>>;
 
@@ -78,6 +98,12 @@ export interface ThinkingBudgets {
 export type CacheRetention = "none" | "short" | "long";
 
 export type Transport = "sse" | "websocket" | "websocket-cached" | "auto";
+
+/** Provider-scoped environment overrides. */
+export type ProviderEnv = Record<string, string>;
+
+/** A null value suppresses a default header with the same case-insensitive name. */
+export type ProviderHeaders = Record<string, string | null>;
 
 export interface ProviderResponse {
 	status: number;
@@ -121,8 +147,9 @@ export interface StreamOptions {
 	 * On AWS Bedrock these are injected via a Smithy `build`-step middleware so
 	 * they are covered by SigV4 signing; reserved headers (`x-amz-*`,
 	 * `authorization`, `host`) are silently ignored to preserve SigV4 / bearer auth.
+	 * A null value suppresses a provider/API default header with the same name.
 	 */
-	headers?: Record<string, string>;
+	headers?: ProviderHeaders;
 	/**
 	 * HTTP request timeout in milliseconds for providers/SDKs that support it.
 	 * For example, OpenAI and Anthropic SDK clients default to 10 minutes.
@@ -153,13 +180,40 @@ export interface StreamOptions {
 	 * For example, Anthropic uses `user_id` for abuse tracking and rate limiting.
 	 */
 	metadata?: Record<string, unknown>;
+	/** Provider-scoped configuration values that override ambient environment variables. */
+	env?: ProviderEnv;
 }
 
 export type ProviderStreamOptions = StreamOptions & Record<string, unknown>;
 
+/** Known API implementations and their provider-specific stream options. */
+export interface ApiOptionsMap {
+	"anthropic-messages": AnthropicOptions;
+	"openai-completions": OpenAICompletionsOptions;
+	"openai-responses": OpenAIResponsesOptions;
+	"openai-codex-responses": OpenAICodexResponsesOptions;
+	"azure-openai-responses": AzureOpenAIResponsesOptions;
+	"google-generative-ai": GoogleOptions;
+	"google-vertex": GoogleVertexOptions;
+	"mistral-conversations": MistralOptions;
+	"bedrock-converse-stream": BedrockOptions;
+}
+
+export type ApiStreamOptions<TApi extends Api> = TApi extends keyof ApiOptionsMap
+	? ApiOptionsMap[TApi]
+	: StreamOptions & Record<string, unknown>;
+
+/** Uniform dispatch surface owned by a runtime provider. */
+export interface ProviderStreams {
+	stream(model: Model<Api>, context: Context, options?: StreamOptions): AssistantMessageEventStream;
+	streamSimple(model: Model<Api>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream;
+}
+
 export interface ImagesOptions {
 	signal?: AbortSignal;
 	apiKey?: string;
+	/** Provider-scoped configuration values that override ambient environment variables. */
+	env?: ProviderEnv;
 	/**
 	 * Optional callback for inspecting or replacing provider payloads before sending.
 	 * Return undefined to keep the payload unchanged.
@@ -172,8 +226,9 @@ export interface ImagesOptions {
 	/**
 	 * Optional custom HTTP headers to include in API requests.
 	 * Merged with provider defaults; can override default headers.
+	 * A null value suppresses a provider/API default header with the same name.
 	 */
-	headers?: Record<string, string>;
+	headers?: ProviderHeaders;
 	/**
 	 * HTTP request timeout in milliseconds for providers/SDKs that support it.
 	 */
@@ -267,6 +322,8 @@ export interface Usage {
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
+	/** Subset of `cacheWrite` written with 1h retention. Only Anthropic reports this split. */
+	cacheWrite1h?: number;
 	totalTokens: number;
 	cost: {
 		input: number;
@@ -289,7 +346,7 @@ export interface AssistantMessage {
 	role: "assistant";
 	content: (TextContent | ThinkingContent | ToolCall)[];
 	api: Api;
-	provider: Provider;
+	provider: ProviderId;
 	model: string;
 	responseModel?: string; // Concrete `chunk.model` when different from the requested `model` (e.g. OpenRouter `auto` -> `anthropic/...`)
 	responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
@@ -306,6 +363,8 @@ export interface ToolResultMessage<TDetails = any> {
 	toolName: string;
 	content: (TextContent | ImageContent)[]; // Supports text and images
 	details?: TDetails;
+	/** Names of tools introduced by this result and available from this transcript point onward. */
+	addedToolNames?: string[];
 	isError: boolean;
 	timestamp: number; // Unix timestamp in milliseconds
 }
@@ -415,6 +474,8 @@ export interface OpenAICompletionsCompat {
 	cacheControlFormat?: "anthropic";
 	/** Whether to send known session-affinity headers (`session_id`, `x-client-request-id`, `x-session-affinity`) from `options.sessionId` when caching is enabled. Default: false. */
 	sendSessionAffinityHeaders?: boolean;
+	/** Deferred tool serialization strategy. Default: disabled. */
+	deferredToolsMode?: "system-message";
 	/** Whether the provider supports long prompt cache retention (`prompt_cache_retention: "24h"` or Anthropic-style `cache_control.ttl: "1h"`, depending on format). Default: false. */
 	supportsLongCacheRetention?: boolean;
 }
@@ -429,10 +490,14 @@ export interface OpenAIResponsesCompat {
 	sendSessionIdHeader?: boolean;
 	/** Whether the provider supports `prompt_cache_retention: "24h"`. Default: false. */
 	supportsLongCacheRetention?: boolean;
+	/** Whether the model supports client-executed tool search for deferred tools. Default: false. */
+	supportsToolSearch?: boolean;
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */
 export interface AnthropicMessagesCompat {
+	/** Whether the provider supports message-anchored `tool_reference` blocks. Default: false for custom providers. */
+	supportsToolReferences?: boolean;
 	/**
 	 * Whether the provider accepts per-tool `eager_input_streaming`.
 	 * When false, the Anthropic provider omits `tools[].eager_input_streaming`
@@ -471,7 +536,7 @@ export interface AnthropicMessagesCompat {
 	 * require adaptive thinking set this in generated metadata. Custom
 	 * Anthropic-compatible providers can set this to `true` for any model whose
 	 * upstream requires the adaptive format. Set to `false` to
-	 * opt out on overridden built-in models.
+	 * opt out on explicitly supplied model metadata.
 	 * Default: false.
 	 */
 	forceAdaptiveThinking?: boolean;
@@ -566,12 +631,29 @@ export interface VercelGatewayRouting {
 	order?: string[];
 }
 
+export interface ModelCostRates {
+	input: number; // $/million tokens
+	output: number; // $/million tokens
+	cacheRead: number; // $/million tokens
+	cacheWrite: number; // $/million tokens
+}
+
+export interface ModelCostTier extends ModelCostRates {
+	/** Use this tier for requests whose total input usage exceeds this token count. */
+	inputTokensAbove: number;
+}
+
+export interface ModelCost extends ModelCostRates {
+	/** Request-wide pricing tiers. The highest matching input threshold applies to the full request. */
+	tiers?: ModelCostTier[];
+}
+
 // Model interface for the unified model system
 export interface Model<TApi extends Api> {
 	id: string;
 	name: string;
 	api: TApi;
-	provider: Provider;
+	provider: ProviderId;
 	baseUrl: string;
 	reasoning: boolean;
 	/**
@@ -580,19 +662,14 @@ export interface Model<TApi extends Api> {
 	 */
 	thinkingLevelMap?: ThinkingLevelMap;
 	input: ("text" | "image")[];
-	cost: {
-		input: number; // $/million tokens
-		output: number; // $/million tokens
-		cacheRead: number; // $/million tokens
-		cacheWrite: number; // $/million tokens
-	};
+	cost: ModelCost;
 	contextWindow: number;
 	maxTokens: number;
-	headers?: Record<string, string>;
+	headers?: ProviderHeaders;
 	/** Compatibility overrides for OpenAI-compatible APIs. If not set, REPI sends a minimal standard payload. */
 	compat?: TApi extends "openai-completions"
 		? OpenAICompletionsCompat
-		: TApi extends "openai-responses"
+		: TApi extends "openai-responses" | "openai-codex-responses"
 			? OpenAIResponsesCompat
 			: TApi extends "anthropic-messages"
 				? AnthropicMessagesCompat

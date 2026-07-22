@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { getModel, getModels } from "../src/models.ts";
+import { registerXiaomiFixtures } from "./model-fixtures.ts";
+
+registerXiaomiFixtures();
 
 describe("Xiaomi MiMo models", () => {
 	it("keeps mimo-v2-flash on the API billing provider", () => {
-		expect(getModel("xiaomi", "mimo-v2-flash")).toBeDefined();
+		expect(getModel<"openai-completions">("xiaomi", "mimo-v2-flash")).toBeDefined();
 	});
 
 	it.each(["xiaomi-token-plan-cn", "xiaomi-token-plan-ams", "xiaomi-token-plan-sgp"] as const)(

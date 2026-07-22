@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getThemeExportColors } from "../src/modes/interactive/theme/theme.ts";
+import { getThemeExportColors } from "../src/core/presentation/theme-runtime.ts";
 
 type ThemeFile = {
 	name: string;

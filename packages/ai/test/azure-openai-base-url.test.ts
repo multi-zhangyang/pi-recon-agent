@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.ts";
 import { streamAzureOpenAIResponses } from "../src/providers/azure-openai-responses.ts";
 import type { Context } from "../src/types.ts";
+import { registerAzureOpenAIFixtures } from "./model-fixtures.ts";
+
+registerAzureOpenAIFixtures();
 
 interface CapturedAzureClientOptions {
 	apiKey: string;
@@ -12,6 +15,7 @@ interface CapturedAzureClientOptions {
 }
 
 interface CapturedAzureResponsesPayload {
+	model?: string;
 	prompt_cache_key?: string;
 }
 
@@ -150,5 +154,24 @@ describe("azure-openai-responses base URL normalization", () => {
 		await streamAzureOpenAIResponses(model, context, { apiKey: "test-api-key" }).result();
 		expect(azureMock.constructorCalls).toHaveLength(1);
 		expect(azureMock.constructorCalls[0].baseURL).toBe("https://my-resource.openai.azure.com/openai/v1");
+	});
+
+	it("resolves resource, API version, and deployment from request-scoped env", async () => {
+		const model = getModel("azure-openai-responses", "gpt-4o-mini");
+		await streamAzureOpenAIResponses(model, context, {
+			apiKey: "test-api-key",
+			env: {
+				AZURE_OPENAI_RESOURCE_NAME: "scoped-resource",
+				AZURE_OPENAI_API_VERSION: "2026-07-01-preview",
+				AZURE_OPENAI_DEPLOYMENT_NAME_MAP: "gpt-4o-mini=scoped-deployment",
+			},
+		}).result();
+
+		expect(azureMock.constructorCalls).toHaveLength(1);
+		expect(azureMock.constructorCalls[0]).toMatchObject({
+			apiVersion: "2026-07-01-preview",
+			baseURL: "https://scoped-resource.openai.azure.com/openai/v1",
+		});
+		expect(azureMock.lastParams?.model).toBe("scoped-deployment");
 	});
 });

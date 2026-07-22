@@ -8,6 +8,22 @@ in `CHANGELOG.upstream.md` for reference.
 
 ## [Unreleased]
 
+### Changed
+
+- Source installs now build and validate all production workspace entrypoints; the checkout launcher prefers the current compiled Node runtime and falls back to `tsx` only when the build is missing, stale, or explicitly disabled for development.
+- Removed REPI's cross-session memory CLI, store, recall, and prompt-injection paths. Session transcripts and generic compaction now provide continuity without a second persistence system.
+- Removed the implicit provider/model catalog completely. Models now come only from `REPI_*`, explicit `models.json` providers, or extension registration; the environment path supports headers, compat overrides, thinking maps, input/reasoning metadata, context/output limits, four-way pricing, and pricing tiers.
+
+### Fixed
+
+- Prompt templates now support default values for positional and all-argument placeholders (`${N:-default}`, `${@:-default}`, and `${ARGUMENTS:-default}`).
+- System prompts no longer embed the wall-clock date, keeping otherwise identical provider cache prefixes stable across days.
+- OpenAI Responses streams that end before a terminal event now fail explicitly and enter the existing transient retry path.
+
+### Tests
+
+- Added installer/launcher smoke coverage for compiled runtime selection, stale or incomplete build fallback, package-command dispatch, and shell-routed product commands.
+
 ## [0.1.3] - 2026-07-07
 
 Patch release focused on env-provider correctness, runtime reliability, and release install safety.
@@ -49,7 +65,7 @@ Release focused on install reliability, env-first model selection, and upstream 
 
 ### Changed
 
-- REPI defaults to `REPI_LOAD_BUILTIN_MODELS=0`, so the runtime surface is environment providers, explicit `models.json` providers, and dynamic extension providers rather than the large upstream built-in catalog.
+- REPI no longer loads the upstream generated provider/model catalog; the runtime surface is environment providers, explicit `models.json` providers, and dynamic extension providers.
 - Swarm/subagent runtime manifests now carry explicit timeout, cancellation, and retry-attempt metadata into child-session and worker-pool validation.
 - Swarm/subagent timeout handling now terminates the worker process group, records `timeoutMs`/`maxTurns`/`cancelledAt`, and recovers partial stdout/stderr into merge output when a model fails to write `handoff.md`.
 - `re_swarm` output now surfaces worker closure rows (`passed`, `retry_queued`, timeout/cancel state, and evidence ref counts) so handoff/retry evidence is visible without opening the JSON artifact.
@@ -103,7 +119,7 @@ test-suite reconciliation. No feature or contract changes.
   `re-harness` were renamed to `re_profile_check` / `re-profile-check` (plus
   `GateV1` → `CheckV1` and `gate:` → `check:` markers). Also fixed a misshapen
   `prepareCompaction` mock and a `process.cwd()`-relative `dark.json` test
-  path, and added the missing `context-compact-audit.mjs` harness.
+  path.
 
 ### Docs
 
@@ -156,7 +172,6 @@ operator infrastructure.
   `repi engage`.
 - **Model + MCP management**: `repi model add|login|default|list|doctor|test`,
   `repi mcp status|list|probe|search|resources`.
-- **Memory**: `repi memory status|list|show|why|forget|quarantine|doctor|export|purge|consolidate`.
 
 ### Added — distribution
 

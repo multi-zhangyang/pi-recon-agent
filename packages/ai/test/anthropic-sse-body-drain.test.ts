@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import { getModel } from "../src/models.ts";
 import { streamAnthropic } from "../src/providers/anthropic.ts";
 import type { Context } from "../src/types.ts";
+import { registerAnthropicFixtures } from "./model-fixtures.ts";
+
+registerAnthropicFixtures();
 
 // opt #117 — iterateSseMessages (anthropic.ts) read the response body via a
 // reader whose `finally` only called reader.releaseLock(). On a mid-stream
@@ -77,7 +80,7 @@ describe("streamAnthropic cancels the SSE body on a mid-stream error event (opt 
 			headers: { "content-type": "text/event-stream" },
 		});
 
-		const model = getModel("anthropic", "claude-haiku-4-5");
+		const model = getModel<"anthropic-messages">("anthropic", "claude-haiku-4-5")!;
 		const context: Context = {
 			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
 		};

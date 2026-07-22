@@ -150,6 +150,70 @@ describe("AgentHarness", () => {
 		expect(persistedText).toEqual(["hello", "hook"]);
 	});
 
+	it("isolates nested context-hook mutations from the persisted session", async () => {
+		const registration = registerFauxProvider();
+		registrations.push(registration);
+		let requestText: string[] = [];
+		registration.setResponses([
+			(context) => {
+				requestText = textFromUserMessages(context.messages);
+				return fauxAssistantMessage("ok");
+			},
+		]);
+		const session = new Session(new InMemorySessionStorage());
+		const harness = new AgentHarness({
+			env: new NodeExecutionEnv({ cwd: process.cwd() }),
+			session,
+			model: registration.getModel(),
+		});
+		harness.on("context", (event) => {
+			const user = event.messages.find((message) => message.role === "user");
+			if (user && Array.isArray(user.content)) {
+				const text = user.content.find((part) => part.type === "text");
+				if (text?.type === "text") text.text = "hook-mutated";
+			}
+			return { messages: event.messages };
+		});
+
+		await harness.prompt("hello");
+
+		const persistedText = (await session.getEntries()).flatMap((entry) => {
+			if (entry.type !== "message" || entry.message.role !== "user") return [];
+			return textFromUserMessages([entry.message]);
+		});
+		expect(requestText).toEqual(["hook-mutated"]);
+		expect(persistedText).toEqual(["hello"]);
+	});
+
+	it("rejects unbounded context-hook growth before the provider request", async () => {
+		const registration = registerFauxProvider();
+		registrations.push(registration);
+		let requestText: string[] = [];
+		registration.setResponses([
+			(context) => {
+				requestText = textFromUserMessages(context.messages);
+				return fauxAssistantMessage("ok");
+			},
+		]);
+		const harness = new AgentHarness({
+			env: new NodeExecutionEnv({ cwd: process.cwd() }),
+			session: new Session(new InMemorySessionStorage()),
+			model: registration.getModel(),
+		});
+		harness.on("context", (event) => {
+			event.messages.push({
+				role: "user",
+				content: [{ type: "text", text: "x".repeat(40_000) }],
+				timestamp: Date.now(),
+			});
+			return { messages: event.messages };
+		});
+
+		await harness.prompt("hello");
+
+		expect(requestText).toEqual(["hello"]);
+	});
+
 	it("abort clears steer and follow-up queues but preserves next-turn messages", async () => {
 		const registration = registerFauxProvider();
 		registrations.push(registration);
@@ -450,6 +514,43 @@ describe("AgentHarness", () => {
 				role: "toolResult",
 				content: [{ type: "text", text: "patched result" }],
 				details: { patched: true },
+			},
+		});
+	});
+
+	it("does not persist in-place tool_result hook mutations without an explicit patch", async () => {
+		const registration = registerFauxProvider();
+		registrations.push(registration);
+		registration.setResponses([
+			() =>
+				fauxAssistantMessage(fauxToolCall("calculate", { expression: "2 + 2" }, { id: "call-1" }), {
+					stopReason: "toolUse",
+				}),
+			() => fauxAssistantMessage("done"),
+		]);
+		const session = new Session(new InMemorySessionStorage());
+		const harness = new AgentHarness({
+			env: new NodeExecutionEnv({ cwd: process.cwd() }),
+			session,
+			model: registration.getModel(),
+			tools: [calculateTool],
+		});
+		harness.on("tool_result", (event) => {
+			const text = event.content.find((part) => part.type === "text");
+			if (text?.type === "text") text.text = "hook-mutated";
+			return undefined;
+		});
+
+		await harness.prompt("hello");
+
+		const toolResult = (await session.getEntries()).find(
+			(entry) => entry.type === "message" && entry.message.role === "toolResult",
+		);
+		expect(toolResult).toMatchObject({
+			type: "message",
+			message: {
+				role: "toolResult",
+				content: [{ type: "text", text: "2 + 2 = 4" }],
 			},
 		});
 	});

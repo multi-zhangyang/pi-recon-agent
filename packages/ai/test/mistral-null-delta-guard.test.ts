@@ -4,6 +4,9 @@ import { getModel } from "../src/models.ts";
 import { consumeChatStream } from "../src/providers/mistral.ts";
 import type { AssistantMessage, Model, Usage } from "../src/types.ts";
 import { AssistantMessageEventStream } from "../src/utils/event-stream.ts";
+import { registerMistralFixtures } from "./model-fixtures.ts";
+
+registerMistralFixtures();
 
 // Regression guard for opt #178 — consumeChatStream (mistral.ts) read `choice.delta`
 // then immediately did `delta.content !== null` with NO null-delta guard. The SDK type
@@ -72,7 +75,7 @@ async function* fakeStream(): AsyncIterable<CompletionEvent> {
 
 describe("Mistral null choice.delta guard (opt #178)", () => {
 	it("preserves accumulated text and stopReason when the terminal chunk has delta: null", async () => {
-		const model = getModel("mistral", "codestral-latest");
+		const model = getModel<"mistral-conversations">("mistral", "codestral-latest")!;
 		const output = buildOutput(model);
 		const stream = new AssistantMessageEventStream();
 
@@ -94,7 +97,7 @@ describe("Mistral null choice.delta guard (opt #178)", () => {
 		// The consumeChatStream path is the only place delta is dereferenced; assert the
 		// public contract: no throw, content preserved, no errorMessage — the silent-discard
 		// regression under test.
-		const model = getModel("mistral", "codestral-latest");
+		const model = getModel<"mistral-conversations">("mistral", "codestral-latest")!;
 		const output = buildOutput(model);
 		const stream = new AssistantMessageEventStream();
 		await consumeChatStream(model, output, stream, fakeStream());

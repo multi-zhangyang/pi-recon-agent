@@ -1,4 +1,4 @@
-import { complete, getModel } from "@pi-recon/repi-ai";
+import { complete } from "@pi-recon/repi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@pi-recon/repi-coding-agent";
 import { DynamicBorder, getMarkdownTheme } from "@pi-recon/repi-coding-agent";
 import { Container, Markdown, matchesKey, Text } from "@pi-recon/repi-tui";
@@ -160,9 +160,10 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify("Preparing summary...", "info");
 			}
 
-			const model = getModel("openai", "gpt-5.2");
+			// This model must be supplied explicitly by models.json, REPI_*, or an extension.
+			const model = ctx.modelRegistry.find("openai", "gpt-5.2");
 			if (!model && ctx.hasUI) {
-				ctx.ui.notify("Model openai/gpt-5.2 not found", "warning");
+				ctx.ui.notify("Configure model openai/gpt-5.2 before using /summarize", "warning");
 			}
 
 			const auth = model ? await ctx.modelRegistry.getApiKeyAndHeaders(model) : undefined;

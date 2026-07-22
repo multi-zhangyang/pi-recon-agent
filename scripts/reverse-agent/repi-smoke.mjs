@@ -74,7 +74,6 @@ const steps = [
 	// those probes can take ~15-20s each; keep smoke fast but do not make the
 	// aggregate doctor step race its own internal 45s probe budget.
 	{ id: "doctor", cmd: "node", args: [script("repi-doctor.mjs"), root], timeout: 90_000 },
-	{ id: "memory-status", cmd: "node", args: [script("memory-inspect.mjs"), root, "status", "--json"] },
 	{ id: "model-doctor", cmd: "node", args: [script("model-inspect.mjs"), root, "doctor", "--json"] },
 	{
 		id: "model-status-env",

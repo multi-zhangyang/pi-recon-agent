@@ -75,6 +75,24 @@ export function sanitizeTargetForCommand(value?: string): string | undefined {
 	return classified.value;
 }
 
+/** Extract only an explicit target token from a natural-language task. */
+export function extractRepiTaskTarget(value?: string): string | undefined {
+	const text = value?.trim();
+	if (!text) return undefined;
+	const candidates = [
+		text.match(/https?:\/\/[^\s'"`<>)]+/i)?.[0]?.replace(/[),.;]+$/, ""),
+		text.match(/\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b/)?.[0],
+		text.match(
+			/\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|cn|app|dev|site|co|xyz|info|biz|ai|cloud|edu|gov|me|local|test)(?::\d+)?\b/i,
+		)?.[0],
+		text.match(/(?:^|\s)(\.{1,2}\/[^\s'"`<>]+|~\/[^\s'"`<>]+|\/[A-Za-z0-9_][^\s'"`<>]*)/)?.[1],
+		text.match(
+			/\b[A-Za-z0-9_@+-]+\.(?:elf|bin|so|exe|dll|dylib|wasm|apk|ipa|pcap|pcapng|raw|vmem|img|rom|zip|tar|gz|xz)\b/i,
+		)?.[0],
+	].filter((candidate): candidate is string => Boolean(candidate));
+	return candidates.map((candidate) => candidate.replace(/[),.;]+$/, "")).find(Boolean);
+}
+
 export function commandTarget(value?: string, fallback?: string, placeholder = "<target>"): string {
 	return sanitizeTargetForCommand(value) ?? sanitizeTargetForCommand(fallback) ?? placeholder;
 }

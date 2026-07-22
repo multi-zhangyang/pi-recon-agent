@@ -4,38 +4,32 @@
  * Shows how to select a specific model and thinking level.
  */
 
-import { getModel } from "@pi-recon/repi-ai";
-import { AuthStorage, createAgentSession, ModelRegistry } from "@pi-recon/repi-coding-agent";
+import { AuthStorage, createAgentSession, ModelRuntime } from "@pi-recon/repi-coding-agent";
 
-// Set up auth storage and model registry
+// ModelRuntime reads only explicit ~/.repi/agent/models.json and REPI_* configuration.
 const authStorage = AuthStorage.create();
-const modelRegistry = ModelRegistry.create(authStorage);
+const modelRuntime = await ModelRuntime.create({ credentials: authStorage.asCredentialStore() });
 
-// Option 1: Find a specific built-in model by provider/id
-const opus = getModel("anthropic", "claude-opus-4-5");
-if (opus) {
-	console.log(`Found model: ${opus.provider}/${opus.id}`);
+// Option 1: Find a model explicitly declared by the host.
+const configuredModel = modelRuntime.getModel("my-provider", "my-model");
+if (configuredModel) {
+	console.log(`Found model: ${configuredModel.provider}/${configuredModel.id}`);
 }
 
-// Option 2: Find model via registry (includes custom models from models.json)
-const customModel = modelRegistry.find("my-provider", "my-model");
-if (customModel) {
-	console.log(`Found custom model: ${customModel.provider}/${customModel.id}`);
-}
-
-// Option 3: Pick from available models (have valid API keys)
-const available = await modelRegistry.getAvailable();
+// Option 2: Pick from explicitly configured models that have usable credentials.
+const available = await modelRuntime.getAvailable();
 console.log(
 	"Available models:",
 	available.map((m) => `${m.provider}/${m.id}`),
 );
 
-if (available.length > 0) {
+const model = configuredModel ?? available[0];
+if (model) {
 	const { session } = await createAgentSession({
-		model: available[0],
+		model,
 		thinkingLevel: "medium", // off, low, medium, high
 		authStorage,
-		modelRegistry,
+		modelRuntime,
 	});
 
 	try {
@@ -50,4 +44,6 @@ if (available.length > 0) {
 	} finally {
 		session.dispose();
 	}
+} else {
+	console.log("Configure a model with models.json or REPI_* before running this example.");
 }

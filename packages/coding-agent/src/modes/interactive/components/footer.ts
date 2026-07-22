@@ -3,7 +3,7 @@ import { type Component, truncateToWidth, visibleWidth } from "@pi-recon/repi-tu
 import type { AgentSession } from "../../../core/agent-session.ts";
 import { compactionTriggerTokens, DEFAULT_COMPACTION_SETTINGS } from "../../../core/compaction/index.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
-import { theme } from "../theme/theme.ts";
+import { theme } from "../../../core/presentation/theme-runtime.ts";
 
 /**
  * Sanitize text for display in a single-line status.
@@ -20,7 +20,7 @@ function sanitizeStatusText(text: string): string {
 /**
  * Format token counts for compact footer display.
  */
-function formatTokens(count: number): string {
+export function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
 	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
 	if (count < 1000000) return `${Math.round(count / 1000)}k`;
@@ -167,7 +167,8 @@ export class FooterComponent implements Component {
 				? (compactionTriggerTokens(contextWindow, compactionSettings) / contextWindow) * 100
 				: undefined;
 		const errorThreshold = compactionTriggerPercent ?? 90;
-		const configuredWarningThreshold = compactionSettings.warningPercent ?? 70;
+		const configuredWarningThreshold =
+			compactionSettings.warningPercent ?? DEFAULT_COMPACTION_SETTINGS.warningPercent ?? 80;
 		const warningThreshold = Math.min(configuredWarningThreshold, Math.max(0, errorThreshold - 5));
 		const autoIndicator =
 			this.autoCompactEnabled && compactionTriggerPercent !== undefined

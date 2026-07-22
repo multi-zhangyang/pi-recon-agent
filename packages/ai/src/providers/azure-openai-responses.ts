@@ -6,13 +6,15 @@ import type {
 	AssistantMessage,
 	Context,
 	Model,
+	ProviderHeaders,
 	SimpleStreamOptions,
 	StreamFunction,
 	StreamOptions,
 } from "../types.ts";
 import { terminalErrorMessage } from "../utils/error-stringify.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
-import { headersToRecord } from "../utils/headers.ts";
+import { headersToRecord, mergeProviderHeaders } from "../utils/headers.ts";
+import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { callOnResponseWithDrain } from "../utils/response-drain.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.ts";
@@ -38,7 +40,9 @@ function resolveDeploymentName(model: Model<"azure-openai-responses">, options?:
 	if (options?.azureDeploymentName) {
 		return options.azureDeploymentName;
 	}
-	const mappedDeployment = parseDeploymentNameMap(process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(model.id);
+	const mappedDeployment = parseDeploymentNameMap(
+		getProviderEnvValue("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", options?.env),
+	).get(model.id);
 	return mappedDeployment || model.id;
 }
 
@@ -60,7 +64,7 @@ function formatAzureOpenAIError(error: unknown): string {
 
 // Azure OpenAI Responses-specific options
 export interface AzureOpenAIResponsesOptions extends StreamOptions {
-	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
 	azureApiVersion?: string;
 	azureResourceName?: string;
@@ -205,10 +209,14 @@ function resolveAzureConfig(
 	model: Model<"azure-openai-responses">,
 	options?: AzureOpenAIResponsesOptions,
 ): { baseUrl: string; apiVersion: string } {
-	const apiVersion = options?.azureApiVersion || process.env.AZURE_OPENAI_API_VERSION || DEFAULT_AZURE_API_VERSION;
+	const apiVersion =
+		options?.azureApiVersion ||
+		getProviderEnvValue("AZURE_OPENAI_API_VERSION", options?.env) ||
+		DEFAULT_AZURE_API_VERSION;
 
-	const baseUrl = options?.azureBaseUrl?.trim() || process.env.AZURE_OPENAI_BASE_URL?.trim() || undefined;
-	const resourceName = options?.azureResourceName || process.env.AZURE_OPENAI_RESOURCE_NAME;
+	const baseUrl =
+		options?.azureBaseUrl?.trim() || getProviderEnvValue("AZURE_OPENAI_BASE_URL", options?.env)?.trim() || undefined;
+	const resourceName = options?.azureResourceName || getProviderEnvValue("AZURE_OPENAI_RESOURCE_NAME", options?.env);
 
 	let resolvedBaseUrl = baseUrl;
 
@@ -233,11 +241,7 @@ function resolveAzureConfig(
 }
 
 function createClient(model: Model<"azure-openai-responses">, apiKey: string, options?: AzureOpenAIResponsesOptions) {
-	const headers = { ...model.headers };
-
-	if (options?.headers) {
-		Object.assign(headers, options.headers);
-	}
+	const headers: ProviderHeaders = mergeProviderHeaders(model.headers, options?.headers) ?? {};
 
 	const { baseUrl, apiVersion } = resolveAzureConfig(model, options);
 

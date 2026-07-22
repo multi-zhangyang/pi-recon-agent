@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@pi-recon/repi-ai";
@@ -52,7 +52,9 @@ function writeStubBin(): string {
 			// stdout tail. mergeRun must surface the handoff file as ## Worker handoff.
 			'if [ -n "$REPI_WORKER_HANDOFF_PATH" ]; then\n' +
 			'  mkdir -p "$(dirname "$REPI_WORKER_HANDOFF_PATH")"\n' +
-			"  cat > \"$REPI_WORKER_HANDOFF_PATH\" <<'HOEOF'\n" +
+			"  {\n" +
+			'    printf \'run_id: %s\\nmission_id: %s\\nlineage_sha256: %s\\n\' "$REPI_WORKER_RUN_ID" "$REPI_WORKER_MISSION_ID" "$REPI_WORKER_LINEAGE_SHA256"\n' +
+			"    cat <<'HOEOF'\n" +
 			"Outcome: claim verified\n" +
 			"Key Evidence: readelf -lW shows PIE; offset 0x40 controlled\n" +
 			"Verification: reproducible, 2 stable runs\n" +
@@ -60,6 +62,7 @@ function writeStubBin(): string {
 			"Gaps: none\n" +
 			"Artifacts: handoff.md\n" +
 			"HOEOF\n" +
+			'  } > "$REPI_WORKER_HANDOFF_PATH"\n' +
 			"fi\n" +
 			"printf 'VERIFIER_HANDOFF_PROOF: claim verified\\nfindings: ok\\n'\n" +
 			"exit 0\n",
@@ -278,6 +281,10 @@ describe("re_subagent tool", () => {
 			expect(resultText).toContain("Outcome: claim verified");
 			expect(resultText).toContain("Key Evidence: readelf -lW shows PIE");
 			expect(resultText).toContain("handoff_path:");
+			const ledger = readFileSync(join(agentDir, "recon", "evidence", "ledger.md"), "utf8");
+			expect(ledger).toContain("subagent-handoff-verifier-complete");
+			expect(ledger).toContain("stdout_sha256=");
+			expect(ledger).toContain("candidate: process-isolated handoff");
 		});
 	});
 });

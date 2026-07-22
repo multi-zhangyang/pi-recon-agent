@@ -12,6 +12,7 @@
 	},
 	"files": [
 		"dist/**/*",
+		"!dist/**/*.map",
 		"native/win32/prebuilds/**/*.node",
 		"native/darwin/prebuilds/**/*.node",
 		"README.md"

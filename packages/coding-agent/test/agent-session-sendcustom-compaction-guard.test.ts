@@ -116,7 +116,9 @@ describe("AgentSession sendCustomMessage during compaction guard (opt #246)", ()
 	it("routes a triggerTurn sendCustomMessage during compaction to the steer queue, not _runAgentPrompt", async () => {
 		// Mock agent.continue so the post-compaction drain of the queued steer
 		// message does not start a real LLM run.
-		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const continueSpy = vi.spyOn(session.agent, "continue").mockImplementation(async () => {
+			session.agent.clearAllQueues();
+		});
 		// _runAgentPrompt is the dangerous path — must NOT be called during compaction.
 		const runPromptSpy = vi
 			.spyOn(session as unknown as { _runAgentPrompt: (msg: unknown) => Promise<void> }, "_runAgentPrompt")
@@ -153,7 +155,9 @@ describe("AgentSession sendCustomMessage during compaction guard (opt #246)", ()
 	}, 15000);
 
 	it("does not push a no-trigger sendCustomMessage into state.messages during compaction (would be clobbered)", async () => {
-		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const continueSpy = vi.spyOn(session.agent, "continue").mockImplementation(async () => {
+			session.agent.clearAllQueues();
+		});
 		const messagesBefore = session.agent.state.messages.length;
 
 		sessionManager.appendMessage({

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { getModel, getSupportedThinkingLevels } from "../src/models.ts";
+import { registerThinkingLevelFixtures } from "./model-fixtures.ts";
+
+registerThinkingLevelFixtures();
 
 describe("getSupportedThinkingLevels", () => {
 	it("includes xhigh for Anthropic Opus 4.6 on anthropic-messages API", () => {

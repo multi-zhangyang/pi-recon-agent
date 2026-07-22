@@ -48,6 +48,9 @@ vi.mock("@google/genai", () => {
 import { getModel } from "../src/models.ts";
 import { streamGoogleVertex } from "../src/providers/google-vertex.ts";
 import type { Context, Model } from "../src/types.ts";
+import { registerGoogleVertexFixtures } from "./model-fixtures.ts";
+
+registerGoogleVertexFixtures();
 
 const model = getModel("google-vertex", "gemini-3-flash-preview");
 const context: Context = {
@@ -87,6 +90,24 @@ describe("google-vertex api key resolution", () => {
 			apiVersion: "v1",
 		});
 		expect(googleGenAiMock.constructorCalls[0]).not.toHaveProperty("apiKey");
+	});
+
+	it("uses provider-scoped ADC configuration before process environment", async () => {
+		const stream = streamGoogleVertex(model, context, {
+			env: {
+				GOOGLE_CLOUD_PROJECT: "scoped-project",
+				GOOGLE_CLOUD_LOCATION: "europe-west1",
+				GOOGLE_APPLICATION_CREDENTIALS: "/tmp/scoped-service-account.json",
+			},
+		});
+
+		await stream.result();
+
+		expect(googleGenAiMock.constructorCalls[0]).toMatchObject({
+			project: "scoped-project",
+			location: "europe-west1",
+			googleAuthOptions: { keyFilename: "/tmp/scoped-service-account.json" },
+		});
 	});
 
 	it("falls back to ADC when options.apiKey is the gcp-vertex-credentials marker", async () => {

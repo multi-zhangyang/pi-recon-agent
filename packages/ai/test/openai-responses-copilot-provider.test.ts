@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.ts";
 import { streamOpenAIResponses } from "../src/providers/openai-responses.ts";
 import type { Model } from "../src/types.ts";
+import { registerGitHubCopilotFixtures, registerOpenAIResponsesRegressionFixtures } from "./model-fixtures.ts";
+
+registerGitHubCopilotFixtures();
+registerOpenAIResponsesRegressionFixtures();
 
 type CapturedHeaders = Headers | string[][] | Record<string, string | readonly string[]> | undefined;
 
@@ -57,7 +61,7 @@ describe("openai-responses provider defaults", () => {
 	});
 
 	it("omits reasoning when no reasoning is requested", async () => {
-		const model = getModel("github-copilot", "gpt-5-mini");
+		const model = getModel<"openai-responses">("github-copilot", "gpt-5-mini");
 		let capturedPayload: unknown;
 
 		vi.spyOn(globalThis, "fetch").mockResolvedValue(

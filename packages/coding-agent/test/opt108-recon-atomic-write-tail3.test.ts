@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import { createReconExtensionFactory } from "../src/core/recon-profile.ts";
@@ -9,7 +9,6 @@ import {
 	evidenceDecisionsDir,
 	evidenceProfileCheckDir,
 	evidenceVerifiersDir,
-	memoryPath,
 } from "../src/core/repi/storage.ts";
 
 // opt #108: third tail pass of the repi atomic-write audit. Prior opts
@@ -19,15 +18,13 @@ import {
 // via readText (show action / JSON.parse(readText(path))) so a crash-torn write
 // silently degrades state:
 //   writeDecisionCoreArtifact  → evidence/decisions/<ts>.md  (NEW file: mode 0o600)
-//                              + memory/decision-core.md     (REWRITE-same-path: inode-change)
 //   writeProfileCheckArtifact  → evidence/profile-check/<ts>.md (NEW file: mode 0o600)
 //   writeVerifierArtifact      → evidence/verifiers/<ts>.md  (NEW file: mode 0o600)
 //   writeCompilerArtifact      → evidence/compilers/<ts>.md  (NEW file: mode 0o600, JSON-parse read)
 // Drives re_decision_core plan ×2, re_profile_check quick ×2, re_verifier check ×2,
 // re_compiler draft ×2 via the fakePi harness and probes: inode-change on the
-// rewrite-same-path board (atomic temp+rename swaps the inode; truncate-then-write
-// keeps it) AND mode 0o600 on the new timestamped artifacts (bare writeFileSync
-// yields 0o644 under default umask) AND no .tmp leftover in any involved directory.
+// mode 0o600 on the new timestamped artifacts (bare writeFileSync yields 0o644
+// under default umask) and no .tmp leftovers in the artifact directories.
 
 const ENV_AGENT_DIR = "REPI_CODING_AGENT_DIR";
 
@@ -37,10 +34,6 @@ type RegisteredTool = {
 	name: string;
 	execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
 };
-
-function reconMemoryDir(): string {
-	return dirname(memoryPath("x"));
-}
 
 function latestMarkdown(dir: string): string | undefined {
 	const files = readdirSync(dir)
@@ -93,28 +86,19 @@ describe("recon-profile atomic writes tail3 (opt #108)", () => {
 	}
 
 	it(
-		"re_decision_core plan ×2 writes the artifact (0o600) + rewrites decision-core.md atomically (inode-change, no .tmp)",
+		"re_decision_core plan ×2 writes private artifacts without temporary-file leftovers",
 		async () => {
 			const tools = registerTools();
 			const tool = tools.get("re_decision_core");
 			expect(tool, "re_decision_core tool registered").toBeDefined();
 
 			const decisionsDir = evidenceDecisionsDir();
-			const memDir = reconMemoryDir();
-
 			await (tool as RegisteredTool).execute("dc-1", { action: "plan" });
-
-			const boardAfter1 = statSync(memoryPath("decision-core.md")).ino;
 
 			// Distinct millisecond so the second artifact gets a fresh timestamp filename.
 			await new Promise((resolve) => setTimeout(resolve, 5));
 
 			await (tool as RegisteredTool).execute("dc-2", { action: "plan" });
-
-			const boardAfter2 = statSync(memoryPath("decision-core.md")).ino;
-
-			// decision-core.md rewritten via atomic temp+rename → inode changes.
-			expect(boardAfter2, "decision-core.md inode changed between plans").not.toBe(boardAfter1);
 
 			// decision-core artifact: the latest decisions artifact .md is a NEW file
 			// written via writePrivateTextFile → mode 0o600 (bare writeFileSync would be 0o644).
@@ -125,7 +109,6 @@ describe("recon-profile atomic writes tail3 (opt #108)", () => {
 			);
 
 			noTmpLeftover(decisionsDir);
-			noTmpLeftover(memDir);
 		},
 		testTimeout,
 	);

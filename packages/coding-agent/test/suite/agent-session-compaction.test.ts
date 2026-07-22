@@ -1,6 +1,3 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import {
 	type AssistantMessage,
 	createAssistantMessageEventStream,
@@ -11,15 +8,12 @@ import {
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createReconExtensionFactory } from "../../src/core/recon-profile.ts";
-import type { CustomEntry } from "../../src/core/session-manager.ts";
 import { createHarness, getMessageText, type Harness } from "./harness.ts";
 
 type SessionWithCompactionInternals = {
 	_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<boolean>;
 	_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
 };
-
-const ENV_AGENT_DIR = "REPI_CODING_AGENT_DIR";
 
 function createUsage(totalTokens: number) {
 	return {
@@ -85,12 +79,17 @@ function seedCompactableSession(harness: Harness): void {
 	});
 	harness.sessionManager.appendMessage(
 		createAssistant(harness, {
-			text: "assistant message to compact ".repeat(40),
+			text: "assistant message to compact ".repeat(200),
 			stopReason: "stop",
 			totalTokens: 100,
 			timestamp: now - 500,
 		}),
 	);
+	harness.sessionManager.appendMessage({
+		role: "user",
+		content: [{ type: "text", text: "recent request to keep" }],
+		timestamp: now,
+	});
 	harness.session.agent.state.messages = harness.sessionManager.buildSessionContext().messages;
 }
 
@@ -133,76 +132,26 @@ describe("AgentSession compaction characterization", () => {
 		expect(harness.session.messages[0]?.role).toBe("compactionSummary");
 	});
 
-	it("manually compacts through REPI and writes the resume-contract audit entry", async () => {
-		const previousAgentDir = process.env[ENV_AGENT_DIR];
-		const agentDir = join(tmpdir(), `pi-recon-compact-suite-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-		mkdirSync(agentDir, { recursive: true });
-		process.env[ENV_AGENT_DIR] = agentDir;
-		try {
-			const harness = await createHarness({
-				settings: { compaction: { keepRecentTokens: 1 } },
-				extensionFactories: [createReconExtensionFactory()],
-			});
-			harnesses.push(harness);
-			seedCompactableSession(harness);
-			harness.setResponses([fauxAssistantMessage("auto resumed from compaction contract")]);
+	it("rejects a compaction that would grow the estimated context", async () => {
+		const harness = await createHarness({
+			settings: { compaction: { keepRecentTokens: 1 } },
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", async (event) => ({
+						compaction: {
+							summary: "oversized summary ".repeat(1_000),
+							firstKeptEntryId: event.preparation.firstKeptEntryId,
+							tokensBefore: event.preparation.tokensBefore,
+						},
+					}));
+				},
+			],
+		});
+		harnesses.push(harness);
+		seedCompactableSession(harness);
 
-			const result = await harness.session.compact();
-			const compactionEntries = harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction");
-			const resumeContracts = harness.sessionManager
-				.getEntries()
-				.filter(
-					(entry): entry is CustomEntry<Record<string, unknown>> =>
-						entry.type === "custom" && entry.customType === "repi-compaction-resume-contract",
-				);
-			const autoResumeEntries = harness.sessionManager
-				.getEntries()
-				.filter(
-					(entry): entry is CustomEntry<Record<string, unknown>> =>
-						entry.type === "custom" && entry.customType === "repi-compaction-auto-resume",
-				);
-			const telemetryEntries = harness.sessionManager
-				.getEntries()
-				.filter(
-					(entry): entry is CustomEntry<Record<string, unknown>> =>
-						entry.type === "custom" && entry.customType === "repi-compaction-resume-telemetry",
-				);
-
-			expect(result.summary).toContain("# REPI Compaction Summary");
-			expect(result.summary).toContain("kind: repi-compaction");
-			expect(result.summary).toContain("re_context resume");
-			expect(result.details).toMatchObject({ kind: "repi-compaction" });
-			expect(compactionEntries).toHaveLength(1);
-			expect(compactionEntries[0]).toMatchObject({ fromHook: true });
-			expect(resumeContracts).toHaveLength(1);
-			expect(resumeContracts[0]?.data).toMatchObject({
-				kind: "repi-compaction-resume-contract",
-				verified: true,
-				compactionKind: "repi-compaction",
-			});
-			expect(existsSync(String(resumeContracts[0]?.data?.contextPath))).toBe(true);
-			expect(autoResumeEntries).toHaveLength(1);
-			expect(autoResumeEntries[0]?.data).toMatchObject({
-				kind: "repi-compaction-auto-resume",
-				triggered: true,
-				contractVerified: true,
-			});
-			expect(telemetryEntries).toHaveLength(1);
-			expect(telemetryEntries[0]?.data).toMatchObject({
-				kind: "repi-compaction-resume-telemetry",
-				contractVerified: true,
-				autoResumeTriggered: true,
-			});
-			await harness.session.agent.waitForIdle();
-			expect(harness.getPendingResponseCount()).toBe(0);
-		} finally {
-			if (previousAgentDir === undefined) {
-				delete process.env[ENV_AGENT_DIR];
-			} else {
-				process.env[ENV_AGENT_DIR] = previousAgentDir;
-			}
-			rmSync(agentDir, { recursive: true, force: true });
-		}
+		await expect(harness.session.compact()).rejects.toThrow("Compaction did not reduce estimated context");
+		expect(harness.sessionManager.getEntries().some((entry) => entry.type === "compaction")).toBe(false);
 	});
 
 	it("does not auto-compact generic 400 no-body provider errors", async () => {
@@ -434,8 +383,9 @@ describe("AgentSession compaction characterization", () => {
 			});
 			return stream;
 		};
+		seedCompactableSession(harness);
 
-		await harness.session.prompt("start autonomous work");
+		await harness.session.prompt("start autonomous work ".repeat(1_000));
 
 		expect(toolCalls).toEqual(["one"]);
 		expect(streamCalls).toBe(2);

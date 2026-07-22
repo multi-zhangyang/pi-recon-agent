@@ -6,7 +6,11 @@ import type { Api, Model } from "@pi-recon/repi-ai";
 import { fuzzyFilter } from "@pi-recon/repi-tui";
 import chalk from "chalk";
 import { formatNoModelsAvailableMessage } from "../core/auth-guidance.ts";
-import type { ModelRegistry } from "../core/model-registry.ts";
+
+export interface ModelListSource {
+	getError(): string | undefined;
+	getAvailable(): readonly Model<Api>[] | Promise<readonly Model<Api>[]>;
+}
 
 /**
  * Format a number as human-readable (e.g., 200000 -> "200K", 1000000 -> "1M")
@@ -26,13 +30,13 @@ function formatTokenCount(count: number): string {
 /**
  * List available models, optionally filtered by search pattern
  */
-export async function listModels(modelRegistry: ModelRegistry, searchPattern?: string): Promise<void> {
-	const loadError = modelRegistry.getError();
+export async function listModels(modelsSource: ModelListSource, searchPattern?: string): Promise<void> {
+	const loadError = modelsSource.getError();
 	if (loadError) {
 		console.error(chalk.yellow(`Warning: errors loading models.json:\n${loadError}`));
 	}
 
-	const models = modelRegistry.getAvailable();
+	const models = [...(await modelsSource.getAvailable())];
 
 	if (models.length === 0) {
 		console.log(formatNoModelsAvailableMessage());

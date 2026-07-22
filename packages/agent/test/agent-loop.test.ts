@@ -1359,6 +1359,7 @@ describe("agentLoop with AgentMessage", () => {
 				return {
 					content: [{ type: "text", text: `echoed: ${params.value}` }],
 					details: { value: params.value },
+					addedToolNames: ["new-tool"],
 				};
 			},
 		};
@@ -1393,7 +1394,10 @@ describe("agentLoop with AgentMessage", () => {
 			// consume
 		}
 
+		const messages = await stream.result();
+		const toolResult = messages.find((message) => message.role === "toolResult");
 		expect(llmCalls).toBe(1);
+		expect(toolResult?.addedToolNames).toEqual(["new-tool"]);
 	});
 });
 

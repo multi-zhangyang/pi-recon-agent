@@ -1,7 +1,8 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getAgentDir, getPackageDir } from "../config.ts";
+import { DEFAULT_COMPACTION_SETTINGS } from "./compaction/compaction.ts";
 import { atomicWriteFileSync } from "./tools/atomic-write.ts";
 
 export interface RepiProfileInitResult {
@@ -38,19 +39,159 @@ function writeJson(path: string, value: unknown, mode?: number): void {
 	// opt #43 (SettingsManager runtime path); this startup init path bypassed the
 	// SettingsManager entirely. The helper preserves an existing target's mode
 	// across the replace and unlinks the temp on any failure.
-	atomicWriteFileSync(path, `${JSON.stringify(value, null, 2)}\n`, mode ?? 0o600);
+	const content = `${JSON.stringify(value, null, 2)}\n`;
+	try {
+		if (readFileSync(path, "utf8") === content) {
+			chmodSync(path, mode ?? 0o600);
+			return;
+		}
+	} catch {}
+	atomicWriteFileSync(path, content, mode ?? 0o600);
 }
 
 function copyIfMissing(from: string, to: string, mode?: number): boolean {
 	if (!existsSync(from) || existsSync(to)) return false;
 	mkdir(dirname(to));
-	copyFileSync(from, to);
-	if (mode !== undefined) chmodSync(to, mode);
+	// A failed direct copy can leave a truncated destination that makes every
+	// later startup skip the legacy import via existsSync(to). Publish only a
+	// complete JSON file so a failed import leaves the destination retryable.
+	atomicWriteFileSync(to, readFileSync(from, "utf8"), mode ?? 0o600);
 	return true;
 }
 
 function truthyEnv(value: string | undefined): boolean {
 	return value === "1" || value?.toLowerCase() === "true" || value?.toLowerCase() === "yes";
+}
+
+/**
+ * Return only profile roots created by REPI's worker/session isolation code.
+ * Evidence can contain user-owned fixtures named settings.json, so do not
+ * recursively discover files by name.
+ */
+function knownIsolatedProfileSettings(agentDir: string): string[] {
+	const paths = [join(agentDir, "settings.json")];
+	const add = (path: string) => paths.push(path);
+	const threadRoot = join(agentDir, "recon", "agent-threads");
+	try {
+		for (const entry of readdirSync(threadRoot, { withFileTypes: true })) {
+			if (entry.isDirectory()) add(join(threadRoot, entry.name, "agent-home", "settings.json"));
+		}
+	} catch {
+		// Missing worker roots are normal.
+	}
+	const swarmsRoot = join(agentDir, "recon", "evidence", "swarms");
+	try {
+		for (const entry of readdirSync(swarmsRoot, { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			if (/-sessions$/.test(entry.name)) {
+				add(join(swarmsRoot, entry.name, ".repi", "agent", "settings.json"));
+			}
+			if (/-worker-child-session-runtime-child-process$/.test(entry.name)) {
+				add(join(swarmsRoot, entry.name, "home", ".repi", "agent", "settings.json"));
+			}
+		}
+	} catch {
+		// Missing swarm roots are normal.
+	}
+	return Array.from(new Set(paths));
+}
+
+function removeRetiredMemorySetting(path: string): void {
+	const settings = readJson(path);
+	if (!settings || Array.isArray(settings) || !Object.hasOwn(settings, "memory")) return;
+	delete settings.memory;
+	writeJson(path, settings, 0o600);
+}
+
+/**
+ * Remove state written by the retired persistent-memory/file-profile runtime.
+ *
+ * This is deliberately a narrow, idempotent migration. Session transcripts,
+ * mission state, and ordinary evidence remain intact; only paths that could
+ * reintroduce the removed memory/trace/profile prompt surface are removed.
+ */
+function removeRetiredRuntimeState(agentDir: string): void {
+	const remove = (path: string) => {
+		try {
+			rmSync(path, { recursive: true, force: true });
+		} catch {
+			// Best effort: a locked stale artifact must not prevent startup.
+		}
+	};
+
+	for (const path of [
+		join(agentDir, "memory"),
+		join(agentDir, "SYSTEM.md"),
+		join(agentDir, "APPEND_SYSTEM.md"),
+		// Retired file-profile resources. Keep the scope exact so a user-owned
+		// prompt/skill outside the isolated REPI profile is never touched.
+		join(agentDir, "prompts", "memory.md"),
+		join(agentDir, "skills", "reverse-pentest-orchestrator"),
+		join(agentDir, "recon", "memory"),
+		join(agentDir, "recon", "builtin"),
+		join(agentDir, "recon", "evidence", "knowledge"),
+		join(agentDir, "recon", "evidence", "tool-calls"),
+	]) {
+		remove(path);
+	}
+
+	const archiveDir = join(agentDir, "recon", "archive");
+	try {
+		for (const entry of readdirSync(join(agentDir, "extensions"), { withFileTypes: true })) {
+			if (entry.isDirectory() && /^(?:legacy-tools|legacy-hooks)-/.test(entry.name)) {
+				remove(join(agentDir, "extensions", entry.name));
+			}
+		}
+	} catch {
+		// Missing extension directory is normal.
+	}
+	try {
+		const runsDir = join(agentDir, "recon", "evidence", "runs");
+		for (const entry of readdirSync(runsDir, { withFileTypes: true })) {
+			if (/(?:case-memory|knowledge-graph)/i.test(entry.name)) remove(join(runsDir, entry.name));
+		}
+	} catch {
+		// Missing run evidence is normal.
+	}
+
+	try {
+		for (const entry of readdirSync(archiveDir, { withFileTypes: true })) {
+			if (entry.isDirectory() && /^(?:legacy-file-profile|poison-cleanup-runtime)-/.test(entry.name)) {
+				remove(join(archiveDir, entry.name));
+			}
+		}
+	} catch {
+		// Missing archive directory is the normal fresh-profile case.
+	}
+
+	// Worker homes are independent profiles. Clean their retired state too so
+	// an old delegated run cannot be reintroduced by a later merge/resume.
+	const threadRoot = join(agentDir, "recon", "agent-threads");
+	try {
+		for (const entry of readdirSync(threadRoot, { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			const workerDir = join(threadRoot, entry.name, "agent-home");
+			for (const path of [
+				join(workerDir, "memory"),
+				join(workerDir, "SYSTEM.md"),
+				join(workerDir, "APPEND_SYSTEM.md"),
+				join(workerDir, "prompts", "memory.md"),
+				join(workerDir, "skills", "reverse-pentest-orchestrator"),
+				join(workerDir, "recon", "memory"),
+				join(workerDir, "recon", "builtin"),
+				join(workerDir, "recon", "evidence", "knowledge"),
+				join(workerDir, "recon", "evidence", "tool-calls"),
+			]) {
+				remove(path);
+			}
+		}
+	} catch {
+		// Missing or unreadable worker roots are non-fatal.
+	}
+
+	for (const settingsPath of knownIsolatedProfileSettings(agentDir)) {
+		removeRetiredMemorySetting(settingsPath);
+	}
 }
 
 export function initializeRepiProfile(options: { repoRoot?: string; verbose?: boolean } = {}): RepiProfileInitResult {
@@ -65,57 +206,8 @@ export function initializeRepiProfile(options: { repoRoot?: string; verbose?: bo
 
 	mkdir(agentDir);
 	mkdir(join(agentDir, "sessions"));
-	// opt #273: do NOT create the global recon/memory/playbooks dir here.
-	// initializeRepiProfile runs before the session cwd is known, so a global
-	// playbooks dir would orphan (scoped agent uses projects/<cwd>/playbooks via
-	// memoryPlaybooksDir()). The scoped playbooks dir is created on demand by
-	// ensureRepiStorage when the recon extension inits with the cwd scope set.
-	mkdir(join(agentDir, "recon", "memory"));
-	mkdir(join(agentDir, "recon", "mission"));
-	mkdir(join(agentDir, "recon", "tools"));
-	for (const sub of [
-		"runs",
-		"maps",
-		"browser",
-		"web-authz",
-		"chains",
-		"decisions",
-		"exploit-lab",
-		"mobile-runtime",
-		"native-runtime",
-		"graphs",
-		"proof-loops",
-		"knowledge",
-		"harness",
-		"swarms",
-		"supervisor",
-		"contexts",
-		"operators",
-		"verifiers",
-		"compilers",
-		"replayers",
-		"autofix",
-		"failures",
-		"repairs",
-		"claim-release",
-	]) {
-		mkdir(join(agentDir, "recon", "evidence", sub));
-	}
-	for (const dir of [
-		agentDir,
-		join(agentDir, "sessions"),
-		join(agentDir, "recon"),
-		join(agentDir, "recon", "memory"),
-		join(agentDir, "recon", "evidence"),
-		join(agentDir, "recon", "mission"),
-		join(agentDir, "recon", "tools"),
-	]) {
-		try {
-			chmodSync(dir, 0o700);
-		} catch {
-			// Best-effort on non-POSIX filesystems.
-		}
-	}
+	mkdir(join(agentDir, "recon"));
+	removeRetiredRuntimeState(agentDir);
 
 	const copiedModels = importLegacyPiProfile
 		? copyIfMissing(join(legacyPiAgentDir, "models.json"), join(agentDir, "models.json"), 0o600)
@@ -126,7 +218,7 @@ export function initializeRepiProfile(options: { repoRoot?: string; verbose?: bo
 
 	const settingsPath = join(agentDir, "settings.json");
 	const settings = readJson(settingsPath) || {};
-	settings.defaultThinkingLevel = settings.defaultThinkingLevel ?? "high";
+	settings.defaultThinkingLevel = settings.defaultThinkingLevel ?? "medium";
 	settings.enableSkillCommands = true;
 	settings.quietStartup = settings.quietStartup ?? false;
 	settings.collapseChangelog = settings.collapseChangelog ?? true;
@@ -135,49 +227,19 @@ export function initializeRepiProfile(options: { repoRoot?: string; verbose?: bo
 		existingCompaction.triggerPercent === undefined &&
 		existingCompaction.warningPercent === undefined &&
 		existingCompaction.reserveTokens === 32768
-			? 16384
+			? DEFAULT_COMPACTION_SETTINGS.reserveTokens
 			: existingCompaction.reserveTokens;
 	settings.compaction = {
 		...existingCompaction,
-		enabled: existingCompaction.enabled ?? true,
-		triggerPercent: existingCompaction.triggerPercent ?? 85,
-		warningPercent: existingCompaction.warningPercent ?? 80,
-		reserveTokens: migratedLegacyReserveTokens ?? 16384,
-		keepRecentTokens: existingCompaction.keepRecentTokens ?? 36000,
+		enabled: existingCompaction.enabled ?? DEFAULT_COMPACTION_SETTINGS.enabled,
+		triggerPercent: existingCompaction.triggerPercent ?? DEFAULT_COMPACTION_SETTINGS.triggerPercent,
+		warningPercent: existingCompaction.warningPercent ?? DEFAULT_COMPACTION_SETTINGS.warningPercent,
+		reserveTokens: migratedLegacyReserveTokens ?? DEFAULT_COMPACTION_SETTINGS.reserveTokens,
+		keepRecentTokens: existingCompaction.keepRecentTokens ?? DEFAULT_COMPACTION_SETTINGS.keepRecentTokens,
 	};
-	const existingMemory =
-		settings.memory && typeof settings.memory === "object" && !Array.isArray(settings.memory)
-			? (settings.memory as Record<string, unknown>)
-			: {};
-	const migrateMemoryV1 = Number(existingMemory.schemaVersion ?? 0) < 2;
-	const legacyAutoDeposit =
-		migrateMemoryV1 && existingMemory.autoDeposit === false ? "high-value" : existingMemory.autoDeposit;
-	const legacyStartupDigest =
-		migrateMemoryV1 && existingMemory.startupDigest === "status" ? "scoped" : existingMemory.startupDigest;
-	const legacyScopePolicy =
-		migrateMemoryV1 && existingMemory.scopePolicy === "session"
-			? "mission+workspace+target"
-			: existingMemory.scopePolicy;
-	settings.memory = {
-		...existingMemory,
-		schemaVersion: 2,
-		mode: existingMemory.mode ?? "scoped",
-		autoRecall: existingMemory.autoRecall ?? true,
-		autoInject: existingMemory.autoInject ?? false,
-		rawAutoInject: existingMemory.rawAutoInject ?? false,
-		autoDeposit: legacyAutoDeposit ?? "high-value",
-		startupDigest: legacyStartupDigest ?? "scoped",
-		scopePolicy: legacyScopePolicy ?? "mission+workspace+target",
-		contextMemoryMode: existingMemory.contextMemoryMode ?? "scoped",
-		includeGlobalMemoryInContextPack: existingMemory.includeGlobalMemoryInContextPack ?? false,
-		activeRecall: existingMemory.activeRecall ?? false,
-		maxInjectedTokens: existingMemory.maxInjectedTokens ?? 1200,
-		startupBudgetTokens: existingMemory.startupBudgetTokens ?? 800,
-		contextPackBudgetTokens: existingMemory.contextPackBudgetTokens ?? 1200,
-		maxStartupItems: existingMemory.maxStartupItems ?? 5,
-		minRecallScore: existingMemory.minRecallScore ?? 0.35,
-		rawTranscriptRetention: existingMemory.rawTranscriptRetention ?? "external-only",
-	};
+	// Drop the retired persistence block during migration so old profiles cannot
+	// recreate the removed subsystem.
+	delete settings.memory;
 	settings.branchSummary = {
 		reserveTokens: 24576,
 		skipPrompt: true,
@@ -202,35 +264,14 @@ export function initializeRepiProfile(options: { repoRoot?: string; verbose?: bo
 	// Remove stale file-profile resources that old takeover installers placed in settings.
 	for (const key of ["extensions", "skills", "prompts", "enabledModels"]) {
 		const value = settings[key];
-		if (
-			Array.isArray(value) &&
-			value.some((entry) => String(entry).includes("reverse-pentest") || String(entry) === "prompts")
-		) {
-			delete settings[key];
-		}
+		if (!Array.isArray(value)) continue;
+		const filtered = value.filter(
+			(entry) => !String(entry).includes("reverse-pentest") && String(entry) !== "prompts",
+		);
+		if (filtered.length === 0) delete settings[key];
+		else if (filtered.length !== value.length) settings[key] = filtered;
 	}
 	writeJson(settingsPath, settings, 0o600);
-
-	for (const [rel, body] of [
-		// opt #273: the recon/memory/* default .md files are NOT seeded here.
-		// initializeRepiProfile runs at cli.ts bootstrap BEFORE the session cwd is
-		// known, so it cannot scope them — writing them here seeded the GLOBAL
-		// recon/memory root on every startup, orphaning defaults the scoped agent
-		// never reads (cross-project pollution). ensureRepiStorage() now seeds the
-		// same defaults per-cwd via memoryPath() (scoped) when the recon extension
-		// inits. Only non-memory recon infrastructure (evidence ledger, tool index)
-		// is seeded here — those are global runtime infra, not project memory.
-		["recon/evidence/ledger.md", "# REPI Evidence Ledger\n\n"],
-		["recon/tools/tool-index.md", "# REPI Tool Index\n\n"],
-	] as const) {
-		const path = join(agentDir, rel);
-		if (!existsSync(path)) writeFileSync(path, body, "utf8");
-		try {
-			chmodSync(path, 0o600);
-		} catch {
-			// Best-effort on non-POSIX filesystems.
-		}
-	}
 
 	const manifestPath = join(agentDir, "recon", "profile.json");
 	writeJson(

@@ -4,20 +4,39 @@ Stateful agent with tool execution and event streaming. Built on `@pi-recon/repi
 
 ## Installation
 
+This fork is distributed through GitHub Release tarballs, not the npm registry. Agent core depends on the matching AI package, so pass both same-version local files to one command:
+
 ```bash
-npm install @pi-recon/repi-agent-core
+npm install \
+  ./pi-recon-repi-ai-0.1.3.tgz \
+  ./pi-recon-repi-agent-core-0.1.3.tgz
 ```
 
 ## Quick Start
 
 ```typescript
 import { Agent } from "@pi-recon/repi-agent-core";
-import { getModel } from "@pi-recon/repi-ai";
+import type { Model } from "@pi-recon/repi-ai";
+
+// Model metadata is application-owned. Load this object from models.json,
+// ModelRuntime/REPI_*, or construct it directly for a private endpoint.
+const model: Model<"anthropic-messages"> = {
+  id: "claude-sonnet-4-5",
+  name: "Claude Sonnet 4.5",
+  api: "anthropic-messages",
+  provider: "anthropic",
+  baseUrl: "https://api.anthropic.com",
+  reasoning: true,
+  input: ["text", "image"],
+  cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  contextWindow: 200000,
+  maxTokens: 64000,
+};
 
 const agent = new Agent({
   initialState: {
     systemPrompt: "You are a helpful assistant.",
-    model: getModel("anthropic", "claude-sonnet-4-5"),
+    model,
   },
 });
 
@@ -268,7 +287,8 @@ await agent.continue();
 
 ```typescript
 agent.state.systemPrompt = "New prompt";
-agent.state.model = getModel("openai", "gpt-4o");
+// Replace with another explicit Model object supplied by the application.
+agent.state.model = anotherModel;
 agent.state.thinkingLevel = "medium";
 agent.state.tools = [myTool];
 agent.toolExecution = "sequential";
@@ -453,7 +473,21 @@ const agent = new Agent({
 For direct control without the Agent class:
 
 ```typescript
+import type { Model } from "@pi-recon/repi-ai";
 import { agentLoop, agentLoopContinue } from "@pi-recon/repi-agent-core";
+
+const model: Model<"openai-responses"> = {
+  id: "gpt-4o",
+  name: "GPT-4o",
+  api: "openai-responses",
+  provider: "openai",
+  baseUrl: "https://api.openai.com/v1",
+  reasoning: false,
+  input: ["text", "image"],
+  cost: { input: 2.5, output: 10, cacheRead: 1.25, cacheWrite: 0 },
+  contextWindow: 128000,
+  maxTokens: 16384,
+};
 
 const context: AgentContext = {
   systemPrompt: "You are helpful.",
@@ -462,7 +496,7 @@ const context: AgentContext = {
 };
 
 const config: AgentLoopConfig = {
-  model: getModel("openai", "gpt-4o"),
+  model,
   convertToLlm: (msgs) => msgs.filter(m => ["user", "assistant", "toolResult"].includes(m.role)),
   toolExecution: "parallel",  // overridden by per-tool executionMode if set
   beforeToolCall: async ({ toolCall, args, context }) => undefined,

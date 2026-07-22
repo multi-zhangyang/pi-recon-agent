@@ -116,7 +116,7 @@ describe("REPI built-in goal mode", () => {
 		await harness.commands.get("goal").handler("--tokens 100k harden runtime", harness.ctx);
 
 		expect(harness.sent).toHaveLength(1);
-		expect(harness.sent[0].content).toContain("REPI goal mode is active");
+		expect(harness.sent[0].content).toContain("Start the active REPI goal.");
 		expect(harness.sent[0].content).toContain("harden runtime");
 		expect(harness.statuses.get("goal")).toBe("🎯 active 0/100k");
 		expect(harness.entries.at(-1)).toMatchObject({
@@ -135,8 +135,14 @@ describe("REPI built-in goal mode", () => {
 			{ type: "before_agent_start", prompt: "finish", systemPrompt: "base", images: undefined },
 			harness.ctx,
 		);
-		expect(promptResult.systemPrompt).toContain("Active REPI /goal");
+		expect(promptResult.systemPrompt).toContain("Active REPI goal:");
 		expect(buildGoalSystemPrompt(createGoalState())).toContain("goal_complete");
+		expect(
+			beforeAgentStart(
+				{ type: "before_agent_start", prompt: "continue", systemPrompt: "base", images: undefined },
+				harness.ctx,
+			),
+		).toBeUndefined();
 
 		const agentEnd = harness.handlers.get("agent_end")![0];
 		await agentEnd(
@@ -148,7 +154,7 @@ describe("REPI built-in goal mode", () => {
 		);
 
 		expect(harness.sent).toHaveLength(2);
-		expect(harness.sent[1].content).toContain("Continue the active REPI /goal");
+		expect(harness.sent[1].content).toContain("Continue the active REPI goal");
 		expect(harness.sent[1].content).toContain("repi-goal-continuation:");
 	});
 
@@ -258,7 +264,7 @@ describe("REPI built-in goal mode", () => {
 
 			expect(harness.statuses.get("goal")).toBe("🎯 active 0s");
 			expect(harness.sent).toHaveLength(2);
-			expect(harness.sent[1].content).toContain("explicitly resumed the paused REPI /goal");
+			expect(harness.sent[1].content).toContain("The user resumed the active REPI goal.");
 			expect(harness.sent[1].content).toContain(`${mode} lifecycle objective`);
 			expect(
 				harness.handlers.get("tool_call")![0]({ type: "tool_call", toolName: "bash" }, harness.ctx),
@@ -369,7 +375,7 @@ describe("REPI built-in goal mode", () => {
 			expect(harness.statuses.get("goal")).toBe("🎯 active 500/2k");
 			expect(harness.notifications.at(-1)?.message).toBe("Goal updated: edited objective");
 			expect(harness.sent).toHaveLength(2);
-			expect(harness.sent[1].content).toContain("The active REPI /goal objective was updated.");
+			expect(harness.sent[1].content).toContain("The active REPI goal changed.");
 			expect(harness.sent[1].content).toContain("edited objective");
 			expect(harness.sent[1].content).toContain("Token budget: 500/2k used.");
 			expect(harness.entries.at(-1)).toMatchObject({
@@ -439,8 +445,9 @@ describe("REPI built-in goal mode", () => {
 			expect(harness.abort).not.toHaveBeenCalled();
 			expect(harness.statuses.get("goal")).toBe("🎯 active 0s");
 			expect(harness.sent).toHaveLength(2);
-			expect(harness.sent[1].content).toContain("Continue the active REPI /goal");
-			expect(harness.sent[1].content).toContain(`${mode} retry objective`);
+			expect(harness.sent[1].content).toContain("Continue the active REPI goal");
+			expect(harness.sent[1].content).not.toContain(`${mode} retry objective`);
+			expect(harness.sent[1].content).toContain("repi-goal-continuation:");
 			expect(harness.notifications.at(-1)).toMatchObject({
 				message: "Goal provider interruption; retrying (1/3).",
 				level: "warning",
@@ -481,15 +488,16 @@ describe("REPI built-in goal mode", () => {
 		});
 		expect(harness.compact).toHaveBeenCalledWith(
 			expect.objectContaining({
-				customInstructions: expect.stringContaining("Preserve the active REPI /goal objective"),
+				customInstructions: expect.stringContaining("Preserve the active REPI /goal ID and objective"),
 			}),
 		);
 
 		await harness.handlers.get("session_compact")![0]({ type: "session_compact" }, harness.ctx);
 
 		expect(harness.sent).toHaveLength(2);
-		expect(harness.sent[1].content).toContain("Continue the active REPI /goal");
-		expect(harness.sent[1].content).toContain("context overflow objective");
+		expect(harness.sent[1].content).toContain("Continue the active REPI goal");
+		expect(harness.sent[1].content).not.toContain("context overflow objective");
+		expect(harness.sent[1].content).toContain("repi-goal-continuation:");
 		expect(harness.entries.at(-1)).toMatchObject({
 			type: "custom",
 			customType: REPI_GOAL_STATE_ENTRY_TYPE,

@@ -1,5 +1,5 @@
 import type { Component } from "@pi-recon/repi-tui";
-import { theme } from "../theme/theme.ts";
+import { theme } from "../../../core/presentation/theme-runtime.ts";
 
 /**
  * Dynamic border component that adjusts to viewport width.

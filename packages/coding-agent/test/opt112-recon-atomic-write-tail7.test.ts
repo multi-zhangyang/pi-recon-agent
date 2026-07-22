@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import { createReconExtensionFactory, routeReconTask, writeCurrentMission } from "../src/core/recon-profile.ts";
@@ -15,7 +15,6 @@ import {
 	evidenceOperationsDir,
 	evidenceRunsDir,
 	evidenceWebAuthzDir,
-	memoryPath,
 } from "../src/core/repi/storage.ts";
 
 // opt #112: seventh tail pass of the repi atomic-write audit. Converts the
@@ -43,10 +42,6 @@ type RegisteredTool = {
 	name: string;
 	execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
 };
-
-function reconMemoryDir(): string {
-	return dirname(memoryPath("x"));
-}
 
 function latestMarkdown(dir: string): string | undefined {
 	const files = readdirSync(dir)
@@ -117,8 +112,6 @@ describe("recon-profile atomic writes tail7 (opt #112)", () => {
 		const tool = tools.get(toolName);
 		expect(tool, `${toolName} tool registered`).toBeDefined();
 
-		const memDir = reconMemoryDir();
-
 		await (tool as RegisteredTool).execute("a-1", { action: "plan", ...params });
 
 		const artifactAfter1 = latestMarkdown(dir);
@@ -134,7 +127,6 @@ describe("recon-profile atomic writes tail7 (opt #112)", () => {
 		expect(statSync(join(dir, artifactAfter2!)).mode & 0o777, `${label} artifact mode 0o600 (2nd)`).toBe(0o600);
 
 		noTmpLeftover(dir);
-		noTmpLeftover(memDir);
 	}
 
 	it(
@@ -145,7 +137,6 @@ describe("recon-profile atomic writes tail7 (opt #112)", () => {
 			expect(tool, "re_lane tool registered").toBeDefined();
 
 			const runsDir = evidenceRunsDir();
-			const memDir = reconMemoryDir();
 
 			seedPwnMission();
 
@@ -168,7 +159,6 @@ describe("recon-profile atomic writes tail7 (opt #112)", () => {
 			);
 
 			noTmpLeftover(runsDir);
-			noTmpLeftover(memDir);
 		},
 		testTimeout,
 	);
@@ -181,7 +171,6 @@ describe("recon-profile atomic writes tail7 (opt #112)", () => {
 			expect(tool, "re_map tool registered").toBeDefined();
 
 			const mapsDir = evidenceMapsDir();
-			const memDir = reconMemoryDir();
 
 			await (tool as RegisteredTool).execute("map-1", { target: "." });
 
@@ -202,7 +191,6 @@ describe("recon-profile atomic writes tail7 (opt #112)", () => {
 			);
 
 			noTmpLeftover(mapsDir);
-			noTmpLeftover(memDir);
 		},
 		testTimeout,
 	);

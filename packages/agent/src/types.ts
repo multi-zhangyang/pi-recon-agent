@@ -164,6 +164,12 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 
 	/**
+	 * Optional lease gate checked immediately before a queued message is emitted.
+	 * Return false to drop a cancelled message without persisting it.
+	 */
+	claimMessageDelivery?: (message: AgentMessage) => boolean;
+
+	/**
 	 * Optional transform applied to the context before `convertToLlm`.
 	 *
 	 * Use this for operations that work at the AgentMessage level:
@@ -222,6 +228,19 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * `onRunBudgetExceeded`.
 	 */
 	maxTurns?: number;
+
+	/**
+	 * Reserve the last request in {@link maxTurns} for a tool-free synthesis turn.
+	 *
+	 * When the model is still requesting tools with one turn left, the loop removes
+	 * tools from the final request and injects {@link finalTurnPrompt}. This keeps a
+	 * hard request budget while still producing a user-facing answer. Disabled by
+	 * default for backwards compatibility with low-level loop consumers.
+	 */
+	reserveFinalTurn?: boolean;
+
+	/** Prompt used by the reserved tool-free synthesis turn. */
+	finalTurnPrompt?: string;
 
 	/**
 	 * Called when the loop stops because `maxTurns` was reached, after the final
@@ -312,6 +331,21 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * UI keep the original.
 	 */
 	maxToolResultChars?: number;
+
+	/**
+	 * Aggregate text budget for tool results that have already been consumed by a
+	 * later assistant turn. The newest, not-yet-consumed tool results remain intact;
+	 * older results are compacted only in the provider projection, not in the
+	 * transcript or UI events. Set to 0 to disable.
+	 */
+	maxConsumedToolResultChars?: number;
+
+	/**
+	 * Reuse an earlier successful invocation marker when an identical read-only
+	 * tool probe is requested again in the same run. Any non-read-only call clears
+	 * the probe history. Defaults to true; tools must opt in with `readOnly`.
+	 */
+	deduplicateReadOnlyToolCalls?: boolean;
 
 	/**
 	 * Called after `turn_end` and before the loop decides whether another provider request should start.
@@ -453,6 +487,8 @@ export interface AgentToolResult<T> {
 	content: (TextContent | ImageContent)[];
 	/** Arbitrary structured details for logs or UI rendering. */
 	details: T;
+	/** Names of tools introduced by this result and available from this transcript point onward. */
+	addedToolNames?: string[];
 	/**
 	 * Hint that the agent should stop after the current tool batch.
 	 * Early termination only happens when every finalized tool result in the batch sets this to true.
@@ -487,6 +523,18 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	 * If omitted, the default execution mode applies.
 	 */
 	executionMode?: ToolExecutionMode;
+	/**
+	 * Declares that this tool only observes state. Identical successful calls may
+	 * be deduplicated within one agent run until a non-read-only tool is requested.
+	 */
+	readOnly?: boolean;
+	/**
+	 * Optional conservative coverage relation for read-only probes. Return true
+	 * only when the successful previous call's result contains every observation
+	 * the next call would request. The runtime clears probe history at every
+	 * mutating/unknown tool boundary.
+	 */
+	readOnlyProbeCovers?(previous: Static<TParameters>, next: Static<TParameters>): boolean;
 }
 
 /** Context snapshot passed into the low-level agent loop. */

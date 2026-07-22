@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import { getModel } from "../src/models.ts";
 import { complete } from "../src/stream.ts";
 import type { Context, Model } from "../src/types.ts";
+import { registerMistralFixtures } from "./model-fixtures.ts";
+
+registerMistralFixtures();
 
 interface MistralToolPayload {
 	tools?: Array<{
@@ -17,7 +20,7 @@ interface MistralToolPayload {
 describe("Mistral tool schema serialization", () => {
 	it("strips TypeBox symbol keys before the SDK validates tool schemas", async () => {
 		const model: Model<"mistral-conversations"> = {
-			...getModel("mistral", "devstral-medium-latest"),
+			...getModel<"mistral-conversations">("mistral", "devstral-medium-latest")!,
 			baseUrl: "http://127.0.0.1:9",
 		};
 		const parameters = Type.Object({

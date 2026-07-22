@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { collectEntriesForBranchSummary } from "../../src/harness/compaction/branch-summarization.ts";
+import {
+	collectEntriesForBranchSummary,
+	prepareBranchEntries,
+} from "../../src/harness/compaction/branch-summarization.ts";
 import type { Session } from "../../src/harness/session/session.ts";
 import type { MessageEntry, SessionTreeEntry } from "../../src/harness/types.ts";
 import { SessionError } from "../../src/harness/types.ts";
@@ -69,6 +72,33 @@ describe("collectEntriesForBranchSummary cycle guard (opt #104 Fix 1)", () => {
 		if (result instanceof SessionError) {
 			expect(result.code).toBe("invalid_session");
 			expect(result.message).toMatch(/Cycle detected at entry/);
+		}
+	});
+
+	it("bounds oversized persisted summaries to the requested token budget", () => {
+		const summary = `## Goal\nHEAD\n${"x".repeat(2_000)}\n## Next Steps\nTAIL`;
+		const result = prepareBranchEntries(
+			[
+				{
+					type: "compaction",
+					id: "summary",
+					parentId: null,
+					timestamp: "2026-01-01T00:00:00.000Z",
+					summary,
+					firstKeptEntryId: "kept",
+					tokensBefore: 10_000,
+				},
+			] as SessionTreeEntry[],
+			100,
+		);
+
+		expect(result.totalTokens).toBeLessThanOrEqual(100);
+		const message = result.messages[0];
+		expect(message?.role).toBe("compactionSummary");
+		if (message?.role === "compactionSummary") {
+			expect(message.summary).toContain("summary truncated");
+			expect(message.summary).toContain("HEAD");
+			expect(message.summary).toContain("TAIL");
 		}
 	});
 });

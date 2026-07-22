@@ -1,5 +1,5 @@
 import { CancellableLoader, Container, Loader, Spacer, Text, type TUI } from "@pi-recon/repi-tui";
-import type { Theme } from "../theme/theme.ts";
+import type { Theme } from "../../../core/presentation/theme-runtime.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint } from "./keybinding-hints.ts";
 

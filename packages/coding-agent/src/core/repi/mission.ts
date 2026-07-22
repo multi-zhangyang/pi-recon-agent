@@ -1,6 +1,17 @@
 import { createHash } from "node:crypto";
-import type { RoutePlan } from "./routes.ts";
-import { currentMissionPath, ensureRepiStorage, readJsonObjectFileCached } from "./storage.ts";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import lockfile from "proper-lockfile";
+import { REPI_GENERIC_TASK, type RoutePlan, routeRepiTask } from "./routes.ts";
+import {
+	currentMissionPath,
+	ensureRepiStorage,
+	missionStorageScope,
+	readJsonObjectFileCached,
+	readTextFile,
+	writePrivateTextFile,
+} from "./storage.ts";
+import { redactSensitiveText, sha256Text } from "./text.ts";
 
 export type MissionCheckpointStatus = "pending" | "done" | "blocked";
 export type MissionLaneStatus = "pending" | "in_progress" | "done" | "blocked";
@@ -21,15 +32,38 @@ export type MissionLane = {
 	updatedAt?: string;
 };
 
+export type MissionRuntimeStats = {
+	calls: number;
+	bashCalls: number;
+	failures: number;
+	lastCommandHash?: string;
+	repeatedCommandCount: number;
+	lastCommands: string[];
+	selfReviewDue: boolean;
+	lastInjectedState?: string;
+};
+
 export type MissionState = {
 	id: string;
 	createdAt: string;
 	updatedAt: string;
 	task: string;
+	/** Stable workspace scope; prevents a stale mission crossing cwd boundaries. */
+	scope?: string;
 	route: RoutePlan;
 	lanes: MissionLane[];
 	checkpoints: MissionCheckpoint[];
+	runtimeStats?: MissionRuntimeStats;
 };
+
+/** Parallel orchestration is opt-in through mission checkpoints. */
+export function missionRequiresParallel(mission: MissionState | undefined): boolean {
+	return Boolean(
+		mission?.checkpoints.some((checkpoint) =>
+			/^(?:delegation_packets_ready|swarm_plan_ready|supervisor_review_ready)$/.test(checkpoint.name),
+		),
+	);
+}
 
 export function missionLanesForRoute(route: RoutePlan): MissionLane[] {
 	if (route.domain === "Pwn / exploit") {
@@ -49,7 +83,11 @@ export function missionLanesForRoute(route: RoutePlan): MissionLane[] {
 				objective: "构造稳定 payload 并验证本地/远程一致性",
 				next: ["pwntools 脚本", "leak->base->gadget", "重复运行稳定性"],
 			},
-			{ name: "report", objective: "沉淀偏移、命令、脚本和失败路线", next: ["证据块", "复现命令", "field journal"] },
+			{
+				name: "report",
+				objective: "沉淀偏移、命令、脚本和失败路线",
+				next: ["证据块", "复现命令", "evidence ledger"],
+			},
 		];
 	}
 	if (route.domain === "Web / API pentest") {
@@ -65,7 +103,11 @@ export function missionLanesForRoute(route: RoutePlan): MissionLane[] {
 				next: ["最小 replay", "cookie/token/session diff", "状态变化证据"],
 			},
 			{ name: "poc", objective: "产出可复现 PoC", next: ["curl/httpie 脚本", "前后状态对照", "边界条件"] },
-			{ name: "report", objective: "整理影响、证据和修复/下一步", next: ["证据块", "验证步骤", "memory 回写"] },
+			{
+				name: "report",
+				objective: "整理影响、证据和修复/下一步",
+				next: ["证据块", "验证步骤", "operator next step"],
+			},
 		];
 	}
 	if (route.domain === "Web pentest scanning") {
@@ -114,7 +156,7 @@ export function missionLanesForRoute(route: RoutePlan): MissionLane[] {
 				objective: "用真实请求验证本地生成结果",
 				next: ["replay", "对比字段", "记录时间戳/nonce 依赖"],
 			},
-			{ name: "report", objective: "写出复现脚本和关键断点", next: ["脚本", "证据块", "field journal"] },
+			{ name: "report", objective: "写出复现脚本和关键断点", next: ["脚本", "证据块", "evidence ledger"] },
 		];
 	}
 	if (route.domain === "Crypto / stego") {
@@ -142,7 +184,7 @@ export function missionLanesForRoute(route: RoutePlan): MissionLane[] {
 			{
 				name: "report",
 				objective: "沉淀参数、脚本、验证命令和失败分支",
-				next: ["solver script", "proof-exit", "field journal"],
+				next: ["solver script", "proof-exit", "evidence ledger"],
 			},
 		];
 	}
@@ -171,7 +213,7 @@ export function missionLanesForRoute(route: RoutePlan): MissionLane[] {
 			{
 				name: "report",
 				objective: "沉淀 hash、IOCs、行为链、配置和复现命令",
-				next: ["IOC table", "YARA/config evidence", "field journal"],
+				next: ["IOC table", "YARA/config evidence", "evidence ledger"],
 			},
 		];
 	}
@@ -206,7 +248,7 @@ export function missionLanesForRoute(route: RoutePlan): MissionLane[] {
 			{
 				name: "report",
 				objective: "沉淀固件图谱、rootfs 路径、凭据/端点/服务和复现命令",
-				next: ["evidence graph", "IOC/config table", "field journal"],
+				next: ["evidence graph", "IOC/config table", "evidence ledger"],
 			},
 		];
 	}
@@ -248,7 +290,7 @@ export function missionLanesForRoute(route: RoutePlan): MissionLane[] {
 		return [
 			{
 				name: "surface",
-				objective: "映射 system/developer/user/tool/memory/RAG/MCP 输入边界和不可信内容入口",
+				objective: "映射 system/developer/user/tool/session-context/RAG/MCP 输入边界和不可信内容入口",
 				next: ["prompt/resource inventory", "tool schema map", "untrusted content flow"],
 			},
 			{
@@ -257,9 +299,9 @@ export function missionLanesForRoute(route: RoutePlan): MissionLane[] {
 				next: ["registerTool/exec map", "argument validation", "tool output trust boundary"],
 			},
 			{
-				name: "memory",
-				objective: "确认长期记忆、检索、向量库、日志和 playbook 的投毒/污染路径",
-				next: ["memory stores", "retrieval filters", "poison payload replay"],
+				name: "retrieval-boundary",
+				objective: "确认外部 RAG/检索、日志和不可信资源的投毒/污染路径",
+				next: ["resource inventory", "retrieval filters", "poison payload replay"],
 			},
 			{
 				name: "injection",
@@ -303,7 +345,7 @@ export function missionLanesForRoute(route: RoutePlan): MissionLane[] {
 			{
 				name: "report",
 				objective: "沉淀 profile、插件输出、artifact hash、IOC/timeline 和复现命令",
-				next: ["evidence table", "timeline", "memory proof-exit"],
+				next: ["evidence table", "timeline", "forensics proof-exit"],
 			},
 		];
 	}
@@ -332,7 +374,7 @@ export function missionLanesForRoute(route: RoutePlan): MissionLane[] {
 			{
 				name: "report",
 				objective: "整理 timeline、artifact、transform 和证据块",
-				next: ["flow table", "decode chain", "field journal"],
+				next: ["flow table", "decode chain", "evidence ledger"],
 			},
 		];
 	}
@@ -362,7 +404,7 @@ export function missionLanesForRoute(route: RoutePlan): MissionLane[] {
 			{
 				name: "report",
 				objective: "沉淀 IPA 结构、hook 点、请求重放、bypass 证据和复现命令",
-				next: ["hook script", "replay verifier", "field journal"],
+				next: ["hook script", "replay verifier", "evidence ledger"],
 			},
 		];
 	}
@@ -382,7 +424,7 @@ export function missionLanesForRoute(route: RoutePlan): MissionLane[] {
 			{
 				name: "report",
 				objective: "沉淀地址、偏移、脚本和复现命令",
-				next: ["证据 ledger", "复现命令", "memory 回写"],
+				next: ["证据 ledger", "复现命令", "operator next step"],
 			},
 		];
 	}
@@ -411,7 +453,7 @@ export function missionLanesForRoute(route: RoutePlan): MissionLane[] {
 			{
 				name: "report",
 				objective: "整理身份链、资源边和复现命令",
-				next: ["attack graph", "evidence ledger", "field journal"],
+				next: ["attack graph", "evidence ledger", "operator next step"],
 			},
 		];
 	}
@@ -440,7 +482,7 @@ export function missionLanesForRoute(route: RoutePlan): MissionLane[] {
 			{
 				name: "report",
 				objective: "沉淀凭据可用性、图边、复现命令和证据",
-				next: ["attack graph", "evidence block", "field journal"],
+				next: ["attack graph", "evidence block", "operator next step"],
 			},
 		];
 	}
@@ -448,7 +490,7 @@ export function missionLanesForRoute(route: RoutePlan): MissionLane[] {
 		{ name: "map", objective: "被动映射入口、配置、资产和证据面", next: route.workflow.slice(0, 2) },
 		{ name: "prove", objective: "证明一条最小端到端路径", next: route.workflow.slice(2, 4) },
 		{ name: "expand", objective: "只在最小路径成立后横向扩展", next: ["换证据面", "补工具链", "验证边界"] },
-		{ name: "report", objective: "输出证据块、复现命令、下一步和记忆", next: ["report", "diagram", "field journal"] },
+		{ name: "report", objective: "输出证据块、复现命令和下一步", next: ["report", "diagram", "evidence ledger"] },
 	];
 }
 
@@ -465,7 +507,6 @@ const MISSION_CHECKPOINTS_FULL: MissionCheckpoint[] = [
 	{ name: "route_selected", status: "done", note: "REPI route created" },
 	{ name: "execution_kernel_ready", status: "pending" },
 	{ name: "decision_core_ready", status: "pending" },
-	{ name: "memory_checked", status: "pending" },
 	{ name: "tool_index_checked", status: "pending" },
 	{ name: "passive_map_done", status: "pending" },
 	{ name: "live_browser_ready", status: "pending" },
@@ -483,31 +524,47 @@ const MISSION_CHECKPOINTS_FULL: MissionCheckpoint[] = [
 	{ name: "delegation_packets_ready", status: "pending" },
 	{ name: "swarm_plan_ready", status: "pending" },
 	{ name: "supervisor_review_ready", status: "pending" },
-	{ name: "reflection_memory_ready", status: "pending" },
-	{ name: "context_pack_ready", status: "pending" },
 	{ name: "operator_queue_ready", status: "pending" },
 	{ name: "verifier_matrix_ready", status: "pending" },
 	{ name: "compiler_ready", status: "pending" },
 	{ name: "replay_ready", status: "pending" },
 	{ name: "autofix_ready", status: "pending" },
 	{ name: "proof_loop_ready", status: "pending" },
-	{ name: "knowledge_graph_ready", status: "pending" },
 	{ name: "report_or_writeup_ready", status: "pending" },
-	{ name: "memory_or_evolution_written", status: "pending" },
 ];
 const MISSION_CHECKPOINTS_CORE = [
 	"route_selected",
 	"execution_kernel_ready",
 	"decision_core_ready",
-	"memory_checked",
 	"tool_index_checked",
 	"passive_map_done",
 	"minimal_path_proven",
 	"evidence_ledger_updated",
 	"repro_commands_ready",
 	"report_or_writeup_ready",
-	"memory_or_evolution_written",
 ];
+
+/** Checkpoints that must be closed by a runtime artifact, never by a model/operator note. */
+export const RUNTIME_OWNED_MISSION_CHECKPOINTS: ReadonlySet<string> = new Set([
+	"minimal_path_proven",
+	"verifier_matrix_ready",
+	"compiler_ready",
+	"replay_ready",
+	"proof_loop_ready",
+	"report_or_writeup_ready",
+]);
+
+export function normalizeOperatorCheckpointUpdate(
+	name: string,
+	status: MissionCheckpointStatus,
+	note?: string,
+): { status: MissionCheckpointStatus; note: string | undefined } {
+	if (status !== "done" || !RUNTIME_OWNED_MISSION_CHECKPOINTS.has(name)) return { status, note };
+	return {
+		status: "blocked",
+		note: `operator checkpoint rejected: ${name} is runtime-owned; close it through its evidence artifact and completion audit`,
+	};
+}
 
 const MISSION_CHECKPOINTS_BY_DOMAIN: Record<string, string[]> = {
 	"Native reverse": [
@@ -577,7 +634,6 @@ const MISSION_CHECKPOINTS_BY_DOMAIN: Record<string, string[]> = {
 		"delegation_packets_ready",
 		"swarm_plan_ready",
 		"supervisor_review_ready",
-		"context_pack_ready",
 		"operator_queue_ready",
 		"verifier_matrix_ready",
 		"compiler_ready",
@@ -624,13 +680,11 @@ const MISSION_CHECKPOINTS_BY_DOMAIN: Record<string, string[]> = {
 	"Reverse/Pentest general": [
 		"attack_graph_ready",
 		"operation_queue_ready",
-		"context_pack_ready",
 		"operator_queue_ready",
 		"verifier_matrix_ready",
 		"compiler_ready",
 		"replay_ready",
 		"proof_loop_ready",
-		"knowledge_graph_ready",
 	],
 };
 
@@ -644,52 +698,211 @@ export function defaultMissionCheckpoints(route?: RoutePlan): MissionCheckpoint[
 
 export function createMission(task: string, route: RoutePlan): MissionState {
 	const timestamp = new Date().toISOString();
-	const id = createHash("sha256").update(`${timestamp}\n${route.domain}\n${task}`).digest("hex").slice(0, 12);
+	const safeTask = redactSensitiveText(task);
+	const id = createHash("sha256").update(`${timestamp}\n${route.domain}\n${safeTask}`).digest("hex").slice(0, 12);
 	return {
 		id,
 		createdAt: timestamp,
 		updatedAt: timestamp,
-		task,
+		task: safeTask,
+		scope: missionScope(),
 		route,
 		lanes: initializeMissionLanes(missionLanesForRoute(route)),
 		checkpoints: defaultMissionCheckpoints(route),
 	};
 }
 
+function missionScope(): string {
+	return `cwd:${sha256Text(missionStorageScope()).slice(0, 16)}`;
+}
+
 export function normalizeMission(mission: MissionState): MissionState {
 	let sawActive = false;
 	const timestamp = new Date().toISOString();
+	const inheritedTimestamp = mission.updatedAt || mission.createdAt || timestamp;
 	const lanes = mission.lanes.map((lane, index) => {
-		const status = lane.status ?? (index === 0 ? "in_progress" : "pending");
-		if (status === "in_progress") sawActive = true;
-		return { ...lane, status, updatedAt: lane.updatedAt ?? timestamp };
+		let status = lane.status ?? (index === 0 ? "in_progress" : "pending");
+		let updatedAt = lane.updatedAt ?? inheritedTimestamp;
+		if (status === "in_progress") {
+			if (sawActive) {
+				status = "pending";
+				updatedAt = timestamp;
+			} else sawActive = true;
+		}
+		return { ...lane, status, updatedAt };
 	});
 	if (!sawActive) {
 		const firstPending = lanes.findIndex((lane) => lane.status === "pending");
 		if (firstPending >= 0)
 			lanes[firstPending] = { ...lanes[firstPending], status: "in_progress", updatedAt: timestamp };
 	}
-	return { ...mission, lanes };
+	return { ...mission, task: redactSensitiveText(mission.task), scope: missionScope(), lanes };
+}
+
+function parseMission(text: string | undefined): MissionState | undefined {
+	if (!text?.trim()) return undefined;
+	try {
+		return JSON.parse(text) as MissionState;
+	} catch {
+		return undefined;
+	}
+}
+
+function normalizeStoredMission(mission: MissionState | undefined): MissionState | undefined {
+	if (isInactiveMission(mission)) return undefined;
+	if (
+		!mission ||
+		mission.scope !== missionScope() ||
+		!Array.isArray(mission.lanes) ||
+		!Array.isArray(mission.checkpoints)
+	)
+		return undefined;
+	try {
+		return normalizeMission(mission);
+	} catch {
+		return undefined;
+	}
+}
+
+function isInactiveMission(mission: MissionState | undefined): boolean {
+	const status = (mission as (MissionState & { status?: unknown }) | undefined)?.status;
+	return status === "closed" || status === "empty";
+}
+
+function acquireMissionLock(path: string): () => void {
+	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+	let lastError: unknown;
+	for (let attempt = 0; attempt < 10; attempt++) {
+		try {
+			return lockfile.lockSync(path, { realpath: false, stale: 30_000 });
+		} catch (error) {
+			const code =
+				typeof error === "object" && error !== null && "code" in error
+					? String((error as { code?: unknown }).code)
+					: undefined;
+			if (code !== "ELOCKED" || attempt === 9) throw error;
+			lastError = error;
+			const waitUntil = Date.now() + 20;
+			while (Date.now() < waitUntil) {
+				// Mission writes are synchronous and the lock is held only around one small JSON write.
+			}
+		}
+	}
+	throw lastError instanceof Error ? lastError : new Error("Failed to acquire mission lock");
+}
+
+function itemTimestamp(item: { updatedAt?: string }): number {
+	const parsed = Date.parse(item.updatedAt ?? "");
+	return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function mergeMissionItems<T extends { name: string; updatedAt?: string }>(current: T[], candidate: T[]): T[] {
+	const remaining = new Map(current.map((item) => [item.name, item]));
+	const merged = candidate.map((item) => {
+		const existing = remaining.get(item.name);
+		remaining.delete(item.name);
+		return existing && itemTimestamp(existing) > itemTimestamp(item) ? existing : item;
+	});
+	return [...merged, ...remaining.values()];
+}
+
+function mergeConcurrentMission(current: MissionState | undefined, candidate: MissionState): MissionState {
+	const normalizedCurrent = normalizeStoredMission(current);
+	if (!normalizedCurrent || normalizedCurrent.id !== candidate.id) return candidate;
+	return normalizeMission({
+		...candidate,
+		createdAt: normalizedCurrent.createdAt,
+		lanes: mergeMissionItems(normalizedCurrent.lanes, candidate.lanes),
+		checkpoints: mergeMissionItems(normalizedCurrent.checkpoints, candidate.checkpoints),
+	});
+}
+
+function withMissionLock(mutate: (current: MissionState | undefined) => MissionState): MissionState {
+	ensureRepiStorage();
+	const path = currentMissionPath();
+	const release = acquireMissionLock(path);
+	try {
+		const current = parseMission(readTextFile(path, ""));
+		const mission = mutate(current);
+		const next = normalizeMission({ ...mission, updatedAt: new Date().toISOString() });
+		writePrivateTextFile(path, `${JSON.stringify(next, null, 2)}\n`);
+		return next;
+	} finally {
+		release();
+	}
+}
+
+export function writeCurrentMission(mission: MissionState): MissionState {
+	return withMissionLock((current) => mergeConcurrentMission(current, normalizeMission(mission)));
+}
+
+export function updateMissionCheckpoint(name: string, status: MissionCheckpointStatus, note?: string): MissionState {
+	return withMissionLock((current) => {
+		if (isInactiveMission(current)) return current as MissionState;
+		const mission =
+			normalizeStoredMission(current) ?? createMission("manual mission", routeRepiTask(REPI_GENERIC_TASK));
+		const updatedAt = new Date().toISOString();
+		const checkpoints = mission.checkpoints.some((checkpoint) => checkpoint.name === name)
+			? mission.checkpoints.map((checkpoint) =>
+					checkpoint.name === name ? { ...checkpoint, status, note, updatedAt } : checkpoint,
+				)
+			: [...mission.checkpoints, { name, status, note, updatedAt }];
+		return { ...mission, checkpoints };
+	});
+}
+
+export function updateMissionRuntimeStats(runtimeStats: MissionRuntimeStats): MissionState {
+	return withMissionLock((current) => {
+		if (isInactiveMission(current)) return current as MissionState;
+		const mission =
+			normalizeStoredMission(current) ?? createMission("manual mission", routeRepiTask(REPI_GENERIC_TASK));
+		return {
+			...mission,
+			runtimeStats: {
+				...runtimeStats,
+				lastCommands: runtimeStats.lastCommands.slice(-8),
+			},
+		};
+	});
 }
 
 export function readCurrentMission(): MissionState | undefined {
 	ensureRepiStorage();
-	// opt #75 — mtime+size-keyed cache (readJsonObjectFileCached, the #65 primitive) instead
-	// of an uncached readTextFile + JSON.parse on every call. readCurrentMission is called
-	// 3-4× per deposit tool_result (recall buildPerTurnMemoryRecall + appendMemoryEvent
-	// Transaction + appendMemoryDepositionRuntimeEvent + currentMemoryScope) plus once per
-	// most re_* command handlers — each was a readFileSync + JSON.parse of current-mission
-	// .json, a file that only changes on re_mission ops (writeCurrentMission atomic temp+
-	// rename bumps mtime+size → auto-invalidate). normalizeMission does NOT mutate its input
-	// (it builds a fresh lanes array via .map + spreads), so it is safe to call on the shared
-	// cached raw object; each caller still gets a fresh normalized copy it can mutate freely.
+	// The mission changes only through mission operations, whose atomic rename
+	// invalidates this mtime+size cache. normalizeMission returns a fresh copy, so
+	// callers cannot mutate the cached object.
 	const raw = readJsonObjectFileCached<MissionState>(currentMissionPath());
 	if (!raw) return undefined;
+	const lifecycle = raw as MissionState & { status?: unknown };
+	if (lifecycle.status === "closed" || lifecycle.status === "empty") return undefined;
+	if (raw.scope !== missionScope()) return undefined;
 	try {
 		return normalizeMission(raw);
 	} catch {
 		return undefined;
 	}
+}
+
+type MissionSessionContext = {
+	sessionManager?: {
+		getBranch?: () => readonly unknown[];
+		getEntries?: () => readonly unknown[];
+	};
+};
+
+/** Return the workspace mission only when the current session actually owns it. */
+export function readCurrentSessionMission(ctx: MissionSessionContext): MissionState | undefined {
+	const mission = readCurrentMission();
+	if (!mission || !ctx.sessionManager) return undefined;
+	const entries = ctx.sessionManager.getBranch?.() ?? ctx.sessionManager.getEntries?.() ?? [];
+	for (let index = entries.length - 1; index >= 0; index--) {
+		const entry = entries[index] as { type?: string; customType?: string; data?: unknown };
+		if (entry.type !== "custom") continue;
+		if (entry.customType !== "repi-mission" && entry.customType !== "repi-route") continue;
+		const data = entry.data as { missionId?: unknown } | undefined;
+		if (typeof data?.missionId === "string") return data.missionId === mission.id ? mission : undefined;
+	}
+	return undefined;
 }
 
 /**

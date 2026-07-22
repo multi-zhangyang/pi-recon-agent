@@ -3,9 +3,9 @@ import { Box, Container, Spacer, Text } from "@pi-recon/repi-tui";
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile, stat as fsStat } from "fs/promises";
 import { type Static, Type } from "typebox";
-import { renderDiff } from "../../modes/interactive/components/diff.ts";
-import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
+import { renderDiff } from "../presentation/diff.ts";
+import type { Theme } from "../presentation/theme.ts";
 import { atomicWriteFile } from "./atomic-write.ts";
 import {
 	applyEditsToNormalizedContent,
@@ -241,7 +241,7 @@ function formatEditResult(
 
 	const resultDiff = result.details?.diff;
 	if (resultDiff && resultDiff !== previewDiff) {
-		return renderDiff(resultDiff, { filePath: rawPath ?? undefined });
+		return renderDiff(resultDiff, theme, { filePath: rawPath ?? undefined });
 	}
 
 	return undefined;
@@ -279,7 +279,9 @@ function buildEditCallComponent(
 	}
 
 	const body =
-		"error" in component.preview ? theme.fg("error", component.preview.error) : renderDiff(component.preview.diff);
+		"error" in component.preview
+			? theme.fg("error", component.preview.error)
+			: renderDiff(component.preview.diff, theme);
 	component.addChild(new Spacer(1));
 	component.addChild(new Text(body, 0, 0));
 	return component;

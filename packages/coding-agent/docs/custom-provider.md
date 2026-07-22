@@ -184,7 +184,7 @@ repi.registerProvider("my-llm", {
 repi.unregisterProvider("my-llm");
 ```
 
-Unregistering removes that provider's dynamic models, API key fallback, OAuth provider registration, and custom stream handler registrations. Any built-in models or provider behavior that were overridden are restored.
+Unregistering removes that provider's dynamic models, API key fallback, OAuth provider registration, and custom stream handler registrations. No bundled model or provider catalog is restored.
 
 Calls made after the initial extension load phase are applied immediately, so no `/reload` is required.
 
@@ -604,7 +604,7 @@ repi.registerProvider("my-provider", {
 
 ## Testing Your Implementation
 
-Test your provider against the same test suites used by built-in providers. Copy and adapt these test files from [packages/ai/test/](https://github.com/multi-zhangyang/pi-recon-agent/tree/main/packages/ai/test):
+Test your adapter against the protocol regression suites in [packages/ai/test/](https://github.com/multi-zhangyang/pi-recon-agent/tree/main/packages/ai/test):
 
 | Test | Purpose |
 |------|---------|

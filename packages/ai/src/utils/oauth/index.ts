@@ -1,10 +1,8 @@
 /**
  * OAuth credential management for AI providers.
  *
- * This module handles login, token refresh, and credential storage
- * for OAuth-based providers:
- * - Anthropic (Claude Pro/Max)
- * - GitHub Copilot
+ * Provider implementations are exported as opt-in building blocks. Importing
+ * this module never registers a provider; hosts own the active registry.
  */
 
 // Anthropic
@@ -39,60 +37,88 @@ import { githubCopilotOAuthProvider } from "./github-copilot.ts";
 import { openaiCodexOAuthProvider } from "./openai-codex.ts";
 import type { OAuthCredentials, OAuthProviderId, OAuthProviderInfo, OAuthProviderInterface } from "./types.ts";
 
-const BUILT_IN_OAUTH_PROVIDERS: OAuthProviderInterface[] = [
+type RegisteredOAuthProvider = {
+	provider: OAuthProviderInterface;
+	sourceId?: string;
+};
+
+const BUILT_IN_OAUTH_PROVIDER_SOURCE = "pi-ai:built-in";
+const oauthProviderRegistry = new Map<string, RegisteredOAuthProvider[]>();
+
+const BUILT_IN_OAUTH_PROVIDERS: readonly OAuthProviderInterface[] = [
 	anthropicOAuthProvider,
 	githubCopilotOAuthProvider,
 	openaiCodexOAuthProvider,
 ];
 
-const oauthProviderRegistry = new Map<string, OAuthProviderInterface>(
-	BUILT_IN_OAUTH_PROVIDERS.map((provider) => [provider.id, provider]),
-);
+/**
+ * Register the OAuth implementations owned by the CLI host.
+ *
+ * The AI package deliberately keeps provider registration opt-in so importing
+ * it in a browser or library does not mutate process-global state. Hosts that
+ * expose the standard login flow call this once during bootstrap and again
+ * after resetting extension registrations.
+ */
+export function registerBuiltInOAuthProviders(): void {
+	for (const provider of BUILT_IN_OAUTH_PROVIDERS) {
+		const entries = oauthProviderRegistry.get(provider.id) ?? [];
+		const retained = entries.filter((entry) => entry.sourceId !== BUILT_IN_OAUTH_PROVIDER_SOURCE);
+		oauthProviderRegistry.set(provider.id, [{ provider, sourceId: BUILT_IN_OAUTH_PROVIDER_SOURCE }, ...retained]);
+	}
+}
 
 /**
  * Get an OAuth provider by ID
  */
 export function getOAuthProvider(id: OAuthProviderId): OAuthProviderInterface | undefined {
-	return oauthProviderRegistry.get(id);
+	return oauthProviderRegistry.get(id)?.at(-1)?.provider;
 }
 
 /**
- * Register a custom OAuth provider
+ * Register an OAuth provider
  */
-export function registerOAuthProvider(provider: OAuthProviderInterface): void {
-	oauthProviderRegistry.set(provider.id, provider);
+export function registerOAuthProvider(provider: OAuthProviderInterface, sourceId?: string): void {
+	const entries = oauthProviderRegistry.get(provider.id) ?? [];
+	const retained = entries.filter((entry) => entry.sourceId !== sourceId);
+	oauthProviderRegistry.set(provider.id, [...retained, { provider, sourceId }]);
 }
 
 /**
  * Unregister an OAuth provider.
  *
- * If the provider is built-in, restores the built-in implementation.
- * Custom providers are removed completely.
+ * Removes override layers and reveals the built-in implementation, when one exists.
  */
 export function unregisterOAuthProvider(id: string): void {
-	const builtInProvider = BUILT_IN_OAUTH_PROVIDERS.find((provider) => provider.id === id);
-	if (builtInProvider) {
-		oauthProviderRegistry.set(id, builtInProvider);
-		return;
+	const entries = oauthProviderRegistry.get(id);
+	if (!entries) return;
+	const retained = entries.filter((entry) => entry.sourceId === BUILT_IN_OAUTH_PROVIDER_SOURCE);
+	if (retained.length > 0) oauthProviderRegistry.set(id, retained);
+	else oauthProviderRegistry.delete(id);
+}
+
+/** Remove registrations owned by one host/runtime while preserving other layers. */
+export function unregisterOAuthProviders(sourceId: string): void {
+	for (const [id, entries] of oauthProviderRegistry.entries()) {
+		const retained = entries.filter((entry) => entry.sourceId !== sourceId);
+		if (retained.length > 0) oauthProviderRegistry.set(id, retained);
+		else oauthProviderRegistry.delete(id);
 	}
-	oauthProviderRegistry.delete(id);
 }
 
 /**
- * Reset OAuth providers to built-ins.
+ * Clear all process-local OAuth provider registrations.
  */
 export function resetOAuthProviders(): void {
 	oauthProviderRegistry.clear();
-	for (const provider of BUILT_IN_OAUTH_PROVIDERS) {
-		oauthProviderRegistry.set(provider.id, provider);
-	}
 }
 
 /**
  * Get all registered OAuth providers
  */
 export function getOAuthProviders(): OAuthProviderInterface[] {
-	return Array.from(oauthProviderRegistry.values());
+	return Array.from(oauthProviderRegistry.values(), (entries) => entries.at(-1)?.provider).filter(
+		(provider): provider is OAuthProviderInterface => provider !== undefined,
+	);
 }
 
 /**

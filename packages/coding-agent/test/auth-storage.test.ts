@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { registerOAuthProvider } from "@pi-recon/repi-ai/oauth";
 import lockfile from "proper-lockfile";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { AuthStorage } from "../src/core/auth-storage.ts";
+import { AuthStorage, FileAuthStorageBackend } from "../src/core/auth-storage.ts";
 import { clearConfigValueCache } from "../src/core/resolve-config-value.ts";
 
 describe("AuthStorage", () => {
@@ -585,6 +585,55 @@ describe("AuthStorage", () => {
 		});
 	});
 
+	describe("credential change notifications", () => {
+		test("covers persistent and runtime mutations without exposing credential values", async () => {
+			authStorage = AuthStorage.inMemory();
+			const credentialStore = authStorage.asCredentialStore();
+			const changes: unknown[] = [];
+			const unsubscribe = credentialStore.subscribe((change) => changes.push(change));
+
+			authStorage.set("anthropic", { type: "api_key", key: "secret-stored-key" });
+			authStorage.setRuntimeApiKey("anthropic", "secret-runtime-key");
+			authStorage.removeRuntimeApiKey("anthropic");
+			authStorage.remove("anthropic");
+			await credentialStore.modify("anthropic", async () => ({
+				type: "oauth",
+				access: "secret-access-token",
+				refresh: "secret-refresh-token",
+				expires: Date.now() + 60_000,
+			}));
+			await credentialStore.delete("anthropic");
+
+			expect(changes).toEqual([
+				{ providerId: "anthropic", credentialType: "api_key", source: "stored" },
+				{ providerId: "anthropic", credentialType: "api_key", source: "runtime" },
+				{ providerId: "anthropic", credentialType: "api_key", source: "stored" },
+				{ providerId: "anthropic" },
+				{ providerId: "anthropic", credentialType: "oauth", source: "stored" },
+				{ providerId: "anthropic" },
+			]);
+			const serialized = JSON.stringify(changes);
+			expect(serialized).not.toContain("secret-stored-key");
+			expect(serialized).not.toContain("secret-runtime-key");
+			expect(serialized).not.toContain("secret-access-token");
+			expect(serialized).not.toContain("secret-refresh-token");
+
+			unsubscribe();
+			authStorage.set("anthropic", { type: "api_key", key: "after-unsubscribe" });
+			expect(changes).toHaveLength(6);
+		});
+
+		test("rejects empty runtime overrides before publishing configured state", () => {
+			authStorage = AuthStorage.inMemory();
+			const changes: unknown[] = [];
+			authStorage.subscribe((change) => changes.push(change));
+
+			expect(() => authStorage.setRuntimeApiKey("anthropic", "")).toThrow("must not be empty");
+			expect(authStorage.getAuthStatus("anthropic")).toEqual({ configured: false });
+			expect(changes).toEqual([]);
+		});
+	});
+
 	describe("runtime overrides", () => {
 		test("runtime override takes priority over auth.json", async () => {
 			writeAuthJson({
@@ -628,8 +677,8 @@ describe("AuthStorage", () => {
 		// inode. That inode-change assertion is the regression probe below.
 
 		test("set() replaces auth.json atomically: inode changes, mode 0o600, no .tmp leftover, credentials survive", async () => {
-			// create() → reload() → ensureFileExists creates {} atomically at 0o600.
-			// Seed through AuthStorage so the initial file is 0o600 (writeAuthJson
+			// The first set() creates auth.json atomically at 0o600. Seed through
+			// AuthStorage so the initial file is private (writeAuthJson
 			// uses default mode 0o644; atomicWriteFileSync preserves an existing
 			// target's mode, so the rewrite would inherit 0o644 instead of 0o600).
 			const authJson = AuthStorage.create(authJsonPath);
@@ -660,18 +709,28 @@ describe("AuthStorage", () => {
 			expect(await reloaded.getApiKey("anthropic")).toBe("sk-survived");
 		});
 
-		test("ensureFileExists creates auth.json atomically at 0o600 when absent", () => {
-			// AuthStorage.create() calls reload() → withLock → ensureFileExists, which
-			// must create the missing file atomically (temp+rename) at mode 0o600
-			// rather than truncate-then-write. Creating via a fresh instance covers it.
+		test("read-only sync and async locks do not create a missing auth.json", async () => {
+			const backend = new FileAuthStorageBackend(authJsonPath);
 			expect(existsSync(authJsonPath)).toBe(false);
-			AuthStorage.create(authJsonPath);
+			expect(backend.withLock((current) => ({ result: current }))).toBeUndefined();
+			expect(existsSync(authJsonPath)).toBe(false);
+			expect(await backend.withLockAsync(async (current) => ({ result: current }))).toBeUndefined();
+			expect(existsSync(authJsonPath)).toBe(false);
+		});
+
+		test("AuthStorage stays fileless until the first atomic 0o600 write", () => {
+			expect(existsSync(authJsonPath)).toBe(false);
+			const authJson = AuthStorage.create(authJsonPath);
+			expect(existsSync(authJsonPath)).toBe(false);
+
+			authJson.set("anthropic", { type: "api_key", key: "sk-first" });
 			expect(existsSync(authJsonPath)).toBe(true);
 			expect(statSync(authJsonPath).mode & 0o777).toBe(0o600);
 			const leftovers = readdirSync(dirname(authJsonPath)).filter((f) => f.endsWith(".tmp"));
 			expect(leftovers).toEqual([]);
-			// Newly created file is a valid empty-object JSON (reload must not throw).
-			expect(JSON.parse(readFileSync(authJsonPath, "utf8"))).toEqual({});
+			expect(JSON.parse(readFileSync(authJsonPath, "utf8"))).toEqual({
+				anthropic: { type: "api_key", key: "sk-first" },
+			});
 		});
 	});
 });

@@ -1,6 +1,6 @@
 import { Box, Markdown, type MarkdownTheme, Text } from "@pi-recon/repi-tui";
 import type { ParsedSkillBlock } from "../../../core/agent-session.ts";
-import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import { getMarkdownTheme, theme } from "../../../core/presentation/theme-runtime.ts";
 import { keyText } from "./keybinding-hints.ts";
 
 /**

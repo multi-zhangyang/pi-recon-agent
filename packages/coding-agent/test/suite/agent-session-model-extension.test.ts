@@ -1,5 +1,5 @@
 import type { AgentTool, ThinkingLevel } from "@pi-recon/repi-agent-core";
-import { fauxAssistantMessage, fauxToolCall, type Model } from "@pi-recon/repi-ai";
+import { type FauxResponseFactory, fauxAssistantMessage, fauxToolCall, type Model } from "@pi-recon/repi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BuildSystemPromptOptions, ExtensionAPI } from "../../src/index.ts";
@@ -306,27 +306,76 @@ describe("AgentSession model and extension characterization", () => {
 		});
 		harnesses.push(harness);
 		let providerSystemPrompt = "";
-		let sawInjectedUserMessage = false;
-		harness.setResponses([
-			(context) => {
-				providerSystemPrompt = context.systemPrompt ?? "";
-				sawInjectedUserMessage = context.messages.some(
+		const injectedMessagePresence: boolean[] = [];
+		const inspectRequest: FauxResponseFactory = (context) => {
+			providerSystemPrompt = context.systemPrompt ?? "";
+			injectedMessagePresence.push(
+				context.messages.some(
 					(message) =>
 						message.role === "user" &&
 						typeof message.content !== "string" &&
 						message.content.some((part) => part.type === "text" && part.text === "injected"),
-				);
-				return fauxAssistantMessage("done");
-			},
-		]);
+				),
+			);
+			return fauxAssistantMessage("done");
+		};
+		harness.setResponses([inspectRequest, inspectRequest]);
 
 		await harness.session.prompt("hello");
+		// Simulate a compacted active context. The durable current branch still
+		// owns the injected message, so the next turn must not persist it again.
+		harness.session.state.messages = harness.session.state.messages.filter((message) => message.role !== "custom");
+		await harness.session.prompt("again");
 
 		expect(providerSystemPrompt).toContain("extra instructions");
-		expect(sawInjectedUserMessage).toBe(true);
+		expect(injectedMessagePresence).toEqual([true, false]);
 		expect(
-			harness.session.messages.some((message) => message.role === "custom" && message.customType === "before-start"),
-		).toBe(true);
+			harness.sessionManager
+				.getBranch()
+				.filter((entry) => entry.type === "custom_message" && entry.customType === "before-start"),
+		).toHaveLength(1);
+	});
+
+	it("reapplies the tool-result cap after message_end replacement", async () => {
+		const echoTool: AgentTool = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo text",
+			parameters: Type.Object({ text: Type.String() }),
+			execute: async (_toolCallId, params) => ({
+				content: [{ type: "text", text: String((params as { text: string }).text) }],
+				details: {},
+			}),
+		};
+		const harness = await createHarness({
+			tools: [echoTool],
+			extensionFactories: [
+				(pi) => {
+					pi.on("message_end", (event) => {
+						if (event.message.role !== "toolResult") return;
+						return {
+							message: {
+								...event.message,
+								content: [{ type: "text", text: "x".repeat(400_000) }],
+							},
+						};
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("echo", { text: "hello" })], { stopReason: "toolUse" }),
+			fauxAssistantMessage("done"),
+		]);
+
+		await harness.session.prompt("start");
+
+		const toolResult = harness.session.messages.find((message) => message.role === "toolResult");
+		const text =
+			toolResult?.role === "toolResult" ? toolResult.content.find((part) => part.type === "text") : undefined;
+		expect(text?.type).toBe("text");
+		expect(text?.type === "text" ? text.text.length : 0).toBeLessThanOrEqual(262_144);
 	});
 
 	it("bindExtensions emits session_start and reload emits session_shutdown then session_start", async () => {

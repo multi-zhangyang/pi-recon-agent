@@ -2124,7 +2124,15 @@ preview_chars=${artifact.previewChars}`,
 		}
 		this._inflightNonPooledPids.clear();
 		this.refreshExitReapHook();
-		await Promise.all([...this.clientPool.keys()].map((key) => this.closePooledClient(key)));
+		const closeResults = await Promise.allSettled(
+			[...this.clientPool.keys()].map((key) => this.closePooledClient(key)),
+		);
+		const closeErrors = closeResults
+			.filter((result): result is PromiseRejectedResult => result.status === "rejected")
+			.map((result) => result.reason);
+		if (closeErrors.length > 0) {
+			throw new AggregateError(closeErrors, "Failed to close all MCP clients");
+		}
 	}
 
 	private async closePooledClient(key: string): Promise<void> {
@@ -2132,8 +2140,11 @@ preview_chars=${artifact.previewChars}`,
 		if (!pooled) return;
 		this.clientPool.delete(key);
 		if (pooled.idleTimer) clearTimeout(pooled.idleTimer);
-		await pooled.client.close();
-		this.refreshExitReapHook();
+		try {
+			await pooled.client.close();
+		} finally {
+			this.refreshExitReapHook();
+		}
 	}
 
 	/** Install/remove the process.on('exit') reap hook based on pool state. */

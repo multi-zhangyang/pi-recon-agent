@@ -8,7 +8,6 @@
 repi doctor
 repi smoke
 repi model doctor
-repi memory doctor
 ```
 
 需要导出诊断时：

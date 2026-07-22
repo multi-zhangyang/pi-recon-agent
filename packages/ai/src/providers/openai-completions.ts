@@ -19,6 +19,8 @@ import type {
 	Message,
 	Model,
 	OpenAICompletionsCompat,
+	ProviderEnv,
+	ProviderHeaders,
 	SimpleStreamOptions,
 	StopReason,
 	StreamFunction,
@@ -29,12 +31,15 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.ts";
+import { splitDeferredTools } from "../utils/deferred-tools.ts";
 import { safeStringifyError } from "../utils/error-stringify.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
-import { headersToRecord } from "../utils/headers.ts";
+import { headersToRecord, mergeProviderHeaders } from "../utils/headers.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
+import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { callOnResponseWithDrain } from "../utils/response-drain.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
+import { normalizeOpenAIToolSchema } from "../utils/tool-schema.ts";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
@@ -78,7 +83,7 @@ function isImageContentBlock(block: { type: string }): block is ImageContent {
 
 export interface OpenAICompletionsOptions extends StreamOptions {
 	toolChoice?: "auto" | "none" | "required" | { type: "function"; function: { name: string } };
-	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 }
 
 interface OpenAICompatCacheControl {
@@ -86,11 +91,20 @@ interface OpenAICompatCacheControl {
 	ttl?: string;
 }
 
-type ResolvedOpenAICompletionsCompat = Omit<Required<OpenAICompletionsCompat>, "cacheControlFormat"> & {
+type ResolvedOpenAICompletionsCompat = Omit<
+	Required<OpenAICompletionsCompat>,
+	"cacheControlFormat" | "deferredToolsMode"
+> & {
 	cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
+	deferredToolsMode?: OpenAICompletionsCompat["deferredToolsMode"];
 };
 
 type ChatCompletionInstructionMessageParam = ChatCompletionDeveloperMessageParam | ChatCompletionSystemMessageParam;
+
+type DeferredToolSystemMessageParam = {
+	role: "system";
+	tools: OpenAI.Chat.Completions.ChatCompletionTool[];
+};
 
 type ChatCompletionTextPartWithCacheControl = ChatCompletionContentPartText & {
 	cache_control?: OpenAICompatCacheControl;
@@ -100,11 +114,11 @@ type ChatCompletionToolWithCacheControl = OpenAI.Chat.Completions.ChatCompletion
 	cache_control?: OpenAICompatCacheControl;
 };
 
-function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
+function resolveCacheRetention(cacheRetention?: CacheRetention, env?: ProviderEnv): CacheRetention {
 	if (cacheRetention) {
 		return cacheRetention;
 	}
-	if (typeof process !== "undefined" && process.env.PI_CACHE_RETENTION === "long") {
+	if (getProviderEnvValue("PI_CACHE_RETENTION", env) === "long") {
 		return "long";
 	}
 	return "short";
@@ -142,9 +156,9 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 				throw new Error(`No API key for provider: ${model.provider}`);
 			}
 			const compat = getCompat(model);
-			const cacheRetention = resolveCacheRetention(options?.cacheRetention);
+			const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
 			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-			const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, compat);
+			const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, compat, options?.env);
 			let params = buildParams(model, context, options, compat, cacheRetention);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
@@ -498,43 +512,39 @@ function createClient(
 	model: Model<"openai-completions">,
 	context: Context,
 	apiKey: string,
-	optionsHeaders?: Record<string, string>,
+	optionsHeaders?: ProviderHeaders,
 	sessionId?: string,
 	compat: ResolvedOpenAICompletionsCompat = getCompat(model),
+	env?: ProviderEnv,
 ) {
-	const headers = { ...model.headers };
+	const dynamicHeaders: ProviderHeaders = {};
 	if (model.provider === "github-copilot") {
 		const hasImages = hasCopilotVisionInput(context.messages);
 		const copilotHeaders = buildCopilotDynamicHeaders({
 			messages: context.messages,
 			hasImages,
 		});
-		Object.assign(headers, copilotHeaders);
+		Object.assign(dynamicHeaders, copilotHeaders);
 	}
 
 	if (sessionId && compat.sendSessionAffinityHeaders) {
-		headers.session_id = sessionId;
-		headers["x-client-request-id"] = sessionId;
-		headers["x-session-affinity"] = sessionId;
+		dynamicHeaders.session_id = sessionId;
+		dynamicHeaders["x-client-request-id"] = sessionId;
+		dynamicHeaders["x-session-affinity"] = sessionId;
 	}
 
-	// Merge options headers last so they can override defaults
-	if (optionsHeaders) {
-		Object.assign(headers, optionsHeaders);
-	}
-
-	const defaultHeaders =
+	const providerHeaders: ProviderHeaders | undefined =
 		model.provider === "cloudflare-ai-gateway"
 			? {
-					...headers,
-					Authorization: headers.Authorization ?? null,
+					Authorization: null,
 					"cf-aig-authorization": `Bearer ${apiKey}`,
 				}
-			: headers;
+			: undefined;
+	const defaultHeaders = mergeProviderHeaders(model.headers, dynamicHeaders, providerHeaders, optionsHeaders) ?? {};
 
 	return new OpenAI({
 		apiKey,
-		baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
+		baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model, env) : model.baseUrl,
 		dangerouslyAllowBrowser: true,
 		defaultHeaders,
 	});
@@ -545,8 +555,12 @@ function buildParams(
 	context: Context,
 	options?: OpenAICompletionsOptions,
 	compat: ResolvedOpenAICompletionsCompat = getCompat(model),
-	cacheRetention: CacheRetention = resolveCacheRetention(options?.cacheRetention),
+	cacheRetention: CacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env),
 ) {
+	const immediateTools =
+		compat.deferredToolsMode === "system-message"
+			? splitDeferredTools(context, true).immediate
+			: (context.tools ?? []);
 	const messages = convertMessages(model, context, compat);
 	const cacheControl = getCompatCacheControl(compat, cacheRetention);
 
@@ -581,8 +595,8 @@ function buildParams(
 		params.temperature = options.temperature;
 	}
 
-	if (context.tools && context.tools.length > 0) {
-		params.tools = convertTools(context.tools, compat);
+	if (immediateTools.length > 0) {
+		params.tools = convertTools(immediateTools, compat);
 		if (compat.zaiToolStream) {
 			(params as any).tool_stream = true;
 		}
@@ -795,6 +809,10 @@ export function convertMessages(
 	compat: ResolvedOpenAICompletionsCompat,
 ): ChatCompletionMessageParam[] {
 	const params: ChatCompletionMessageParam[] = [];
+	const deferredTools =
+		compat.deferredToolsMode === "system-message"
+			? splitDeferredTools(context, true).deferred
+			: new Map<string, Tool>();
 
 	const normalizeToolCallId = (id: string): string => {
 		// Handle pipe-separated IDs from OpenAI Responses API
@@ -977,6 +995,7 @@ export function convertMessages(
 			params.push(assistantMsg);
 		} else if (msg.role === "toolResult") {
 			const imageBlocks: Array<{ type: "image_url"; image_url: { url: string } }> = [];
+			const deferredToolNames = new Set<string>();
 			let j = i;
 
 			for (; j < transformedMessages.length && transformedMessages[j].role === "toolResult"; j++) {
@@ -1011,6 +1030,12 @@ export function convertMessages(
 					(toolResultMsg as any).name = toolMsg.toolName;
 				}
 				params.push(toolResultMsg);
+
+				if (compat.deferredToolsMode === "system-message") {
+					for (const name of toolMsg.addedToolNames ?? []) {
+						if (deferredTools.has(name)) deferredToolNames.add(name);
+					}
+				}
 
 				if (hasImages && model.input.includes("image")) {
 					for (const block of toolMsg.content) {
@@ -1050,6 +1075,19 @@ export function convertMessages(
 			} else {
 				lastRole = "toolResult";
 			}
+
+			if (deferredToolNames.size > 0) {
+				const tools = Array.from(deferredToolNames, (name) => deferredTools.get(name)).filter(
+					(tool): tool is Tool => tool !== undefined,
+				);
+				if (tools.length > 0) {
+					const deferredToolMessage: DeferredToolSystemMessageParam = {
+						role: "system",
+						tools: convertTools(tools, compat),
+					};
+					params.push(deferredToolMessage as unknown as ChatCompletionMessageParam);
+				}
+			}
 			continue;
 		}
 
@@ -1068,7 +1106,7 @@ function convertTools(
 		function: {
 			name: tool.name,
 			description: tool.description,
-			parameters: tool.parameters as any, // TypeBox already generates JSON Schema
+			parameters: normalizeOpenAIToolSchema(tool.parameters),
 			// Only include strict if provider supports it. Some reject unknown fields.
 			...(compat.supportsStrictMode !== false && { strict: false }),
 		},
@@ -1131,8 +1169,7 @@ export function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"
 			return { stopReason: "error", errorMessage: "Provider finish_reason: network_error" };
 		default:
 			// opt #187: graceful default for unknown/future finish_reasons. An
-			// OpenAI-compatible provider (OpenRouter/vLLM/local gateways — REPI's
-			// default kimchi/kimi runs this path via the GLM proxy) may emit a
+			// OpenAI-compatible provider (OpenRouter/vLLM/local gateways) may emit a
 			// finish_reason outside the known set (e.g. "insufficient_information",
 			// "sensitive", "model_length"). The old default reclassified the
 			// successfully-streamed content as stopReason:"error" → false failure
@@ -1167,6 +1204,7 @@ function defaultCompat(): ResolvedOpenAICompletionsCompat {
 		zaiToolStream: false,
 		supportsStrictMode: false,
 		sendSessionAffinityHeaders: false,
+		deferredToolsMode: undefined,
 		supportsLongCacheRetention: false,
 	};
 }
@@ -1199,6 +1237,7 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
 		supportsStrictMode: model.compat.supportsStrictMode ?? detected.supportsStrictMode,
 		cacheControlFormat: model.compat.cacheControlFormat ?? detected.cacheControlFormat,
 		sendSessionAffinityHeaders: model.compat.sendSessionAffinityHeaders ?? detected.sendSessionAffinityHeaders,
+		deferredToolsMode: model.compat.deferredToolsMode ?? detected.deferredToolsMode,
 		supportsLongCacheRetention: model.compat.supportsLongCacheRetention ?? detected.supportsLongCacheRetention,
 	};
 }

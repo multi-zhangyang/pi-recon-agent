@@ -35,6 +35,9 @@ vi.mock("@aws-sdk/client-bedrock-runtime", () => {
 import { getModel } from "../src/models.ts";
 import { convertMessages } from "../src/providers/amazon-bedrock.ts";
 import type { AssistantMessage, Context, Message } from "../src/types.ts";
+import { registerBedrockFixtures } from "./model-fixtures.ts";
+
+registerBedrockFixtures();
 
 // opt #212 (bedrock twin): thinkingDisplay:"omitted" streams an EMPTY thinking
 // string BUT a real signature. The replay path used to drop the whole block on
@@ -42,7 +45,10 @@ import type { AssistantMessage, Context, Message } from "../src/types.ts";
 // reasoning degradation. The fix preserves the signature-bearing block for
 // Anthropic-Claude models (which support reasoningText.signature).
 
-const baseModel = getModel("amazon-bedrock", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")!;
+const baseModel = getModel<"bedrock-converse-stream">(
+	"amazon-bedrock",
+	"us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+)!;
 
 function makeAssistant(thinking: string, thinkingSignature: string): AssistantMessage {
 	return {

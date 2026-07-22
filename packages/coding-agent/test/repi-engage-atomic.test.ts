@@ -3665,6 +3665,34 @@ jobs:
 		expect(collectTmp(agentDir)).toEqual([]);
 	});
 
+	it("routes standalone .uimage files into the firmware lane", () => {
+		const firmwareTarget = join(workspace, "kernel.uimage");
+		writeFileSync(firmwareTarget, "standalone uImage routing fixture\n");
+
+		const result = spawnSync(
+			process.execPath,
+			[ENGAGE, workspace, firmwareTarget, "--no-mission", "--no-write", "--json", "--timeout-ms=5000"],
+			{
+				encoding: "utf8",
+				env: {
+					...process.env,
+					REPI_CODING_AGENT_DIR: agentDir,
+				},
+				timeout: 15_000,
+			},
+		);
+		expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+		const report = JSON.parse(result.stdout) as {
+			target: { lane: string; reason: string };
+			commands: Array<{ id: string }>;
+		};
+		expect(report.target).toMatchObject({
+			lane: "firmware-iot",
+			reason: "firmware-like extension",
+		});
+		expect(report.commands.map((row) => row.id)).toContain("firmware-quicklook");
+	});
+
 	it("summarizes firmware images and emits extraction plans without requiring binwalk", () => {
 		const firmwareTarget = join(workspace, "router.bin");
 		const secret = "superFirmwareSecretToken123456789";

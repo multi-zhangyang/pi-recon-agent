@@ -1,14 +1,35 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { readCurrentMission } from "../src/core/repi/mission.ts";
 import { createRegisteredReconHarness } from "./recon-profile-harness.ts";
 
 vi.setConfig({ testTimeout: 60_000 });
+
+function readProofArtifactFromOutput(output: string): string {
+	expect(output).toContain("proof_loop:");
+	expect(output).toContain("next_proof_command:");
+	expect(output).toContain("details: read ");
+	expect(output).not.toContain("gap_classifier:");
+	expect(output).not.toContain("specialist_queue:");
+	expect(output.length).toBeLessThanOrEqual(4096);
+	const path = /proof_loop_artifact: (.+)/.exec(output)?.[1]?.trim();
+	expect(path).toBeDefined();
+	return readFileSync(path!, "utf-8");
+}
+
+async function startMission(tools: Map<string, unknown>, task: string): Promise<void> {
+	const missionTool = tools.get("re_mission") as {
+		execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
+	};
+	await missionTool.execute("mission-new", { action: "new", task });
+}
 
 describe("REPI kernel profile proof-loop flow", () => {
 	it("wires proof-loop gaps into a quick verifier/replayer/autofix path", async () => {
 		const harness = createRegisteredReconHarness("repi-profile-proof-loop");
 		try {
+			await startMission(harness.tools, "audit https://target.local/app request order and runtime authorization");
 			const proofLoopTool = harness.tools.get("re_proof_loop") as {
 				execute: (
 					toolCallId: string,
@@ -36,25 +57,20 @@ describe("REPI kernel profile proof-loop flow", () => {
 				action: "plan",
 				target: "https://target.local/app",
 			});
-			expect(proof.content[0]?.text).toContain("gap_classifier:");
-			expect(proof.content[0]?.text).toContain("source=attack_graph");
-			expect(proof.content[0]?.text).toContain("class=runtime_adapter_gap");
-			expect(proof.content[0]?.text).toContain("class=missing_artifact");
-			expect(proof.content[0]?.text).toContain("quick_path:");
-			expect(proof.content[0]?.text).toContain("quick_plan_phases:");
-			expect(proof.content[0]?.text).toContain("runtime_adapter_before_replay=pass");
-			expect(proof.content[0]?.text).toContain("runtime_adapter_closure:");
-			expect(proof.content[0]?.text).toContain(
-				"re_runtime_adapter run web-cdp-network-adapter https://target.local/app",
-			);
-			expect(proof.content[0]?.text).toContain("re_verifier matrix https://target.local/app");
-			expect(proof.content[0]?.text).toContain("re_replayer run https://target.local/app 1");
-			expect(proof.content[0]?.text).toContain("re_autofix plan https://target.local/app");
-			expect(proof.content[0]?.text).toContain("source=attack_graph_gap");
-			const caseMemoryPath = join(harness.agentDir, "recon", "memory", "case-memory.jsonl");
-			expect(existsSync(caseMemoryPath) ? readFileSync(caseMemoryPath, "utf-8") : "").not.toContain(
-				"proof_loop plan",
-			);
+			const proofText = readProofArtifactFromOutput(proof.content[0]?.text ?? "");
+			expect(proofText).toContain("gap_classifier:");
+			expect(proofText).toContain("source=attack_graph");
+			expect(proofText).toContain("class=runtime_adapter_gap");
+			expect(proofText).toContain("class=missing_artifact");
+			expect(proofText).toContain("quick_path:");
+			expect(proofText).toContain("quick_plan_phases:");
+			expect(proofText).toContain("runtime_adapter_before_replay=pass");
+			expect(proofText).toContain("runtime_adapter_closure:");
+			expect(proofText).toContain("re_runtime_adapter run web-cdp-network-adapter https://target.local/app");
+			expect(proofText).toContain("re_verifier matrix https://target.local/app");
+			expect(proofText).toContain("re_replayer run https://target.local/app 1");
+			expect(proofText).toContain("re_autofix plan https://target.local/app");
+			expect(proofText).toContain("source=attack_graph_gap");
 
 			const proofRun = await proofLoopTool.execute("tool-call-id", {
 				action: "run",
@@ -62,13 +78,13 @@ describe("REPI kernel profile proof-loop flow", () => {
 				maxSteps: 1,
 				replaySteps: 1,
 			});
-			const proofRunText = proofRun.content[0]?.text ?? "";
-			expect(proofRunText).toContain("proof_loop:");
+			const proofRunOutput = proofRun.content[0]?.text ?? "";
+			expect(proofRunOutput).toContain("executed_steps: 1");
+			const proofRunText = readProofArtifactFromOutput(proofRunOutput);
 			expect(proofRunText).toContain("executed_steps: 1");
 			expect(proofRunText).toContain(
 				"quick_path_execution: index=1 phase=runtime-adapter command=re_runtime_adapter run web-cdp-network-adapter https://target.local/app",
 			);
-			expect(readFileSync(caseMemoryPath, "utf-8")).toContain("proof_loop run");
 			const nextProofActions = /next_proof_actions:([\s\S]*?)source_artifacts:/m.exec(proofRunText)?.[1] ?? "";
 			expect(nextProofActions).not.toContain(
 				"re_runtime_adapter run web-cdp-network-adapter https://target.local/app",
@@ -96,6 +112,7 @@ describe("REPI kernel profile proof-loop flow", () => {
 	it("promotes attack-graph binary mitigation maps into the proof spine", async () => {
 		const harness = createRegisteredReconHarness("repi-profile-proof-loop-mitigation");
 		try {
+			await startMission(harness.tools, "reverse native ELF ./vuln and prove its binary mitigations");
 			const proofLoopTool = harness.tools.get("re_proof_loop") as {
 				execute: (
 					toolCallId: string,
@@ -123,6 +140,7 @@ describe("REPI kernel profile proof-loop flow", () => {
 					{
 						kind: "RuntimeAdapterExecutionArtifactV1",
 						schemaVersion: 1,
+						missionId: readCurrentMission()?.id,
 						adapterId: "gdb-native-trace-adapter",
 						domainId: "rev-native",
 						bridgeId: "tool-bridge-runtime",
@@ -154,7 +172,7 @@ describe("REPI kernel profile proof-loop flow", () => {
 							missingProofExitSignals: [],
 						},
 						artifactKinds: ["native-symbol-map", "binary-mitigation-map", "runtime-adapter-transcript"],
-						ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
+						ingestTargets: ["evidence-ledger"],
 						proofExitSignals: ["binary mitigation map"],
 					},
 					null,
@@ -168,7 +186,7 @@ describe("REPI kernel profile proof-loop flow", () => {
 				action: "plan",
 				target: "./vuln",
 			});
-			const text = proof.content[0]?.text ?? "";
+			const text = readProofArtifactFromOutput(proof.content[0]?.text ?? "");
 			expect(text).toContain("class=proof_spine_seed");
 			expect(text).toContain("binary mitigation map matched");
 			expect(text).toContain("phase=2:proof_spine");
@@ -183,6 +201,7 @@ describe("REPI kernel profile proof-loop flow", () => {
 	it("turns attack-graph parser summaries into exact runtime-adapter closure", async () => {
 		const harness = createRegisteredReconHarness("repi-profile-proof-loop-parser-summary");
 		try {
+			await startMission(harness.tools, "audit opaque-web-target network request order");
 			const proofLoopTool = harness.tools.get("re_proof_loop") as {
 				execute: (
 					toolCallId: string,
@@ -211,6 +230,7 @@ describe("REPI kernel profile proof-loop flow", () => {
 					{
 						kind: "RuntimeAdapterExecutionArtifactV1",
 						schemaVersion: 1,
+						missionId: readCurrentMission()?.id,
 						adapterId: "web-cdp-network-adapter",
 						domainId: "web-api",
 						bridgeId: "tool-bridge-runtime",
@@ -248,7 +268,7 @@ describe("REPI kernel profile proof-loop flow", () => {
 							missingProofExitSignals: ["request order proof"],
 						},
 						artifactKinds: ["web-network-ledger", "runtime-adapter-transcript"],
-						ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
+						ingestTargets: ["evidence-ledger"],
 						proofExitSignals: ["network request ledger", "request order proof"],
 					},
 					null,
@@ -262,7 +282,7 @@ describe("REPI kernel profile proof-loop flow", () => {
 				action: "plan",
 				target: "opaque-web-target",
 			});
-			const text = proof.content[0]?.text ?? "";
+			const text = readProofArtifactFromOutput(proof.content[0]?.text ?? "");
 			expect(text).toContain(
 				"parser_signal_summary adapter=web-cdp-network-adapter matched=network request ledger missing=request order proof",
 			);
@@ -281,6 +301,7 @@ describe("REPI kernel profile proof-loop flow", () => {
 	it("uses complete parser summaries as proof-spine seeds instead of stale adapter gaps", async () => {
 		const harness = createRegisteredReconHarness("repi-profile-proof-loop-parser-complete");
 		try {
+			await startMission(harness.tools, "audit opaque-web-target-complete network request order");
 			const proofLoopTool = harness.tools.get("re_proof_loop") as {
 				execute: (
 					toolCallId: string,
@@ -308,6 +329,7 @@ describe("REPI kernel profile proof-loop flow", () => {
 					{
 						kind: "RuntimeAdapterExecutionArtifactV1",
 						schemaVersion: 1,
+						missionId: readCurrentMission()?.id,
 						adapterId: "web-cdp-network-adapter",
 						domainId: "web-api",
 						bridgeId: "tool-bridge-runtime",
@@ -345,7 +367,7 @@ describe("REPI kernel profile proof-loop flow", () => {
 							missingProofExitSignals: [],
 						},
 						artifactKinds: ["web-network-ledger", "runtime-adapter-transcript"],
-						ingestTargets: ["evidence-ledger", "knowledge-graph", "memory-event"],
+						ingestTargets: ["evidence-ledger"],
 						proofExitSignals: ["network request ledger", "request order proof"],
 					},
 					null,
@@ -359,7 +381,7 @@ describe("REPI kernel profile proof-loop flow", () => {
 				action: "plan",
 				target: "opaque-web-target-complete",
 			});
-			const text = proof.content[0]?.text ?? "";
+			const text = readProofArtifactFromOutput(proof.content[0]?.text ?? "");
 			expect(text).toContain("class=proof_spine_seed");
 			expect(text).toContain("runtime adapter proof-exit complete adapter=web-cdp-network-adapter");
 			expect(text).toContain("adapter=web-cdp-network-adapter status=proof_spine_ready");

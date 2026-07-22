@@ -6,12 +6,14 @@ export type RoutePlan = {
 	workflow: string[];
 };
 
+export const REPI_GENERIC_TASK = "general REPI investigation";
+
 export const REPI_TASK_PATTERNS = [
 	/apk|android|ios|ipa|frida|objection|jadx|apktool|smali/i,
-	/ida|radare2|\br2\b|ghidra|binary|二进制|逆向|反编译|反汇编|elf|pe\b|dll|so\b|wasm|vmprotect|upx/i,
+	/ida|radare2|\br2\b|ghidra|gdb|lldb|checksec|readelf|objdump|crackme|revers(?:e|ing)(?:\s+engineering)?|binary|二进制|逆向|反编译|反汇编|elf|pe\b|dll|so\b|wasm|vmprotect|upx/i,
 	/\bctf\b|\bpwn\b|\brop\b|ret2libc|\bheap\b|tcache|fastbin|format[-_ ]?string|fmtstr|srop|sigreturn|ret2dlresolve|dlresolve|one_gadget|seccomp|seccomp[-_ ]?bpf|syscall filter|pwntools|漏洞利用|\bexploit\b/i,
 	/js\s*逆向|签名|加密参数|风控|webpack|sourcemap|hook|xhr|fetch|websocket/i,
-	/web\s*渗透|api\s*安全|graphql|jwt|oauth|ssrf|idor|bola|xss|sqli|ssti|csrf|rce|waf|burp|漏洞扫描|目录扫描|nuclei|ffuf|gobuster|sqlmap|dalfox/i,
+	/web\s*渗透|api\s*安全|漏洞扫描|目录扫描|\b(?:graphql|jwt|oauth|ssrf|idor|bola|xss|sqli|ssti|csrf|rce|waf|burp|nuclei|ffuf|gobuster|sqlmap|dalfox)\b/i,
 	/firmware|固件|iot|binwalk|squashfs|uboot|uart|jtag|mips|arm/i,
 	/pcap|流量|取证|dfir|forensic|stego|隐写|wireshark|tshark|memory dump|memdump|vmem|volatility|内存取证|内存镜像/i,
 	/cloud|aws|azure|gcp|metadata|k8s|kubernetes|docker|container|容器|云/i,
@@ -21,7 +23,17 @@ export const REPI_TASK_PATTERNS = [
 ] as const;
 
 export function isRepiTask(text: string): boolean {
-	return REPI_TASK_PATTERNS.some((pattern) => pattern.test(text));
+	return (
+		REPI_TASK_PATTERNS.some((pattern) => pattern.test(text)) ||
+		routeRepiTask(text).domain !== "Reverse/Pentest general"
+	);
+}
+
+/** Elliptical follow-up which should inherit the active routed task. */
+export function isRepiContinuation(text: string): boolean {
+	return /^(?:continue(?:\s+(?:working|execution|the task))?|go on|keep going|proceed|next(?: step)?|resume|继续(?:执行|处理|做|工作)?|接着(?:做|处理|执行)?|往下|下一步|再查(?:一下)?|继续跑|继续检查|继续修复)(?:[\s,，.!！。:：].*)?$/i.test(
+		text.trim(),
+	);
 }
 
 export function routeRepiTask(text: string): RoutePlan {
@@ -36,10 +48,11 @@ export function routeRepiTask(text: string): RoutePlan {
 		/https?:\/\/|www\.|\.(?:com|net|org|io|cn|app|dev|site|co|xyz|info|biz)\b|网站|站点|网页|接口|endpoint|\bhttp\b|登录|cookie|session|bearer|authorization|请求|响应|header|x-forwarded|user-agent/i.test(
 			lower,
 		);
+	const explicitJsRuntimeSignal =
+		/\bjs\b|jsre|javascript|frontend|js\s*逆向|webpack|sourcemap|风控|crypto\.subtle|浏览器|前端/.test(lower);
 	const jsSpecific =
-		/(?:\bjs\b|jsre|javascript|frontend|js\s*逆向|签名|加密参数|webpack|sourcemap|风控|crypto|subtle|\bsign\b|signature|nonce|timestamp|encrypt|decrypt)/.test(
-			lower,
-		) ||
+		explicitJsRuntimeSignal ||
+		(webTargetSignal && /签名|加密参数|\bsign\b|signature|nonce|timestamp|encrypt|decrypt/.test(lower)) ||
 		(/(?:xhr|fetch|websocket)/.test(lower) &&
 			!/(?:api|graphql|jwt|oauth|auth|session|csrf|ssrf|idor|bola|xss|sqli|ssti|rce|web\s*api|web\s*渗透)/.test(
 				lower,
@@ -50,15 +63,12 @@ export function routeRepiTask(text: string): RoutePlan {
 	// and routed the native binary as an LLM-boundary audit. Keep pure REPI QA
 	// tasks on the Agent lane, but let concrete ELF/binary/crackme wording win.
 	const nativeConcreteSignal =
-		/elf|pe\b|dll|so\b|binary|二进制|反编译|反汇编|ida|radare2|\br2\b|ghidra|wasm|\.exe\b|executable|compiled|\bcrackme\b|keygen|license[-_ ]?check|许可证校验/i.test(
+		/elf|pe\b|dll|so\b|binary|二进制|反编译|反汇编|ida|radare2|\br2\b|ghidra|gdb|lldb|checksec|readelf|objdump|wasm|\.exe\b|executable|compiled|\bcrackme\b|keygen|license[-_ ]?check|许可证校验/i.test(
 			lower,
 		);
-	// nativeReverseWord requires the "engineer" compound (or 逆向) so the bare English
-	// word "reverse" — which appears in default fallback task strings like "reverse/pentest
-	// task" across recon-profile.ts — does NOT flip a generic task to Native reverse.
-	// Without this, default missions route to Native (triage/control-flow lanes) instead of
-	// the generic Reverse/Pentest general lanes (map/prove), breaking the autopilot contract.
-	const nativeReverseWord = /逆向|reverse[-_ ]?engineer/i.test(lower);
+	// A user-facing bare reverse/reversing request is a real native route signal. Internal
+	// fallback missions should call routeRepiTask with explicit generic wording instead.
+	const nativeReverseWord = /逆向|revers(?:e|ing)(?:[-_ ]?engineer(?:ing)?)?/i.test(lower);
 	const nativeRouteSignal = nativeConcreteSignal || (nativeReverseWord && !webTargetSignal);
 	const memoryForensicsSignal =
 		/memory dump|memdump|mem\.raw|\.vmem|hiberfil|pagefile|volatility|内存取证|内存镜像|内存转储|lsass dump|crash dump/.test(
@@ -91,12 +101,12 @@ export function routeRepiTask(text: string): RoutePlan {
 	if (agentBoundarySpecific && !nonAgentConcreteTargetSignal) {
 		return plan(
 			"Agent / LLM boundary",
-			"prove prompt, memory, tool-call, and delegation boundary failures",
+			"prove prompt, session-context, tool-call, and delegation boundary failures",
 			"prompt/resource map + tool schema/audit + injection replay harness",
 			"agent-boundary",
 			[
 				"prompt/tool surface",
-				"memory/retrieval boundary",
+				"session-context/retrieval boundary",
 				"injection replay",
 				"delegation/tool-call trace",
 				"report",
@@ -163,7 +173,7 @@ export function routeRepiTask(text: string): RoutePlan {
 		);
 	}
 	if (
-		/(?:\bcrypto\b|cryptography|rsa|aes|cbc|ecb|gcm|nonce|iv\b|padding oracle|oracle|lattice|sage|z3|hashcat|john|xor|base64|base32|hex|modulus|exponent|elliptic|ecdsa|stego|隐写|密码题|格|同余|椭圆曲线)/.test(
+		/(?:\bcrypto\b|cryptography|cryptanalysis|cipher(?:text)?|encrypt|decrypt|digital signature|rsa|aes|cbc|ecb|gcm|nonce|iv\b|padding oracle|oracle|lattice|sage|z3|hashcat|john|xor|base64|base32|hex|modulus|exponent|elliptic|ecdsa|stego|隐写|密码|签名算法|格|同余|椭圆曲线)/.test(
 			lower,
 		)
 	) {
@@ -194,7 +204,7 @@ export function routeRepiTask(text: string): RoutePlan {
 			["scope baseline", "crawl/route corpus", "template scan", "manual replay verifier", "finding queue/report"],
 		);
 	}
-	if (/api|graphql|jwt|oauth|ssrf|idor|bola|xss|sqli|ssti|csrf|rce|web|burp|waf|渗透/.test(lower)) {
+	if (/\b(?:api|graphql|jwt|oauth|ssrf|idor|bola|xss|sqli|ssti|csrf|rce|web|burp|waf)\b|渗透/.test(lower)) {
 		return plan(
 			"Web / API pentest",
 			"prove request/auth/state vulnerability path",

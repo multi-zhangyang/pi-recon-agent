@@ -2,6 +2,17 @@ import { describe, expect, test } from "vitest";
 import { buildSystemPrompt } from "../src/core/system-prompt.ts";
 
 describe("buildSystemPrompt", () => {
+	test("keeps default and custom system prompts independent of wall-clock time", () => {
+		const options = { contextFiles: [], skills: [], cwd: "/workspace" };
+		const defaultPrompt = buildSystemPrompt(options);
+		const customPrompt = buildSystemPrompt({ ...options, customPrompt: "REPI kernel" });
+
+		expect(defaultPrompt).not.toContain("Current date:");
+		expect(customPrompt).not.toContain("Current date:");
+		expect(defaultPrompt).toContain("Current working directory: /workspace");
+		expect(customPrompt).toContain("Current working directory: /workspace");
+	});
+
 	describe("empty tools", () => {
 		test("shows (none) for empty tools list", () => {
 			const prompt = buildSystemPrompt({

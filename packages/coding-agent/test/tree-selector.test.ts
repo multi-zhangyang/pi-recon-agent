@@ -1,6 +1,7 @@
 import { setKeybindings } from "@pi-recon/repi-tui";
 import { beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
+import { initTheme } from "../src/core/presentation/theme-runtime.ts";
 import type {
 	ModelChangeEntry,
 	SessionEntry,
@@ -8,7 +9,6 @@ import type {
 	SessionTreeNode,
 } from "../src/core/session-manager.ts";
 import { TreeSelectorComponent } from "../src/modes/interactive/components/tree-selector.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 beforeAll(() => {
 	initTheme("dark");

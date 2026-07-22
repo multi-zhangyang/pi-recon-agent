@@ -7,7 +7,10 @@ type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.ts";
 import { hasBedrockCredentials } from "./bedrock-utils.ts";
+import { registerProviderIntegrationFixtures } from "./model-fixtures.ts";
 import { resolveApiKey } from "./oauth.ts";
+
+registerProviderIntegrationFixtures();
 
 // Resolve OAuth tokens at module level (async, runs before tests)
 const [openaiCodexToken] = await Promise.all([resolveApiKey("openai-codex")]);
@@ -251,7 +254,7 @@ describe("AI Providers Abort Tests", () => {
 	});
 
 	describe.skipIf(!process.env.KIMI_API_KEY)("Kimi For Coding Provider Abort", () => {
-		const llm = getModel("kimi-coding", "kimi-k2-thinking");
+		const llm = getModel("kimi-coding", "k2p7");
 
 		it("should abort mid-stream", { retry: 3 }, async () => {
 			await testAbortSignal(llm);

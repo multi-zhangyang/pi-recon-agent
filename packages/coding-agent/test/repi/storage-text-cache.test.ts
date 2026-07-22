@@ -23,12 +23,9 @@ vi.mock("node:fs", async (importOriginal) => {
 const { mkdirSync, rmSync, writeFileSync } = await import("node:fs");
 const { readTextFileCached } = await import("../../src/core/repi/storage.ts");
 
-// readTextFileCached is the mtime+size-keyed cache of readTextFile, used by the
-// per-tool-result memory-recall packet header (readMemoryNote + memoryLineCount)
-// which read the core/project/procedural .md notes TWICE each per tool result and
-// re-read them on every subsequent tool result until the memory system rewrites
-// them. The cache pays one stat(2) per call and re-reads only when the file
-// changes. Load-bearing behaviors: (1) returns the file text (+ fallback default),
+// readTextFileCached is the mtime+size-keyed cache of readTextFile. It pays one
+// stat(2) per call and re-reads only when the file changes. Load-bearing
+// behaviors: (1) returns the file text (+ fallback default),
 // (2) picks up changes (mtime+size invalidation — does NOT cache forever),
 // (3) fallback on missing file (and a later write is observed), (4) repeat reads
 // skip readFileSync (the within-call double-read + cross-tool-result re-reads).
@@ -46,7 +43,7 @@ describe("repi/storage readTextFileCached", () => {
 	});
 
 	it("returns the file text and matches a fresh read", () => {
-		const path = join(tempDir, "core-memory.md");
+		const path = join(tempDir, "report.md");
 		writeFileSync(path, "# Core\n\n- fact one\n- fact two\n");
 		expect(readTextFileCached(path)).toBe("# Core\n\n- fact one\n- fact two\n");
 		// second call returns the same text (cache hit path)
@@ -60,7 +57,7 @@ describe("repi/storage readTextFileCached", () => {
 	});
 
 	it("invalidates on file change (picks up a new write rather than returning the stale cached text)", async () => {
-		const path = join(tempDir, "project-memory.md");
+		const path = join(tempDir, "project.md");
 		writeFileSync(path, "v1\n");
 		expect(readTextFileCached(path)).toBe("v1\n");
 		// mtime resolution can be ms on modern filesystems; bump mtime explicitly.
@@ -77,13 +74,11 @@ describe("repi/storage readTextFileCached", () => {
 	});
 
 	it("serves repeat reads from the cache (no readFileSync on a cache hit — regression: was read per call)", () => {
-		// The win is on the hot path: the recall packet header reads each .md note
-		// twice per tool result (memoryLineCount + readMemoryNote) and again on every
-		// subsequent tool result. A cache hit must skip readFileSync entirely (one
-		// stat(2) only). The mocked readFileSync counter proves the 2nd..Nth calls
+		// A cache hit must skip readFileSync entirely (one stat(2) only). The mocked
+		// readFileSync counter proves the 2nd..Nth calls
 		// don't re-read, then a re-write (mtime change) proves invalidation re-reads
 		// exactly once more.
-		const path = join(tempDir, "procedural-memory.md");
+		const path = join(tempDir, "steps.md");
 		writeFileSync(path, "step one\nstep two\n");
 		readFileSyncCalls.current = 0;
 		expect(readTextFileCached(path)).toBe("step one\nstep two\n"); // miss
@@ -93,25 +88,5 @@ describe("repi/storage readTextFileCached", () => {
 		// 4 calls, 1 readFileSync — the within-call double-read + cross-call re-reads
 		// all hit the cache.
 		expect(readFileSyncCalls.current).toBe(1);
-	});
-
-	it("dedups the within-call double-read (readMemoryNote + memoryLineCount on the same path)", async () => {
-		// The recall packet header reads each .md note twice in one tool result:
-		// memoryLineCount (for the status line) + readMemoryNote (for the packet).
-		// Both go through readTextFileCached now, so the second is a cache hit. This
-		// test imports the real memory-ux readers to prove the dedup at the seam
-		// where it matters (not just the raw cache primitive).
-		const { memoryFileStatusLine, readMemoryNote } = await import("../../src/core/repi/memory-ux.ts");
-		const path = join(tempDir, "core-memory.md");
-		writeFileSync(path, "# Core\n\n- fact\n");
-		readFileSyncCalls.current = 0;
-		// Simulate the recall packet header: status line (line count) + note packet.
-		memoryFileStatusLine("core_memory", path);
-		readMemoryNote(path, "core_memory");
-		// Two readers, one readFileSync — the second reader hit the cache.
-		expect(readFileSyncCalls.current).toBe(1);
-		// And the values are correct + consistent.
-		expect(memoryFileStatusLine("core_memory", path)).toBe("core_memory=present rows=2 bytes=15");
-		expect(readMemoryNote(path, "core_memory")).toContain("# Core");
 	});
 });

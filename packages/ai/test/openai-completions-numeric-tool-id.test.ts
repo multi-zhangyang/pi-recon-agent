@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.ts";
 import { streamSimple } from "../src/stream.ts";
 import type { Tool } from "../src/types.ts";
+import { registerOpenAIFixtures } from "./model-fixtures.ts";
+
+registerOpenAIFixtures();
 
 const mockState = vi.hoisted(() => ({
 	lastParams: undefined as unknown,
@@ -99,7 +102,7 @@ describe("openai-completions numeric tool-call id", () => {
 			},
 		];
 
-		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const { compat: _compat, ...baseModel } = getModel<"openai-responses">("openai", "gpt-4o-mini")!;
 		const model = { ...baseModel, api: "openai-completions" } as const;
 		const tool: Tool = {
 			name: "read",
@@ -173,7 +176,7 @@ describe("openai-completions numeric tool-call id", () => {
 			},
 		];
 
-		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const { compat: _compat, ...baseModel } = getModel<"openai-responses">("openai", "gpt-4o-mini")!;
 		const model = { ...baseModel, api: "openai-completions" } as const;
 		const tools: Tool[] = [
 			{
@@ -258,7 +261,7 @@ describe("openai-completions numeric tool-call id", () => {
 			},
 		];
 
-		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const { compat: _compat, ...baseModel } = getModel<"openai-responses">("openai", "gpt-4o-mini")!;
 		const model = { ...baseModel, api: "openai-completions" } as const;
 		const tool: Tool = {
 			name: "read",

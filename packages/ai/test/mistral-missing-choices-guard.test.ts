@@ -14,6 +14,9 @@ import { getModel } from "../src/models.ts";
 import { consumeChatStream } from "../src/providers/mistral.ts";
 import type { AssistantMessage, Model, Usage } from "../src/types.ts";
 import { AssistantMessageEventStream } from "../src/utils/event-stream.ts";
+import { registerMistralFixtures } from "./model-fixtures.ts";
+
+registerMistralFixtures();
 
 const emptyUsage: Usage = {
 	input: 0,
@@ -66,7 +69,7 @@ async function* fakeStream(): AsyncIterable<CompletionEvent> {
 
 describe("Mistral missing choices guard (opt #258)", () => {
 	it("skips a usage-only chunk with no choices field instead of throwing", async () => {
-		const model = getModel("mistral", "codestral-latest");
+		const model = getModel<"mistral-conversations">("mistral", "codestral-latest")!;
 		const output = buildOutput(model);
 		const stream = new AssistantMessageEventStream();
 

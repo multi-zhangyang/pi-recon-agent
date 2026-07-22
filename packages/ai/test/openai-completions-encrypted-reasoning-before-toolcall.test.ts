@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.ts";
 import { streamSimple } from "../src/stream.ts";
 import type { Tool } from "../src/types.ts";
+import { registerOpenAIFixtures } from "./model-fixtures.ts";
+
+registerOpenAIFixtures();
 
 const mockState = vi.hoisted(() => ({
 	lastParams: undefined as unknown,
@@ -127,7 +130,7 @@ describe("opt #211: reasoning.encrypted detail preceding tool_calls delta", () =
 			},
 		];
 
-		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const { compat: _compat, ...baseModel } = getModel<"openai-responses">("openai", "gpt-4o-mini")!;
 		const model = { ...baseModel, api: "openai-completions" } as const;
 		const tool: Tool = {
 			name: "edit",
@@ -213,7 +216,7 @@ describe("opt #211: reasoning.encrypted detail preceding tool_calls delta", () =
 			},
 		];
 
-		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const { compat: _compat, ...baseModel } = getModel<"openai-responses">("openai", "gpt-4o-mini")!;
 		const model = { ...baseModel, api: "openai-completions" } as const;
 		const tool: Tool = {
 			name: "edit",

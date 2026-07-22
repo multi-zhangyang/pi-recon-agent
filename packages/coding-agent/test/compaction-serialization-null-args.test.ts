@@ -16,6 +16,7 @@
  */
 import type { AssistantMessage, Message } from "@pi-recon/repi-ai";
 import { describe, expect, it } from "vitest";
+import { estimateTokens } from "../src/core/compaction/compaction.ts";
 import { serializeConversation } from "../src/core/compaction/utils.ts";
 
 function assistantWithToolCall(args: unknown): Message {
@@ -59,5 +60,24 @@ describe("opt #241: serializeConversation tolerates a toolCall with null/undefin
 		const messages: Message[] = [assistantWithToolCall(undefined)];
 		expect(() => serializeConversation(messages)).not.toThrow();
 		expect(serializeConversation(messages)).toContain("read()");
+	});
+
+	it.each([
+		["null", null],
+		["undefined", undefined],
+	])("estimateTokens does not throw on %s arguments", (_label, args) => {
+		const message = assistantWithToolCall(args);
+		expect(() => estimateTokens(message)).not.toThrow();
+		expect(estimateTokens(message)).toBeGreaterThan(0);
+	});
+
+	it("does not throw on circular arguments", () => {
+		const circular: Record<string, unknown> = {};
+		circular.self = circular;
+		const message = assistantWithToolCall(circular);
+
+		expect(() => estimateTokens(message)).not.toThrow();
+		expect(() => serializeConversation([message])).not.toThrow();
+		expect(serializeConversation([message])).toContain("self=[unserializable]");
 	});
 });

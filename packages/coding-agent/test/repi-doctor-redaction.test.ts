@@ -70,4 +70,37 @@ process.exit(0);
 		expect(result.stdout).toContain("<redacted:api-key>");
 		expect(result.stdout).toContain("<redacted:url>");
 	});
+
+	it("reports a retired settings.memory block", () => {
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ memory: { autoRecall: true } }));
+		const workerSettings = join(agentDir, "recon", "agent-threads", "run-1", "agent-home", "settings.json");
+		const swarmSettings = join(
+			agentDir,
+			"recon",
+			"evidence",
+			"swarms",
+			"2020-run-sessions",
+			".repi",
+			"agent",
+			"settings.json",
+		);
+		const unrelatedSettings = join(agentDir, "recon", "evidence", "swarms", "notes", "settings.json");
+		for (const path of [workerSettings, swarmSettings, unrelatedSettings]) {
+			mkdirSync(join(path, ".."), { recursive: true });
+			writeFileSync(path, JSON.stringify({ memory: { autoRecall: true } }));
+		}
+		const result = spawnSync(process.execPath, [DOCTOR, fakeRoot, "--json"], {
+			encoding: "utf8",
+			env: { ...process.env, REPI_CODING_AGENT_DIR: agentDir },
+			timeout: 10_000,
+		});
+		const report = JSON.parse(result.stdout) as {
+			checks: Array<{ id: string; status: string; evidence: string }>;
+		};
+		const retiredState = report.checks.find((check) => check.id === "runtime:retired-state-absent");
+		expect(retiredState?.status).toBe("fail");
+		expect(retiredState?.evidence).toContain(`${join(agentDir, "settings.json")}#memory`);
+		expect(retiredState?.evidence).toContain(`${workerSettings}#memory`);
+		expect(retiredState?.evidence).toContain(`${swarmSettings}#memory`);
+	});
 });

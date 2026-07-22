@@ -39,7 +39,7 @@ describe("issue #2791 fs.watch error event crashes process", () => {
 	});
 
 	it("process should survive an error event on the theme FSWatcher", () => {
-		const themeModulePath = join(__dirname, "../../../src/modes/interactive/theme/theme.ts").replace(/\\/g, "/");
+		const themeModulePath = join(__dirname, "../../../src/core/presentation/theme-runtime.ts").replace(/\\/g, "/");
 		const agentDir = join(tempRoot, "agent").replace(/\\/g, "/");
 
 		// Script that sets up the watcher and emits a synthetic error on it.

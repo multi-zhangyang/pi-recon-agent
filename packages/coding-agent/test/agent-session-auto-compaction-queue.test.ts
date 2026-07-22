@@ -5,11 +5,16 @@ import { Agent } from "@pi-recon/repi-agent-core";
 import { type AssistantMessage, getModel } from "@pi-recon/repi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.ts";
+import type { AgentSessionCompactionRuntime } from "../src/core/agent-session-compaction.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRegistry } from "../src/core/model-registry.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { createTestResourceLoader } from "./utilities.ts";
+
+function getCompactionRuntime(session: AgentSession): AgentSessionCompactionRuntime {
+	return (session as unknown as { _compactionRuntime: AgentSessionCompactionRuntime })._compactionRuntime;
+}
 
 vi.mock("../src/core/compaction/index.js", () => ({
 	calculateContextTokens: (usage: {
@@ -26,6 +31,7 @@ vi.mock("../src/core/compaction/index.js", () => ({
 		tokensBefore: 100,
 		details: {},
 	}),
+	estimateCompactionContext: () => ({ beforeTokens: 100, afterTokens: 10 }),
 	estimateContextTokens: (
 		messages: Array<{
 			role: string;
@@ -45,20 +51,17 @@ vi.mock("../src/core/compaction/index.js", () => ({
 		return { tokens: 0, usageTokens: 0, trailingTokens: 0, lastUsageIndex: null };
 	},
 	generateBranchSummary: async () => ({ summary: "", aborted: false, readFiles: [], modifiedFiles: [] }),
-	// Return a minimal but well-shaped CompactionPreparation so the real
-	// _runAutoCompaction can read preparation.messagesToSummarize /
-	// turnPrefixMessages without throwing. compact() is mocked below to provide
-	// the compaction payload.
-	prepareCompaction: () => ({ messagesToSummarize: [], turnPrefixMessages: [] }),
+	// Return a minimal but well-shaped CompactionPreparation for the runtime.
+	prepareCompaction: () => ({
+		messagesToSummarize: [{ role: "user", content: "history", timestamp: 0 }],
+		turnPrefixMessages: [],
+	}),
 	shouldCompact: (
 		contextTokens: number,
 		contextWindow: number,
 		settings: { enabled: boolean; reserveTokens: number },
 	) => settings.enabled && contextTokens > contextWindow - settings.reserveTokens,
-	// Faithful copy of the real pure helper (see compaction/utils.ts). The mock
-	// replaces the compaction module, so it must provide this export too — the
-	// overflow-recovery path in _checkCompaction calls it to strip trailing
-	// error/aborted assistants before retrying.
+	// The mock replaces the compaction module, so it also provides this helper.
 	stripTrailingErrorAssistants: (messages: Array<{ role: string; stopReason?: string }>) => {
 		let end = messages.length;
 		while (end > 0) {
@@ -131,11 +134,8 @@ describe("AgentSession auto-compaction queue resume", () => {
 
 		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
 
-		const runAutoCompaction = (
-			session as unknown as {
-				_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
-			}
-		)._runAutoCompaction.bind(session);
+		const compactionRuntime = getCompactionRuntime(session);
+		const runAutoCompaction = compactionRuntime.runAutoCompaction.bind(compactionRuntime);
 
 		await expect(runAutoCompaction("threshold", false)).resolves.toBe(true);
 
@@ -163,14 +163,8 @@ describe("AgentSession auto-compaction queue resume", () => {
 			timestamp: Date.now(),
 		};
 
-		const runAutoCompactionSpy = vi
-			.spyOn(
-				session as unknown as {
-					_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
-				},
-				"_runAutoCompaction",
-			)
-			.mockResolvedValue();
+		const compactionRuntime = getCompactionRuntime(session);
+		const runAutoCompactionSpy = vi.spyOn(compactionRuntime, "runAutoCompaction").mockResolvedValue(false);
 
 		const events: Array<{ type: string; reason: string; errorMessage?: string }> = [];
 		session.subscribe((event) => {
@@ -179,14 +173,8 @@ describe("AgentSession auto-compaction queue resume", () => {
 			}
 		});
 
-		const checkCompaction = (
-			session as unknown as {
-				_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<void>;
-			}
-		)._checkCompaction.bind(session);
-
-		await checkCompaction(overflowMessage);
-		await checkCompaction({ ...overflowMessage, timestamp: Date.now() + 1 });
+		await compactionRuntime.checkCompaction(overflowMessage);
+		await compactionRuntime.checkCompaction({ ...overflowMessage, timestamp: Date.now() + 1 });
 
 		expect(runAutoCompactionSpy).toHaveBeenCalledTimes(1);
 		expect(events).toContainEqual({
@@ -234,22 +222,10 @@ describe("AgentSession auto-compaction queue resume", () => {
 			timestamp: Date.now(),
 		});
 
-		const runAutoCompactionSpy = vi
-			.spyOn(
-				session as unknown as {
-					_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
-				},
-				"_runAutoCompaction",
-			)
-			.mockResolvedValue();
+		const compactionRuntime = getCompactionRuntime(session);
+		const runAutoCompactionSpy = vi.spyOn(compactionRuntime, "runAutoCompaction").mockResolvedValue(false);
 
-		const checkCompaction = (
-			session as unknown as {
-				_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<void>;
-			}
-		)._checkCompaction.bind(session);
-
-		await checkCompaction(staleAssistant, false);
+		await compactionRuntime.checkCompaction(staleAssistant, false);
 
 		expect(runAutoCompactionSpy).not.toHaveBeenCalled();
 	});
@@ -304,22 +280,10 @@ describe("AgentSession auto-compaction queue resume", () => {
 			errorAssistant,
 		];
 
-		const runAutoCompactionSpy = vi
-			.spyOn(
-				session as unknown as {
-					_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
-				},
-				"_runAutoCompaction",
-			)
-			.mockResolvedValue();
+		const compactionRuntime = getCompactionRuntime(session);
+		const runAutoCompactionSpy = vi.spyOn(compactionRuntime, "runAutoCompaction").mockResolvedValue(false);
 
-		const checkCompaction = (
-			session as unknown as {
-				_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<void>;
-			}
-		)._checkCompaction.bind(session);
-
-		await checkCompaction(errorAssistant);
+		await compactionRuntime.checkCompaction(errorAssistant);
 
 		expect(runAutoCompactionSpy).toHaveBeenCalledWith("threshold", false);
 	});
@@ -352,22 +316,10 @@ describe("AgentSession auto-compaction queue resume", () => {
 			errorAssistant,
 		];
 
-		const runAutoCompactionSpy = vi
-			.spyOn(
-				session as unknown as {
-					_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
-				},
-				"_runAutoCompaction",
-			)
-			.mockResolvedValue();
+		const compactionRuntime = getCompactionRuntime(session);
+		const runAutoCompactionSpy = vi.spyOn(compactionRuntime, "runAutoCompaction").mockResolvedValue(false);
 
-		const checkCompaction = (
-			session as unknown as {
-				_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<void>;
-			}
-		)._checkCompaction.bind(session);
-
-		await checkCompaction(errorAssistant);
+		await compactionRuntime.checkCompaction(errorAssistant);
 
 		expect(runAutoCompactionSpy).not.toHaveBeenCalled();
 	});
@@ -433,22 +385,10 @@ describe("AgentSession auto-compaction queue resume", () => {
 			errorAssistant,
 		];
 
-		const runAutoCompactionSpy = vi
-			.spyOn(
-				session as unknown as {
-					_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
-				},
-				"_runAutoCompaction",
-			)
-			.mockResolvedValue();
+		const compactionRuntime = getCompactionRuntime(session);
+		const runAutoCompactionSpy = vi.spyOn(compactionRuntime, "runAutoCompaction").mockResolvedValue(false);
 
-		const checkCompaction = (
-			session as unknown as {
-				_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<void>;
-			}
-		)._checkCompaction.bind(session);
-
-		await checkCompaction(errorAssistant);
+		await compactionRuntime.checkCompaction(errorAssistant);
 
 		// Should NOT compact because the only usage data is from a kept pre-compaction message
 		expect(runAutoCompactionSpy).not.toHaveBeenCalled();

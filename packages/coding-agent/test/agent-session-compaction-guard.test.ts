@@ -114,7 +114,7 @@ describe("AgentSession prompt() during compaction guard (bug #3)", () => {
 
 	it("rejects a concurrent prompt() with no streamingBehavior during compaction (no race)", async () => {
 		// Seed a user message so the branch has content for prepareCompaction.
-		sessionManager.appendMessage({
+		const firstKeptEntryId = sessionManager.appendMessage({
 			role: "user",
 			content: [{ type: "text", text: "hello" }],
 			timestamp: Date.now(),
@@ -133,7 +133,7 @@ describe("AgentSession prompt() during compaction guard (bug #3)", () => {
 		await expect(session.prompt("concurrent")).rejects.toThrow(/already processing/i);
 
 		// Let compaction complete cleanly.
-		resolveCompact({ summary: "compacted", firstKeptEntryId: "entry-1", tokensBefore: 100, details: {} });
+		resolveCompact({ summary: "compacted", firstKeptEntryId, tokensBefore: 100, details: {} });
 		await compactCall;
 
 		// Exactly one compaction entry — no double-compaction from a racing run.
@@ -145,9 +145,11 @@ describe("AgentSession prompt() during compaction guard (bug #3)", () => {
 		// Mock agent.continue so the post-compaction drain of the queued steer
 		// message does not start a real LLM run (_handlePostAgentRun sees no
 		// _lastAssistantMessage and exits its loop immediately).
-		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const continueSpy = vi.spyOn(session.agent, "continue").mockImplementation(async () => {
+			session.agent.clearAllQueues();
+		});
 
-		sessionManager.appendMessage({
+		const firstKeptEntryId = sessionManager.appendMessage({
 			role: "user",
 			content: [{ type: "text", text: "hello" }],
 			timestamp: Date.now(),
@@ -160,7 +162,7 @@ describe("AgentSession prompt() during compaction guard (bug #3)", () => {
 		await expect(session.prompt("concurrent", { streamingBehavior: "steer" })).resolves.toBeUndefined();
 
 		// Let compaction finish; its finally drains the queued steer via continue.
-		resolveCompact({ summary: "compacted", firstKeptEntryId: "entry-1", tokensBefore: 100, details: {} });
+		resolveCompact({ summary: "compacted", firstKeptEntryId, tokensBefore: 100, details: {} });
 		await compactCall;
 
 		// The drain ran at least one continue. The user message was queued and

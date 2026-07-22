@@ -212,6 +212,26 @@ describe("REPI worker runtime pure contracts", () => {
 		);
 	});
 
+	it("allows recovered retries to use the cumulative per-attempt timeout budget", () => {
+		const recovered = validPool({
+			workers: [
+				{
+					...validPool().workers[0],
+					attempt: 2,
+					retryBudget: { signature: "sig", attempt: 2, maxAttempts: 3, remaining: 1, exhausted: false },
+					endedAt: "2026-07-03T00:00:15.000Z",
+				},
+			],
+		});
+		expect(verifyWorkerRuntimePool(recovered).errors).not.toContain("timeout_not_marked:w1");
+
+		const exceeded = {
+			...recovered,
+			workers: [{ ...recovered.workers[0], endedAt: "2026-07-03T00:00:21.000Z" }],
+		};
+		expect(verifyWorkerRuntimePool(exceeded).errors).toContain("timeout_not_marked:w1");
+	});
+
 	it("rejects timeout without cancel, unresolved merge collisions, and incomplete claim refs", () => {
 		const timeoutPool = validPool({
 			workers: [{ ...validPool().workers[0], status: "timeout", cancelledAt: undefined }],

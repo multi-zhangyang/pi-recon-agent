@@ -26,6 +26,31 @@ type RecordedSessionEvent =
 	| SessionShutdownEvent
 	| SessionStartEvent;
 
+interface Deferred<T> {
+	promise: Promise<T>;
+	resolve(value: T): void;
+}
+
+function deferred<T>(): Deferred<T> {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((resolvePromise) => {
+		resolve = resolvePromise;
+	});
+	return { promise, resolve };
+}
+
+function installDeferredMcpClose(session: unknown): { started: Promise<void>; release(): void } {
+	const started = deferred<void>();
+	const completion = deferred<void>();
+	(session as { _mcpManager?: { closeAll(): Promise<void> } })._mcpManager = {
+		async closeAll() {
+			started.resolve();
+			await completion.promise;
+		},
+	};
+	return { started: started.promise, release: () => completion.resolve() };
+}
+
 describe("AgentSessionRuntime characterization", () => {
 	const cleanups: Array<() => Promise<void> | void> = [];
 
@@ -159,6 +184,67 @@ describe("AgentSessionRuntime characterization", () => {
 			throw new Error("missing persisted assistant message");
 		}
 		expect(persistedAssistant.usage.cost.total).toBe(0.123);
+	});
+
+	it("waits for MCP cleanup before runtime disposal completes", async () => {
+		const { runtime } = await createRuntimeForTest(() => {});
+		const close = installDeferredMcpClose(runtime.session);
+		let disposed = false;
+
+		const disposal = runtime.dispose().then(() => {
+			disposed = true;
+		});
+		await close.started;
+
+		expect(disposed).toBe(false);
+		close.release();
+		await disposal;
+		expect(disposed).toBe(true);
+	});
+
+	it("waits for old-session MCP cleanup before applying a replacement", async () => {
+		const { runtime } = await createRuntimeForTest(() => {});
+		const previousSession = runtime.session;
+		const close = installDeferredMcpClose(previousSession);
+
+		const replacement = runtime.newSession();
+		await close.started;
+
+		expect(runtime.session).toBe(previousSession);
+		close.release();
+		await replacement;
+		expect(runtime.session).not.toBe(previousSession);
+	});
+
+	it("bounds oversized message_end user replacements before state and persistence", async () => {
+		const { runtime } = await createRuntimeForTest((pi: ExtensionAPI) => {
+			pi.on("message_end", (event) => {
+				if (event.message.role !== "user") return;
+				return {
+					message: {
+						...event.message,
+						content: [{ type: "text", text: "x".repeat(80_000) }],
+					},
+				};
+			});
+		});
+
+		await runtime.session.prompt("hello");
+
+		const stateUser = runtime.session.messages.find((message) => message.role === "user");
+		const persistedUser = runtime.session.sessionManager
+			.getEntries()
+			.filter((entry) => entry.type === "message")
+			.map((entry) => entry.message)
+			.find((message) => message.role === "user");
+		const stateText =
+			stateUser?.role === "user" && Array.isArray(stateUser.content) ? stateUser.content[0] : undefined;
+		const persistedText =
+			persistedUser?.role === "user" && Array.isArray(persistedUser.content) ? persistedUser.content[0] : undefined;
+		expect(stateText).toMatchObject({ type: "text" });
+		expect(persistedText).toMatchObject({ type: "text" });
+		expect(stateText?.type === "text" ? stateText.text.length : 0).toBeLessThanOrEqual(32_000);
+		expect(persistedText?.type === "text" ? persistedText.text.length : 0).toBeLessThanOrEqual(32_000);
 	});
 
 	it("emits session_before_switch and session_start for new and resume flows", async () => {

@@ -53,6 +53,7 @@ export { createEventBus, type EventBus, type EventBusController } from "./core/e
 // Extension system
 export type {
 	AgentEndEvent,
+	AgentSettledEvent,
 	AgentStartEvent,
 	AgentToolResult,
 	AgentToolUpdateCallback,
@@ -151,6 +152,12 @@ export {
 export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.ts";
 export { convertToLlm } from "./core/messages.ts";
 export { ModelRegistry } from "./core/model-registry.ts";
+export {
+	type CreateModelRuntimeOptions,
+	ModelRuntime,
+	type ModelRuntimeAuthOverrides,
+} from "./core/model-runtime.ts";
+export { FileModelsStore, getModelsStorePath, InMemoryCodingAgentModelsStore } from "./core/models-store.ts";
 export type {
 	PackageManager,
 	PathMetadata,
@@ -160,6 +167,22 @@ export type {
 	ResolvedResource,
 } from "./core/package-manager.ts";
 export { DefaultPackageManager } from "./core/package-manager.ts";
+export type {
+	Theme as ThemeContract,
+	ThemeBg,
+	ThemeColor,
+	ThemeColorMode,
+} from "./core/presentation/theme.ts";
+// Theme utilities for custom tools and extensions
+export {
+	getLanguageFromPath,
+	getMarkdownTheme,
+	getSelectListTheme,
+	getSettingsListTheme,
+	highlightCode,
+	initTheme,
+	Theme,
+} from "./core/presentation/theme-runtime.ts";
 export type { ResourceCollision, ResourceDiagnostic, ResourceLoader } from "./core/resource-loader.ts";
 export { DefaultResourceLoader, loadProjectContextFiles } from "./core/resource-loader.ts";
 // SDK for programmatic usage
@@ -211,6 +234,7 @@ export {
 	type SessionInfoEntry,
 	SessionManager,
 	type SessionMessageEntry,
+	type SessionTreeNode,
 	type ThinkingLevelChangeEntry,
 } from "./core/session-manager.ts";
 export {
@@ -341,17 +365,6 @@ export {
 	UserMessageSelectorComponent,
 	type VisualTruncateResult,
 } from "./modes/interactive/components/index.ts";
-// Theme utilities for custom tools and extensions
-export {
-	getLanguageFromPath,
-	getMarkdownTheme,
-	getSelectListTheme,
-	getSettingsListTheme,
-	highlightCode,
-	initTheme,
-	Theme,
-	type ThemeColor,
-} from "./modes/interactive/theme/theme.ts";
 // Clipboard utilities
 export { copyToClipboard } from "./utils/clipboard.ts";
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.ts";

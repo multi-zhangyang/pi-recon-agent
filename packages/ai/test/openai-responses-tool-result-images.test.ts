@@ -7,7 +7,10 @@ import { describe, expect, it } from "vitest";
 import type { Api, Context, Model, StreamOptions, Tool, ToolResultMessage } from "../src/index.ts";
 import { complete, getModel } from "../src/index.ts";
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.ts";
+import { registerProviderIntegrationFixtures } from "./model-fixtures.ts";
 import { resolveApiKey } from "./oauth.ts";
+
+registerProviderIntegrationFixtures();
 
 type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 

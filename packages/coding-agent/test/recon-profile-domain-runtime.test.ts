@@ -7,12 +7,14 @@ import { createReconExtensionFactory } from "../src/core/recon-profile.ts";
 
 const ENV_AGENT_DIR = "REPI_CODING_AGENT_DIR";
 const ENV_BRANCH_ID = "REPI_BRANCH_ID";
+const ENV_PRODUCT = "REPI_PRODUCT";
 
 describe("REPI kernel profile domain runtime captures", () => {
 	let tempDir: string;
 	let agentDir: string;
 	let previousAgentDir: string | undefined;
 	let previousBranchId: string | undefined;
+	let previousProduct: string | undefined;
 
 	beforeEach(() => {
 		tempDir = join(tmpdir(), `repi-profile-domain-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -20,7 +22,9 @@ describe("REPI kernel profile domain runtime captures", () => {
 		mkdirSync(agentDir, { recursive: true });
 		previousAgentDir = process.env[ENV_AGENT_DIR];
 		previousBranchId = process.env[ENV_BRANCH_ID];
+		previousProduct = process.env[ENV_PRODUCT];
 		process.env[ENV_AGENT_DIR] = agentDir;
+		process.env[ENV_PRODUCT] = "1";
 	});
 
 	afterEach(() => {
@@ -33,6 +37,11 @@ describe("REPI kernel profile domain runtime captures", () => {
 			delete process.env[ENV_BRANCH_ID];
 		} else {
 			process.env[ENV_BRANCH_ID] = previousBranchId;
+		}
+		if (previousProduct === undefined) {
+			delete process.env[ENV_PRODUCT];
+		} else {
+			process.env[ENV_PRODUCT] = previousProduct;
 		}
 		rmSync(tempDir, { recursive: true, force: true });
 	});
@@ -94,18 +103,24 @@ describe("REPI kernel profile domain runtime captures", () => {
 
 		expect(execCalls).toHaveLength(1);
 		expect(execCalls[0]?.args.join("\n")).toContain("repi-exploit-lab-runner.py");
-		expect(result.content[0]?.text).toContain("exploit_lab:");
-		expect(result.content[0]?.text).toContain("mode: run");
-		expect(result.content[0]?.text).toContain("executions:");
-		expect(result.content[0]?.text).toContain("stdout_sha256=");
-		expect(result.content[0]?.text).toContain("Exploit Lab PoC inventory anchors");
-		expect(result.content[0]?.text).toContain("Exploit Lab replay matrix anchors");
-		expect(result.content[0]?.text).toContain("Exploit Lab flake triage anchors");
-		expect(result.content[0]?.text).toContain("Exploit Lab artifact bundle anchors");
-		const artifactPath = /exploit_lab_artifact: (.+)/.exec(result.content[0]?.text ?? "")?.[1]?.trim();
+		const resultText = result.content[0]?.text ?? "";
+		expect(resultText).toContain("exploit_lab:");
+		expect(resultText).toContain("mode: run");
+		expect(resultText).toContain("executions:");
+		expect(resultText).toContain("stdout_sha256=");
+		expect(resultText).toContain("Exploit Lab PoC inventory anchors");
+		expect(resultText).toContain("Exploit Lab replay matrix anchors");
+		expect(resultText).toContain("Exploit Lab flake triage anchors");
+		expect(resultText).toContain("Exploit Lab artifact bundle anchors");
+		expect(resultText).not.toContain("lab_commands:");
+		expect(resultText.length).toBeLessThanOrEqual(4096);
+		const artifactPath = /exploit_lab_artifact: (.+)/.exec(resultText)?.[1]?.trim();
 		expect(artifactPath).toBeDefined();
 		expect(existsSync(artifactPath!)).toBe(true);
-		expect(readFileSync(artifactPath!, "utf-8")).toContain("REPI Exploit Lab Artifact");
+		const artifactText = readFileSync(artifactPath!, "utf-8");
+		expect(artifactText).toContain("REPI Exploit Lab Artifact");
+		expect(artifactText).toContain("lab_commands:");
+		expect(artifactText).toContain("repi-exploit-lab-runner.py");
 		const missionAfterLab = JSON.parse(readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8")) as {
 			checkpoints: Array<{ name: string; status: string }>;
 		};
@@ -172,21 +187,27 @@ describe("REPI kernel profile domain runtime captures", () => {
 
 		expect(execCalls).toHaveLength(1);
 		expect(execCalls[0]?.args.join("\n")).toContain("repi-mobile-frida-hooks.js");
-		expect(result.content[0]?.text).toContain("mobile_runtime:");
-		expect(result.content[0]?.text).toContain("mode: run");
-		expect(result.content[0]?.text).toContain("executions:");
-		expect(result.content[0]?.text).toContain("stdout_sha256=");
-		expect(result.content[0]?.text).toContain("mobile APK inventory anchors");
-		expect(result.content[0]?.text).toContain("mobile device anchors");
-		expect(result.content[0]?.text).toContain("mobile process map anchors");
-		expect(result.content[0]?.text).toContain("mobile Frida hook template anchors");
-		expect(result.content[0]?.text).toContain("mobile Java crypto/compare hook anchors");
-		expect(result.content[0]?.text).toContain("mobile native compare hook anchors");
-		expect(result.content[0]?.text).toContain("mobile anti-debug/root check anchors");
-		const artifactPath = /mobile_runtime_artifact: (.+)/.exec(result.content[0]?.text ?? "")?.[1]?.trim();
+		const resultText = result.content[0]?.text ?? "";
+		expect(resultText).toContain("mobile_runtime:");
+		expect(resultText).toContain("mode: run");
+		expect(resultText).toContain("executions:");
+		expect(resultText).toContain("stdout_sha256=");
+		expect(resultText).toContain("mobile APK inventory anchors");
+		expect(resultText).toContain("mobile device anchors");
+		expect(resultText).toContain("mobile process map anchors");
+		expect(resultText).toContain("mobile Frida hook template anchors");
+		expect(resultText).toContain("mobile Java crypto/compare hook anchors");
+		expect(resultText).toContain("mobile native compare hook anchors");
+		expect(resultText).toContain("mobile anti-debug/root check anchors");
+		expect(resultText).not.toContain("capture_script:");
+		expect(resultText.length).toBeLessThanOrEqual(4096);
+		const artifactPath = /mobile_runtime_artifact: (.+)/.exec(resultText)?.[1]?.trim();
 		expect(artifactPath).toBeDefined();
 		expect(existsSync(artifactPath!)).toBe(true);
-		expect(readFileSync(artifactPath!, "utf-8")).toContain("REPI Mobile Runtime Artifact");
+		const artifactText = readFileSync(artifactPath!, "utf-8");
+		expect(artifactText).toContain("REPI Mobile Runtime Artifact");
+		expect(artifactText).toContain("capture_script:");
+		expect(artifactText).toContain("repi-mobile-frida-hooks.js");
 		const missionAfterMobile = JSON.parse(
 			readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8"),
 		) as {
@@ -338,26 +359,80 @@ describe("REPI kernel profile domain runtime captures", () => {
 		expect(execCalls).toHaveLength(1);
 		expect(execCalls[0]?.args.join("\n")).toContain("repi-native-gdb.gdb");
 		expect(execCalls[0]?.args.join("\n")).toContain("repi-native-pwn-scaffold.py");
-		expect(result.content[0]?.text).toContain("native_runtime:");
-		expect(result.content[0]?.text).toContain("mode: run");
-		expect(result.content[0]?.text).toContain("executions:");
-		expect(result.content[0]?.text).toContain("stdout_sha256=");
-		expect(result.content[0]?.text).toContain("native binary inventory anchors");
-		expect(result.content[0]?.text).toContain("native mitigation/header anchors");
-		expect(result.content[0]?.text).toContain("native loader/libc anchors");
-		expect(result.content[0]?.text).toContain("native symbol/string anchors");
-		expect(result.content[0]?.text).toContain("native GDB trace anchors");
-		expect(result.content[0]?.text).toContain("native crash/register anchors");
-		expect(result.content[0]?.text).toContain("native exploit scaffold anchors");
-		const artifactPath = /native_runtime_artifact: (.+)/.exec(result.content[0]?.text ?? "")?.[1]?.trim();
+		const resultText = result.content[0]?.text ?? "";
+		expect(resultText).toContain("native_runtime:");
+		expect(resultText).toContain("mode: run");
+		expect(resultText).toContain("executions:");
+		expect(resultText).toContain("stdout_sha256=");
+		expect(resultText).toContain("native binary inventory anchors");
+		expect(resultText).toContain("native mitigation/header anchors");
+		expect(resultText).toContain("native loader/libc anchors");
+		expect(resultText).toContain("native symbol/string anchors");
+		expect(resultText).toContain("native GDB trace anchors");
+		expect(resultText).toContain("native crash/register anchors");
+		expect(resultText).toContain("native exploit scaffold anchors");
+		expect(resultText).not.toContain("capture_script:");
+		expect(resultText.length).toBeLessThanOrEqual(4096);
+		const artifactPath = /native_runtime_artifact: (.+)/.exec(resultText)?.[1]?.trim();
 		expect(artifactPath).toBeDefined();
 		expect(existsSync(artifactPath!)).toBe(true);
-		expect(readFileSync(artifactPath!, "utf-8")).toContain("REPI Native Runtime Artifact");
+		const artifactText = readFileSync(artifactPath!, "utf-8");
+		expect(artifactText).toContain("REPI Native Runtime Artifact");
+		expect(artifactText).toContain("capture_script:");
+		expect(artifactText).toContain("repi-native-gdb.gdb");
 		const missionAfterNative = JSON.parse(
 			readFileSync(join(agentDir, "recon", "mission", "current.json"), "utf-8"),
 		) as {
 			checkpoints: Array<{ name: string; status: string }>;
 		};
 		expect(missionAfterNative.checkpoints.find((gate) => gate.name === "native_runtime_ready")?.status).toBe("done");
+	});
+
+	it("keeps supervisor queues in the artifact instead of the provider result", async () => {
+		const tools = new Map<string, unknown>();
+		const fakePi = {
+			registerCommand() {},
+			registerTool(tool: { name: string }) {
+				tools.set(tool.name, tool);
+			},
+			on() {},
+			appendEntry() {},
+			getSessionName: () => undefined,
+			setSessionName() {},
+			sendMessage() {},
+		} as unknown as ExtensionAPI;
+
+		createReconExtensionFactory()(fakePi);
+
+		const missionTool = tools.get("re_mission") as {
+			execute: (
+				toolCallId: string,
+				params: Record<string, unknown>,
+			) => Promise<{ content: Array<{ text: string }> }>;
+		};
+		await missionTool.execute("tool-call-id", { action: "new", task: "review worker evidence and claim gates" });
+
+		const supervisorTool = tools.get("re_supervisor") as {
+			execute: (
+				toolCallId: string,
+				params: Record<string, unknown>,
+			) => Promise<{ content: Array<{ text: string }> }>;
+		};
+		const result = await supervisorTool.execute("tool-call-id", { action: "review" });
+		const resultText = result.content[0]?.text ?? "";
+
+		expect(resultText).toContain("supervisor_review:");
+		expect(resultText).toContain("supervisor_verdict:");
+		expect(resultText).toContain("key_blockers:");
+		expect(resultText).toContain("next_supervisor_command:");
+		expect(resultText).not.toContain("worker_scoreboard:");
+		expect(resultText).not.toContain("priority_queue:");
+		expect(resultText.length).toBeLessThanOrEqual(4096);
+		const artifactPath = /supervisor_artifact: (.+)/.exec(resultText)?.[1]?.trim();
+		expect(artifactPath).toBeDefined();
+		const artifactText = readFileSync(artifactPath!, "utf-8");
+		expect(artifactText).toContain("worker_scoreboard:");
+		expect(artifactText).toContain("priority_queue:");
+		expect(artifactText).toContain("claim_check_policy:");
 	});
 });

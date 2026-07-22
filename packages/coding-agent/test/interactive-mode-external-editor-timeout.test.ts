@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { initTheme } from "../src/core/presentation/theme-runtime.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 // opt #144: openExternalEditor awaited the spawned $EDITOR child with only
 // 'error'/'close' listeners and NO timeout/abort. A wedged editor — $EDITOR
