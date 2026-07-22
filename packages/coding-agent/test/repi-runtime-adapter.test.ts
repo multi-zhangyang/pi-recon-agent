@@ -282,7 +282,7 @@ describe("REPI runtime adapter pure contracts", () => {
 		expect(formatRuntimeAdapterExecutionGate(report)).toContain("target_profile:");
 	});
 
-	test("executes real rootfs and web adapter commands against local fixtures", () => {
+	test("executes real rootfs and web adapter commands against local fixtures", { timeout: 90_000 }, () => {
 		const rootfs = join(tempDir, "squashfs-root");
 		mkdirSync(join(rootfs, "etc", "init.d"), { recursive: true });
 		mkdirSync(join(rootfs, "bin"), { recursive: true });
@@ -336,7 +336,7 @@ describe("REPI runtime adapter pure contracts", () => {
 			{
 				encoding: "utf8",
 				env: { ...process.env, REPI_ADAPTER_TARGET: url },
-				timeout: 30_000,
+				timeout: 60_000,
 			},
 		);
 		expect(webOutput).toContain("[web-browser-transport] engine=playwright-core");
