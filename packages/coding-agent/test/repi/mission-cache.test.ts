@@ -83,12 +83,12 @@ describe("repi/mission read cache + atomic write (opt #75)", () => {
 		missionReadCount.current = 0;
 		const first = readCurrentMission();
 		expect(first?.task).toBe("cache-test mission");
-		expect(missionReadCount.current).toBe(1); // cold read
+		expect(missionReadCount.current).toBe(0); // SQLite-backed state bypasses JSON reads
 		readCurrentMission();
 		readCurrentMission();
 		readCurrentMission();
 		readCurrentMission();
-		expect(missionReadCount.current).toBe(1); // 4 more calls, still 1 read total
+		expect(missionReadCount.current).toBe(0);
 	});
 
 	it("writeCurrentMission invalidates the read cache (next read sees the new mission, not stale)", () => {

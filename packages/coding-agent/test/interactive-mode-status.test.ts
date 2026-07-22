@@ -7,7 +7,9 @@ import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import type { AutocompleteProviderFactory } from "../src/core/extensions/types.ts";
 import { initTheme } from "../src/core/presentation/theme-runtime.ts";
 import type { SourceInfo } from "../src/core/source-info.ts";
+import { interactiveExtensionRuntime } from "../src/modes/interactive/interactive-extension-runtime.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { InteractiveResourceRuntime } from "../src/modes/interactive/interactive-resource-runtime.ts";
 
 function renderLastLine(container: Container, width = 120): string {
 	const last = container.children[container.children.length - 1];
@@ -154,7 +156,7 @@ describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 			ui: { requestRender: vi.fn() },
 		};
 
-		const uiContext = (InteractiveMode as any).prototype.createExtensionUIContext.call(fakeThis);
+		const uiContext = interactiveExtensionRuntime.createExtensionUIContext(fakeThis);
 		const result = uiContext.setTheme("light");
 
 		expect(result.success).toBe(true);
@@ -176,7 +178,7 @@ describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 			ui: { requestRender: vi.fn() },
 		};
 
-		const uiContext = (InteractiveMode as any).prototype.createExtensionUIContext.call(fakeThis);
+		const uiContext = interactiveExtensionRuntime.createExtensionUIContext(fakeThis);
 		const result = uiContext.setTheme("__missing_theme__");
 
 		expect(result.success).toBe(false);
@@ -214,7 +216,7 @@ describe("InteractiveMode.showExtensionCustom", () => {
 			factory: (tui: TUI, theme: unknown, keybindings: unknown, done: (result: T) => void) => Component,
 			options?: { overlay?: boolean },
 		): Promise<T> =>
-			(InteractiveMode as any).prototype.showExtensionCustom.call(fakeThis, factory, options) as Promise<T>;
+			interactiveExtensionRuntime.showExtensionCustom(fakeThis as never, factory as never, options) as Promise<T>;
 
 		editorContainer.addChild(editor);
 		ui.addChild(editorContainer);
@@ -265,7 +267,7 @@ describe("InteractiveMode.createExtensionUIContext addAutocompleteProvider", () 
 			setupAutocompleteProvider: vi.fn(),
 		};
 
-		const uiContext = (InteractiveMode as any).prototype.createExtensionUIContext.call(fakeThis);
+		const uiContext = interactiveExtensionRuntime.createExtensionUIContext(fakeThis as never);
 		uiContext.addAutocompleteProvider(wrapper);
 
 		expect(fakeThis.autocompleteProviderWrappers).toEqual([wrapper]);
@@ -309,13 +311,15 @@ describe("InteractiveMode.setupAutocompleteProvider", () => {
 		});
 
 		const fakeThis = {
-			createBaseAutocompleteProvider: () => new CombinedAutocompleteProvider([], "/tmp/project", undefined),
 			defaultEditor,
 			editor: customEditor,
 			autocompleteProviderWrappers: [wrap1, wrap2],
 		};
 
-		(InteractiveMode as any).prototype.setupAutocompleteProvider.call(fakeThis);
+		const runtime = new InteractiveResourceRuntime(fakeThis as never);
+		(runtime as any).createBaseAutocompleteProvider = () =>
+			new CombinedAutocompleteProvider([], "/tmp/project", undefined);
+		runtime.setupAutocompleteProvider();
 
 		expect(defaultEditor.setAutocompleteProvider).toHaveBeenCalledTimes(1);
 		expect(customEditor.setAutocompleteProvider).toHaveBeenCalledTimes(1);
@@ -355,6 +359,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			session: {
 				promptTemplates: [],
 				extensionRunner: {
+					getRegisteredCommands: () => [],
 					getCommandDiagnostics: () => [],
 					getShortcutDiagnostics: () => [],
 				},
@@ -522,7 +527,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		new InteractiveResourceRuntime(fakeThis).showLoadedResources({
 			force: false,
 		});
 
@@ -539,13 +544,13 @@ describe("InteractiveMode.showLoadedResources", () => {
 			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		new InteractiveResourceRuntime(fakeThis).showLoadedResources({
 			force: false,
 		});
 
 		const output = renderAll(fakeThis.chatContainer);
 		expect(output).toContain("[Skills]");
-		expect(output).toContain("resource-list");
+		expect(output).toContain("/tmp/skill/SKILL.md");
 		expect(output).not.toContain("commit");
 	});
 
@@ -557,13 +562,13 @@ describe("InteractiveMode.showLoadedResources", () => {
 			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		new InteractiveResourceRuntime(fakeThis).showLoadedResources({
 			force: false,
 		});
 
 		const output = renderAll(fakeThis.chatContainer);
 		expect(output).toContain("[Skills]");
-		expect(output).toContain("resource-list");
+		expect(output).toContain("/tmp/skill/SKILL.md");
 		expect(output).not.toContain("commit");
 	});
 
@@ -573,7 +578,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			extensions: [{ path: "/tmp/extensions/answer.ts" }, { path: "/tmp/extensions/btw.ts" }],
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		new InteractiveResourceRuntime(fakeThis).showLoadedResources({
 			force: false,
 		});
 
@@ -590,7 +595,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			useRealScopeGroups: true,
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		new InteractiveResourceRuntime(fakeThis).showLoadedResources({
 			force: false,
 		});
 
@@ -636,7 +641,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			useRealScopeGroups: true,
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		new InteractiveResourceRuntime(fakeThis).showLoadedResources({
 			force: false,
 		});
 
@@ -664,7 +669,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			useRealScopeGroups: true,
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		new InteractiveResourceRuntime(fakeThis).showLoadedResources({
 			force: false,
 		});
 
@@ -692,7 +697,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			useRealScopeGroups: true,
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		new InteractiveResourceRuntime(fakeThis).showLoadedResources({
 			force: false,
 		});
 
@@ -729,7 +734,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			useRealScopeGroups: true,
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		new InteractiveResourceRuntime(fakeThis).showLoadedResources({
 			force: false,
 		});
 
@@ -766,7 +771,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			useRealScopeGroups: true,
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		new InteractiveResourceRuntime(fakeThis).showLoadedResources({
 			force: false,
 		});
 
@@ -803,7 +808,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			useRealScopeGroups: true,
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		new InteractiveResourceRuntime(fakeThis).showLoadedResources({
 			force: false,
 		});
 
@@ -831,7 +836,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			useRealScopeGroups: true,
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		new InteractiveResourceRuntime(fakeThis).showLoadedResources({
 			force: false,
 		});
 
@@ -862,7 +867,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			useRealScopeGroups: true,
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		new InteractiveResourceRuntime(fakeThis).showLoadedResources({
 			force: false,
 		});
 
@@ -878,7 +883,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			useRealScopeGroups: true,
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		new InteractiveResourceRuntime(fakeThis).showLoadedResources({
 			force: false,
 		});
 
@@ -912,7 +917,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			],
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		new InteractiveResourceRuntime(fakeThis).showLoadedResources({
 			force: false,
 		});
 
@@ -935,7 +940,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			],
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		new InteractiveResourceRuntime(fakeThis).showLoadedResources({
 			force: false,
 		});
 
@@ -952,7 +957,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		new InteractiveResourceRuntime(fakeThis).showLoadedResources({
 			extensions: [{ path: "/tmp/ext/index.ts" }],
 			force: false,
 			showDiagnosticsWhenQuiet: true,
@@ -968,7 +973,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			skillDiagnostics: [{ type: "warning", message: "duplicate skill name" }],
 		});
 
-		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+		new InteractiveResourceRuntime(fakeThis).showLoadedResources({
 			force: false,
 			showDiagnosticsWhenQuiet: true,
 		});

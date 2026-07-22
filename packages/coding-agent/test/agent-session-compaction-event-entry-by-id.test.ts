@@ -53,6 +53,7 @@ vi.mock("../src/core/compaction/index.js", () => ({
 	collectEntriesForBranchSummary: () => ({ entries: [], commonAncestorId: null }),
 	compact: async () => ({ summary: DUP_SUMMARY, firstKeptEntryId: "new-kept", tokensBefore: 200, details: {} }),
 	estimateContextTokens: () => ({ tokens: 99999, usageTokens: 99999, trailingTokens: 0, lastUsageIndex: 0 }),
+	estimateCompactionContext: () => ({ beforeTokens: 200, afterTokens: 100 }),
 	generateBranchSummary: async () => ({ summary: "", aborted: false, readFiles: [], modifiedFiles: [] }),
 	isContextOverflow: () => false,
 	prepareCompaction: () => ({

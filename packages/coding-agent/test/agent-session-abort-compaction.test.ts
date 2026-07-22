@@ -54,6 +54,7 @@ vi.mock("../src/core/compaction/index.js", () => ({
 	}) => usage.totalTokens ?? usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
 	collectEntriesForBranchSummary: () => ({ entries: [], commonAncestorId: null }),
 	compact: () => compactPromise,
+	estimateCompactionContext: () => ({ beforeTokens: 2, afterTokens: 1 }),
 	estimateContextTokens: () => ({ tokens: 0, usageTokens: 0, trailingTokens: 0, lastUsageIndex: null }),
 	generateBranchSummary: async () => ({ summary: "", aborted: false, readFiles: [], modifiedFiles: [] }),
 	prepareCompaction: () => ({
@@ -73,7 +74,7 @@ async function waitForCompacting(session: AgentSession, timeoutMs = 2000): Promi
 }
 
 type SessionInternals = {
-	_compactionAbortController?: { signal: { aborted: boolean } };
+	_compactionRuntime: { _compactionAbortController?: { signal: { aborted: boolean } } };
 	_unsubscribeAgent?: () => void;
 	_disposed: boolean;
 };
@@ -129,14 +130,15 @@ describe("AgentSession abort/dispose during compaction (bug #4)", () => {
 		await waitForCompacting(session);
 
 		const internals = session as unknown as SessionInternals;
-		expect(internals._compactionAbortController).toBeDefined();
-		expect(internals._compactionAbortController!.signal.aborted).toBe(false);
+		const controller = internals._compactionRuntime._compactionAbortController;
+		expect(controller).toBeDefined();
+		expect(controller!.signal.aborted).toBe(false);
 
 		// abort() must abort the compaction controller, not just the agent run.
 		// Pre-fix, abortCompaction() was never called → signal stayed un-aborted
 		// and the summarization LLM call kept running (cost/quota leak).
 		await session.abort();
-		expect(internals._compactionAbortController!.signal.aborted).toBe(true);
+		expect(controller!.signal.aborted).toBe(true);
 
 		// Let compact() unwind through the signal.aborted throw + finally.
 		resolveCompact({ summary: "compacted", firstKeptEntryId: "entry-1", tokensBefore: 100, details: {} });

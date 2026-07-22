@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AgentSession } from "../src/core/agent-session.ts";
+import { exportSessionToJsonl } from "../src/core/agent-session-presentation-runtime.ts";
 
 // opt #150: AgentSession.exportToJsonl wrote the full session JSONL via
 // writeFileSync (truncate-then-write) to the user's target path. A crash /
@@ -31,12 +31,6 @@ type Ctx = {
 	};
 };
 
-const exportToJsonl = (
-	AgentSession.prototype as unknown as {
-		exportToJsonl: (this: Ctx, outputPath?: string) => string;
-	}
-).exportToJsonl;
-
 function makeCtx(cwd: string, entries: StubEntry[]): Ctx {
 	return {
 		sessionManager: {
@@ -64,11 +58,11 @@ describe("AgentSession.exportToJsonl atomic write (opt #150)", () => {
 		]);
 		const out = join(dir, "export.jsonl");
 
-		const returned1 = exportToJsonl.call(ctx, out);
+		const returned1 = exportSessionToJsonl(ctx.sessionManager as never, out);
 		expect(returned1).toBe(out);
 		const ino1 = statSync(out).ino;
 
-		exportToJsonl.call(ctx, out);
+		exportSessionToJsonl(ctx.sessionManager as never, out);
 		const ino2 = statSync(out).ino;
 
 		if (ino1 === 0 || ino2 === 0) {
@@ -92,7 +86,7 @@ describe("AgentSession.exportToJsonl atomic write (opt #150)", () => {
 		const ctx = makeCtx(dir, [{ id: "e1" }]);
 		const nested = join(dir, "sub", "deep", "export.jsonl");
 
-		const returned = exportToJsonl.call(ctx, nested);
+		const returned = exportSessionToJsonl(ctx.sessionManager as never, nested);
 		expect(returned).toBe(nested);
 		expect(existsSync(nested)).toBe(true);
 

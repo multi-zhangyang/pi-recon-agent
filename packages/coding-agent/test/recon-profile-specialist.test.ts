@@ -1,9 +1,10 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import { createReconExtensionFactory } from "../src/core/recon-profile.ts";
+import { readCurrentMission, writeCurrentMission } from "../src/core/repi/mission.ts";
 
 const ENV_AGENT_DIR = "REPI_CODING_AGENT_DIR";
 const ENV_BRANCH_ID = "REPI_BRANCH_ID";
@@ -225,29 +226,34 @@ describe("REPI kernel profile self-heal and specialist routing", () => {
 			) => Promise<{ content: Array<{ text: string }> }>;
 		};
 		await missionTool.execute("tool-call-id", { action: "new", task: "分析 ELF 许可证校验" });
-		const missionPath = join(agentDir, "recon", "mission", "current.json");
-		const mission = JSON.parse(readFileSync(missionPath, "utf-8")) as {
-			lanes: Array<{ name: string; objective: string; status?: string; note?: string; next: string[] }>;
-		};
-		const lanes = mission.lanes.map((lane) => {
+		const mission = readCurrentMission();
+		if (!mission) throw new Error("expected active mission");
+		const updatedAt = new Date().toISOString();
+		const lanes: typeof mission.lanes = mission.lanes.map((lane) => {
 			if (lane.name === "control-flow") {
 				return {
 					...lane,
-					status: "blocked",
+					status: "blocked" as const,
 					note: "waiting for tool-bootstrap",
 					next: ["[auto:post-bootstrap-signal] printf 'strcmp\\n' # evidence: resume after tool-index refresh"],
+					updatedAt,
 				};
 			}
-			return { ...lane, status: lane.name === "triage" ? "done" : "pending" };
+			return {
+				...lane,
+				status: lane.name === "triage" ? ("done" as const) : ("pending" as const),
+				updatedAt,
+			};
 		});
 		lanes.splice(2, 0, {
 			name: "tool-bootstrap",
 			objective: "补齐缺失工具或确认可用替代路径，再回到被阻塞 lane",
-			status: "in_progress",
+			status: "in_progress" as const,
 			note: "adaptive_from=control-flow; reason=tool_strategy_tool-index-missing:control-flow",
-			next: ["re_bootstrap plan file"],
+			next: ["re_bootstrap plan file sha256sum rg python3"],
+			updatedAt,
 		});
-		writeFileSync(missionPath, `${JSON.stringify({ ...mission, lanes }, null, 2)}\n`, "utf-8");
+		writeCurrentMission({ ...mission, lanes });
 
 		const laneTool = tools.get("re_lane") as {
 			execute: (
@@ -262,7 +268,7 @@ describe("REPI kernel profile self-heal and specialist routing", () => {
 			max: 2,
 		});
 
-		expect(execCalls).toHaveLength(2);
+		expect(execCalls, auto.content[0]?.text).toHaveLength(2);
 		expect(auto.content[0]?.text).toContain("tool_bootstrap_closure:");
 		expect(auto.content[0]?.text).toContain("missing_after_refresh: none");
 		expect(auto.content[0]?.text).toContain("resumed_lane: control-flow");
@@ -270,7 +276,7 @@ describe("REPI kernel profile self-heal and specialist routing", () => {
 		expect(auto.content[0]?.text).toContain("## run-auto step 2: control-flow");
 		expect(auto.content[0]?.text).toContain("auto_lane_update: control-flow -> runtime-proof");
 
-		const missionAfterClosure = JSON.parse(readFileSync(missionPath, "utf-8")) as {
+		const missionAfterClosure = readCurrentMission() as {
 			lanes: Array<{ name: string; status?: string; note?: string }>;
 			checkpoints: Array<{ name: string; status: string; note?: string }>;
 		};

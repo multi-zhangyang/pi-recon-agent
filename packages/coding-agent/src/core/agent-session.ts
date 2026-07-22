@@ -1913,7 +1913,7 @@ export class AgentSession {
 			// create an unprompted extra model turn from the prior assistant message.
 			const lastAssistant = this._findLastAssistantMessage();
 			if (lastAssistant) {
-				await this._compactionRuntime.checkCompaction(lastAssistant, false);
+				await this._compactionRuntime.checkCompaction(lastAssistant, false, false);
 			}
 
 			// Build messages array (custom message if any, then user message)

@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { InteractiveSelectorRuntime } from "../src/modes/interactive/interactive-selector-runtime.ts";
 
 function createSettingsManager(warnings: { anthropicExtraUsage?: boolean } = {}) {
 	return {
@@ -23,10 +23,11 @@ describe("InteractiveMode.maybeWarnAboutAnthropicSubscriptionAuth", () => {
 			showWarning: vi.fn(),
 		};
 
-		await (InteractiveMode as any).prototype.maybeWarnAboutAnthropicSubscriptionAuth.call(fakeThis, {
+		const runtime = new InteractiveSelectorRuntime(fakeThis);
+		await runtime.maybeWarnAboutAnthropicSubscriptionAuth({
 			provider: "anthropic",
 		});
-		await (InteractiveMode as any).prototype.maybeWarnAboutAnthropicSubscriptionAuth.call(fakeThis, {
+		await runtime.maybeWarnAboutAnthropicSubscriptionAuth({
 			provider: "anthropic",
 		});
 
@@ -49,7 +50,7 @@ describe("InteractiveMode.maybeWarnAboutAnthropicSubscriptionAuth", () => {
 			showWarning: vi.fn(),
 		};
 
-		await (InteractiveMode as any).prototype.maybeWarnAboutAnthropicSubscriptionAuth.call(fakeThis, {
+		await new InteractiveSelectorRuntime(fakeThis).maybeWarnAboutAnthropicSubscriptionAuth({
 			provider: "anthropic",
 		});
 
@@ -72,7 +73,7 @@ describe("InteractiveMode.maybeWarnAboutAnthropicSubscriptionAuth", () => {
 			showWarning: vi.fn(),
 		};
 
-		await (InteractiveMode as any).prototype.maybeWarnAboutAnthropicSubscriptionAuth.call(fakeThis, {
+		await new InteractiveSelectorRuntime(fakeThis).maybeWarnAboutAnthropicSubscriptionAuth({
 			provider: "openai",
 		});
 
@@ -95,7 +96,7 @@ describe("InteractiveMode.maybeWarnAboutAnthropicSubscriptionAuth", () => {
 			showWarning: vi.fn(),
 		};
 
-		await (InteractiveMode as any).prototype.maybeWarnAboutAnthropicSubscriptionAuth.call(fakeThis, {
+		await new InteractiveSelectorRuntime(fakeThis).maybeWarnAboutAnthropicSubscriptionAuth({
 			provider: "anthropic",
 		});
 

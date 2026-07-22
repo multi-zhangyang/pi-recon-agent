@@ -292,7 +292,8 @@ describe("re_reason tool", () => {
 			const resultText = getToolResultText(harness);
 			expect(resultText).toContain("mode=planner");
 			expect(resultText).toContain("PLANNER_HANDOFF_PROOF");
-			expect(resultText).toContain("Pentesting Task Tree (PTT) snapshot");
+			expect(resultText).toContain("lineage_sha256:");
+			expect(resultText).toContain("handoff_artifact:");
 		});
 	});
 
@@ -369,8 +370,8 @@ describe("re_reason tool", () => {
 			const resultText = getToolResultText(harness);
 			expect(resultText).toContain("llm_supervisor_critique:");
 			expect(resultText).toContain("spec=verifier");
-			expect(resultText).toContain("supervisor_verdict: repair");
-			expect(resultText).toContain("redispatch: spec=verifier");
+			expect(resultText).toContain("supervisor_verdict: blocked");
+			expect(resultText).toContain("next_supervisor_command:");
 		});
 	});
 });

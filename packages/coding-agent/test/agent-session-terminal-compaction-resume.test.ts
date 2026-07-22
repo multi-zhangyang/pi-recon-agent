@@ -47,6 +47,7 @@ vi.mock("../src/core/compaction/index.js", () => ({
 	}) => usage.totalTokens ?? usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
 	collectEntriesForBranchSummary: () => ({ entries: [], commonAncestorId: null }),
 	compact: async () => ({ summary: "compacted", firstKeptEntryId: "entry-1", tokensBefore: 100, details: {} }),
+	estimateCompactionContext: () => ({ beforeTokens: 2, afterTokens: 1 }),
 	estimateContextTokens: (
 		messages: Array<{
 			role: string;
@@ -81,8 +82,10 @@ vi.mock("../src/core/compaction/index.js", () => ({
 }));
 
 type SessionInternals = {
-	_shouldStopAfterTurnForCompaction: (assistantMessage: AssistantMessage) => boolean;
-	_resumeAfterTurnBoundaryCompaction: boolean;
+	_compactionRuntime: {
+		shouldStopAfterTurnForCompaction: (assistantMessage: AssistantMessage) => boolean;
+		_resumeAfterTurnBoundaryCompaction: boolean;
+	};
 };
 
 describe("opt #204: terminal-turn proactive-compaction resume crash", () => {
@@ -150,9 +153,9 @@ describe("opt #204: terminal-turn proactive-compaction resume crash", () => {
 
 		// Must return false: there is no next provider request to stop before.
 		// Pre-fix this returned true AND set the resume flag → doomed continue.
-		expect(internals._shouldStopAfterTurnForCompaction(terminal)).toBe(false);
+		expect(internals._compactionRuntime.shouldStopAfterTurnForCompaction(terminal)).toBe(false);
 		// The toxic side effect must NOT have fired.
-		expect(internals._resumeAfterTurnBoundaryCompaction).toBe(false);
+		expect(internals._compactionRuntime._resumeAfterTurnBoundaryCompaction).toBe(false);
 	});
 
 	it("still stops-to-resume on a tool-call turn over the threshold (positive case preserved)", () => {
@@ -166,8 +169,8 @@ describe("opt #204: terminal-turn proactive-compaction resume crash", () => {
 		);
 		session.agent.state.messages = [toolCallTurn];
 
-		expect(internals._shouldStopAfterTurnForCompaction(toolCallTurn)).toBe(true);
+		expect(internals._compactionRuntime.shouldStopAfterTurnForCompaction(toolCallTurn)).toBe(true);
 		// Resume flag set so the post-compaction path resumes the tool loop.
-		expect(internals._resumeAfterTurnBoundaryCompaction).toBe(true);
+		expect(internals._compactionRuntime._resumeAfterTurnBoundaryCompaction).toBe(true);
 	});
 });

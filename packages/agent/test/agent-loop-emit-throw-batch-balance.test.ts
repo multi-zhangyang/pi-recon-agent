@@ -4,6 +4,7 @@ import {
 	EventStream,
 	type Message,
 	type Model,
+	type ToolResultMessage,
 	type UserMessage,
 } from "@pi-recon/repi-ai";
 import { Type } from "typebox";
@@ -156,14 +157,18 @@ describe("agentLoop tool-result emit-throw batch balance (opt #263)", () => {
 			}
 		};
 
-		// Post-fix: the executor swallows the emit throw and still pushes BOTH
-		// toolResultMessages, so runAgentLoop RESOLVES (does not reject) and the
-		// returned newMessages carry both tool_results. Pre-fix: rejects.
-		const result = await runAgentLoop([userPrompt], context, config, emit, undefined, streamFn);
+		// Delivery still fails loudly, but only after every tool result has been
+		// produced and committed to the in-memory context.
+		await expect(runAgentLoop([userPrompt], context, config, emit, undefined, streamFn)).rejects.toMatchObject({
+			name: "AgentEventDeliveryError",
+		});
 
-		const toolResultIds = result
-			.filter((m) => m.role === "toolResult")
-			.map((m) => (m as { toolCallId: string }).toolCallId)
+		const toolResultIds = events
+			.filter(
+				(event): event is Extract<AgentEvent, { type: "message_end" }> =>
+					event.type === "message_end" && event.message.role === "toolResult",
+			)
+			.map((event) => (event.message as ToolResultMessage).toolCallId)
 			.sort();
 		// Core invariant: BOTH tool_use have a tool_result (no orphan).
 		expect(toolResultIds).toEqual(["tool-1", "tool-2"]);
@@ -171,8 +176,10 @@ describe("agentLoop tool-result emit-throw batch balance (opt #263)", () => {
 		// The emit sink DID throw mid-batch (the test actually exercises the path).
 		expect(thrownOnFirstToolResult).toBe(true);
 
-		// The run terminated cleanly (agent_end emitted despite the broken sink).
-		expect(events.some((e) => e.type === "agent_end")).toBe(true);
+		// turn_end is attempted after balancing; agent_end is intentionally not
+		// emitted because durable event delivery did not complete.
+		expect(events.some((e) => e.type === "turn_end")).toBe(true);
+		expect(events.some((e) => e.type === "agent_end")).toBe(false);
 	});
 
 	it("parallel executor: a mid-batch emit throw in the post-Promise.all loop does not orphan the remaining tool_use", async () => {
@@ -245,15 +252,21 @@ describe("agentLoop tool-result emit-throw batch balance (opt #263)", () => {
 			}
 		};
 
-		const result = await runAgentLoop([userPrompt], context, config, emit, undefined, streamFn);
+		await expect(runAgentLoop([userPrompt], context, config, emit, undefined, streamFn)).rejects.toMatchObject({
+			name: "AgentEventDeliveryError",
+		});
 
-		const toolResultIds = result
-			.filter((m) => m.role === "toolResult")
-			.map((m) => (m as { toolCallId: string }).toolCallId)
+		const toolResultIds = events
+			.filter(
+				(event): event is Extract<AgentEvent, { type: "message_end" }> =>
+					event.type === "message_end" && event.message.role === "toolResult",
+			)
+			.map((event) => (event.message as ToolResultMessage).toolCallId)
 			.sort();
 		// Core invariant: ALL THREE tool_use have a tool_result (no orphan).
 		expect(toolResultIds).toEqual(["tool-1", "tool-2", "tool-3"]);
 		expect(thrownOnFirstToolResult).toBe(true);
-		expect(events.some((e) => e.type === "agent_end")).toBe(true);
+		expect(events.some((e) => e.type === "turn_end")).toBe(true);
+		expect(events.some((e) => e.type === "agent_end")).toBe(false);
 	});
 });

@@ -157,11 +157,14 @@ describe("opt #237: manual /compact on a small session does not hallucinate a co
 		session.subscribe((event) => {
 			if (event.type === "compaction_end") events.push(event);
 		});
-		const runAutoCompaction = (
+		const compactionRuntime = (
 			session as unknown as {
-				_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
+				_compactionRuntime: {
+					runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
+				};
 			}
-		)._runAutoCompaction.bind(session);
+		)._compactionRuntime;
+		const runAutoCompaction = compactionRuntime.runAutoCompaction.bind(compactionRuntime);
 
 		await expect(runAutoCompaction("threshold", false)).resolves.toBe(false);
 		expect(completeSimpleMock).not.toHaveBeenCalled();

@@ -433,7 +433,9 @@ describe("AgentSession concurrent prompt guard", () => {
 		await session.abort();
 		await firstPrompt.catch(() => {});
 
-		expect(sawSteeringMessage).toBe(true);
+		// abort() cancels the active run and clears steering rather than spending a
+		// second provider request on queued work.
+		expect(sawSteeringMessage).toBe(false);
 	});
 
 	it("should allow prompt() after previous completes", async () => {

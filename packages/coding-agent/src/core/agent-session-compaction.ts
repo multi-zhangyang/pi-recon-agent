@@ -469,7 +469,11 @@ export class AgentSessionCompactionRuntime {
 		return true;
 	}
 
-	async checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<boolean> {
+	async checkCompaction(
+		assistantMessage: AssistantMessage,
+		skipAbortedCheck = true,
+		willRetryOverflow = true,
+	): Promise<boolean> {
 		const settings = this.settingsManager.getCompactionSettings();
 		if (!settings.enabled) return false;
 
@@ -517,7 +521,7 @@ export class AgentSessionCompactionRuntime {
 			// path or the next continue see an error assistant as the last message
 			// and refuse to continue.
 			this.agent.state.messages = stripTrailingErrorAssistants(this.agent.state.messages);
-			return await this.runAutoCompaction("overflow", true);
+			return await this.runAutoCompaction("overflow", willRetryOverflow);
 		}
 
 		// Case 2: Threshold - context is getting large

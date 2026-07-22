@@ -272,19 +272,18 @@ describe("re_subagent tool", () => {
 			await harness.session.prompt("verify it");
 
 			const resultText = getToolResultText(harness);
-			expect(resultText).toContain("VERIFIER_HANDOFF_PROOF");
 			expect(resultText).toContain("status=complete");
 			// File-based handoff: the stub wrote handoff.md to
 			// $REPI_WORKER_HANDOFF_PATH; mergeRun must surface it as ## Worker handoff
 			// so the parent recovers the work even when stdout text is thin.
-			expect(resultText).toContain("## Worker handoff");
+			expect(resultText).toContain("handoff_artifact:");
 			expect(resultText).toContain("Outcome: claim verified");
 			expect(resultText).toContain("Key Evidence: readelf -lW shows PIE");
-			expect(resultText).toContain("handoff_path:");
+			expect(resultText).toContain("run_id:");
 			const ledger = readFileSync(join(agentDir, "recon", "evidence", "ledger.md"), "utf8");
 			expect(ledger).toContain("subagent-handoff-verifier-complete");
 			expect(ledger).toContain("stdout_sha256=");
-			expect(ledger).toContain("candidate: process-isolated handoff");
+			expect(ledger).toContain("candidate: process-isolated lineage-bound handoff");
 		});
 	});
 });

@@ -644,7 +644,7 @@ function maybeShowCacheMissNotice(host: InteractiveEventHost, message: Assistant
 	if (miss) addCacheMissNotice(host, miss);
 }
 
-function addCacheMissNotice(host: InteractiveEventHost, miss: CacheMiss): void {
+export function addCacheMissNotice(host: InteractiveEventHost, miss: CacheMiss): void {
 	if (miss.missedTokens < 20_000 && miss.missedCost < 0.1) return;
 
 	const cost = miss.missedCost >= 0.01 ? ` (~$${miss.missedCost.toFixed(2)})` : "";

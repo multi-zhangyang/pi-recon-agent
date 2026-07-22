@@ -46,7 +46,7 @@ process.exit(1);
 			const report = JSON.parse(result.stdout) as {
 				cases: Array<{ providerError?: string }>;
 			};
-			expect(report.cases).toHaveLength(2);
+			expect(report.cases).toHaveLength(3);
 			for (const row of report.cases) {
 				expect(row.providerError).toBe("401 Authorization: <redacted>");
 			}

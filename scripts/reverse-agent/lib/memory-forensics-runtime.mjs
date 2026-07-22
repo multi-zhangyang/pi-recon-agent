@@ -9,9 +9,10 @@ let writePrivate;
 let noWrite;
 let shellQuote;
 let firmwareStrings;
+let firmwareEntropySamples;
 
 export function configureMemoryRuntime(runtime) {
-	({ root, redact, shortHash, bufferSha256, writePrivate, noWrite, shellQuote, firmwareStrings } = runtime);
+	({ root, redact, shortHash, bufferSha256, writePrivate, noWrite, shellQuote, firmwareStrings, firmwareEntropySamples } = runtime);
 }
 function memorySignals(strings) {
 	const osHints = [];

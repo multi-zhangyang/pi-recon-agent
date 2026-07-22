@@ -40,6 +40,7 @@ vi.mock("../src/core/compaction/index.js", () => ({
 		tokensBefore: 100,
 		details: {},
 	}),
+	estimateCompactionContext: () => ({ beforeTokens: 2, afterTokens: 1 }),
 	estimateContextTokens: (
 		messages: Array<{
 			role: string;
@@ -144,11 +145,12 @@ describe("opt100 F2: getLatestCompactionOnBranch O(1) cache", () => {
 
 		const getBranchSpy = vi.spyOn(sessionManager, "getBranch");
 
-		const stopAfterTurn = (
+		const compactionRuntime = (
 			session as unknown as {
-				_shouldStopAfterTurnForCompaction: (m: AssistantMessage) => boolean;
+				_compactionRuntime: { shouldStopAfterTurnForCompaction: (m: AssistantMessage) => boolean };
 			}
-		)._shouldStopAfterTurnForCompaction.bind(session);
+		)._compactionRuntime;
+		const stopAfterTurn = compactionRuntime.shouldStopAfterTurnForCompaction.bind(compactionRuntime);
 
 		const TURNS = 20;
 		for (let i = 0; i < TURNS; i++) {
@@ -171,11 +173,14 @@ describe("opt100 F2: getLatestCompactionOnBranch O(1) cache", () => {
 
 		const getBranchSpy = vi.spyOn(sessionManager, "getBranch");
 
-		const checkCompaction = (
+		const compactionRuntime = (
 			session as unknown as {
-				_checkCompaction: (m: AssistantMessage, skipAbortedCheck?: boolean) => Promise<boolean>;
+				_compactionRuntime: {
+					checkCompaction: (m: AssistantMessage, skipAbortedCheck?: boolean) => Promise<boolean>;
+				};
 			}
-		)._checkCompaction.bind(session);
+		)._compactionRuntime;
+		const checkCompaction = compactionRuntime.checkCompaction.bind(compactionRuntime);
 
 		const TURNS = 10;
 		for (let i = 0; i < TURNS; i++) {
@@ -241,8 +246,9 @@ describe("opt100 F2: getLatestCompactionOnBranch O(1) cache", () => {
 		// shouldCompact mocked true → hook sets _resumeAfterTurnBoundaryCompaction
 		// and returns true. This verifies the cache swap did not alter the
 		// trigger decision path.
-		(session as unknown as { _resumeAfterTurnBoundaryCompaction: boolean })._resumeAfterTurnBoundaryCompaction =
-			false;
+		(
+			session as unknown as { _compactionRuntime: { _resumeAfterTurnBoundaryCompaction: boolean } }
+		)._compactionRuntime._resumeAfterTurnBoundaryCompaction = false;
 
 		// Override shouldCompact to true via a fresh module mock is not possible
 		// post-import; instead drive the threshold via a large usage + real
@@ -256,11 +262,12 @@ describe("opt100 F2: getLatestCompactionOnBranch O(1) cache", () => {
 			content: [{ type: "text", text: "q" }],
 			timestamp: Date.now(),
 		});
-		const stopAfterTurn = (
+		const compactionRuntime = (
 			session as unknown as {
-				_shouldStopAfterTurnForCompaction: (m: AssistantMessage) => boolean;
+				_compactionRuntime: { shouldStopAfterTurnForCompaction: (m: AssistantMessage) => boolean };
 			}
-		)._shouldStopAfterTurnForCompaction.bind(session);
+		)._compactionRuntime;
+		const stopAfterTurn = compactionRuntime.shouldStopAfterTurnForCompaction.bind(compactionRuntime);
 
 		// No compaction on branch → cache null → assistantIsFromBeforeCompaction
 		// is false → proceeds to shouldCompact (mocked false) → returns false.

@@ -1,7 +1,10 @@
-import { describe, expect, test, vi } from "vitest";
+import { Container } from "@pi-recon/repi-tui";
+import { beforeAll, describe, expect, test, vi } from "vitest";
+import { initTheme } from "../src/core/presentation/theme-runtime.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 
 describe("InteractiveMode compaction events", () => {
+	beforeAll(() => initTheme("dark"));
 	test("rebuilds chat and appends a synthetic compaction summary at the bottom", async () => {
 		const fakeThis = {
 			isInitialized: true,
@@ -10,9 +13,10 @@ describe("InteractiveMode compaction events", () => {
 			autoCompactionLoader: undefined,
 			defaultEditor: {},
 			statusContainer: { clear: vi.fn() },
-			chatContainer: { clear: vi.fn() },
+			chatContainer: Object.assign(new Container(), { clear: vi.fn() }),
 			rebuildChatFromMessages: vi.fn(),
-			addMessageToChat: vi.fn(),
+			getMarkdownThemeWithSettings: () => ({}) as never,
+			toolOutputExpanded: false,
 			showError: vi.fn(),
 			showStatus: vi.fn(),
 			flushCompactionQueue: vi.fn().mockResolvedValue(undefined),
@@ -45,14 +49,7 @@ describe("InteractiveMode compaction events", () => {
 
 		expect(fakeThis.chatContainer.clear).toHaveBeenCalledTimes(1);
 		expect(fakeThis.rebuildChatFromMessages).toHaveBeenCalledTimes(1);
-		expect(fakeThis.addMessageToChat).toHaveBeenCalledTimes(1);
-		expect(fakeThis.addMessageToChat).toHaveBeenCalledWith(
-			expect.objectContaining({
-				role: "compactionSummary",
-				tokensBefore: 123,
-				summary: "summary",
-			}),
-		);
+		expect(fakeThis.chatContainer.children).toHaveLength(2);
 		expect(fakeThis.flushCompactionQueue).toHaveBeenCalledWith({ willRetry: false });
 	});
 
@@ -60,6 +57,9 @@ describe("InteractiveMode compaction events", () => {
 		const fakeThis = {
 			compactionQueuedMessages: [{ text: "change direction", mode: "steer" as const }],
 			session: {
+				extensionRunner: { getCommand: vi.fn().mockReturnValue(undefined) },
+				getSteeringMessages: () => [],
+				getFollowUpMessages: () => [],
 				clearQueue: vi.fn(),
 				prompt: vi.fn().mockResolvedValue(undefined),
 				steer: vi.fn().mockResolvedValue(undefined),
@@ -68,6 +68,7 @@ describe("InteractiveMode compaction events", () => {
 			isExtensionCommand: vi.fn().mockReturnValue(false),
 			updatePendingMessagesDisplay: vi.fn(),
 			showError: vi.fn(),
+			pendingMessagesContainer: { clear: vi.fn(), addChild: vi.fn() },
 		};
 
 		const flushCompactionQueue = Reflect.get(InteractiveMode.prototype, "flushCompactionQueue") as (

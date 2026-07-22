@@ -261,7 +261,7 @@ function parseJsonSafe(text) {
 	}
 }
 
-function extractJsonObjectFromText(text) {
+export function extractJsonObjectFromText(text) {
 	const input = String(text ?? "");
 	const direct = parseJsonSafe(input.trim());
 	if (direct && typeof direct === "object") return direct;

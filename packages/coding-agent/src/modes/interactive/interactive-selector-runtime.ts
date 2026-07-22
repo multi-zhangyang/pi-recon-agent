@@ -282,7 +282,7 @@ export class InteractiveSelectorRuntime {
 	}
 
 	async maybeWarnAboutAnthropicSubscriptionAuth(
-		model: Model<any> | undefined = this.host.session.model,
+		model: Pick<Model<any>, "provider"> | undefined = this.host.session.model,
 	): Promise<void> {
 		const host = this.host;
 		if (host.settingsManager.getWarnings().anthropicExtraUsage === false) return;

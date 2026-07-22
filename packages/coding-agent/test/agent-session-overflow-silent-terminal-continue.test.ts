@@ -52,6 +52,7 @@ vi.mock("../src/core/compaction/index.js", () => ({
 	}) => usage.totalTokens ?? usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
 	collectEntriesForBranchSummary: () => ({ entries: [], commonAncestorId: null }),
 	compact: async () => ({ summary: "compacted", firstKeptEntryId: "entry-1", tokensBefore: 100, details: {} }),
+	estimateCompactionContext: () => ({ beforeTokens: 2, afterTokens: 1 }),
 	estimateContextTokens: () => ({ tokens: 0, usageTokens: 0, trailingTokens: 0, lastUsageIndex: null }),
 	generateBranchSummary: async () => ({ summary: "", aborted: false, readFiles: [], modifiedFiles: [] }),
 	// Summarizable history so the overflow-only hasSummarizableHistory guard
@@ -74,7 +75,9 @@ vi.mock("../src/core/compaction/index.js", () => ({
 }));
 
 type SessionInternals = {
-	_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
+	_compactionRuntime: {
+		runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
+	};
 };
 
 describe("opt #217: silent-overflow terminal assistant gets a continuation steer", () => {
@@ -135,7 +138,7 @@ describe("opt #217: silent-overflow terminal assistant gets a continuation steer
 
 	function runOverflow(): Promise<boolean> {
 		const internals = session as unknown as SessionInternals;
-		return internals._runAutoCompaction("overflow", true);
+		return internals._compactionRuntime.runAutoCompaction("overflow", true);
 	}
 
 	it("injects a continuation steer for a z.ai-style stop silent-overflow terminal assistant", async () => {
@@ -199,14 +202,14 @@ describe("opt #217: silent-overflow terminal assistant gets a continuation steer
 
 		// Pre-queue a steer (e.g. REPI auto-resume already queued one).
 		session.agent.steer({ role: "user", content: "resume", timestamp: Date.now() });
-		const steeringQueue = (session.agent as unknown as { steeringQueue: { messages: unknown[] } }).steeringQueue;
-		expect(steeringQueue.messages).toHaveLength(1);
+		const steeringQueue = (session.agent as unknown as { steeringQueue: { snapshot(): unknown[] } }).steeringQueue;
+		expect(steeringQueue.snapshot()).toHaveLength(1);
 
 		const result = await runOverflow();
 
 		expect(result).toBe(true);
 		// The pre-existing steer is still the only queued message — the fix must
 		// not append a redundant "Continue." on top.
-		expect(steeringQueue.messages).toHaveLength(1);
+		expect(steeringQueue.snapshot()).toHaveLength(1);
 	});
 });

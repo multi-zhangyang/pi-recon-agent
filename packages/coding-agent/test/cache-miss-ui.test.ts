@@ -2,28 +2,18 @@ import type { AssistantMessage } from "@pi-recon/repi-ai";
 import { Container } from "@pi-recon/repi-tui";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { SessionStats } from "../src/core/agent-session.ts";
-import type { CacheMiss, ModelPriceSource } from "../src/core/cache-stats.ts";
+import type { ModelPriceSource } from "../src/core/cache-stats.ts";
 import { initTheme } from "../src/core/presentation/theme-runtime.ts";
 import type { SessionEntry } from "../src/core/session-manager.ts";
-import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { InteractiveCommandRuntime } from "../src/modes/interactive/interactive-command-runtime.ts";
+import { addCacheMissNotice } from "../src/modes/interactive/interactive-event-runtime.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
-
-const addCacheMissNotice = (
-	InteractiveMode.prototype as unknown as {
-		addCacheMissNotice(this: { chatContainer: Container }, miss: CacheMiss): void;
-	}
-).addCacheMissNotice;
-
-const handleSessionCommand = (
-	InteractiveMode.prototype as unknown as {
-		handleSessionCommand(this: SessionCommandContext): void;
-	}
-).handleSessionCommand;
 
 interface SessionCommandContext {
 	session: {
 		getSessionStats(): SessionStats;
 		modelRegistry: ModelPriceSource;
+		sessionManager: SessionCommandContext["sessionManager"];
 	};
 	sessionManager: {
 		getSessionName(): string | undefined;
@@ -70,7 +60,7 @@ describe("cache miss interactive UI", () => {
 	it("renders significant idle misses and suppresses low-signal notices", () => {
 		const chatContainer = new Container();
 		const context = { chatContainer };
-		addCacheMissNotice.call(context, {
+		addCacheMissNotice(context as never, {
 			missedTokens: 25_000,
 			missedCost: 0.12,
 			idleMs: 6 * 60_000,
@@ -81,7 +71,7 @@ describe("cache miss interactive UI", () => {
 		);
 
 		const childCount = chatContainer.children.length;
-		addCacheMissNotice.call(context, {
+		addCacheMissNotice(context as never, {
 			missedTokens: 2_000,
 			missedCost: 0.001,
 			idleMs: 0,
@@ -123,6 +113,7 @@ describe("cache miss interactive UI", () => {
 		const context: SessionCommandContext = {
 			session: {
 				getSessionStats: () => stats,
+				sessionManager: { getSessionName: () => undefined, getEntries: () => entries },
 				modelRegistry: {
 					find: () => ({ cost: { input: 3, cacheRead: 0.3, cacheWrite: 3.75 } }),
 				},
@@ -132,7 +123,7 @@ describe("cache miss interactive UI", () => {
 			ui: { requestRender: vi.fn() },
 		};
 
-		handleSessionCommand.call(context);
+		new InteractiveCommandRuntime(context as never).handleSessionCommand();
 		const output = stripAnsi(chatContainer.render(160).join("\n"));
 		expect(output).toContain("Total: $0.787");
 		expect(output).toContain("test/model-a: $0.375");

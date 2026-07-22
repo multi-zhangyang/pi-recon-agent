@@ -56,7 +56,8 @@ describe("AgentHarness abort window (F2)", () => {
 			model: registration.getModel(),
 		});
 		harness.on("before_agent_start", () => {
-			const controller = (harness as unknown as { runAbortController?: AbortController }).runAbortController;
+			const controller = (harness as unknown as { activeRun?: { abortController: AbortController } }).activeRun
+				?.abortController;
 			resolveHookFired?.(controller);
 			return hookGate.then(() => undefined);
 		});
@@ -75,13 +76,11 @@ describe("AgentHarness abort window (F2)", () => {
 		const abortPromise = harness.abort(); // don't await yet — waitForIdle blocks on the held run
 		expect(controllerAtHook?.signal.aborted).toBe(true);
 
-		releaseHook?.(); // release the held run so it proceeds with the aborted signal
+		releaseHook?.();
 		await abortPromise;
-		await promptPromise;
+		await expect(promptPromise).rejects.toMatchObject({ code: "hook" });
 
-		// The provider request fired with an already-aborted signal — the early-arm
-		// makes abort() before the stream honored. (Without the fix the signal was
-		// non-aborted and a full real turn ran.)
-		expect(providerSignalAborted).toBe(true);
+		// Cancellation during setup must prevent provider spend entirely.
+		expect(providerSignalAborted).toBeUndefined();
 	});
 });

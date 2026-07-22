@@ -53,6 +53,7 @@ vi.mock("../src/core/compaction/index.js", () => ({
 		new Promise((resolve) => {
 			compactDeferred.resolve = resolve as unknown as (_v: unknown) => void;
 		}),
+	estimateCompactionContext: () => ({ beforeTokens: 2, afterTokens: 1 }),
 	estimateContextTokens: () => ({ tokens: 99999, usageTokens: 99999, trailingTokens: 0, lastUsageIndex: 0 }),
 	generateBranchSummary: async () => ({ summary: "", aborted: false, readFiles: [], modifiedFiles: [] }),
 	isContextOverflow: () => false,

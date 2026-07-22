@@ -23,7 +23,7 @@ describe("pre-prompt compaction regression", () => {
 
 	it("compacts a length-stop response before a new prompt without an unprompted continuation", async () => {
 		const harness = await createHarness({
-			models: [{ id: "faux-1", contextWindow: 100, maxTokens: 100 }],
+			models: [{ id: "faux-1", contextWindow: 4_000, maxTokens: 100 }],
 			settings: { compaction: { enabled: true, keepRecentTokens: 1, reserveTokens: 0 } },
 			extensionFactories: [
 				(repi) => {
@@ -44,15 +44,18 @@ describe("pre-prompt compaction regression", () => {
 		const model = harness.getModel();
 		harness.sessionManager.appendMessage({
 			role: "user",
-			content: [{ type: "text", text: "previous prompt" }],
+			content: [{ type: "text", text: "previous prompt ".repeat(200) }],
 			timestamp: now - 1_000,
 		});
 		const lengthStopAssistant: AssistantMessage = {
-			...fauxAssistantMessage("length-stop assistant response", { stopReason: "length", timestamp: now - 500 }),
+			...fauxAssistantMessage("length-stop assistant response ".repeat(200), {
+				stopReason: "length",
+				timestamp: now - 500,
+			}),
 			api: model.api,
 			provider: model.provider,
 			model: model.id,
-			usage: createUsage(100),
+			usage: createUsage(4_000),
 		};
 		harness.sessionManager.appendMessage(lengthStopAssistant);
 		harness.session.agent.state.messages = harness.sessionManager.buildSessionContext().messages;
@@ -60,12 +63,12 @@ describe("pre-prompt compaction regression", () => {
 		const continueSpy = vi.spyOn(harness.session.agent, "continue");
 
 		await expect(harness.session.prompt("next prompt")).resolves.toBeUndefined();
-
 		expect(continueSpy).not.toHaveBeenCalled();
-		expect(harness.eventsOfType("compaction_end").at(-1)).toMatchObject({
+		expect(harness.eventsOfType("compaction_end")).toHaveLength(1);
+		expect(harness.eventsOfType("compaction_end")[0]).toMatchObject({
 			reason: "overflow",
 			aborted: false,
-			willRetry: true,
+			willRetry: false,
 		});
 		expect(getUserTexts(harness)).toContain("next prompt");
 		expect(harness.faux.state.callCount).toBe(1);

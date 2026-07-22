@@ -71,6 +71,31 @@ export interface AgentSessionPresentationRuntime {
 	exportToJsonl(outputPath?: string): string;
 }
 
+export function exportSessionToJsonl(sessionManager: SessionManager, outputPath?: string): string {
+	const filePath = resolvePath(
+		outputPath ?? `session-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`,
+		process.cwd(),
+	);
+	const dir = dirname(filePath);
+	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+	const header: SessionHeader = {
+		type: "session",
+		version: CURRENT_SESSION_VERSION,
+		id: sessionManager.getSessionId(),
+		timestamp: new Date().toISOString(),
+		cwd: sessionManager.getCwd(),
+	};
+	const lines = [JSON.stringify(header)];
+	let prevId: string | null = null;
+	for (const entry of sessionManager.getBranch()) {
+		lines.push(JSON.stringify({ ...entry, parentId: prevId }));
+		prevId = entry.id;
+	}
+	atomicWriteFileSync(filePath, `${lines.join("\n")}\n`, 0o644);
+	return filePath;
+}
+
 /** Create the reporting runtime for one AgentSession instance. */
 export function createAgentSessionPresentationRuntime(
 	host: AgentSessionPresentationHost,
@@ -209,38 +234,7 @@ export function createAgentSessionPresentationRuntime(
 	}
 
 	function exportToJsonl(outputPath?: string): string {
-		const filePath = resolvePath(
-			outputPath ?? `session-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`,
-			process.cwd(),
-		);
-		const dir = dirname(filePath);
-		if (!existsSync(dir)) {
-			mkdirSync(dir, { recursive: true });
-		}
-
-		const header: SessionHeader = {
-			type: "session",
-			version: CURRENT_SESSION_VERSION,
-			id: host.sessionManager.getSessionId(),
-			timestamp: new Date().toISOString(),
-			cwd: host.sessionManager.getCwd(),
-		};
-
-		const branchEntries = host.sessionManager.getBranch();
-		const lines = [JSON.stringify(header)];
-
-		// Re-chain parentIds to form a linear sequence.
-		let prevId: string | null = null;
-		for (const entry of branchEntries) {
-			const linear = { ...entry, parentId: prevId };
-			lines.push(JSON.stringify(linear));
-			prevId = entry.id;
-		}
-
-		// Atomic temp+rename prevents a torn export from looking like a successful
-		// partial JSONL session after interruption.
-		atomicWriteFileSync(filePath, `${lines.join("\n")}\n`, 0o644);
-		return filePath;
+		return exportSessionToJsonl(host.sessionManager, outputPath);
 	}
 
 	return {

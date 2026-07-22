@@ -1134,7 +1134,13 @@ export class AgentHarness<
 				label: options?.label,
 			};
 			const signal = run.abortController.signal;
-			const hookResult = await this.emitHook({ type: "session_before_tree", preparation, signal }, signal);
+			let hookResult: AgentHarnessEventResultMap["session_before_tree"] | undefined;
+			try {
+				hookResult = await this.emitHook({ type: "session_before_tree", preparation, signal }, signal);
+			} catch (error) {
+				if (signal.aborted) return { cancelled: true };
+				throw error;
+			}
 			if (hookResult?.cancel) return { cancelled: true };
 			let summaryEntry: NavigateTreeResult["summaryEntry"];
 			let summaryText: string | undefined = hookResult?.summary?.summary;

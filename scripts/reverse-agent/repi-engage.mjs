@@ -25,7 +25,7 @@ import {
 	textLikeMalwareFile,
 	textLikeWindowsAdFile,
 } from "./lib/engage-target-classifier.mjs";
-import { configureWebEngagementRuntime, engageUrl } from "./lib/web-engagement-runtime.mjs";
+import { configureWebEngagementRuntime, engageUrl, extractJsonObjectFromText } from "./lib/web-engagement-runtime.mjs";
 import { pcapQuicklookRows } from "./lib/pcap-dfir-runtime.mjs";
 import {
 	configureNativeRuntime,
@@ -343,6 +343,7 @@ function nativeReverseRuntime() {
 		readJsonArtifact,
 		byteEntropy,
 		firmwareStrings,
+		firmwareEntropySamples,
 		timeoutMs,
 		run,
 		shellQuote,
@@ -406,6 +407,7 @@ function memoryRuntime() {
 		noWrite,
 		shellQuote,
 		firmwareStrings,
+		firmwareEntropySamples,
 	};
 }
 
@@ -488,6 +490,8 @@ function malwareRuntime() {
 		bufferSha256,
 		byteEntropy,
 		firmwareStrings,
+		parseElfHardening,
+		parsePeQuicklook,
 	};
 }
 

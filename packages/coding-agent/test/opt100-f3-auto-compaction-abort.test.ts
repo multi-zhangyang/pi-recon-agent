@@ -36,6 +36,7 @@ vi.mock("../src/core/compaction/index.js", () => ({
 		err.name = "AbortError";
 		throw err;
 	},
+	estimateCompactionContext: () => ({ beforeTokens: 2, afterTokens: 1 }),
 	estimateContextTokens: () => ({ tokens: 0, usageTokens: 0, trailingTokens: 0, lastUsageIndex: null }),
 	generateBranchSummary: async () => ({ summary: "", aborted: false, readFiles: [], modifiedFiles: [] }),
 	prepareCompaction: () => ({
@@ -100,11 +101,14 @@ describe("opt100 F3: auto-compaction abort reports aborted, not failed", () => {
 			}
 		});
 
-		const runAutoCompaction = (
+		const compactionRuntime = (
 			session as unknown as {
-				_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
+				_compactionRuntime: {
+					runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
+				};
 			}
-		)._runAutoCompaction.bind(session);
+		)._compactionRuntime;
+		const runAutoCompaction = compactionRuntime.runAutoCompaction.bind(compactionRuntime);
 
 		// The mocked preparation contains real history, so compact() is reached.
 		const result = await runAutoCompaction("threshold", false);
@@ -155,11 +159,14 @@ describe("opt100 F3: auto-compaction abort reports aborted, not failed", () => {
 		}
 		globalThis.AbortController = PreAbortedController as typeof AbortController;
 
-		const runAutoCompaction = (
+		const compactionRuntime = (
 			session as unknown as {
-				_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
+				_compactionRuntime: {
+					runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
+				};
 			}
-		)._runAutoCompaction.bind(session);
+		)._compactionRuntime;
+		const runAutoCompaction = compactionRuntime.runAutoCompaction.bind(compactionRuntime);
 
 		try {
 			await runAutoCompaction("threshold", false);

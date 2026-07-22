@@ -41,6 +41,7 @@ vi.mock("../src/core/compaction/index.js", () => ({
 	}) => usage.totalTokens ?? usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
 	collectEntriesForBranchSummary: () => ({ entries: [], commonAncestorId: null }),
 	compact: () => new Promise(() => {}),
+	estimateCompactionContext: () => ({ beforeTokens: 2, afterTokens: 1 }),
 	estimateContextTokens: () => ({ tokens: 99999, usageTokens: 99999, trailingTokens: 0, lastUsageIndex: 0 }),
 	generateBranchSummary: async () => ({ summary: "", aborted: false, readFiles: [], modifiedFiles: [] }),
 	isContextOverflow: () => false,
@@ -136,8 +137,10 @@ describe("opt #230: _checkCompaction error-branch usage-source guard uses strict
 
 		shouldCompactMock.mockClear();
 		const result = await (
-			session as unknown as { _checkCompaction: (m: AssistantMessage, skip?: boolean) => Promise<boolean> }
-		)._checkCompaction(errorAssistant, false);
+			session as unknown as {
+				_compactionRuntime: { checkCompaction: (m: AssistantMessage, skip?: boolean) => Promise<boolean> };
+			}
+		)._compactionRuntime.checkCompaction(errorAssistant, false);
 
 		// Post-fix: strict `<` → usageMsg NOT stale → the error branch proceeds to
 		// shouldCompact (which returns false → _checkCompaction returns false without

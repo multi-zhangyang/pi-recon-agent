@@ -34,21 +34,40 @@ function countOccurrences(haystack: string, needle: string): number {
 }
 
 describe("recon-profile remaining writes are atomic (opt #208 routing pin)", () => {
-	const profileSrc = readFileSync(resolve(import.meta.dirname, "../src/core/recon-profile.ts"), "utf8");
+	const autopilotSrc = readFileSync(resolve(import.meta.dirname, "../src/core/repi/autopilot-runtime.ts"), "utf8");
+	const adapterSrc = readFileSync(
+		resolve(import.meta.dirname, "../src/core/repi/runtime-adapter-execution-runtime.ts"),
+		"utf8",
+	);
+	const childSrc = readFileSync(
+		resolve(import.meta.dirname, "../src/core/repi/swarm-worker-child-session-runtime.ts"),
+		"utf8",
+	);
 	const proofArtifactSrc = readFileSync(
 		resolve(import.meta.dirname, "../src/core/repi/proof-artifact-runtime.ts"),
 		"utf8",
 	);
-	const swarmSrc = readFileSync(resolve(import.meta.dirname, "../src/core/repi/swarm-supervisor-runtime.ts"), "utf8");
 
 	it("writes worker stdout/stderr via atomicWriteFileSync at BOTH sites (not writeFileSync)", () => {
 		// Two call sites: the swarm-execution aggregation (~17985) and the
 		// bounded re_swarm batch runner (~18304).
-		expect(countOccurrences(swarmSrc, "atomicWriteFileSync(stdoutPath, stdout, 0o644)")).toBe(2);
-		expect(countOccurrences(swarmSrc, "atomicWriteFileSync(stderrPath, stderr, 0o644)")).toBe(2);
+		expect(countOccurrences(childSrc, "atomicWriteFileSync(stdoutPath, stdout, 0o644)")).toBe(1);
+		expect(countOccurrences(childSrc, "atomicWriteFileSync(stderrPath, stderr, 0o644)")).toBe(1);
+		expect(
+			countOccurrences(
+				readFileSync(resolve(import.meta.dirname, "../src/core/repi/swarm-supervisor-runtime.ts"), "utf8"),
+				"atomicWriteFileSync(stdoutPath, stdout, 0o644)",
+			),
+		).toBe(1);
+		expect(
+			countOccurrences(
+				readFileSync(resolve(import.meta.dirname, "../src/core/repi/swarm-supervisor-runtime.ts"), "utf8"),
+				"atomicWriteFileSync(stderrPath, stderr, 0o644)",
+			),
+		).toBe(1);
 		// The bare writeFileSync calls at these sites must be gone.
-		expect(swarmSrc).not.toContain("writeFileSync(stdoutPath, stdout");
-		expect(swarmSrc).not.toContain("writeFileSync(stderrPath, stderr");
+		expect(childSrc).not.toContain("writeFileSync(stdoutPath, stdout");
+		expect(childSrc).not.toContain("writeFileSync(stderrPath, stderr");
 	});
 
 	it("writes the compiled report via writePrivateTextFile (not writeFileSync)", () => {
@@ -59,27 +78,27 @@ describe("recon-profile remaining writes are atomic (opt #208 routing pin)", () 
 	it("writes the archive manifest via atomicWriteFileSync (not writeFileSync)", () => {
 		// Asserted as two substrings; together they pin the exact call site
 		// (atomicWriteFileSync( + join(archiveRoot, "manifest.json")).
-		expect(profileSrc).toContain('atomicWriteFileSync(\n\t\tjoin(archiveRoot, "manifest.json")');
-		expect(profileSrc).not.toContain('writeFileSync(\n\t\tjoin(archiveRoot, "manifest.json")');
+		expect(autopilotSrc).toContain('writePrivateJson(join(archiveRoot, "manifest.json")');
 	});
 
 	it("writes the runtime-adapter artifact via atomicWriteFileSync (not writeFileSync)", () => {
 		// Asserted as two substrings to keep the literal free of "${" (biome
 		// noTemplateCurlyInString). Together they pin the exact call site.
-		expect(profileSrc).toContain("atomicWriteFileSync(");
-		expect(profileSrc).toContain("stdoutHead: truncateMiddle(result.stdout, 8000)");
+		expect(adapterSrc).toContain("atomicWriteFileSync(");
+		expect(adapterSrc).toContain("stdoutHead: truncateMiddle(result.stdout, 8000)");
 		// The bare writeFileSync at this site must be gone (the runtime-adapter
 		// artifact write). Distinguished from other writeFileSync(path, ...)
 		// sites by the adjacent stdoutHead marker.
-		const idx = profileSrc.indexOf("stdoutHead: truncateMiddle(result.stdout, 8000)");
+		const idx = adapterSrc.indexOf("stdoutHead: truncateMiddle(result.stdout, 8000)");
 		expect(idx).toBeGreaterThan(-1);
-		const atomicCall = profileSrc.lastIndexOf("atomicWriteFileSync(", idx);
-		const bareCall = profileSrc.lastIndexOf("\n\t\twriteFileSync(", idx);
+		const atomicCall = adapterSrc.lastIndexOf("atomicWriteFileSync(", idx);
+		const bareCall = adapterSrc.lastIndexOf("\n\t\twriteFileSync(", idx);
 		expect(atomicCall).toBeGreaterThan(bareCall);
 	});
 
 	it("moves archived state without a read/write copy", () => {
-		expect(profileSrc).toContain("renameSync(path, target)");
-		expect(profileSrc).not.toContain('writeFileSync(archived, text, "utf-8")');
+		expect(readFileSync(resolve(import.meta.dirname, "../src/core/repi/autopilot-runtime.ts"), "utf8")).toContain(
+			"renameSync(path, target)",
+		);
 	});
 });

@@ -41,8 +41,8 @@ const ROUTE_PROMPTS: Record<FocusedRoute, string> = {
 
 const EXPECTED_TOOLS: Record<FocusedRoute, string[]> = {
 	core: ["read", "bash", "re_capabilities", "goal_complete"],
-	web: ["re_live_browser", "re_web_authz_state", "re_exploit_lab", "re_runtime_adapter"],
-	native: ["re_native_runtime", "re_exploit_lab", "re_runtime_adapter", "re_lane_specialist_pack"],
+	web: ["re_web_authz_state", "re_runtime_adapter"],
+	native: ["re_exploit_lab", "re_runtime_adapter", "re_lane_specialist_pack"],
 	crypto: ["re_exploit_lab", "re_runtime_adapter", "re_lane_specialist_pack", "re_toolchain_domain"],
 	forensics: ["re_runtime_adapter", "re_runtime_bridge", "re_lane_specialist_pack", "re_toolchain_domain"],
 	agent: ["re_runtime_adapter", "re_runtime_bridge", "re_reason"],
@@ -50,8 +50,8 @@ const EXPECTED_TOOLS: Record<FocusedRoute, string[]> = {
 
 const EXCLUDED_TOOLS: Record<FocusedRoute, string[]> = {
 	core: ["re_live_browser", "re_native_runtime", "re_swarm", "re_proof_loop"],
-	web: ["re_native_runtime", "re_mobile_runtime", "re_swarm", "re_proof_loop"],
-	native: ["re_live_browser", "re_mobile_runtime", "re_swarm", "re_proof_loop"],
+	web: ["re_live_browser", "re_native_runtime", "re_mobile_runtime", "re_swarm", "re_proof_loop"],
+	native: ["re_live_browser", "re_native_runtime", "re_mobile_runtime", "re_swarm", "re_proof_loop"],
 	crypto: ["re_live_browser", "re_native_runtime", "re_runtime_bridge", "re_swarm", "re_proof_loop"],
 	forensics: ["re_live_browser", "re_native_runtime", "re_exploit_lab", "re_swarm", "re_proof_loop"],
 	agent: ["re_live_browser", "re_native_runtime", "re_toolchain_domain", "re_swarm", "re_proof_loop"],
