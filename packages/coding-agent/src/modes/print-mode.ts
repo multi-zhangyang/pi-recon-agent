@@ -573,6 +573,14 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		return wrote;
 	};
 
+	const lastPromptFailed = (): boolean => {
+		const lastMessage = session.state.messages.at(-1);
+		return (
+			lastMessage?.role === "assistant" &&
+			(lastMessage.stopReason === "error" || lastMessage.stopReason === "aborted")
+		);
+	};
+
 	runtimeHost.setRebindSession(async () => {
 		await rebindSession();
 	});
@@ -696,13 +704,16 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 
 		await rebindSession();
 
+		let promptFailed = false;
 		if (initialMessage && !shuttingDown) {
 			await runPromptWithTimeout(initialMessage, { images: initialImages });
+			promptFailed = lastPromptFailed();
 		}
 
 		for (const message of messages) {
-			if (shuttingDown) break;
+			if (shuttingDown || promptFailed) break;
 			await runPromptWithTimeout(message);
+			promptFailed = lastPromptFailed();
 		}
 
 		if (!shuttingDown) {

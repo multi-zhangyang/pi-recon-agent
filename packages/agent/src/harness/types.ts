@@ -813,8 +813,9 @@ export interface BranchSummaryResult {
 
 /** Existing core-loop controls exposed as one immutable harness policy. */
 export interface AgentHarnessRunPolicy {
-	/** Defaults to 20. Set to 0 to opt out of the harness safety cap. */
+	/** Optional hard cap on assistant turns. Non-positive or undefined is unbounded. */
 	maxTurns?: number;
+	/** Reserves a tool-free synthesis turn. Defaults to true only when `maxTurns` is a positive number. */
 	reserveFinalTurn?: boolean;
 	finalTurnPrompt?: string;
 	lengthContinueMaxTurns?: number;

@@ -652,22 +652,21 @@ function boundedConversationText(text: string, model: Model<any>, maxTokens: num
 }
 
 function createSummarizationOptions(
-	model: Model<any>,
-	maxTokens: number,
 	apiKey: string | undefined,
 	headers: ProviderHeaders | undefined,
 	signal: AbortSignal | undefined,
 	thinkingLevel: ThinkingLevel | undefined,
+	reasoningModel: boolean,
 	env?: ProviderEnv,
 ): SimpleStreamOptions {
-	const options: SimpleStreamOptions = { maxTokens, signal, apiKey, headers, env };
-	if (model.reasoning && thinkingLevel && thinkingLevel !== "off") {
+	const options: SimpleStreamOptions = { signal, apiKey, headers, env };
+	if (reasoningModel && thinkingLevel && thinkingLevel !== "off") {
 		options.reasoning = thinkingLevel;
 	}
 	return options;
 }
 
-async function completeSummarization(
+async function requestSummarization(
 	model: Model<any>,
 	context: Context,
 	options: SimpleStreamOptions,
@@ -707,6 +706,32 @@ async function completeSummarization(
 			errorMessage: error instanceof Error ? error.message : String(error),
 			timestamp: Date.now(),
 		};
+	}
+}
+
+const SUMMARIZATION_LENGTH_CONTINUE_MAX_TURNS = 3;
+const SUMMARIZATION_LENGTH_CONTINUE_PROMPT =
+	"Continue the summary exactly where it stopped. Return only the remaining structured summary without repeating completed sections.";
+
+export async function completeSummarization(
+	model: Model<any>,
+	context: Context,
+	options: SimpleStreamOptions,
+	streamFn?: StreamFn,
+): Promise<AssistantMessage> {
+	const messages = [...context.messages];
+	const content: AssistantMessage["content"] = [];
+	for (let continuation = 0; ; continuation++) {
+		const response = await requestSummarization(model, { ...context, messages }, options, streamFn);
+		content.push(...response.content);
+		if (response.stopReason !== "length" || continuation >= SUMMARIZATION_LENGTH_CONTINUE_MAX_TURNS) {
+			return content.length === response.content.length ? response : { ...response, content };
+		}
+		messages.push(response, {
+			role: "user",
+			content: [{ type: "text", text: SUMMARIZATION_LENGTH_CONTINUE_PROMPT }],
+			timestamp: Date.now(),
+		});
 	}
 }
 
@@ -786,7 +811,7 @@ export async function generateSummary(
 		},
 	];
 
-	const completionOptions = createSummarizationOptions(model, maxTokens, apiKey, headers, signal, thinkingLevel, env);
+	const completionOptions = createSummarizationOptions(apiKey, headers, signal, thinkingLevel, model.reasoning, env);
 
 	const response = await completeSummarization(
 		model,
@@ -1081,7 +1106,7 @@ async function generateTurnPrefixSummary(
 	const response = await completeSummarization(
 		model,
 		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		createSummarizationOptions(model, maxTokens, apiKey, headers, signal, thinkingLevel, env),
+		createSummarizationOptions(apiKey, headers, signal, thinkingLevel, model.reasoning, env),
 		streamFn,
 	);
 

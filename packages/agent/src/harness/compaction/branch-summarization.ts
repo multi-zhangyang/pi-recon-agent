@@ -9,7 +9,12 @@ import {
 } from "../messages.ts";
 import type { BranchSummaryResult, Session, SessionTreeEntry } from "../types.ts";
 import { BranchSummaryError, err, ok, type Result, SessionError } from "../types.ts";
-import { estimateTokens, SUMMARIZATION_SYSTEM_PROMPT } from "./compaction.ts";
+import {
+	type CompletionRuntime,
+	completeSummarization,
+	estimateTokens,
+	SUMMARIZATION_SYSTEM_PROMPT,
+} from "./compaction.ts";
 import { summaryInputTokenBudget, truncateSummaryToTokenBudget } from "./policy.ts";
 import {
 	computeFileLists,
@@ -283,15 +288,18 @@ export async function generateBranchSummary(
 		},
 	];
 	const context = { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages };
-	const response =
+	const runtime: CompletionRuntime =
 		"models" in options
-			? await options.models.completeSimple(model, context, { signal, maxTokens: 2048 })
-			: await completeSimple(model, context, {
-					apiKey: options.apiKey,
-					headers: options.headers,
-					signal,
-					maxTokens: 2048,
-				});
+			? options.models
+			: {
+					completeSimple: (requestModel, requestContext, requestOptions) =>
+						completeSimple(requestModel, requestContext, {
+							...requestOptions,
+							apiKey: options.apiKey,
+							headers: { ...options.headers, ...requestOptions?.headers },
+						}),
+				};
+	const response = await completeSummarization(runtime, model, context, { signal });
 	if (response.stopReason === "aborted") {
 		return err(new BranchSummaryError("aborted", response.errorMessage || "Branch summary aborted"));
 	}

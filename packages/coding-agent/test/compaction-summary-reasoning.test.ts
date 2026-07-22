@@ -137,7 +137,7 @@ describe("generateSummary reasoning options", () => {
 		});
 	});
 
-	it("clamps compaction summary maxTokens to the model output cap", async () => {
+	it("uses the model output cap for input budgeting without sending an output-token override", async () => {
 		const preparation: CompactionPreparation = {
 			firstKeptEntryId: "entry-keep",
 			messagesToSummarize: messages,
@@ -150,6 +150,7 @@ describe("generateSummary reasoning options", () => {
 
 		await compact(preparation, createModel(false, 128000), "test-key");
 
-		expect(completeSimpleMock.mock.calls.map((call) => call[2]?.maxTokens)).toEqual([128000, 128000]);
+		expect(completeSimpleMock).toHaveBeenCalledTimes(2);
+		for (const call of completeSimpleMock.mock.calls) expect(call[2]).not.toHaveProperty("maxTokens");
 	});
 });

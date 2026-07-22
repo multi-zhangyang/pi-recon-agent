@@ -42,16 +42,22 @@ function parseState<T>(value: unknown): T | undefined {
 	}
 }
 
-export function readRepiState<T>(namespace: string, key: string): T | undefined {
+export type RepiStateEntry<T> = { found: false; value: undefined } | { found: true; value: T | undefined };
+
+export function readRepiStateEntry<T>(namespace: string, key: string): RepiStateEntry<T> {
 	const db = openStateDb();
 	try {
 		const row = db
 			.prepare("SELECT value_json FROM repi_state WHERE namespace = ? AND state_key = ?")
 			.get(namespace, key) as { value_json?: unknown } | undefined;
-		return parseState<T>(row?.value_json);
+		return row ? { found: true, value: parseState<T>(row.value_json) } : { found: false, value: undefined };
 	} finally {
 		db.close();
 	}
+}
+
+export function readRepiState<T>(namespace: string, key: string): T | undefined {
+	return readRepiStateEntry<T>(namespace, key).value;
 }
 
 export function mutateRepiState<T>(
@@ -66,7 +72,8 @@ export function mutateRepiState<T>(
 		const row = db
 			.prepare("SELECT value_json FROM repi_state WHERE namespace = ? AND state_key = ?")
 			.get(namespace, key) as { value_json?: unknown } | undefined;
-		const current = parseState<T>(row?.value_json) ?? initial();
+		const current = row ? parseState<T>(row.value_json) : initial();
+		if (row && current === undefined) throw new Error(`Invalid REPI state JSON for ${namespace}:${key}`);
 		const next = mutate(current);
 		db.prepare(
 			`INSERT INTO repi_state(namespace, state_key, version, value_json, updated_at)

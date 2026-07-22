@@ -1,4 +1,13 @@
-import type { AssistantMessage, ImageContent, Model, Models, TextContent, Usage } from "@pi-recon/repi-ai";
+import type {
+	AssistantMessage,
+	Context,
+	ImageContent,
+	Model,
+	Models,
+	SimpleStreamOptions,
+	TextContent,
+	Usage,
+} from "@pi-recon/repi-ai";
 import { completeSimple } from "@pi-recon/repi-ai";
 import type { AgentMessage, ThinkingLevel } from "../../types.ts";
 import {
@@ -537,7 +546,7 @@ function boundedConversationText(text: string, model: Model<any>, maxTokens: num
 	return truncateForSummary(text, availableChars);
 }
 
-type CompletionRuntime = Pick<Models, "completeSimple">;
+export type CompletionRuntime = Pick<Models, "completeSimple">;
 
 function legacyCompletionRuntime(apiKey: string, headers?: Record<string, string>): CompletionRuntime {
 	return {
@@ -552,6 +561,32 @@ function legacyCompletionRuntime(apiKey: string, headers?: Record<string, string
 
 function isCompletionRuntime(value: Models | Model<any>): value is Models {
 	return typeof (value as Partial<Models>).completeSimple === "function";
+}
+
+const SUMMARIZATION_LENGTH_CONTINUE_MAX_TURNS = 3;
+const SUMMARIZATION_LENGTH_CONTINUE_PROMPT =
+	"Continue the summary exactly where it stopped. Return only the remaining structured summary without repeating completed sections.";
+
+export async function completeSummarization(
+	runtime: CompletionRuntime,
+	model: Model<any>,
+	context: Context,
+	options: SimpleStreamOptions,
+): Promise<AssistantMessage> {
+	const messages = [...context.messages];
+	const content: AssistantMessage["content"] = [];
+	for (let continuation = 0; ; continuation++) {
+		const response = await runtime.completeSimple(model, { ...context, messages }, options);
+		content.push(...response.content);
+		if (response.stopReason !== "length" || continuation >= SUMMARIZATION_LENGTH_CONTINUE_MAX_TURNS) {
+			return content.length === response.content.length ? response : { ...response, content };
+		}
+		messages.push(response, {
+			role: "user",
+			content: [{ type: "text", text: SUMMARIZATION_LENGTH_CONTINUE_PROMPT }],
+			timestamp: Date.now(),
+		});
+	}
 }
 
 function completedSummaryText(
@@ -628,11 +663,10 @@ async function generateSummaryWithRuntime(
 	];
 
 	const completionOptions =
-		model.reasoning && thinkingLevel && thinkingLevel !== "off"
-			? { maxTokens, signal, reasoning: thinkingLevel }
-			: { maxTokens, signal };
+		model.reasoning && thinkingLevel && thinkingLevel !== "off" ? { signal, reasoning: thinkingLevel } : { signal };
 
-	const response = await runtime.completeSimple(
+	const response = await completeSummarization(
+		runtime,
 		model,
 		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
 		completionOptions,
@@ -917,12 +951,11 @@ async function generateTurnPrefixSummary(
 		},
 	];
 
-	const response = await runtime.completeSimple(
+	const response = await completeSummarization(
+		runtime,
 		model,
 		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		model.reasoning && thinkingLevel && thinkingLevel !== "off"
-			? { maxTokens, signal, reasoning: thinkingLevel }
-			: { maxTokens, signal },
+		model.reasoning && thinkingLevel && thinkingLevel !== "off" ? { signal, reasoning: thinkingLevel } : { signal },
 	);
 	return completedSummaryText(response, "Turn prefix summarization");
 }

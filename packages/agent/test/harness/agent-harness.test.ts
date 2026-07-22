@@ -118,6 +118,36 @@ describe("AgentHarness", () => {
 		expect(steerQueueLengths).toEqual([1, 2, 1, 0]);
 	});
 
+	it("does not impose an implicit turn limit", async () => {
+		const registration = registerFauxProvider();
+		registrations.push(registration);
+		let requests = 0;
+		registration.setResponses([
+			...Array.from({ length: 21 }, (_, index) => () => {
+				requests++;
+				return fauxAssistantMessage(
+					fauxToolCall("calculate", { expression: "1 + 1" }, { id: `call-${index + 1}` }),
+					{ stopReason: "toolUse" },
+				);
+			}),
+			() => {
+				requests++;
+				return fauxAssistantMessage("done");
+			},
+		]);
+		const harness = new AgentHarness({
+			env: new NodeExecutionEnv({ cwd: process.cwd() }),
+			session: new Session(new InMemorySessionStorage()),
+			model: registration.getModel(),
+			tools: [calculateTool],
+		});
+
+		const response = await harness.prompt("keep working until complete");
+
+		expect(response.content).toEqual([{ type: "text", text: "done" }]);
+		expect(requests).toBe(22);
+	});
+
 	it("appends before_agent_start messages and persists them", async () => {
 		const registration = registerFauxProvider();
 		registrations.push(registration);

@@ -120,7 +120,6 @@ function findDuplicateNames(names: string[]): string[] {
 }
 
 const SUBSCRIBER_EVENT_TYPE = "*";
-const DEFAULT_HARNESS_MAX_TURNS = 20;
 
 type AgentHarnessHandler = HarnessHookHandler;
 
@@ -226,11 +225,13 @@ export class AgentHarness<
 		this.session = options.session;
 		this.resources = options.resources ?? {};
 		this.streamOptions = cloneHarnessStreamOptions(options.streamOptions);
+		const runPolicy = options.runPolicy ?? {};
+		const hasPositiveTurnLimit =
+			typeof runPolicy.maxTurns === "number" && Number.isFinite(runPolicy.maxTurns) && runPolicy.maxTurns > 0;
 		this.runPolicy = {
-			maxTurns: DEFAULT_HARNESS_MAX_TURNS,
-			reserveFinalTurn: true,
 			autoCompaction: true,
-			...options.runPolicy,
+			...runPolicy,
+			reserveFinalTurn: runPolicy.reserveFinalTurn ?? hasPositiveTurnLimit,
 		};
 		this.models = options.models;
 		this.systemPrompt = options.systemPrompt;

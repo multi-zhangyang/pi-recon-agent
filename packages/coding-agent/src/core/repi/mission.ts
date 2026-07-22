@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { REPI_GENERIC_TASK, type RoutePlan, routeRepiTask } from "./routes.ts";
-import { mutateRepiState, readRepiState } from "./state-db.ts";
+import { mutateRepiState, readRepiStateEntry } from "./state-db.ts";
 import {
 	currentMissionPath,
 	ensureRepiStorage,
@@ -845,9 +845,8 @@ export function updateMissionRuntimeStats(runtimeStats: MissionRuntimeStats): Mi
 
 export function readCurrentMission(): MissionState | undefined {
 	ensureRepiStorage();
-	const raw =
-		readRepiState<MissionState>("mission", missionStorageScope()) ??
-		readJsonObjectFileCached<MissionState>(currentMissionPath());
+	const persisted = readRepiStateEntry<MissionState>("mission", missionStorageScope());
+	const raw = persisted.found ? persisted.value : readJsonObjectFileCached<MissionState>(currentMissionPath());
 	if (!raw) return undefined;
 	const lifecycle = raw as MissionState & { status?: unknown };
 	if (lifecycle.status === "closed" || lifecycle.status === "empty") return undefined;

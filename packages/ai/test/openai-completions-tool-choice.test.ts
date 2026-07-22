@@ -1056,6 +1056,7 @@ describe("openai-completions tool_choice", () => {
 				thinkingSignature: "reasoning_content",
 			},
 		]);
+		expect(response.stopReason).toBe("length");
 	});
 
 	it("keeps non-OpenCode Go reasoning deltas on the original reasoning field", async () => {
@@ -1083,6 +1084,7 @@ describe("openai-completions tool_choice", () => {
 				thinkingSignature: "reasoning",
 			},
 		]);
+		expect(response.stopReason).toBe("length");
 	});
 
 	it("replays OpenCode Go reasoning thinking blocks as reasoning_content", () => {

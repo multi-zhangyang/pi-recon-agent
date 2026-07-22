@@ -299,6 +299,25 @@ describe("runPrintMode", () => {
 		expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
 	});
 
+	it("stops a prompt batch after the first assistant error", async () => {
+		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "initial" }));
+		const { session } = runtimeHost;
+		const providerError = createAssistantMessage({ stopReason: "error", errorMessage: "provider failure" });
+		session.prompt.mockImplementationOnce(async () => {
+			session.state.messages = [providerError];
+		});
+
+		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+			mode: "json",
+			initialMessage: "first",
+			messages: ["second", "third"],
+		});
+
+		expect(exitCode).toBe(1);
+		expect(session.prompt).toHaveBeenCalledTimes(1);
+		expect(session.prompt).toHaveBeenCalledWith("first", { images: undefined });
+	});
+
 	it("returns non-zero on assistant error in JSON mode", async () => {
 		const runtimeHost = createRuntimeHost(
 			createAssistantMessage({ stopReason: "error", errorMessage: "provider failure" }),

@@ -103,14 +103,37 @@ describe("compaction summarization terminal outcomes", () => {
 		});
 	});
 
-	it.each([
-		["length", "partial summary"],
-		["toolUse", "partial summary"],
-	] as const)("rejects an incomplete %s summary response", async (stopReason, text) => {
-		completeSimpleMock.mockResolvedValue(response(stopReason, text));
+	it("continues and joins an incomplete length summary response", async () => {
+		completeSimpleMock
+			.mockResolvedValueOnce({
+				...response("length", ""),
+				content: [{ type: "thinking", thinking: "reasoning only" }],
+			})
+			.mockResolvedValueOnce(response("stop", "summary after continuation"));
+
+		await expect(generateSummary(messages, model, 2_000, "test-key")).resolves.toBe("summary after continuation");
+		expect(completeSimpleMock).toHaveBeenCalledTimes(2);
+		const continuedContext = completeSimpleMock.mock.calls[1][1];
+		expect(continuedContext.messages.at(-1)).toMatchObject({
+			role: "user",
+			content: [{ type: "text", text: expect.stringContaining("Continue the summary") }],
+		});
+	});
+
+	it("rejects a summary that remains incomplete after bounded continuation", async () => {
+		completeSimpleMock.mockResolvedValue(response("length", "partial summary"));
 
 		await expect(generateSummary(messages, model, 2_000, "test-key")).rejects.toThrow(
-			`Summarization failed: incomplete model response (${stopReason})`,
+			"Summarization failed: incomplete model response (length)",
+		);
+		expect(completeSimpleMock).toHaveBeenCalledTimes(4);
+	});
+
+	it("rejects an incomplete tool-use summary response", async () => {
+		completeSimpleMock.mockResolvedValue(response("toolUse", "partial summary"));
+
+		await expect(generateSummary(messages, model, 2_000, "test-key")).rejects.toThrow(
+			"Summarization failed: incomplete model response (toolUse)",
 		);
 	});
 

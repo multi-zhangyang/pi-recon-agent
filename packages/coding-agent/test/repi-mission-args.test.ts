@@ -1,7 +1,17 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -87,6 +97,29 @@ describe("repi-mission argument parsing", () => {
 		expect(report.mission?.lanes?.[0]).toMatchObject({ name: "mitigations", status: "in_progress" });
 		expect(report.mission?.checkpoints?.some((checkpoint) => checkpoint.name === "passive_map_done")).toBe(true);
 		expect(report.mission?.starterCommands?.some((command) => command.includes("checksec"))).toBe(true);
+
+		const dbPath = join(agentDir, "recon", "state.sqlite3");
+		const db = new DatabaseSync(dbPath, { readOnly: true });
+		try {
+			expect(db.prepare("PRAGMA journal_mode").get()).toMatchObject({ journal_mode: "wal" });
+			const row = db
+				.prepare("SELECT version, value_json FROM repi_state WHERE namespace = 'mission' AND state_key = ?")
+				.get(workspace) as { version: number; value_json: string };
+			expect(row.version).toBe(1);
+			expect(JSON.parse(row.value_json)).toMatchObject({ task: "analyze ELF", target: "./vuln" });
+		} finally {
+			db.close();
+		}
+	});
+
+	it("uses SQLite as authority when the exported JSON snapshot is stale", () => {
+		runMission([MISSION, workspace, "new", "authoritative mission", "--json"]);
+		const snapshotPath = join(agentDir, "recon", "mission", "current.json");
+		const stale = JSON.parse(readFileSync(snapshotPath, "utf8")) as { task: string };
+		writeFileSync(snapshotPath, `${JSON.stringify({ ...stale, task: "stale snapshot" }, null, 2)}\n`);
+
+		const status = runMission([MISSION, workspace, "status", "--json"]);
+		expect(status.mission?.task).toBe("authoritative mission");
 	});
 
 	it("does not let value or boolean flag placement pollute plan task text", () => {

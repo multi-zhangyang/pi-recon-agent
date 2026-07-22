@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { atomicWriteFile } from "./lib/atomic-file.mjs";
 
 const commandNames = new Set([
@@ -54,6 +55,8 @@ const missionPath = missionStorageScope
 	? join(missionDir, `current-${createHash("sha256").update(missionStorageScope).digest("hex").slice(0, 16)}.json`)
 	: join(missionDir, "current.json");
 const historyPath = join(missionDir, "history.jsonl");
+const stateDbPath = join(agentDir, "recon", "state.sqlite3");
+const missionStateKey = effectiveMissionScope;
 const operatorCwd = resolve(process.env.REPI_OPERATOR_CWD || process.env.PWD || process.cwd());
 
 const ROUTES = [
@@ -316,6 +319,71 @@ function slugify(value) {
 
 function nowStamp() {
 	return new Date().toISOString();
+}
+
+function openStateDb() {
+	mkdirSync(dirname(stateDbPath), { recursive: true, mode: 0o700 });
+	const db = new DatabaseSync(stateDbPath);
+	db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;");
+	db.exec(`
+CREATE TABLE IF NOT EXISTS repi_state (
+  namespace TEXT NOT NULL,
+  state_key TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  value_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (namespace, state_key)
+);
+CREATE INDEX IF NOT EXISTS repi_state_updated_at ON repi_state(updated_at);
+`);
+	try {
+		chmodSync(stateDbPath, 0o600);
+	} catch {
+		// File modes are not available on every supported filesystem.
+	}
+	return db;
+}
+
+function readMissionState() {
+	const db = openStateDb();
+	try {
+		const row = db
+			.prepare("SELECT value_json FROM repi_state WHERE namespace = 'mission' AND state_key = ?")
+			.get(missionStateKey);
+		if (typeof row?.value_json !== "string") return undefined;
+		try {
+			return JSON.parse(row.value_json);
+		} catch (error) {
+			throw new Error(`Invalid mission state in ${stateDbPath}: ${error.message}`);
+		}
+	} finally {
+		db.close();
+	}
+}
+
+function writeMissionState(mission) {
+	const db = openStateDb();
+	db.exec("BEGIN IMMEDIATE");
+	try {
+		db.prepare(
+			`INSERT INTO repi_state(namespace, state_key, version, value_json, updated_at)
+			 VALUES ('mission', ?, 1, ?, ?)
+			 ON CONFLICT(namespace, state_key) DO UPDATE SET
+			   version = repi_state.version + 1,
+			   value_json = excluded.value_json,
+			   updated_at = excluded.updated_at`,
+		).run(missionStateKey, JSON.stringify(mission), nowStamp());
+		db.exec("COMMIT");
+	} catch (error) {
+		try {
+			db.exec("ROLLBACK");
+		} catch {
+			// Preserve the transaction error.
+		}
+		throw error;
+	} finally {
+		db.close();
+	}
 }
 
 function compactTime() {
@@ -585,13 +653,18 @@ function newMission(task, options = {}) {
 
 function saveMission(mission) {
 	const normalized = { ...mission, updatedAt: nowStamp() };
+	writeMissionState(normalized);
 	writePrivate(missionPath, `${JSON.stringify(normalized, null, 2)}\n`);
 	appendPrivate(historyPath, `${JSON.stringify({ ts: nowStamp(), event: "mission_write", id: normalized.id, status: normalized.status, task: normalized.task, target: normalized.target, route: normalized.route?.id })}\n`);
 	return normalized;
 }
 
 function loadMission() {
-	return readJson(missionPath);
+	const current = readMissionState();
+	if (current) return current;
+	const legacy = readJson(missionPath);
+	if (legacy) writeMissionState(legacy);
+	return legacy;
 }
 
 function isMissionRecord(value) {
@@ -868,7 +941,9 @@ try {
 		if (isMissionRecord(current)) {
 			appendPrivate(historyPath, `${JSON.stringify({ ts: nowStamp(), event: "mission_reset", id: current.id, status: current.status })}\n`);
 		}
-		writePrivate(missionPath, `${JSON.stringify({ kind: "repi-mission", schemaVersion: 1, status: "empty", updatedAt: nowStamp(), task: null }, null, 2)}\n`);
+		const empty = { kind: "repi-mission", schemaVersion: 1, status: "empty", updatedAt: nowStamp(), task: null };
+		writeMissionState(empty);
+		writePrivate(missionPath, `${JSON.stringify(empty, null, 2)}\n`);
 		finish({ kind: "repi-mission-report", schemaVersion: 1, action: "reset", root, agentDir, missionPath, ok: true, mission: null, nextActions: ["repi mission new <task>"] });
 	}
 

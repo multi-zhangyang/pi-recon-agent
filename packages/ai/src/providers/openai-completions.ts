@@ -81,6 +81,8 @@ function isImageContentBlock(block: { type: string }): block is ImageContent {
 	return block.type === "image";
 }
 
+const REASONING_ONLY_ASSISTANT_FALLBACK = "[Assistant reasoning ended before a final response was produced.]";
+
 export interface OpenAICompletionsOptions extends StreamOptions {
 	toolChoice?: "auto" | "none" | "required" | { type: "function"; function: { name: string } };
 	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -462,6 +464,15 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 				// carried content/tool deltas and no empty terminal marker arrived,
 				// treat it as truncated instead of silently accepting a partial answer.
 				output.stopReason = "stop";
+			}
+			const hasReasoning = output.content.some(
+				(block) => block.type === "thinking" && block.thinking.trim().length > 0,
+			);
+			const hasVisibleOutput = output.content.some(
+				(block) => (block.type === "text" && block.text.trim().length > 0) || block.type === "toolCall",
+			);
+			if (output.stopReason === "stop" && hasReasoning && !hasVisibleOutput) {
+				output.stopReason = "length";
 			}
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
@@ -989,8 +1000,9 @@ export function convertMessages(
 				content !== null &&
 				content !== undefined &&
 				(typeof content === "string" ? content.length > 0 : content.length > 0);
-			if (!hasContent && !assistantMsg.tool_calls && !hasReasoningField) {
-				continue;
+			if (!hasContent && !assistantMsg.tool_calls) {
+				if (!hasReasoningField) continue;
+				assistantMsg.content = REASONING_ONLY_ASSISTANT_FALLBACK;
 			}
 			params.push(assistantMsg);
 		} else if (msg.role === "toolResult") {

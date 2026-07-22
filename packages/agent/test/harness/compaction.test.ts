@@ -655,13 +655,25 @@ describe("harness compaction", () => {
 		expect(abortedResult).toMatchObject({ ok: false, error: { code: "aborted", message: "stopped" } });
 
 		const { faux: lengthFaux, model: lengthModel } = createFauxModel(false);
-		lengthFaux.setResponses([fauxAssistantMessage("partial", { stopReason: "length" })]);
+		lengthFaux.setResponses(
+			Array.from({ length: 4 }, () => fauxAssistantMessage("partial", { stopReason: "length" })),
+		);
 		expect(await generateSummary(messages, lengthModel, 2000, "test-key")).toMatchObject({
 			ok: false,
 			error: {
 				code: "summarization_failed",
 				message: "Summarization failed: incomplete model response (length)",
 			},
+		});
+
+		const { faux: continuedFaux, model: continuedModel } = createFauxModel(false);
+		continuedFaux.setResponses([
+			fauxAssistantMessage({ type: "thinking", thinking: "reasoning only" }, { stopReason: "length" }),
+			fauxAssistantMessage("summary after continuation"),
+		]);
+		expect(await generateSummary(messages, continuedModel, 2000, "test-key")).toMatchObject({
+			ok: true,
+			value: "summary after continuation",
 		});
 
 		const { faux: emptyFaux, model: emptyModel } = createFauxModel(false);
@@ -672,7 +684,7 @@ describe("harness compaction", () => {
 		});
 	});
 
-	it("clamps compaction summary maxTokens to the model output cap", async () => {
+	it("uses the model output cap for input budgeting without sending an output-token override", async () => {
 		const messages: AgentMessage[] = [createUserMessage("Summarize this.")];
 		const seenOptions: Array<Record<string, unknown> | undefined> = [];
 		const { faux, model } = createFauxModel(false, 128000);
@@ -698,7 +710,7 @@ describe("harness compaction", () => {
 
 		getOrThrow(await compact(preparation, model, "test-key"));
 
-		expect(seenOptions.map((options) => options?.maxTokens)).toEqual([128000, 128000]);
+		for (const options of seenOptions) expect(options).not.toHaveProperty("maxTokens");
 	});
 
 	it("returns compaction error results without throwing", async () => {

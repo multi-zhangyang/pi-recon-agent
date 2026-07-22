@@ -13,7 +13,6 @@ import {
 	truncateSummaryToTokenBudget,
 } from "@pi-recon/repi-agent-core";
 import type { AssistantMessage, Model, ProviderEnv, ProviderHeaders, SimpleStreamOptions } from "@pi-recon/repi-ai";
-import { completeSimple } from "@pi-recon/repi-ai";
 import {
 	convertToLlm,
 	createBranchSummaryMessage,
@@ -21,7 +20,7 @@ import {
 	createCustomMessage,
 } from "../messages.ts";
 import type { ReadonlySessionManager, SessionEntry } from "../session-manager.ts";
-import { estimateTokens } from "./compaction.ts";
+import { completeSummarization, estimateTokens } from "./compaction.ts";
 import {
 	computeFileLists,
 	createFileOps,
@@ -365,7 +364,7 @@ export async function generateBranchSummary(
 	// request behavior (timeouts, retries, attribution headers) stays consistent
 	// without running through agent state/events.
 	const context = { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages };
-	const requestOptions: SimpleStreamOptions = { apiKey, headers, env, signal, maxTokens: 2048 };
+	const requestOptions: SimpleStreamOptions = { apiKey, headers, env, signal };
 	// `stream.result()` resolves with an error AssistantMessage on a provider
 	// "error" event (handled by the `stopReason === "error"` check below) but
 	// REJECTS when the underlying EventStream ends without a terminal done/error
@@ -374,9 +373,7 @@ export async function generateBranchSummary(
 	// possible unhandledRejection. (opt #132)
 	let response: AssistantMessage;
 	try {
-		response = streamFn
-			? await (await streamFn(model, context, requestOptions)).result()
-			: await completeSimple(model, context, requestOptions);
+		response = await completeSummarization(model, context, requestOptions, streamFn);
 	} catch (error) {
 		return { error: error instanceof Error ? error.message : String(error) };
 	}

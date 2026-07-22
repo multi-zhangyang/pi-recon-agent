@@ -466,6 +466,8 @@ describe("REPI runtime adapter pure contracts", () => {
 			isToolPresent: (tool) => tool === "python3" || tool === "gdb",
 		});
 		const adapter = report.adapters.find((row) => row.adapterId === "pwntools-local-verifier-adapter")!;
+		expect(adapter.tool).toBe("pwn");
+		expect(adapter.commandTemplate).toContain("from pwn import ELF, context, cyclic, process");
 		expect(materializeRuntimeAdapterCommand(adapter.commandTemplate, "/tmp/vuln")).not.toMatch(
 			/manual-confirm|replay diff pending|fallback=portable/i,
 		);
@@ -599,7 +601,7 @@ describe("REPI runtime adapter pure contracts", () => {
 		const pwnAdapter = pwnReport.adapters.find((row) => row.adapterId === "pwntools-local-verifier-adapter")!;
 		const pwnOutput = execFileSync(
 			"bash",
-			["-lc", materializeRuntimeAdapterCommand(pwnAdapter.commandTemplate, pwnTarget)],
+			["-lc", materializeRuntimeAdapterCommand(pwnAdapter.fallbackCommandTemplate, pwnTarget)],
 			{
 				encoding: "utf8",
 				env: { ...process.env, REPI_ADAPTER_TARGET: pwnTarget, REPI_EXPLOIT_VERIFY_RUNS: "2" },

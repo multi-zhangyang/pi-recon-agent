@@ -97,7 +97,27 @@ describe("opt #213: reasoning-only assistant turn preserved on replay", () => {
 
 		const assistant = messages.find((m) => m.role === "assistant");
 		expect(assistant).toBeDefined();
+		expect((assistant as { content?: unknown }).content).toBe(
+			"[Assistant reasoning ended before a final response was produced.]",
+		);
 		expect((assistant as { reasoning_content?: string }).reasoning_content).toBe("internal reasoning step");
+	});
+
+	it("keeps generic reasoning-field replay valid when no final content exists", () => {
+		const messages = convertMessages(
+			buildModel(),
+			buildContext(
+				buildAssistant([{ type: "thinking", thinking: "internal reasoning step", thinkingSignature: "reasoning" }]),
+			),
+			compat,
+		);
+
+		const assistant = messages.find((m) => m.role === "assistant");
+		expect(assistant).toMatchObject({
+			role: "assistant",
+			content: "[Assistant reasoning ended before a final response was produced.]",
+			reasoning: "internal reasoning step",
+		});
 	});
 
 	it("still drops a genuinely-empty assistant turn (no text, no reasoning, no tool_calls)", () => {
