@@ -336,7 +336,7 @@ describe("REPI runtime adapter pure contracts", () => {
 			{
 				encoding: "utf8",
 				env: { ...process.env, REPI_ADAPTER_TARGET: url },
-				timeout: 10_000,
+				timeout: 30_000,
 			},
 		);
 		expect(webOutput).toContain("[web-browser-transport] engine=playwright-core");

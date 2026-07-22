@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import { createReconExtensionFactory } from "../src/core/recon-profile.ts";
 import { readCurrentMission } from "../src/core/repi/mission.ts";
+import { toolIndexPath, writePrivateTextFile } from "../src/core/repi/storage.ts";
 
 const ENV_AGENT_DIR = "REPI_CODING_AGENT_DIR";
 const ENV_BRANCH_ID = "REPI_BRANCH_ID";
@@ -141,6 +142,18 @@ describe("REPI kernel profile runtime adapter and evidence graph flows", () => {
 		expect(rootfsRun.content[0]?.text).toContain("adapter: firmware-rootfs-service-map-adapter");
 		expect(rootfsRun.content[0]?.text).toContain("parser-rootfs-passwd");
 		expect(rootfsRun.content[0]?.text).toContain("rootfs service map");
+
+		writePrivateTextFile(
+			toolIndexPath(),
+			[
+				"| Tool | Present | Path | Version |",
+				"|---|---:|---|---|",
+				"| node | yes | /usr/bin/node | test |",
+				"| curl | yes | /usr/bin/curl | test |",
+				"| playwright | no |  |  |",
+				"",
+			].join("\n"),
+		);
 
 		const webRun = await runtimeAdapterTool.execute("tool-call-id", {
 			action: "run",

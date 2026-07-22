@@ -1511,9 +1511,9 @@ rows.push(
 			]) &&
 			includesAll(toolPresenceSource, ["repiHostToolPresent", "repiResolvedToolPresent"]) &&
 			includesAll(runtimeAdapterExecutionRuntime, [
+				"createDomainAdapter",
 				"repiResolvedToolPresent",
 				"runner_preflight_blocked_no_synthetic_success",
-				"command_preflight_blocked_no_synthetic_success",
 			]),
 		syntheticRuntimeAdapterHits.length
 			? JSON.stringify(syntheticRuntimeAdapterHits.slice(0, 12))

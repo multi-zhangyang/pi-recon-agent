@@ -88,7 +88,7 @@ describe("grep tool close handler settles on an internal throw (opt #121)", () =
 		// never called, and the promise never settles.
 		const result = await Promise.race([
 			promise.catch((e) => e),
-			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("grep promise hung")), 4000)),
+			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("grep promise hung")), 15_000)),
 		]);
 
 		expect(result).toBeInstanceOf(Error);

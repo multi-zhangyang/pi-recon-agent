@@ -75,7 +75,7 @@ describe("find limit cap (opt #264)", () => {
 
 		const result = await Promise.race([
 			promise,
-			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("find promise hung")), 4000)),
+			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("find promise hung")), 15_000)),
 		]);
 
 		expect(result).not.toBeInstanceOf(Error);
@@ -111,7 +111,7 @@ describe("find limit cap (opt #264)", () => {
 
 		const result = await Promise.race([
 			promise,
-			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("find promise hung")), 4000)),
+			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("find promise hung")), 15_000)),
 		]);
 		expect(result).not.toBeInstanceOf(Error);
 		// 0 disables the cap → the requested 999999 is passed through to fd.

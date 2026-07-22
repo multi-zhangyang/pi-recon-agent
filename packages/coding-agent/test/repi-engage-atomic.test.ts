@@ -4858,7 +4858,11 @@ jobs:
 		expect(report.target.lane).toBe("native-pwn");
 		expect(report.target.representativePath).toBe(binary);
 		expect(report.commands.map((row) => row.id)).toContain("representative-file-stat");
-		expect(report.nextQueue.some((command) => command.includes("vuln.elf"))).toBe(true);
+		expect(
+			report.nextQueue.some(
+				(command) => command.includes("Continue native/pwn target") && command.includes("vuln.elf"),
+			),
+		).toBe(true);
 	});
 
 	it("finds specialist artifacts in nested challenge release folders", () => {
@@ -4889,7 +4893,11 @@ jobs:
 		expect(report.target.lane).toBe("native-pwn");
 		expect(report.target.representativePath).toBe(binary);
 		expect(report.commands.map((row) => row.id)).toContain("representative-file-stat");
-		expect(report.nextQueue.some((command) => command.includes("chall.elf"))).toBe(true);
+		expect(
+			report.nextQueue.some(
+				(command) => command.includes("Continue native/pwn target") && command.includes("chall.elf"),
+			),
+		).toBe(true);
 	});
 
 	it("summarizes ELF hardening without depending on checksec", () => {

@@ -29,19 +29,19 @@ jobs:
             forks: false
           - name: coding-agent-1
             workspace: packages/coding-agent
-            args: "--project=threads --shard=1/4"
+            args: "--project=threads --shard=1/4 --maxWorkers=4"
             forks: true
           - name: coding-agent-2
             workspace: packages/coding-agent
-            args: "--project=threads --shard=2/4"
+            args: "--project=threads --shard=2/4 --maxWorkers=4"
             forks: false
           - name: coding-agent-3
             workspace: packages/coding-agent
-            args: "--project=threads --shard=3/4"
+            args: "--project=threads --shard=3/4 --maxWorkers=4"
             forks: false
           - name: coding-agent-4
             workspace: packages/coding-agent
-            args: "--project=threads --shard=4/4"
+            args: "--project=threads --shard=4/4 --maxWorkers=4"
             forks: false
     steps:
       - name: Checkout

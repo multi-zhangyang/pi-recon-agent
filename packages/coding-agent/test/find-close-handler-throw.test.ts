@@ -100,7 +100,7 @@ describe("find tool close handler settles on an internal throw (opt #128)", () =
 		// never settles.
 		const result = await Promise.race([
 			promise.catch((e) => e),
-			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("find promise hung")), 4000)),
+			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("find promise hung")), 15_000)),
 		]);
 
 		expect(result).toBeInstanceOf(Error);

@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI } from "../extensions/types.ts";
 import { atomicWriteFileSync } from "../tools/atomic-write.ts";
-import { commandKnownTools, parseToolIndex } from "./bootstrap-runtime.ts";
+import { parseToolIndex } from "./bootstrap-runtime.ts";
 import { createDomainAdapter } from "./domain-adapter.ts";
 import type { EvidenceRecord } from "./evidence.ts";
 import { readCurrentMission } from "./mission.ts";
@@ -12,7 +12,6 @@ import {
 	detectRuntimeAdapterIds,
 	formatRuntimeAdapterExecutionArtifact,
 	formatRuntimeAdapterExecutionGate,
-	materializeRuntimeAdapterCommand,
 	type RuntimeAdapterExecutionArtifactV1,
 	type RuntimeAdapterExecutionCheckV1,
 } from "./runtime-adapter.ts";
@@ -88,23 +87,6 @@ export function createRuntimeAdapterExecutionRuntime(dependencies: RuntimeAdapte
 			return `${formatRuntimeAdapterExecutionGate(report)}\n\nblocked: runner_unavailable adapter=${adapter.adapterId} native=${adapter.tool} fallback=${adapter.fallbackTool}\nevidence: runner_preflight_blocked_no_synthetic_success\nnext: re_bootstrap plan ${missingTools.join(" ")}`;
 		}
 		const domainAdapter = createDomainAdapter(adapter);
-		const selectedTemplate = selectedRunner === "native" ? adapter.commandTemplate : adapter.fallbackCommandTemplate;
-		const command = materializeRuntimeAdapterCommand(selectedTemplate, options.target);
-		const index = parseToolIndex();
-		const missingCommandTools = commandKnownTools(command).filter(
-			(tool) => repiResolvedToolPresent(index, tool) === false,
-		);
-		if (missingCommandTools.length > 0) {
-			appendEvidence({
-				kind: "runtime",
-				title: `runtime-adapter preflight ${adapter.adapterId}`,
-				fact: `RuntimeAdapterExecutionCheckV1 adapter=${adapter.adapterId} blocked=command_tools_missing tools=${missingCommandTools.join(",")}`,
-				command: `re_runtime_adapter run ${adapter.adapterId} ${options.target}`,
-				verify: `re_bootstrap plan ${missingCommandTools.join(" ")}`,
-				confidence: "runtime:adapter-execution command_preflight_blocked_no_synthetic_success",
-			});
-			return `${formatRuntimeAdapterExecutionGate(report)}\n\nblocked: command_tools_missing adapter=${adapter.adapterId} tools=${missingCommandTools.join(",")}\nevidence: command_preflight_blocked_no_synthetic_success\ncommand: ${command}\nnext: re_bootstrap plan ${missingCommandTools.join(" ")}`;
-		}
 		const timeout = Math.max(
 			5000,
 			Math.min(options.timeoutMs ?? Number(process.env.REPI_RUNTIME_ADAPTER_TIMEOUT_MS ?? 60000), 600000),
