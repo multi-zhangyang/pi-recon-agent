@@ -100,9 +100,14 @@ export type RuntimeAdapterExecutionArtifactV1 = {
 		matches: string[];
 	}>;
 	parserSignalSummary?: RuntimeAdapterParserSignalSummaryV1;
+	evidenceLines?: string[];
 	artifactKinds: string[];
 	ingestTargets: string[];
 	proofExitSignals: string[];
+	replay?: {
+		command: string;
+		timeoutMs: number;
+	};
 };
 
 export type RuntimeAdapterTargetSignalV1 = {
@@ -337,6 +342,8 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 			"adapter-web-cdp-network-runner: node - <<'NODE'",
 			"const crypto = require('node:crypto');",
 			"const fs = require('node:fs');",
+			"const os = require('node:os');",
+			"const path = require('node:path');",
 			"const target = process.env.REPI_ADAPTER_TARGET || '';",
 			"const cdp = process.env.REPI_BROWSER_CDP_URL || '';",
 			"function head(value, max = 8000) { return String(value ?? '').replace(/\\s+/g, ' ').slice(0, max); }",
@@ -350,8 +357,9 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 			"  if (!key) return;",
 			"  const row = key + ': ' + String(value ?? '');",
 			"  if (/set-cookie|cookie|authorization|csrf|nonce|signature|timestamp|etag|location|x-[a-z0-9-]*sign/i.test(row)) {",
-			"    console.log('[http-header-signal] ' + key + ': ' + head(value, 500));",
-			"    console.log('[web-header-signal] source=' + source + ' direction=' + direction + ' key=' + String(key).toLowerCase() + ' value_sha256=' + sha(value) + ' value=' + head(value, 400));",
+			"    const sensitive = /cookie|authorization/i.test(String(key));",
+			"    console.log('[http-header-signal] key=' + String(key).toLowerCase() + ' value_sha256=' + sha(value));",
+			"    console.log('[web-header-signal] source=' + source + ' direction=' + direction + ' key=' + String(key).toLowerCase() + ' value_sha256=' + sha(value) + ' value=' + (sensitive ? '<redacted>' : head(value, 400)));",
 			"  }",
 			"}",
 			"function emitCookieSignal(source, direction, name, value) {",
@@ -402,6 +410,55 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 			"    emitSignedFields('har', signedSurface);",
 			"  }",
 			"}",
+			"async function emitPlaywright() {",
+			"  let playwright;",
+			"  try { playwright = require('playwright-core'); } catch (error) { console.log('[web-browser-fallback] reason=playwright-core-unavailable'); return false; }",
+			"  const executableCandidates = [process.env.REPI_BROWSER_EXECUTABLE, '/snap/bin/chromium', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome'].filter(Boolean);",
+			"  const executablePath = executableCandidates.find(candidate => fs.existsSync(candidate));",
+			"  if (!executablePath) { console.log('[web-browser-fallback] reason=chromium-unavailable'); return false; }",
+			"  const runId = String(process.env.REPI_ADAPTER_RUN_ID || crypto.randomUUID()).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);",
+			"  const profileDir = process.env.REPI_BROWSER_PROFILE_DIR || path.join(os.tmpdir(), 'repi-browser-profile-' + sha(target) + '-' + runId);",
+			"  const artifactDir = process.env.REPI_BROWSER_ARTIFACT_DIR || path.join(os.tmpdir(), 'repi-browser-artifacts-' + sha(target) + '-' + runId);",
+			"  const harPath = path.join(artifactDir, 'network.har');",
+			"  const storagePath = path.join(artifactDir, 'storage-state.json');",
+			"  fs.mkdirSync(profileDir, { recursive: true, mode: 0o700 });",
+			"  fs.mkdirSync(artifactDir, { recursive: true, mode: 0o700 });",
+			"  let context;",
+			"  try {",
+			"    context = await playwright.chromium.launchPersistentContext(profileDir, { executablePath, headless: true, ignoreHTTPSErrors: true, args: ['--no-sandbox'], recordHar: { path: harPath, mode: 'full', content: 'embed' } });",
+			"    console.log('[web-browser-transport] engine=playwright-core browser=chromium persistent_context=true executable=' + executablePath);",
+			"    const page = context.pages()[0] || await context.newPage();",
+			"    let requestIndex = 0;",
+			"    page.on('request', request => {",
+			"      requestIndex += 1;",
+			"      const url = request.url();",
+			"      console.log('[request-order] index=' + requestIndex + ' route=' + head(url, 700));",
+			"      emitRouteMap('playwright-request', requestIndex, request.method(), '<pending>', url, 'resource_type=' + request.resourceType());",
+			"      if (/\\/api\\/|graphql|websocket|wss?:\\/\\//i.test(url)) console.log('[route-candidate] ' + head(url, 700));",
+			"      emitSignedFields('playwright-request', url + ' ' + (request.postData() || '') + ' ' + JSON.stringify(request.headers()));",
+			"    });",
+			"    page.on('response', response => {",
+			"      const url = response.url();",
+			"      const headers = response.headers();",
+			"      console.log('[http-response] status=' + response.status() + ' method=' + response.request().method() + ' url=' + head(url, 700) + ' content_type=' + (headers['content-type'] || '<none>'));",
+			"      emitRouteMap('playwright-response', requestIndex, response.request().method(), response.status(), url, 'content_type=' + (headers['content-type'] || '<none>'));",
+			"      for (const [key, value] of Object.entries(headers)) emitHeaderSignal('playwright', 'response', key, value);",
+			"    });",
+			"    await page.goto(target, { waitUntil: 'domcontentloaded', timeout: Math.max(5000, Number(process.env.REPI_RUNTIME_ADAPTER_TIMEOUT_MS || 45000)) });",
+			"    await page.waitForTimeout(1500);",
+			"    console.log('[web-page-title] title=' + head(await page.title(), 500) + ' url=' + head(page.url(), 700));",
+			"    await context.storageState({ path: storagePath });",
+			"    await context.close();",
+			"    context = undefined;",
+			"    console.log('[web-browser-artifact] har=' + harPath + ' storage=' + storagePath + ' profile=' + profileDir);",
+			"    return true;",
+			"  } catch (error) {",
+			"    console.log('[web-browser-fallback] reason=' + head(error && error.message ? error.message : error, 500));",
+			"    if (context) await context.close().catch(() => {});",
+			"    console.log('[web-browser-artifact] har=' + (fs.existsSync(harPath) ? harPath : '<missing>') + ' storage=' + (fs.existsSync(storagePath) ? storagePath : '<missing>') + ' profile=' + profileDir);",
+			"    return false;",
+			"  }",
+			"}",
 			"(async () => {",
 			"  if (!target) { console.log('[adapter-error] missing target'); process.exitCode = 2; return; }",
 			"  if (fs.existsSync(target) && fs.statSync(target).isFile()) { emitHar(target); return; }",
@@ -419,13 +476,17 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 			"      console.log('[cdp-endpoint-error] ' + head(error && error.message ? error.message : error, 400));",
 			"    }",
 			"  }",
+			"  if (await emitPlaywright()) return;",
+			"  console.log('[web-browser-transport] engine=fetch-fallback persistent_context=false');",
 			"  const response = await fetch(target, { redirect: 'manual', headers: { 'User-Agent': 'REPI-runtime-adapter' } });",
 			"  const body = await response.text();",
 			"  console.log('[http-response] status=' + response.status + ' url=' + response.url + ' content_type=' + (response.headers.get('content-type') || '<none>') + ' bytes=' + body.length + ' sha256=' + sha(body));",
 			"  emitRouteMap('fetch', 1, 'GET', response.status, response.url, 'content_type=' + (response.headers.get('content-type') || '<none>'));",
+			"  const title = /<title[^>]*>([^<]*)<\\/title>/i.exec(body)?.[1] || '';",
+			"  console.log('[web-page-title] title=' + head(title, 500) + ' url=' + head(response.url, 700));",
 			"  for (const [key, value] of response.headers) { emitHeaderSignal('fetch', 'response', key, value); if (/^set-cookie$/i.test(key)) emitSetCookieHeader('fetch', 'response', value); }",
-			"  console.log('[served-asset-head] ' + head(body));",
-			"  const routeMatches = [...body.matchAll(/(?:fetch|XMLHttpRequest|WebSocket|graphql|\\/api\\/|wss?:\\/\\/)[^\\\"'<>\\s)]{0,240}/gi)].map((match) => match[0]);",
+			"  console.log('[served-asset] bytes=' + body.length + ' sha256=' + sha(body));",
+			"  const routeMatches = [...body.matchAll(/(?:(?:https?:)?\\/\\/[^\\\"'<>\\s)]+|\\/(?:api|x|graphql)\\/[^\\\"'<>\\s)]*)/gi)].map((match) => match[0]);",
 			"  const seenRoutes = new Set();",
 			"  let routeIndex = 0;",
 			"  for (const route of routeMatches) {",
@@ -438,7 +499,6 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 			"    emitRouteMap('served-asset', routeIndex, '<unknown>', '<none>', compactRoute);",
 			"    if (routeIndex >= 40) break;",
 			"  }",
-			"  emitSignedFields('served-asset', body);",
 			"})().catch((error) => { console.log('[adapter-error] ' + head(error && error.stack ? error.stack : error)); process.exitCode = 1; });",
 			"NODE",
 		].join("\n"),
@@ -446,7 +506,7 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 		parserRules: [
 			{
 				id: "parser-cdp-network-event",
-				regex: "(Network\\.|requestWillBeSent|responseReceived|\\[http-response\\]|\\[web-cdp-version\\]|\\[cdp-target-list\\]|HTTP/[0-9.]+|status=[0-9]{3})",
+				regex: "(Network\\.|requestWillBeSent|responseReceived|\\[http-response\\]|\\[web-cdp-version\\]|\\[cdp-target-list\\]|\\[web-browser-transport\\]|\\[web-browser-fallback\\]|\\[web-browser-artifact\\]|\\[web-page-title\\]|HTTP/[0-9.]+|status=[0-9]{3})",
 				evidenceRank: "network",
 				proofExitSignal: "HTTP/CDP response capture",
 			},
@@ -464,7 +524,7 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 			},
 			{
 				id: "parser-signed-replay-diff",
-				regex: "(\\[web-signed-field\\]|\\[web-header-signal\\]|\\[web-cookie-signal\\]|signature|\\bsign\\b|nonce|timestamp|x-[a-z0-9-]*sign|authorization|csrf)",
+				regex: "(\\[web-signed-field\\])",
 				evidenceRank: "network",
 				proofExitSignal: "signed request replay",
 			},
@@ -480,7 +540,13 @@ export const RUNTIME_ADAPTER_EXECUTION_MATRIX: RuntimeAdapterExecutionSpec[] = [
 			"runtime-adapter-transcript",
 		],
 		ingestTargets: ["evidence-ledger"],
-		envRefs: ["REPI_BROWSER_CDP_URL", "REPI_BROWSER_PROFILE_DIR", "REPI_RUNTIME_ADAPTER_TIMEOUT_MS"],
+		envRefs: [
+			"REPI_BROWSER_CDP_URL",
+			"REPI_BROWSER_EXECUTABLE",
+			"REPI_BROWSER_PROFILE_DIR",
+			"REPI_BROWSER_ARTIFACT_DIR",
+			"REPI_RUNTIME_ADAPTER_TIMEOUT_MS",
+		],
 		proofExitSignals: [
 			"HTTP/CDP response capture",
 			"XHR/WS route extraction",
@@ -1685,6 +1751,36 @@ export function parseRuntimeAdapterSignals(
 	});
 }
 
+const NOISY_RUNTIME_EVIDENCE_LINE = /^\[(?:served-asset-head|tool-output-head|browser-body-head)\]/i;
+
+/** Extract bounded, replay-oriented evidence without returning raw transcripts to the model. */
+export function parseRuntimeAdapterEvidenceLines(
+	adapter: RuntimeAdapterExecutionRowV1,
+	combinedOutput: string,
+	limit = 24,
+): string[] {
+	const rules = adapter.parserRules.flatMap((rule) => {
+		try {
+			return [new RegExp(rule.regex, "i")];
+		} catch {
+			return [];
+		}
+	});
+	const seen = new Set<string>();
+	const lines: string[] = [];
+	for (const rawLine of combinedOutput.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line.startsWith("[") || NOISY_RUNTIME_EVIDENCE_LINE.test(line)) continue;
+		if (!rules.some((rule) => rule.test(line))) continue;
+		const bounded = truncateMiddle(line, 600);
+		if (!bounded || seen.has(bounded)) continue;
+		seen.add(bounded);
+		lines.push(bounded);
+		if (lines.length >= Math.max(1, Math.min(limit, 100))) break;
+	}
+	return lines;
+}
+
 export function summarizeRuntimeAdapterSignals(
 	adapter: RuntimeAdapterExecutionRowV1,
 	parserSignals: RuntimeAdapterExecutionArtifactV1["parserSignals"],
@@ -1721,7 +1817,8 @@ export function formatRuntimeAdapterExecutionArtifact(
 		`exit: ${artifact.exitCode} killed=${artifact.killed}`,
 		`stdout_sha256: ${artifact.stdoutSha256}`,
 		`stderr_sha256: ${artifact.stderrSha256}`,
-		`command: ${artifact.command}`,
+		"evidence:",
+		...(artifact.evidenceLines?.length ? artifact.evidenceLines.map((line) => `- ${line}`) : ["- none"]),
 		"parser_signals:",
 		...artifact.parserSignals.map(
 			(signal) =>
@@ -1729,6 +1826,9 @@ export function formatRuntimeAdapterExecutionArtifact(
 		),
 		artifact.parserSignalSummary
 			? `parser_signal_summary: matched=${artifact.parserSignalSummary.matchedRules}/${artifact.parserSignalSummary.totalRules} matches=${artifact.parserSignalSummary.matchCount} ranks=${artifact.parserSignalSummary.evidenceRanks.join(",") || "<none>"} missing_proof=${artifact.parserSignalSummary.missingProofExitSignals.join("; ") || "<none>"}`
+			: undefined,
+		artifact.replay
+			? `replay: timeout_ms=${artifact.replay.timeoutMs} command=${artifact.replay.command}`
 			: undefined,
 		`artifact_kinds: ${artifact.artifactKinds.join(", ")}`,
 		`ingest_targets: ${artifact.ingestTargets.join(", ")}`,

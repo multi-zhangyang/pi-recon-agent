@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "../extensions/types.ts";
 import { atomicWriteFileSync } from "../tools/atomic-write.ts";
 import { commandKnownTools, parseToolIndex } from "./bootstrap-runtime.ts";
+import { createDomainAdapter } from "./domain-adapter.ts";
 import type { EvidenceRecord } from "./evidence.ts";
 import { readCurrentMission } from "./mission.ts";
 import { ensureReconStorage } from "./resources.ts";
@@ -11,12 +12,9 @@ import {
 	detectRuntimeAdapterIds,
 	formatRuntimeAdapterExecutionArtifact,
 	formatRuntimeAdapterExecutionGate,
-	inspectRuntimeAdapterTarget,
 	materializeRuntimeAdapterCommand,
-	parseRuntimeAdapterSignals,
 	type RuntimeAdapterExecutionArtifactV1,
 	type RuntimeAdapterExecutionCheckV1,
-	summarizeRuntimeAdapterSignals,
 } from "./runtime-adapter.ts";
 import { evidenceToolchainDir, toolIndexPath, writePrivateTextFile } from "./storage.ts";
 import { shellQuote } from "./target.ts";
@@ -89,6 +87,7 @@ export function createRuntimeAdapterExecutionRuntime(dependencies: RuntimeAdapte
 			});
 			return `${formatRuntimeAdapterExecutionGate(report)}\n\nblocked: runner_unavailable adapter=${adapter.adapterId} native=${adapter.tool} fallback=${adapter.fallbackTool}\nevidence: runner_preflight_blocked_no_synthetic_success\nnext: re_bootstrap plan ${missingTools.join(" ")}`;
 		}
+		const domainAdapter = createDomainAdapter(adapter);
 		const selectedTemplate = selectedRunner === "native" ? adapter.commandTemplate : adapter.fallbackCommandTemplate;
 		const command = materializeRuntimeAdapterCommand(selectedTemplate, options.target);
 		const index = parseToolIndex();
@@ -110,14 +109,20 @@ export function createRuntimeAdapterExecutionRuntime(dependencies: RuntimeAdapte
 			5000,
 			Math.min(options.timeoutMs ?? Number(process.env.REPI_RUNTIME_ADAPTER_TIMEOUT_MS ?? 60000), 600000),
 		);
-		const startedAt = new Date().toISOString();
-		const result = await pi.exec(
-			"bash",
-			["-lc", `set +e\nexport REPI_ADAPTER_TARGET=${shellQuote(options.target)}\n${command}`],
-			{ timeout },
+		const execution = await domainAdapter.execute(
+			{ target: options.target, timeoutMs: timeout },
+			{
+				run: async (adapterCommand, timeoutMs) =>
+					pi.exec(
+						"bash",
+						["-lc", `set +e\nexport REPI_ADAPTER_TARGET=${shellQuote(options.target!)}\n${adapterCommand}`],
+						{ timeout: timeoutMs },
+					),
+			},
 		);
-		const finishedAt = new Date().toISOString();
-		const parserSignals = parseRuntimeAdapterSignals(adapter, `${result.stdout}\n${result.stderr}`);
+		const verification = domainAdapter.verify(execution);
+		const replay = domainAdapter.replay(execution);
+		const result = execution.result;
 		const artifact: RuntimeAdapterExecutionArtifactV1 = {
 			kind: "RuntimeAdapterExecutionArtifactV1",
 			schemaVersion: 1,
@@ -126,24 +131,26 @@ export function createRuntimeAdapterExecutionRuntime(dependencies: RuntimeAdapte
 			domainId: adapter.domainId,
 			bridgeId: adapter.bridgeId,
 			target: options.target,
-			targetProfile: inspectRuntimeAdapterTarget(options.target),
-			startedAt,
-			finishedAt,
-			selectedRunner,
-			command,
+			targetProfile: execution.targetProfile,
+			startedAt: execution.startedAt,
+			finishedAt: execution.finishedAt,
+			selectedRunner: execution.selectedRunner,
 			exitCode: result.code,
 			killed: result.killed,
 			stdoutSha256: sha256Text(result.stdout),
 			stderrSha256: sha256Text(result.stderr),
-			parserSignals,
-			parserSignalSummary: summarizeRuntimeAdapterSignals(adapter, parserSignals),
+			parserSignals: execution.parserSignals,
+			parserSignalSummary: verification,
+			evidenceLines: execution.evidenceLines,
 			artifactKinds: adapter.artifactKinds,
 			ingestTargets: adapter.ingestTargets,
 			proofExitSignals: adapter.proofExitSignals,
+			replay: { command: replay.command, timeoutMs: replay.timeoutMs },
+			command: execution.command,
 		};
 		const dir = join(evidenceToolchainDir(), "runtime-adapters", adapter.adapterId);
 		mkdirSync(dir, { recursive: true });
-		const path = join(dir, `${startedAt.replace(/[:.]/g, "-")}.json`);
+		const path = join(dir, `${execution.startedAt.replace(/[:.]/g, "-")}.json`);
 		atomicWriteFileSync(
 			path,
 			`${JSON.stringify({ ...artifact, stdoutHead: truncateMiddle(result.stdout, 8000), stderrHead: truncateMiddle(result.stderr, 4000) }, null, 2)}\n`,

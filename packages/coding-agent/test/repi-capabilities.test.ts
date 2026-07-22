@@ -85,7 +85,7 @@ describe("REPI progressive capability activation", () => {
 		expect(active).toContain("third_party_tool");
 		expect(active).not.toContain("edit");
 		expect(active).not.toContain("write");
-		expect(active).toContain("re_route");
+		expect(active).not.toContain("re_route");
 		expect(active).not.toContain("re_techniques");
 		expect(active).not.toContain("re_subagent");
 		expect(active).not.toContain("re_swarm");
@@ -175,6 +175,12 @@ describe("REPI progressive capability activation", () => {
 			"Crypto / stego",
 		);
 		expect(routeRepiTask("trace crypto.subtle signing in this JavaScript bundle").domain).toBe("Frontend JS reverse");
+		expect(
+			routeRepiTask(
+				"Run a generic Web black-box review of https://example.test/ with browser evidence and principal boundaries",
+			).domain,
+		).toBe("Web / API pentest");
+		expect(routeRepiTask("inspect the principal boundary in an iOS IPA").domain).toBe("Mobile / iOS");
 		expect(repiCapabilityProfilesForRoute(routeRepiTask("audit https://example.test/api auth"))).toEqual(["web"]);
 		expect(repiCapabilityProfilesForRoute(routeRepiTask("reverse ./target.elf and build a ROP chain"))).toEqual([
 			"native",
@@ -209,26 +215,18 @@ describe("REPI progressive capability activation", () => {
 			profiles: ["web", "proof"],
 		});
 
-		expect(selected).toEqual([
-			"read",
-			"re_live_browser",
-			"third_party_tool",
-			"re_capabilities",
-			"re_route",
-			"re_verifier",
-			"re_web_authz_state",
-		]);
+		expect(selected).toEqual(["read", "third_party_tool", "re_capabilities", "re_web_authz_state", "re_verifier"]);
 	});
 
 	it("gives every routed professional profile an execution and verification contract", () => {
 		const available = [...REPI_TOOL_NAMES, "read", "bash", "re_capabilities", "goal_complete"];
 		const routeCases = [
-			["audit https://example.test/api auth", "re_web_authz_state"],
-			["reverse ./target.elf and trace the comparison", "re_native_runtime"],
-			["analyze app.apk with Frida", "re_mobile_runtime"],
-			["recover an RSA key from nonce reuse", "re_toolchain_domain"],
-			["analyze capture.pcap with tshark", "re_runtime_bridge"],
-			["audit prompt injection across an LLM tool boundary", "re_reason"],
+			["audit https://example.test/api auth", "re_runtime_adapter"],
+			["reverse ./target.elf and trace the comparison", "re_runtime_adapter"],
+			["analyze app.apk with Frida", "re_runtime_adapter"],
+			["recover an RSA key from nonce reuse", "re_runtime_adapter"],
+			["analyze capture.pcap with tshark", "re_runtime_adapter"],
+			["audit prompt injection across an LLM tool boundary", "re_runtime_adapter"],
 		] as const;
 
 		for (const [prompt, domainExecutor] of routeCases) {
@@ -239,7 +237,9 @@ describe("REPI progressive capability activation", () => {
 				profiles,
 			});
 			expect(selected, prompt).toEqual(expect.arrayContaining([...REPI_ROUTE_CONTRACT_TOOL_NAMES, domainExecutor]));
-			expect(selected, prompt).toContain("re_route");
+			expect(selected, prompt).not.toContain("re_route");
+			expect(selected, prompt).not.toContain("re_mission");
+			expect(selected, prompt).not.toContain("re_tool_index");
 			expect(selected, prompt).not.toContain("re_swarm");
 		}
 	});
@@ -554,7 +554,7 @@ describe("REPI progressive capability activation", () => {
 		expect(providerTurns[0]).not.toContain("re_swarm");
 		expect(providerTurns[1]).toContain("re_swarm");
 		expect(providerTurns[2]).toContain("re_swarm");
-		expect(providerTurns[3]).toContain("re_native_runtime");
+		expect(providerTurns[3]).toContain("re_runtime_adapter");
 		expect(providerTurns[3]).not.toContain("re_swarm");
 		harness.cleanup();
 	});

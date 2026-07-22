@@ -33,7 +33,7 @@ async function closeTurnAfterDeliveryFailure(
 }
 
 export const DEFAULT_FINAL_TURN_PROMPT =
-	"This is the final turn in the current request budget. Do not call tools. Give the user the best complete answer now using the evidence already collected, and state any unresolved gaps briefly.";
+	"This is the final turn in the current request budget. Do not call tools. Give the user the best complete answer using only evidence already collected, state unresolved gaps briefly, and quote recorded verification/replay commands verbatim. Never invent tools, flags, endpoints, or follow-up commands.";
 
 /**
  * Start an agent loop with a new prompt message.

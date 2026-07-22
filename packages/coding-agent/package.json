@@ -55,6 +55,7 @@
 		"ignore": "7.0.5",
 		"jiti": "2.7.0",
 		"minimatch": "10.2.5",
+		"playwright-core": "1.61.1",
 		"proper-lockfile": "4.1.2",
 		"typebox": "1.1.38",
 		"undici": "8.7.0",

@@ -9,7 +9,7 @@ export type RoutePlan = {
 export const REPI_GENERIC_TASK = "general REPI investigation";
 
 export const REPI_TASK_PATTERNS = [
-	/apk|android|ios|ipa|frida|objection|jadx|apktool|smali/i,
+	/\b(?:apk|android|ios|ipa|frida|objection|jadx|apktool|smali)\b|\.(?:apk|ipa)\b/i,
 	/ida|radare2|\br2\b|ghidra|gdb|lldb|checksec|readelf|objdump|crackme|revers(?:e|ing)(?:\s+engineering)?|binary|二进制|逆向|反编译|反汇编|elf|pe\b|dll|so\b|wasm|vmprotect|upx/i,
 	/\bctf\b|\bpwn\b|\brop\b|ret2libc|\bheap\b|tcache|fastbin|format[-_ ]?string|fmtstr|srop|sigreturn|ret2dlresolve|dlresolve|one_gadget|seccomp|seccomp[-_ ]?bpf|syscall filter|pwntools|漏洞利用|\bexploit\b/i,
 	/js\s*逆向|签名|加密参数|风控|webpack|sourcemap|hook|xhr|fetch|websocket/i,
@@ -49,7 +49,9 @@ export function routeRepiTask(text: string): RoutePlan {
 			lower,
 		);
 	const explicitJsRuntimeSignal =
-		/\bjs\b|jsre|javascript|frontend|js\s*逆向|webpack|sourcemap|风控|crypto\.subtle|浏览器|前端/.test(lower);
+		/\b(?:js|jsre|javascript|frontend)\b|js\s*逆向|webpack|sourcemap|风控|crypto\.subtle|前端\s*(?:js|javascript)|前端.*(?:签名|加密)/.test(
+			lower,
+		);
 	const jsSpecific =
 		explicitJsRuntimeSignal ||
 		(webTargetSignal && /签名|加密参数|\bsign\b|signature|nonce|timestamp|encrypt|decrypt/.test(lower)) ||
@@ -139,7 +141,11 @@ export function routeRepiTask(text: string): RoutePlan {
 			"verify clean replay",
 		]);
 	}
-	if (/ios|ipa|objective-c|objc|swift|mach-o|mach_o|class-dump|otool|codesign|keychain|jailbreak|越狱/.test(lower)) {
+	if (
+		/\b(?:ios|ipa|objective-c|objc|swift|mach-o|mach_o|class-dump|otool|codesign|keychain|jailbreak)\b|\.ipa\b|越狱/.test(
+			lower,
+		)
+	) {
 		return plan(
 			"Mobile / iOS",
 			"reverse IPA/iOS logic, entitlement/keychain/network signing, or runtime checks",
@@ -154,7 +160,7 @@ export function routeRepiTask(text: string): RoutePlan {
 			],
 		);
 	}
-	if (/apk|android|jadx|apktool|smali|frida|objection/.test(lower)) {
+	if (/\b(?:apk|android|jadx|apktool|smali|frida|objection)\b|\.apk\b/.test(lower)) {
 		return plan(
 			"Mobile / Android",
 			"reverse app logic or bypass runtime checks",

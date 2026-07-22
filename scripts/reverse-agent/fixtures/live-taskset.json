@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "native-domain-adapter",
+      "target": "/bin/true",
+      "adapter": "pwntools-local-verifier-adapter",
+      "expectedTool": "re_runtime_adapter",
+      "expectedText": "REPI_NATIVE_TASK_OK"
+    },
+    {
+      "id": "web-domain-adapter",
+      "adapter": "web-cdp-network-adapter",
+      "expectedTool": "re_runtime_adapter",
+      "expectedText": "REPI_WEB_TASK_OK"
+    },
+    {
+      "id": "long-session-recovery",
+      "turns": 50,
+      "restartAfter": 25,
+      "minimumCompactions": 2,
+      "expectedText": "REPI_LONG_SESSION_OK"
+    }
+  ]
+}

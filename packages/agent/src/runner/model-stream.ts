@@ -2,6 +2,7 @@ import { type AssistantMessage, type Context, streamSimple } from "@pi-recon/rep
 import type { AgentContext, AgentLoopConfig, StreamFn } from "../types.ts";
 import { compactConsumedToolResults, defaultMaxConsumedToolResultChars } from "./context-projection.ts";
 import { AgentEventDeliveryError, type AgentEventSink, emitAndCollectFailure } from "./events.ts";
+import { isRetryableAgentError } from "./recovery-policy.ts";
 import { synthesizeAbortedToolCallResults } from "./tool-execution.ts";
 
 /**
@@ -34,7 +35,10 @@ export async function streamAssistantResponse(
 		typeof config.streamRetryMaxDelayMs === "number" && config.streamRetryMaxDelayMs > 0
 			? config.streamRetryMaxDelayMs
 			: 30000;
-	const isRetryable = config.isRetryableStreamError ?? defaultIsRetryableStreamError;
+	const isRetryable =
+		config.isRetryableStreamError ??
+		((message: AssistantMessage) =>
+			isRetryableAgentError(message, { contextWindow: config.model.contextWindow, allowUnknown: true }));
 
 	for (let attempt = 0; ; attempt++) {
 		// Per-attempt setup: re-resolve context + expiring API key + open a fresh stream.
@@ -253,37 +257,6 @@ export async function streamAssistantResponse(
 		}
 		return finalMessage;
 	}
-}
-
-/**
- * Conservative default retry filter: skip obvious permanent failures (auth,
- * quota/billing, model-not-found) and retry everything else, including unknown
- * errors (a pre-stream failure is usually transient). Generic string match —
- * no per-provider special-casing.
- */
-const NON_RETRYABLE_STREAM_ERROR_PATTERNS = [
-	"401",
-	"403",
-	"invalid api key",
-	"invalid_api_key",
-	"unauthorized",
-	"unauthorised",
-	"authentication",
-	"permission_denied",
-	"forbidden",
-	"usage limit",
-	"quota",
-	"billing",
-	"insufficient_quota",
-	"model not found",
-	"model_not_found",
-	"does not exist",
-];
-
-function defaultIsRetryableStreamError(message: AssistantMessage): boolean {
-	const text = (message.errorMessage ?? "").toLowerCase();
-	if (!text) return true;
-	return !NON_RETRYABLE_STREAM_ERROR_PATTERNS.some((p) => text.includes(p));
 }
 
 /**

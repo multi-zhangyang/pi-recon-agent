@@ -822,6 +822,13 @@ export interface AgentHarnessRunPolicy {
 	streamMaxRetries?: number;
 	streamRetryBaseDelayMs?: number;
 	streamRetryMaxDelayMs?: number;
+	isRetryableStreamError?: (message: import("@pi-recon/repi-ai").AssistantMessage) => boolean;
+	/** Automatically compact the active branch before a prompt crosses the configured threshold. */
+	autoCompaction?: boolean;
+	/** Overrides for the shared compaction policy. */
+	compactionSettings?: Partial<CompactionSettings>;
+	/** Optional instructions applied only to automatic compaction summaries. */
+	autoCompactionInstructions?: string;
 	maxToolResultChars?: number;
 	maxConsumedToolResultChars?: number;
 	deduplicateReadOnlyToolCalls?: boolean;

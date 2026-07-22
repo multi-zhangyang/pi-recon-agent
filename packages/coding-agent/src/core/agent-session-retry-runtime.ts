@@ -1,6 +1,5 @@
-import type { Agent, AgentMessage } from "@pi-recon/repi-agent-core";
+import { type Agent, type AgentMessage, isRetryableAgentError } from "@pi-recon/repi-agent-core";
 import type { AssistantMessage, Model } from "@pi-recon/repi-ai";
-import { isContextOverflow } from "@pi-recon/repi-ai";
 import { sleep } from "../utils/sleep.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 
@@ -14,11 +13,6 @@ export interface AgentSessionRetryHost {
 	readonly model: Model<any> | undefined;
 	emit(event: AgentSessionRetryEvent): void;
 }
-
-const NON_RETRYABLE_LIMIT =
-	/GoUsageLimitError|FreeUsageLimitError|Monthly usage limit reached|available balance|insufficient_quota|out of budget|quota exceeded|billing/i;
-const RETRYABLE_ERROR =
-	/overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|stream ended before message_stop|stream ended before a terminal response event|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i;
 
 export class AgentSessionRetryRuntime {
 	private readonly host: AgentSessionRetryHost;
@@ -81,9 +75,7 @@ export class AgentSessionRetryRuntime {
 	}
 
 	isRetryableError(message: AssistantMessage): boolean {
-		if (message.stopReason !== "error" || !message.errorMessage) return false;
-		if (isContextOverflow(message, this.host.model?.contextWindow ?? 0)) return false;
-		return !NON_RETRYABLE_LIMIT.test(message.errorMessage) && RETRYABLE_ERROR.test(message.errorMessage);
+		return isRetryableAgentError(message, { contextWindow: this.host.model?.contextWindow });
 	}
 
 	async prepareRetry(message: AssistantMessage): Promise<boolean> {

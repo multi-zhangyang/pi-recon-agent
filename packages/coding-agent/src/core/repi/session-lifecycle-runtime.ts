@@ -28,6 +28,7 @@ export type ReconStats = {
 	active: boolean;
 	selfReviewDue: boolean;
 	selfReviewNotified?: boolean;
+	toolingGapObserved: boolean;
 	lastRoute?: RoutePlan;
 	currentMissionId?: string;
 	currentMission?: MissionState;
@@ -114,6 +115,7 @@ function resetReconStats(stats: ReconStats): void {
 	stats.lastCommands = [];
 	stats.selfReviewDue = false;
 	stats.selfReviewNotified = false;
+	stats.toolingGapObserved = false;
 	stats.lastInjectedState = undefined;
 }
 
@@ -122,6 +124,67 @@ function getBashCommand(event: ToolCallEvent): string | undefined {
 	const input = event.input as { command?: unknown; cmd?: unknown };
 	const command = input.command ?? input.cmd;
 	return typeof command === "string" ? command.trim() : undefined;
+}
+
+/** Prevent a report-only heredoc from consuming another model turn. */
+function isReportOnlyBashCommand(command: string): boolean {
+	const firstLine = command.split(/\r?\n/, 1)[0]?.trim() ?? "";
+	return /^cat\s+<<-?\s*["']?[A-Za-z_][A-Za-z0-9_]*["']?\s*$/.test(firstLine) && !/[|>]/.test(firstLine);
+}
+
+function customToolAction(event: ToolCallEvent): { action?: string; target?: string; url?: string } {
+	if (
+		event.toolName === "bash" ||
+		event.toolName === "read" ||
+		event.toolName === "edit" ||
+		event.toolName === "write"
+	) {
+		return {};
+	}
+	const input = event.input as { action?: unknown; target?: unknown; url?: unknown };
+	return {
+		action: typeof input.action === "string" ? input.action.toLowerCase() : undefined,
+		target: typeof input.target === "string" ? input.target : undefined,
+		url: typeof input.url === "string" ? input.url : undefined,
+	};
+}
+
+function missionRequestsControlPlane(task: string): boolean {
+	return /tool\s*index|toolchain|capabilit(?:y|ies)\b|available\s+tools|工具索引|工具链|能力矩阵|可用工具/i.test(task);
+}
+
+function routedToolGuard(
+	event: ToolCallEvent,
+	stats: ReconStats,
+	mission: MissionState | undefined,
+): string | undefined {
+	if (!stats.active || !mission || missionRequestsControlPlane(mission.task)) return undefined;
+	const { action, target, url } = customToolAction(event);
+	const explicitTarget = Boolean((target ?? url)?.trim());
+	if (event.toolName === "re_mission" && action === "new") {
+		return "The harness already created the routed mission for this turn; continue with the domain execution tool instead of creating a second mission.";
+	}
+	if (event.toolName === "re_capabilities" && action === "status") {
+		return "The routed capability profile is already active in the current schema; do not perform a capability status preflight.";
+	}
+	if (event.toolName === "re_tool_index" && (action === "show" || action === "refresh") && !stats.toolingGapObserved) {
+		return "The execution adapter performs its own tool preflight; only inspect the tool index after a concrete missing-runner evidence gap.";
+	}
+	if (event.toolName === "re_runtime_adapter" && explicitTarget && (action === "show" || action === "plan")) {
+		return "A concrete target is present; run the selected runtime adapter directly and use its artifact for verification.";
+	}
+	if (event.toolName === "re_web_authz_state" && explicitTarget && action === "plan") {
+		return "A concrete Web target is present; run the authorization-state probe directly. The run result includes its plan and evidence contract.";
+	}
+	if (
+		event.toolName === "re_live_browser" &&
+		explicitTarget &&
+		(action === "plan" || action === "run") &&
+		!/(?:re_live_browser|cdp|persistent\s+browser|har)/i.test(mission.task)
+	) {
+		return "Use re_runtime_adapter run as the single DomainAdapter browser/network execution path; do not duplicate it with re_live_browser for the same routed target.";
+	}
+	return undefined;
 }
 
 function createSessionScopedExtensionApi(pi: ExtensionAPI, getSessionFile: () => string | undefined): ExtensionAPI {
@@ -157,6 +220,7 @@ export function installRepiSessionLifecycle(
 		active: false,
 		selfReviewDue: false,
 		selfReviewNotified: false,
+		toolingGapObserved: false,
 	};
 	const persistStats = (): void => {
 		if (!stats.active || stats.noSession || !stats.currentMissionId) return;
@@ -254,13 +318,17 @@ export function installRepiSessionLifecycle(
 			if (options.injectRuntimePacket === false) return;
 			const lane = mission.lanes.find((candidate) => candidate.status === "in_progress");
 			const claims = buildEvidenceClaimSummary({ missionId: mission.id, limit: 60 });
-			const nextCommand = truncateMiddle(
-				repiCapabilityAwareCommand(route, mission.task, dependencies.nextDecisionCommand(mission)).replace(
-					/\s+/g,
-					" ",
-				),
-				180,
-			);
+			const fallbackCommand = dependencies.nextDecisionCommand(mission);
+			const target = extractRepiTaskTarget(mission.task);
+			const directCommand = target
+				? `re_runtime_adapter run ${JSON.stringify(redactSensitiveText(target))}`
+				: fallbackCommand;
+			const routedDirectCommand = repiCapabilityAwareCommand(route, mission.task, directCommand);
+			const proposedCommand =
+				target && /^re_capabilities\s+activate\b/i.test(routedDirectCommand)
+					? fallbackCommand
+					: routedDirectCommand;
+			const nextCommand = truncateMiddle(proposedCommand.replace(/\s+/g, " "), 180);
 			const selfReviewDue = stats.selfReviewDue;
 			const packet = created
 				? `REPI state: mission=${mission.id}; domain=${route.domain}; lane=${lane?.name ?? "triage"}; next=${nextCommand}`
@@ -276,8 +344,18 @@ export function installRepiSessionLifecycle(
 
 	pi.on("tool_call", async (event) => {
 		return runMissionSessionScope(stats.sessionFile, async () => {
+			const mission = stats.noSession ? stats.currentMission : readCurrentMission();
+			const routedGuard = routedToolGuard(event, stats, mission);
+			if (routedGuard) return { block: true, reason: `REPI routed execution guard: ${routedGuard}` };
 			const command = getBashCommand(event);
 			if (!command) return;
+			if (isReportOnlyBashCommand(command)) {
+				return {
+					block: true,
+					reason:
+						"Report-only shell heredocs are blocked; return the completed report directly in the assistant message.",
+				};
+			}
 			stats.bashCalls += 1;
 			const hash = createHash("sha256").update(command).digest("hex");
 			stats.repeatedCommandCount = stats.lastCommandHash === hash ? stats.repeatedCommandCount + 1 : 1;
@@ -301,8 +379,19 @@ export function installRepiSessionLifecycle(
 	pi.on("tool_result", async (event, ctx) => {
 		const sessionFile = ctx.sessionManager?.getSessionFile?.() ?? stats.sessionFile;
 		return runMissionSessionScope(sessionFile, async () => {
+			const text = event.content
+				.filter((block): block is { type: "text"; text: string } => block.type === "text")
+				.map((block) => block.text)
+				.join("\n");
 			stats.calls += 1;
 			if (event.isError) stats.failures += 1;
+			if (
+				/runner_unavailable|command_tools_missing|missing[-_ ](?:runner|tool)|command not found|not recognized/i.test(
+					text,
+				)
+			) {
+				stats.toolingGapObserved = true;
+			}
 			if (stats.active && stats.calls > 0 && stats.calls % 5 === 0) {
 				if (!stats.selfReviewDue) stats.selfReviewNotified = false;
 				stats.selfReviewDue = true;
@@ -312,13 +401,10 @@ export function installRepiSessionLifecycle(
 				}
 			}
 			if (stats.active && event.toolName === "bash") {
-				const text = event.content
-					.filter((block): block is { type: "text"; text: string } => block.type === "text")
-					.map((block) => block.text)
-					.join("\n");
 				if (
 					/command not found|not recognized|No such file|cannot stat|ModuleNotFoundError|ImportError/i.test(text)
 				) {
+					stats.toolingGapObserved = true;
 					if (!stats.selfReviewDue) stats.selfReviewNotified = false;
 					stats.selfReviewDue = true;
 				}

@@ -27,7 +27,7 @@ Evidence contract:
 - operator_command_floor: When work remains, end with one executable operator_next_command.
 - Report as Outcome -> Key Evidence -> Verification -> Next Step.`;
 
-export const RECON_APPEND_SYSTEM_PROMPT = `Use only tools present in the current schema. Batch independent probes and never repeat an equivalent read-only call. Load domain and proof capabilities only when the next probe needs them. Keep raw output out of the prompt; surface decisive evidence and the next probe.`;
+export const RECON_APPEND_SYSTEM_PROMPT = `Schema tools only. Mission and executor are ready: run it. Skip status/mission/route/tool-index preflight; treat missing surfaces as evidence gaps. Answer directly after verification; never use shell/files to emit a report. Run each probe once. Keep raw output in artifacts; quote its replay verbatim.`;
 
 export const REPI_REASONING_DOCTRINE = `# REPI reasoning doctrine (pentester cognition)
 

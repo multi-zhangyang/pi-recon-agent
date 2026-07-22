@@ -339,21 +339,15 @@ describe("REPI runtime adapter pure contracts", () => {
 				timeout: 10_000,
 			},
 		);
-		expect(webOutput).toContain("[http-response] status=200");
-		expect(webOutput).toContain("[web-route-map] source=fetch index=1 method=GET status=200");
-		expect(webOutput).toContain("[web-route-map] source=served-asset");
-		expect(webOutput).toContain("[web-signed-field] source=served-asset");
+		expect(webOutput).toContain("[web-browser-transport] engine=playwright-core");
+		expect(webOutput).toContain("persistent_context=true");
+		expect(webOutput).toContain("[web-page-title]");
+		expect(webOutput).toContain("[web-browser-artifact] har=");
+		expect(webOutput).not.toContain("[web-signed-field] source=served-asset");
 		expect(webOutput).not.toMatch(/replay diff pending|manual-confirm|fallback=portable/i);
 		const webSummary = summarizeRuntimeAdapterSignals(webAdapter, parseRuntimeAdapterSignals(webAdapter, webOutput));
-		expect(webSummary.matchedProofExitSignals).toEqual(
-			expect.arrayContaining([
-				"HTTP/CDP response capture",
-				"XHR/WS route extraction",
-				"request order proof",
-				"signed request replay",
-			]),
-		);
-		expect(webSummary.missingProofExitSignals).toEqual([]);
+		expect(webSummary.matchedProofExitSignals).toContain("HTTP/CDP response capture");
+		expect(webSummary.missingProofExitSignals).toEqual(expect.arrayContaining(["signed request replay"]));
 
 		const har = join(tempDir, "signed-flow.har");
 		writeFileSync(

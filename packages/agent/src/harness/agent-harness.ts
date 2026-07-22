@@ -24,7 +24,9 @@ import {
 	compact,
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateCompactionContext,
+	estimateContextTokens,
 	prepareCompaction,
+	shouldCompact,
 } from "./compaction/compaction.ts";
 import {
 	awaitWithAbort,
@@ -53,6 +55,8 @@ import type {
 	AgentHarnessRunPolicy,
 	AgentHarnessStreamOptions,
 	BeforeAgentStartEvent,
+	CompactionSettings,
+	CompactResult,
 	ContextEvent,
 	ExecutionEnv,
 	NavigateTreeResult,
@@ -225,6 +229,7 @@ export class AgentHarness<
 		this.runPolicy = {
 			maxTurns: DEFAULT_HARNESS_MAX_TURNS,
 			reserveFinalTurn: true,
+			autoCompaction: true,
 			...options.runPolicy,
 		};
 		this.models = options.models;
@@ -597,6 +602,7 @@ export class AgentHarness<
 			streamMaxRetries: this.runPolicy.streamMaxRetries,
 			streamRetryBaseDelayMs: this.runPolicy.streamRetryBaseDelayMs,
 			streamRetryMaxDelayMs: this.runPolicy.streamRetryMaxDelayMs,
+			isRetryableStreamError: this.runPolicy.isRetryableStreamError,
 			maxToolResultChars: this.runPolicy.maxToolResultChars,
 			maxConsumedToolResultChars: this.runPolicy.maxConsumedToolResultChars,
 			deduplicateReadOnlyToolCalls: this.runPolicy.deduplicateReadOnlyToolCalls,
@@ -701,6 +707,21 @@ export class AgentHarness<
 				await this.session.moveTo(write.targetId);
 			}
 			this.pendingSessionWrites.shift();
+		}
+	}
+
+	/** Immutable snapshot of mutations waiting for the current run's next durable save point. */
+	getPendingWrites(): readonly PendingSessionWrite[] {
+		return structuredClone(this.pendingSessionWrites);
+	}
+
+	/** Force queued mutations to durable session storage without ending the active run. */
+	async flushPendingWrites(): Promise<void> {
+		this.assertNotDisposed("flushPendingWrites");
+		try {
+			await this.flushPendingSessionWrites();
+		} catch (error) {
+			throw normalizeHarnessError(error, "session");
 		}
 	}
 
@@ -896,6 +917,7 @@ export class AgentHarness<
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "AgentHarness is busy");
 		const run = this.startRun("turn");
 		try {
+			await this.maybeAutoCompact(run);
 			const turnState = await this.createTurnState(run.abortController.signal);
 			return await this.executeTurn(turnState, text, options, run.abortController);
 		} catch (error) {
@@ -910,6 +932,7 @@ export class AgentHarness<
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "AgentHarness is busy");
 		const run = this.startRun("turn");
 		try {
+			await this.maybeAutoCompact(run);
 			const turnState = await this.createTurnState(run.abortController.signal);
 			const skill = (turnState.resources.skills ?? []).find((candidate) => candidate.name === name);
 			if (!skill) throw new AgentHarnessError("invalid_argument", `Unknown skill: ${name}`);
@@ -931,6 +954,7 @@ export class AgentHarness<
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "AgentHarness is busy");
 		const run = this.startRun("turn");
 		try {
+			await this.maybeAutoCompact(run);
 			const turnState = await this.createTurnState(run.abortController.signal);
 			const template = (turnState.resources.promptTemplates ?? []).find((candidate) => candidate.name === name);
 			if (!template) throw new AgentHarnessError("invalid_argument", `Unknown prompt template: ${name}`);
@@ -980,78 +1004,105 @@ export class AgentHarness<
 		}
 	}
 
-	async compact(
-		customInstructions?: string,
-	): Promise<{ summary: string; firstKeptEntryId: string; tokensBefore: number; details?: unknown }> {
+	private getCompactionSettings(): CompactionSettings {
+		return { ...DEFAULT_COMPACTION_SETTINGS, ...this.runPolicy.compactionSettings };
+	}
+
+	private async maybeAutoCompact(run: ActiveHarnessRun): Promise<CompactResult | undefined> {
+		if (!this.runPolicy.autoCompaction) return undefined;
+		const settings = this.getCompactionSettings();
+		if (!settings.enabled) return undefined;
+		const context = await awaitWithAbort(this.session.buildContext(), run.abortController.signal);
+		const contextTokens = estimateContextTokens(context.messages).tokens;
+		if (!shouldCompact(contextTokens, this.model.contextWindow, settings)) return undefined;
+		return this.performCompaction(run, this.runPolicy.autoCompactionInstructions, settings, true);
+	}
+
+	private async performCompaction(
+		run: ActiveHarnessRun,
+		customInstructions: string | undefined,
+		settings: CompactionSettings,
+		allowNoop = false,
+	): Promise<CompactResult | undefined> {
+		const model = this.model;
+		if (!model) throw new AgentHarnessError("invalid_state", "No model set for compaction");
+		const auth = this.models ? undefined : await this.getApiKeyAndHeaders?.(model);
+		if (!this.models && !auth) throw new AgentHarnessError("auth", "No auth available for compaction");
+		const branchEntries = await this.session.getBranch();
+		const preparationResult = prepareCompaction(branchEntries, settings, model.contextWindow);
+		if (!preparationResult.ok) throw preparationResult.error;
+		const preparation = preparationResult.value;
+		if (
+			!preparation ||
+			(preparation.messagesToSummarize.length === 0 && preparation.turnPrefixMessages.length === 0)
+		) {
+			if (allowNoop) return undefined;
+			throw new AgentHarnessError("compaction", "Nothing to compact");
+		}
+		const hookResult = await this.emitHook(
+			{
+				type: "session_before_compact",
+				preparation,
+				branchEntries,
+				customInstructions,
+				signal: run.abortController.signal,
+			},
+			run.abortController.signal,
+		);
+		if (hookResult?.cancel) {
+			if (allowNoop) return undefined;
+			throw new AgentHarnessError("compaction", "Compaction cancelled");
+		}
+		const provided = hookResult?.compaction;
+		const compactResult = provided
+			? { ok: true as const, value: provided }
+			: this.models
+				? await compact(
+						preparation,
+						this.models,
+						model,
+						customInstructions,
+						run.abortController.signal,
+						this.thinkingLevel,
+					)
+				: await compact(
+						preparation,
+						model,
+						auth!.apiKey,
+						auth!.headers,
+						customInstructions,
+						run.abortController.signal,
+						this.thinkingLevel,
+					);
+		if (!compactResult.ok) throw compactResult.error;
+		const result = compactResult.value;
+		const contextEstimate = estimateCompactionContext(branchEntries, result);
+		if (contextEstimate.afterTokens >= contextEstimate.beforeTokens) {
+			throw new AgentHarnessError(
+				"compaction",
+				`Compaction did not reduce estimated context (${contextEstimate.beforeTokens} -> ${contextEstimate.afterTokens} tokens)`,
+			);
+		}
+		const entryId = await this.session.appendCompaction(
+			result.summary,
+			result.firstKeptEntryId,
+			result.tokensBefore,
+			result.details,
+			provided !== undefined,
+		);
+		const entry = await this.session.getEntry(entryId);
+		if (entry?.type === "compaction") {
+			await this.emitOwn({ type: "session_compact", compactionEntry: entry, fromHook: provided !== undefined });
+		}
+		return result;
+	}
+
+	async compact(customInstructions?: string): Promise<CompactResult> {
 		this.assertNotDisposed("compact");
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "compact() requires idle harness");
 		const run = this.startRun("compaction");
 		try {
-			const model = this.model;
-			if (!model) throw new AgentHarnessError("invalid_state", "No model set for compaction");
-			const auth = this.models ? undefined : await this.getApiKeyAndHeaders?.(model);
-			if (!this.models && !auth) throw new AgentHarnessError("auth", "No auth available for compaction");
-			const branchEntries = await this.session.getBranch();
-			const preparationResult = prepareCompaction(branchEntries, DEFAULT_COMPACTION_SETTINGS, model.contextWindow);
-			if (!preparationResult.ok) throw preparationResult.error;
-			const preparation = preparationResult.value;
-			if (!preparation) throw new AgentHarnessError("compaction", "Nothing to compact");
-			if (preparation.messagesToSummarize.length === 0 && preparation.turnPrefixMessages.length === 0) {
-				throw new AgentHarnessError("compaction", "Nothing to compact");
-			}
-			const hookResult = await this.emitHook(
-				{
-					type: "session_before_compact",
-					preparation,
-					branchEntries,
-					customInstructions,
-					signal: run.abortController.signal,
-				},
-				run.abortController.signal,
-			);
-			if (hookResult?.cancel) throw new AgentHarnessError("compaction", "Compaction cancelled");
-			const provided = hookResult?.compaction;
-			const compactResult = provided
-				? { ok: true as const, value: provided }
-				: this.models
-					? await compact(
-							preparation,
-							this.models,
-							model,
-							customInstructions,
-							run.abortController.signal,
-							this.thinkingLevel,
-						)
-					: await compact(
-							preparation,
-							model,
-							auth!.apiKey,
-							auth!.headers,
-							customInstructions,
-							run.abortController.signal,
-							this.thinkingLevel,
-						);
-			if (!compactResult.ok) throw compactResult.error;
-			const result = compactResult.value;
-			const contextEstimate = estimateCompactionContext(branchEntries, result);
-			if (contextEstimate.afterTokens >= contextEstimate.beforeTokens) {
-				throw new AgentHarnessError(
-					"compaction",
-					`Compaction did not reduce estimated context (${contextEstimate.beforeTokens} -> ${contextEstimate.afterTokens} tokens)`,
-				);
-			}
-			const entryId = await this.session.appendCompaction(
-				result.summary,
-				result.firstKeptEntryId,
-				result.tokensBefore,
-				result.details,
-				provided !== undefined,
-			);
-			const entry = await this.session.getEntry(entryId);
-			if (entry?.type === "compaction") {
-				await this.emitOwn({ type: "session_compact", compactionEntry: entry, fromHook: provided !== undefined });
-			}
-			return result;
+			return (await this.performCompaction(run, customInstructions, this.getCompactionSettings()))!;
 		} catch (error) {
 			throw normalizeHarnessError(error, "compaction");
 		} finally {

@@ -64,14 +64,11 @@ describe("REPI kernel profile runtime adapter and evidence graph flows", () => {
 						killed: false,
 					};
 				}
-				if (
-					args.join("\n").includes("adapter-web-cdp-network-runner") ||
-					args.join("\n").includes("repi-web-adapter-body")
-				) {
+				if (args.join("\n").includes("emitRouteMap('fetch'") || args.join("\n").includes("repi-web-adapter-body")) {
 					return {
 						code: 0,
 						stdout:
-							"[http-response] status=200 url=https://target.local/app content_type=text/html bytes=128 sha256=abc\n[route-candidate] fetch('/api/orders?nonce=123')\n[crypto-request-field] nonce=123 signature=abc\n",
+							"[http-response] status=200 url=https://target.local/app content_type=text/html bytes=128 sha256=abc\n[route-candidate] fetch('/api/orders?nonce=123')\n[web-signed-field] source=playwright-request field_sha256=abc field=nonce=123&signature=abc\n",
 						stderr: "",
 						killed: false,
 					};
@@ -152,6 +149,12 @@ describe("REPI kernel profile runtime adapter and evidence graph flows", () => {
 		expect(webRun.content[0]?.text).toContain("adapter: web-cdp-network-adapter");
 		expect(webRun.content[0]?.text).toContain("parser_signal_summary:");
 		expect(webRun.content[0]?.text).toContain("request order proof");
+		expect(webRun.content[0]?.text).toContain("evidence:");
+		expect(webRun.content[0]?.text).toContain("[http-response] status=200");
+		expect(webRun.content[0]?.text).toContain(
+			"replay: timeout_ms=60000 command=re_runtime_adapter run web-cdp-network-adapter 'https://target.local/app'",
+		);
+		expect(webRun.content[0]?.text).not.toContain("adapter-web-cdp-network-runner");
 
 		const nativeAdapterDir = join(
 			agentDir,

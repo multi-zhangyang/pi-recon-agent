@@ -1021,11 +1021,15 @@ rows.push(
 			includesAll(reconLaneRuntime, ["export function createReconLaneRuntime", "function laneCommandPack(", "async function runLaneCommandPack("]) &&
 			includesAll(runtimeAdapterExecutionRuntime, [
 				'from "./runtime-adapter.ts"',
+				'from "./domain-adapter.ts"',
 				"export function createRuntimeAdapterExecutionRuntime",
 				"function buildExecutionGate(",
 				"function writeExecutionArtifact(",
 				"async function runExecution(",
-				"parseRuntimeAdapterSignals",
+				"createDomainAdapter(adapter)",
+				"domainAdapter.execute(",
+				"domainAdapter.verify(execution)",
+				"domainAdapter.replay(execution)",
 				"atomicWriteFileSync(",
 			]) &&
 			includesAll(sessionLifecycleRuntime, [

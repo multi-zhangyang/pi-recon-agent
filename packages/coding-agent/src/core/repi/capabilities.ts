@@ -23,20 +23,13 @@ export const REPI_CAPABILITY_PROFILE_NAMES = [
 export type RepiCapabilityProfile = (typeof REPI_CAPABILITY_PROFILE_NAMES)[number] | "all";
 
 /** Tools exposed for every automatically managed REPI turn. */
-export const REPI_CORE_TOOL_NAMES = ["read", "bash", "re_capabilities", "re_route", "goal_complete"] as const;
+export const REPI_CORE_TOOL_NAMES = ["read", "bash", "re_capabilities", "goal_complete"] as const;
 
-/** Shared task/evidence tools exposed once a professional route is selected. */
-export const REPI_ROUTED_FOUNDATION_TOOL_NAMES = [
-	"re_mission",
-	"re_map",
-	"re_lane",
-	"re_techniques",
-	"re_evidence",
-	"re_tool_index",
-] as const;
+/** Runtime adapters write scoped evidence directly; routed turns need no control-plane preflight tools. */
+export const REPI_ROUTED_FOUNDATION_TOOL_NAMES = [] as const;
 
-/** Small proof gate available on the first turn of every professional route. */
-export const REPI_ROUTED_VERIFICATION_TOOL_NAMES = ["re_verifier", "re_domain_proof_exit"] as const;
+/** Proof gates are opt-in after execution; they do not belong in the first routed turn. */
+export const REPI_ROUTED_VERIFICATION_TOOL_NAMES = [] as const;
 
 export const REPI_ROUTE_CONTRACT_TOOL_NAMES = [
 	...REPI_ROUTED_FOUNDATION_TOOL_NAMES,
@@ -49,6 +42,17 @@ export const REPI_WRITE_TOOL_NAMES = ["edit", "write"] as const;
 export const REPI_CAPABILITY_TOOLS: Record<Exclude<RepiCapabilityProfile, "all">, readonly string[]> = {
 	workflow: [
 		...REPI_ROUTE_CONTRACT_TOOL_NAMES,
+		"re_capabilities",
+		"re_route",
+		"re_mission",
+		"re_map",
+		"re_lane",
+		"re_techniques",
+		"re_evidence",
+		"re_tool_index",
+		"re_live_browser",
+		"re_native_runtime",
+		"re_mobile_runtime",
 		"re_kernel",
 		"re_decision_core",
 		"re_autopilot",
@@ -56,27 +60,9 @@ export const REPI_CAPABILITY_TOOLS: Record<Exclude<RepiCapabilityProfile, "all">
 		"re_operator",
 		"re_bootstrap",
 	],
-	web: [
-		...REPI_ROUTE_CONTRACT_TOOL_NAMES,
-		"re_live_browser",
-		"re_web_authz_state",
-		"re_exploit_lab",
-		"re_runtime_adapter",
-	],
-	native: [
-		...REPI_ROUTE_CONTRACT_TOOL_NAMES,
-		"re_native_runtime",
-		"re_exploit_lab",
-		"re_runtime_adapter",
-		"re_lane_specialist_pack",
-	],
-	mobile: [
-		...REPI_ROUTE_CONTRACT_TOOL_NAMES,
-		"re_mobile_runtime",
-		"re_live_browser",
-		"re_runtime_adapter",
-		"re_lane_specialist_pack",
-	],
+	web: [...REPI_ROUTE_CONTRACT_TOOL_NAMES, "re_web_authz_state", "re_runtime_adapter"],
+	native: [...REPI_ROUTE_CONTRACT_TOOL_NAMES, "re_exploit_lab", "re_runtime_adapter", "re_lane_specialist_pack"],
+	mobile: [...REPI_ROUTE_CONTRACT_TOOL_NAMES, "re_runtime_adapter", "re_lane_specialist_pack"],
 	crypto: [
 		...REPI_ROUTE_CONTRACT_TOOL_NAMES,
 		"re_exploit_lab",
@@ -101,6 +87,8 @@ export const REPI_CAPABILITY_TOOLS: Record<Exclude<RepiCapabilityProfile, "all">
 	agent: [...REPI_ROUTE_CONTRACT_TOOL_NAMES, "re_runtime_adapter", "re_runtime_bridge", "re_reason"],
 	proof: [
 		...REPI_ROUTE_CONTRACT_TOOL_NAMES,
+		"re_verifier",
+		"re_domain_proof_exit",
 		"re_compiler",
 		"re_replayer",
 		"re_autofix",
@@ -490,7 +478,13 @@ export function createRepiCapabilityActivationFactory(options: RepiCapabilityAct
 				allowWriteTools =
 					allowWriteTools || repiPromptNeedsWriteTools(event.prompt) || repiPromptNeedsWriteTools(task);
 				routedProfiles = repiCapabilityProfilesForRoute(route, task);
-				applyProfiles(explicitProfiles ?? routedProfiles);
+				const selected = applyProfiles(explicitProfiles ?? routedProfiles);
+				// The mission runtime already chose the routed profile. Keep capability
+				// activation available to standalone SDK/RPC users, but do not expose a
+				// redundant control-plane tool to the routed provider turn.
+				if (mission && !explicitProfiles && selected.includes("re_capabilities")) {
+					pi.setActiveTools(selected.filter((name) => name !== "re_capabilities"));
+				}
 				// The mission delta already carries ongoing state. Emit this static hint
 				// only on the cold routed prompt, never on sticky/continuation turns.
 				if (options.injectPromptPacket === false || mission || !routedPrompt) return;

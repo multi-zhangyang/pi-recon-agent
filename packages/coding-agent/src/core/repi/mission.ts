@@ -1,8 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import lockfile from "proper-lockfile";
 import { REPI_GENERIC_TASK, type RoutePlan, routeRepiTask } from "./routes.ts";
+import { mutateRepiState, readRepiState } from "./state-db.ts";
 import {
 	currentMissionPath,
 	ensureRepiStorage,
@@ -769,28 +767,6 @@ function isInactiveMission(mission: MissionState | undefined): boolean {
 	return status === "closed" || status === "empty";
 }
 
-function acquireMissionLock(path: string): () => void {
-	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-	let lastError: unknown;
-	for (let attempt = 0; attempt < 10; attempt++) {
-		try {
-			return lockfile.lockSync(path, { realpath: false, stale: 30_000 });
-		} catch (error) {
-			const code =
-				typeof error === "object" && error !== null && "code" in error
-					? String((error as { code?: unknown }).code)
-					: undefined;
-			if (code !== "ELOCKED" || attempt === 9) throw error;
-			lastError = error;
-			const waitUntil = Date.now() + 20;
-			while (Date.now() < waitUntil) {
-				// Mission writes are synchronous and the lock is held only around one small JSON write.
-			}
-		}
-	}
-	throw lastError instanceof Error ? lastError : new Error("Failed to acquire mission lock");
-}
-
 function itemTimestamp(item: { updatedAt?: string }): number {
 	const parsed = Date.parse(item.updatedAt ?? "");
 	return Number.isFinite(parsed) ? parsed : 0;
@@ -820,16 +796,17 @@ function mergeConcurrentMission(current: MissionState | undefined, candidate: Mi
 function withMissionLock(mutate: (current: MissionState | undefined) => MissionState): MissionState {
 	ensureRepiStorage();
 	const path = currentMissionPath();
-	const release = acquireMissionLock(path);
-	try {
-		const current = parseMission(readTextFile(path, ""));
-		const mission = mutate(current);
-		const next = normalizeMission({ ...mission, updatedAt: new Date().toISOString() });
-		writePrivateTextFile(path, `${JSON.stringify(next, null, 2)}\n`);
-		return next;
-	} finally {
-		release();
-	}
+	const next = mutateRepiState(
+		"mission",
+		missionStorageScope(),
+		() => parseMission(readTextFile(path, "")),
+		(current) => {
+			const mission = mutate(current);
+			return normalizeMission({ ...mission, updatedAt: new Date().toISOString() });
+		},
+	);
+	writePrivateTextFile(path, `${JSON.stringify(next, null, 2)}\n`);
+	return next;
 }
 
 export function writeCurrentMission(mission: MissionState): MissionState {
@@ -868,10 +845,9 @@ export function updateMissionRuntimeStats(runtimeStats: MissionRuntimeStats): Mi
 
 export function readCurrentMission(): MissionState | undefined {
 	ensureRepiStorage();
-	// The mission changes only through mission operations, whose atomic rename
-	// invalidates this mtime+size cache. normalizeMission returns a fresh copy, so
-	// callers cannot mutate the cached object.
-	const raw = readJsonObjectFileCached<MissionState>(currentMissionPath());
+	const raw =
+		readRepiState<MissionState>("mission", missionStorageScope()) ??
+		readJsonObjectFileCached<MissionState>(currentMissionPath());
 	if (!raw) return undefined;
 	const lifecycle = raw as MissionState & { status?: unknown };
 	if (lifecycle.status === "closed" || lifecycle.status === "empty") return undefined;

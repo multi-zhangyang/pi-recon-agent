@@ -190,8 +190,22 @@ async function plainFetch() {
 async function playwrightCapture() {
   let playwright;
   try { playwright = require('playwright'); } catch { return false; }
-  const browser = await playwright.chromium.launch({ headless: true });
-  const context = await browser.newContext({ ignoreHTTPSErrors: true });
+	const fs = require('node:fs');
+	const path = require('node:path');
+	const os = require('node:os');
+	const profileDir = process.env.REPI_BROWSER_PROFILE_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'repi-browser-profile-'));
+	const artifactDir = process.env.REPI_BROWSER_ARTIFACT_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'repi-browser-artifacts-'));
+	fs.mkdirSync(profileDir, { recursive: true, mode: 0o700 });
+	fs.mkdirSync(artifactDir, { recursive: true, mode: 0o700 });
+	const harPath = path.join(artifactDir, 'network.har');
+	const tracePath = path.join(artifactDir, 'trace.zip');
+	const storagePath = path.join(artifactDir, 'storage-state.json');
+	const context = await playwright.chromium.launchPersistentContext(profileDir, {
+	  headless: true,
+	  ignoreHTTPSErrors: true,
+	  recordHar: { path: harPath, mode: 'full', content: 'embed' },
+	});
+	await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
   const page = await context.newPage();
   page.on('request', (request) => log('[browser-request]', { method: request.method(), url: request.url(), resource: request.resourceType() }));
   page.on('response', (response) => log('[browser-response]', { status: response.status(), url: response.url(), content_type: response.headers()['content-type'] || '' }));
@@ -211,7 +225,10 @@ async function playwrightCapture() {
     links: Array.from(document.links).map((a) => a.href).filter((href) => /api|graphql|admin|user|account|id=|uuid|token|auth/i.test(href)).slice(0, 40),
   }));
   console.log('[browser-storage] ' + JSON.stringify(storage).slice(0, 4000));
-  await browser.close();
+	await context.storageState({ path: storagePath });
+	await context.tracing.stop({ path: tracePath });
+	await context.close();
+	log('[browser-artifacts]', { profile: profileDir, har: harPath, trace: tracePath, storage: storagePath });
   return true;
 }
 (async () => {

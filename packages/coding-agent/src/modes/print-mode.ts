@@ -364,17 +364,20 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		let timer: NodeJS.Timeout | undefined;
 		let finished = false;
 		let cancelWarn: (() => void) | undefined;
+		let toolsBeforeTimeoutWarning: string[] | undefined;
 		try {
 			const races: Array<Promise<unknown>> = [session.prompt(message, promptOptions)];
 			if (timeoutMs) {
 				const warnAtMs = timeoutMs - timeoutWarnLeadMs;
 				if (timeoutWarnLeadMs > 0 && warnAtMs > 0) {
-					const warning = `[REPI time-budget] Wall timeout in ~${Math.round(timeoutWarnLeadMs / 1000)}s. Persist your findings and write your report to disk NOW. Finish the current step and save outputs; do not start new long probes.`;
+					const warning = `[REPI time-budget] Wall timeout in ~${Math.round(timeoutWarnLeadMs / 1000)}s. Stop probing and return the final Outcome / Key Evidence / Verification / Next Step answer directly. Do not call tools or use shell/file output to write the report.`;
 					cancelWarn = scheduleTimeoutWarning({
 						warnAtMs,
 						isFinished: () => finished,
 						inject: () => {
 							emitProgress(`timeout_warn leadMs=${timeoutWarnLeadMs} remainingMs=${timeoutWarnLeadMs}`);
+							toolsBeforeTimeoutWarning ??= session.getActiveToolNames();
+							session.setActiveToolsByName([]);
 							// session.steer queues into the agent's stream with no streaming gate
 							// (delivered at the next turn boundary) — safe to call mid-flight.
 							void session
@@ -445,6 +448,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 			activeGuardReject = undefined;
 			session.agent.maxTurns = previousMaxTurns;
 			session.agent.reserveFinalTurn = previousReserveFinalTurn;
+			if (toolsBeforeTimeoutWarning) session.setActiveToolsByName(toolsBeforeTimeoutWarning);
 			if (timer) clearTimeout(timer);
 			cancelWarn?.();
 		}

@@ -148,7 +148,7 @@ describe("REPI kernel profile core routing/resources", () => {
 		expect(RECON_SYSTEM_PROMPT).toContain("execution-first mode");
 		expect(RECON_SYSTEM_PROMPT).toContain("refusal_to_execution");
 		expect(RECON_SYSTEM_PROMPT).toContain("operator_command_floor");
-		expect(RECON_APPEND_SYSTEM_PROMPT).toContain("only when the next probe needs them");
+		expect(RECON_APPEND_SYSTEM_PROMPT).toContain("missing surfaces as evidence gaps");
 	});
 
 	it("keeps built-in prompt resources virtual for the headless product path", () => {

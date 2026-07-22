@@ -11,6 +11,49 @@ permissions:
   contents: read
 
 jobs:
+  unit-tests:
+    name: tests (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ai
+            workspace: packages/ai
+            args: ""
+          - name: agent
+            workspace: packages/agent
+            args: ""
+          - name: coding-agent-1
+            workspace: packages/coding-agent
+            args: "--shard=1/4"
+          - name: coding-agent-2
+            workspace: packages/coding-agent
+            args: "--shard=2/4"
+          - name: coding-agent-3
+            workspace: packages/coding-agent
+            args: "--shard=3/4"
+          - name: coding-agent-4
+            workspace: packages/coding-agent
+            args: "--shard=4/4"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run complete test shard
+        working-directory: ${{ matrix.workspace }}
+        run: npx vitest --run ${{ matrix.args }}
+
   check:
     name: check and smoke
     runs-on: ubuntu-latest
@@ -37,19 +80,11 @@ jobs:
       - name: Repository check
         run: npm run check
 
-      - name: Provider payload regression tests
-        working-directory: packages/ai
-        run: npx vitest --run test/openai-completions-prompt-cache.test.ts test/cache-retention.test.ts test/openai-completions-cache-control-format.test.ts
-
       - name: Build runtime package entrypoints
         run: |
           (cd packages/tui && npx tsgo -p tsconfig.build.json)
           (cd packages/ai && npx tsgo -p tsconfig.build.json)
           (cd packages/agent && npx tsgo -p tsconfig.build.json)
-
-      - name: Agent runtime regression tests
-        working-directory: packages/coding-agent
-        run: npx vitest --run test/agent-session-dynamic-provider.test.ts test/agent-session-auto-compaction-queue.test.ts
 
       - name: Production dependency audit
         run: npm audit --omit=dev --audit-level=high

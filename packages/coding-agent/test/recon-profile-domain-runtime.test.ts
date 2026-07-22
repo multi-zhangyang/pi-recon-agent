@@ -326,7 +326,8 @@ describe("REPI kernel profile domain runtime captures", () => {
 						"[native-gdb-script] /tmp/repi-native-gdb.gdb breakpoints=main,strcmp,strncmp,memcmp,strstr",
 						"[native-gdb] Program received signal SIGSEGV",
 						"[native-gdb] RIP 0x6161616b RSP 0x7fffffffe000",
-						"[native-pwn-scaffold] /tmp/repi-native-pwn-scaffold.py target=./vuln cyclic=128 rop=leak-libc-verifier",
+						'[native-lief] format=FORMATS.ELF entry=0x401000 imports=["strcmp"]',
+						'[native-pwntools] arch=amd64 entry=0x401000 bits=64 checksec={"NX": true}',
 					].join("\n"),
 					stderr: "",
 					killed: false,
@@ -358,7 +359,7 @@ describe("REPI kernel profile domain runtime captures", () => {
 
 		expect(execCalls).toHaveLength(1);
 		expect(execCalls[0]?.args.join("\n")).toContain("repi-native-gdb.gdb");
-		expect(execCalls[0]?.args.join("\n")).toContain("repi-native-pwn-scaffold.py");
+		expect(execCalls[0]?.args.join("\n")).toContain("repi-native-analyze.py");
 		const resultText = result.content[0]?.text ?? "";
 		expect(resultText).toContain("native_runtime:");
 		expect(resultText).toContain("mode: run");
@@ -370,7 +371,7 @@ describe("REPI kernel profile domain runtime captures", () => {
 		expect(resultText).toContain("native symbol/string anchors");
 		expect(resultText).toContain("native GDB trace anchors");
 		expect(resultText).toContain("native crash/register anchors");
-		expect(resultText).toContain("native exploit scaffold anchors");
+		expect(resultText).toContain("native analyzer anchors");
 		expect(resultText).not.toContain("capture_script:");
 		expect(resultText.length).toBeLessThanOrEqual(4096);
 		const artifactPath = /native_runtime_artifact: (.+)/.exec(resultText)?.[1]?.trim();

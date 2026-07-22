@@ -157,16 +157,32 @@ export function createNativeRuntime(dependencies: NativeRuntimeDependencies) {
 	quit`);
 	}
 
-	function nativeRuntimePwntoolsScaffold(): string {
+	function nativeRuntimePythonAnalyzer(): string {
 		return stripScriptIndent(`#!/usr/bin/env python3
-	from pwn import *
-	import sys
+	import json, os, shlex, sys
 	path = sys.argv[1] if len(sys.argv) > 1 else './vuln'
-	context.binary = path
-	elf = ELF(path, checksec=False)
-	print(f"[native-pwn-scaffold] arch={elf.arch} entry={hex(elf.entry)} bits={elf.bits}")
-	print(f"[native-pwn-scaffold] cyclic_pattern={cyclic(128).hex()[:96]}")
-	print("[native-pwn-scaffold] TODO: set offset from native crash/register anchors, then build leak -> libc -> ROP verifier")`);
+	try:
+	    import lief
+	    binary = lief.parse(path)
+	    imports = [str(item) for item in getattr(binary, 'imported_functions', [])[:80]]
+	    print('[native-lief] format=%s entry=%s imports=%s' % (binary.format, hex(binary.entrypoint), json.dumps(imports)))
+	except Exception as error:
+	    print('[native-lief-unavailable] ' + str(error))
+	try:
+	    from pwn import ELF, context, cyclic, process
+	    context.log_level = 'error'
+	    elf = ELF(path, checksec=False)
+	    print('[native-pwntools] arch=%s entry=%s bits=%s checksec=%s' % (elf.arch, hex(elf.entry), elf.bits, json.dumps(elf.checksec(), sort_keys=True)))
+	    pattern = cyclic(512)
+	    print('[native-cyclic] bytes=%d sha_head=%s' % (len(pattern), pattern[:48].hex()))
+	    if os.environ.get('REPI_NATIVE_RUN') == '1':
+	        argv = [path] + shlex.split(os.environ.get('REPI_NATIVE_ARGS', ''))
+	        tube = process(argv)
+	        tube.sendline(pattern)
+	        tube.wait_for_close(timeout=float(os.environ.get('REPI_NATIVE_RUN_TIMEOUT_SEC', '5')))
+	        print('[native-pwntools-run] exit=%s' % tube.poll())
+	except Exception as error:
+	    print('[native-pwntools-unavailable] ' + str(error))`);
 	}
 
 	function nativeRuntimeShellCommand(target?: string, timeoutMs = 12000): string {
@@ -186,11 +202,11 @@ export function createNativeRuntime(dependencies: NativeRuntimeDependencies) {
 			nativeRuntimeGdbScript(),
 			"GDB",
 			'echo "[native-gdb-script] /tmp/repi-native-gdb.gdb breakpoints=main,strcmp,strncmp,memcmp,strstr run_env=REPI_NATIVE_RUN"',
-			`if [ -n "$TARGET" ] && [ -e "$TARGET" ] && command -v gdb >/dev/null 2>&1 && [ "$REPI_NATIVE_RUN" = "1" ]; then timeout ${runTimeout}s gdb -q -batch -x /tmp/repi-native-gdb.gdb --args "$TARGET" $REPI_NATIVE_ARGS 2>&1 | sed "s/^/[native-gdb] /"; else echo "[native-runtime-blocked] reason=gdb_run_skipped set_REPI_NATIVE_RUN=1 target=$TARGET"; fi`,
-			"cat > /tmp/repi-native-pwn-scaffold.py <<'PY'",
-			nativeRuntimePwntoolsScaffold(),
+			`if [ -n "$TARGET" ] && [ -e "$TARGET" ] && command -v gdb >/dev/null 2>&1 && [ "$REPI_NATIVE_RUN" = "1" ]; then timeout ${runTimeout}s gdb --interpreter=mi2 -q -batch -x /tmp/repi-native-gdb.gdb --args "$TARGET" $REPI_NATIVE_ARGS 2>&1 | sed "s/^/[native-gdb-mi] /"; else echo "[native-runtime-blocked] reason=gdb_run_skipped set_REPI_NATIVE_RUN=1 target=$TARGET"; fi`,
+			"cat > /tmp/repi-native-analyze.py <<'PY'",
+			nativeRuntimePythonAnalyzer(),
 			"PY",
-			'echo "[native-pwn-scaffold] /tmp/repi-native-pwn-scaffold.py target=$TARGET cyclic=128 rop=leak-libc-verifier"',
+			'if [ -n "$TARGET" ] && [ -e "$TARGET" ]; then python3 /tmp/repi-native-analyze.py "$TARGET" 2>&1; fi',
 		].join("\n");
 	}
 
@@ -220,8 +236,8 @@ export function createNativeRuntime(dependencies: NativeRuntimeDependencies) {
 				/SIGSEGV|Program received signal|RIP|RSP|EIP|ESP|info registers|bt|backtrace/i,
 				30,
 			).map((line) => `native crash/register anchors: ${truncateMiddle(line, 260)}`),
-			...interestingLines(text, /\[native-pwn-scaffold\]/i, 12).map(
-				(line) => `native exploit scaffold anchors: ${truncateMiddle(line, 260)}`,
+			...interestingLines(text, /\[native-(?:lief|pwntools|cyclic)/i, 12).map(
+				(line) => `native analyzer anchors: ${truncateMiddle(line, 260)}`,
 			),
 			...interestingLines(text, /\[native-runtime-blocked\]/i, 12).map(
 				(line) => `native runtime blocked anchors: ${truncateMiddle(line, 260)}`,
@@ -272,13 +288,13 @@ export function createNativeRuntime(dependencies: NativeRuntimeDependencies) {
 			"default run skips target execution; set REPI_NATIVE_RUN=1 and optional REPI_NATIVE_ARGS for live trace",
 		];
 		const exploitScaffold = [
-			"/tmp/repi-native-pwn-scaffold.py emits pwntools ELF context and cyclic pattern",
-			"next scaffold stage: leak source -> libc/one_gadget/ROP chain -> local verifier -> exploit lab replay",
+			"/tmp/repi-native-analyze.py uses LIEF and pwntools for format, imports, mitigations, and cyclic input",
+			"REPI_NATIVE_RUN=1 enables the bounded pwntools process probe and GDB MI trace",
 		];
 		const replayCommands = [
 			`re_native_runtime run ${target ?? "<elf-or-so>"} ${timeoutMs}`,
 			"cat /tmp/repi-native-gdb.gdb",
-			"cat /tmp/repi-native-pwn-scaffold.py",
+			"cat /tmp/repi-native-analyze.py",
 			target
 				? `REPI_NATIVE_RUN=1 timeout ${Math.ceil(timeoutMs / 1000)}s gdb -q -batch -x /tmp/repi-native-gdb.gdb --args ${shellQuote(target)}`
 				: "REPI_NATIVE_RUN=1 gdb -q -batch -x /tmp/repi-native-gdb.gdb --args <target>",
@@ -512,7 +528,7 @@ export function createNativeRuntime(dependencies: NativeRuntimeDependencies) {
 		latestNativeRuntimeArtifactPath,
 		inferNativeRuntimeTarget,
 		nativeRuntimeGdbScript,
-		nativeRuntimePwntoolsScaffold,
+		nativeRuntimePythonAnalyzer,
 		nativeRuntimeShellCommand,
 		nativeRuntimeAnchors,
 		buildNativeRuntimeArtifact,

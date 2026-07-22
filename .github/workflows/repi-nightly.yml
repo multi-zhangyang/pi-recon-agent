@@ -1,0 +1,57 @@
+name: REPI Nightly
+
+on:
+  schedule:
+    - cron: '23 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-model:
+    name: live model contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      REPI_RUN_LIVE_MODEL: '1'
+      REPI_BASE_URL: ${{ secrets.REPI_BASE_URL }}
+      REPI_AUTH_TOKEN: ${{ secrets.REPI_AUTH_TOKEN }}
+      REPI_MODEL: ${{ secrets.REPI_MODEL }}
+      REPI_MODEL_API: openai-completions
+      REPI_LIVE_MODEL_TIMEOUT_MS: '180000'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Validate live model configuration
+        run: |
+          test -n "$REPI_BASE_URL"
+          test -n "$REPI_AUTH_TOKEN"
+          case "$REPI_MODEL" in
+            thinkingmachines/inkling|poolside/laguna-s-2.1:free) ;;
+            *) echo "REPI_MODEL must be thinkingmachines/inkling or poolside/laguna-s-2.1:free" >&2; exit 1 ;;
+          esac
+
+      - name: Build launcher dependencies
+        run: |
+          (cd packages/tui && npx tsgo -p tsconfig.build.json)
+          (cd packages/ai && npx tsgo -p tsconfig.build.json)
+          (cd packages/agent && npx tsgo -p tsconfig.build.json)
+
+      - name: Run live response, tool, and multi-turn contract
+        run: node scripts/reverse-agent/repi-live-model-contract.mjs . --json
+
+      - name: Run live Native, Web, and long-session benchmark
+        env:
+          REPI_RUN_LIVE_TASKSET: '1'
+        run: node scripts/reverse-agent/repi-live-taskset.mjs . --json
