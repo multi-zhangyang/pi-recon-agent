@@ -65,7 +65,7 @@ describe("find limit cap (opt #264)", () => {
 			undefined,
 			undefined as never,
 		);
-		await new Promise<void>((r) => setImmediate(r));
+		await vi.waitFor(() => expect(fakeChild.listenerCount("close")).toBeGreaterThan(0));
 
 		for (let i = 1; i <= 12; i++) {
 			fakeChild.stdout.emit("data", Buffer.from(`file${i}.ts\n`));
@@ -73,10 +73,7 @@ describe("find limit cap (opt #264)", () => {
 		await new Promise<void>((r) => setTimeout(r, 10));
 		fakeChild.emit("close", 0);
 
-		const result = await Promise.race([
-			promise,
-			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("find promise hung")), 15_000)),
-		]);
+		const result = await promise;
 
 		expect(result).not.toBeInstanceOf(Error);
 		const text = (result as { content: { type: string; text: string }[] }).content[0].text;
@@ -104,15 +101,12 @@ describe("find limit cap (opt #264)", () => {
 			undefined,
 			undefined as never,
 		);
-		await new Promise<void>((r) => setImmediate(r));
+		await vi.waitFor(() => expect(fakeChild.listenerCount("close")).toBeGreaterThan(0));
 		fakeChild.stdout.emit("data", Buffer.from("file1.ts\n"));
 		await new Promise<void>((r) => setTimeout(r, 10));
 		fakeChild.emit("close", 0);
 
-		const result = await Promise.race([
-			promise,
-			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("find promise hung")), 15_000)),
-		]);
+		const result = await promise;
 		expect(result).not.toBeInstanceOf(Error);
 		// 0 disables the cap → the requested 999999 is passed through to fd.
 		const spawnArgs = vi.mocked(spawn).mock.calls[0]?.[1] as string[];

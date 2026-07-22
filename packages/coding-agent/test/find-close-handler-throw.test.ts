@@ -77,10 +77,7 @@ describe("find tool close handler settles on an internal throw (opt #128)", () =
 
 		const promise = def.execute("call-128", { pattern: "*.ts", path: "." }, undefined, undefined, undefined as never);
 
-		// Let the async IIFE resume past ensureTool + spawn and attach its
-		// readline/stream/child listeners (microtask work before the
-		// setImmediate macrotask resolves).
-		await new Promise<void>((r) => setImmediate(r));
+		await vi.waitFor(() => expect(fakeChild.listenerCount("close")).toBeGreaterThan(0));
 
 		// Feed one stdout line so `output` is non-empty and the close handler
 		// reaches the success path (code 0 → relativization → truncateHead).
@@ -96,12 +93,7 @@ describe("find tool close handler settles on an internal throw (opt #128)", () =
 		// Post-fix the try/catch swallows it and settle() rejects the promise.
 		fakeChild.emit("close", 0);
 
-		// Race against a hang: pre-fix settle() is never called and the promise
-		// never settles.
-		const result = await Promise.race([
-			promise.catch((e) => e),
-			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("find promise hung")), 15_000)),
-		]);
+		const result = await promise.catch((e) => e);
 
 		expect(result).toBeInstanceOf(Error);
 		// The throw is the mocked truncateHead TypeError, propagated via the catch.
