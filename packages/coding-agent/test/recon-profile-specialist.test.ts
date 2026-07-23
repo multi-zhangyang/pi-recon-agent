@@ -1,10 +1,14 @@
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import { createReconExtensionFactory } from "../src/core/recon-profile.ts";
-import { createBootstrapPlan } from "../src/core/repi/bootstrap-runtime.ts";
+import {
+	autopilotExecutionStrategy,
+	commandKnownTools,
+	createBootstrapPlan,
+} from "../src/core/repi/bootstrap-runtime.ts";
 import { readCurrentMission, writeCurrentMission } from "../src/core/repi/mission.ts";
 
 const ENV_AGENT_DIR = "REPI_CODING_AGENT_DIR";
@@ -40,10 +44,57 @@ describe("REPI kernel profile self-heal and specialist routing", () => {
 	});
 
 	it("falls back to host command discovery when the persisted tool index is empty", () => {
-		const plan = createBootstrapPlan(["rg", "python3"]);
+		// bash and sh are guaranteed by the host shell used by REPI itself; the
+		// test exercises host discovery without depending on optional tooling.
+		const plan = createBootstrapPlan(["bash", "sh"]);
 		expect(plan).toHaveLength(2);
-		expect(plan.find((item) => item.tool === "rg")?.present).toBe(true);
-		expect(plan.find((item) => item.tool === "python3")?.present).toBe(true);
+		expect(plan.find((item) => item.tool === "bash")?.present).toBe(true);
+		expect(plan.find((item) => item.tool === "sh")?.present).toBe(true);
+	});
+
+	it("keeps guarded and best-effort utilities out of hard command dependencies", () => {
+		const command = [
+			"if command -v binwalk >/dev/null 2>&1; then binwalk image.bin || true; fi",
+			"file image.bin",
+		].join("\n");
+		expect(commandKnownTools(command)).not.toContain("binwalk");
+		expect(commandKnownTools(command)).toContain("file");
+	});
+
+	it("selects an actually indexed disassembler for a missing Ghidra command", () => {
+		const toolDir = join(agentDir, "recon", "tools");
+		mkdirSync(toolDir, { recursive: true });
+		writeFileSync(
+			join(toolDir, "tool-index.md"),
+			["| Tool | Present | Path |", "|---|---:|---|", "| objdump | yes | /usr/bin/objdump |", ""].join("\n"),
+		);
+		const previousPath = process.env.PATH;
+		process.env.PATH = "";
+		let strategy: ReturnType<typeof autopilotExecutionStrategy>;
+		try {
+			strategy = autopilotExecutionStrategy(
+				{
+					lane: "control-flow",
+					route: "native",
+					target: "./sample",
+					commands: [
+						{
+							label: "ghidra analysis",
+							command: "ghidra --headless ./sample",
+							evidence: "native analysis",
+						},
+					],
+					notes: [],
+				},
+				createBootstrapPlan(["ghidra"]),
+			);
+		} finally {
+			if (previousPath === undefined) delete process.env.PATH;
+			else process.env.PATH = previousPath;
+		}
+		expect(strategy.mode).toBe("degraded");
+		expect(strategy.fallbacks[0]?.command).toContain("objdump -d");
+		expect(strategy.fallbacks[0]?.command).not.toMatch(/\br2\b|\bradare2\b/);
 	});
 
 	it("turns tool/runtime failures into repair matrix follow-ups", async () => {

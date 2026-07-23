@@ -8,7 +8,7 @@ import { ensureReconStorage } from "./resources.ts";
 import type { RoutePlan } from "./routes.ts";
 import type { LaneCommand } from "./specialist-command-planner.ts";
 import { evidenceRunsDir, readTextFile, toolIndexPath, writePrivateTextFile } from "./storage.ts";
-import { shellQuote } from "./target.ts";
+import { escapeRegExp, shellQuote } from "./target.ts";
 import { compactStoredArtifact, truncateMiddle } from "./text.ts";
 import { repiIndexedToolPresent, repiResolvedToolPresent } from "./tool-presence.ts";
 import { REPI_TOOL_BOOTSTRAP_CATALOG, type RepiToolBootstrapCatalogEntry } from "./toolchain.ts";
@@ -106,7 +106,22 @@ function toolsFromCommand(command: string): string[] {
 		const tool = firstToken.split("/").pop();
 		if (tool) tools.add(tool);
 	}
-	return Array.from(tools);
+	// A guarded probe or best-effort command is evidence-capable even when the
+	// optional utility is absent. Keep the enclosing command pack runnable so
+	// its portable portions (file/strings/readelf/etc.) still execute.
+	const optionalTools = new Set<string>();
+	for (const match of withoutHeredocs.matchAll(/\bcommand\s+-v\s+([A-Za-z0-9_.:+-]+)/gi)) {
+		optionalTools.add(match[1]!.toLowerCase());
+	}
+	for (const line of withoutHeredocs.split(/\r?\n/)) {
+		if (!/\|\|\s*(?:true|:)\s*(?:$|[;&])/i.test(line)) continue;
+		for (const tool of tools) {
+			if (new RegExp(`\\b${escapeRegExp(tool)}\\b`, "i").test(line)) {
+				optionalTools.add(tool.toLowerCase());
+			}
+		}
+	}
+	return Array.from(tools).filter((tool) => !optionalTools.has(tool.toLowerCase()));
 }
 
 export function recommendedToolsForRoute(route: RoutePlan, pack?: LaneCommandPack, map?: PassiveMapContext): string[] {
@@ -282,6 +297,30 @@ function fallbackForMissingTools(
 		const readelf = `readelf -hW ${target}; readelf -lW ${target} 2>/dev/null | grep -Ei 'GNU_STACK|GNU_RELRO' || true`;
 		return { label, command: [rabin, readelf].filter(Boolean).join("; "), evidence };
 	}
+	if (missingTools.includes("rg") && hasReplacement(["grep"])) {
+		return {
+			label,
+			command: command.command.replace(/(^|[;&|()\n]\s*)rg(?=\s)/g, "$1grep -RIn"),
+			evidence,
+		};
+	}
+	if (missingTools.includes("ghidra") && target !== "<TARGET>") {
+		const disassembler = ["r2", "radare2"].find((tool) => repiResolvedToolPresent(index, tool));
+		if (disassembler) {
+			return {
+				label,
+				command: `${disassembler} -A -q -c 'aaa; afl; iz~license,key,serial,valid,invalid,flag; q' ${target}`,
+				evidence,
+			};
+		}
+		if (repiResolvedToolPresent(index, "objdump")) {
+			return {
+				label,
+				command: `objdump -d ${target} 2>/dev/null | grep -iE 'license|serial|key|valid|invalid|verify|strcmp|memcmp' -C 8 | head -220 || true`,
+				evidence,
+			};
+		}
+	}
 	if (missingTools.includes("rabin2") && target !== "<TARGET>" && hasReplacement(["readelf", "objdump"])) {
 		return {
 			label,
@@ -308,6 +347,13 @@ function fallbackForMissingTools(
 		return {
 			label,
 			command: `strace -f -e trace=read,write,openat,execve -s 256 ${target} 2>&1 | head -180 || true`,
+			evidence,
+		};
+	}
+	if (missingTools.includes("ltrace") && target !== "<TARGET>") {
+		return {
+			label,
+			command: `ldd ${target} 2>/dev/null || true; ${target} </dev/null 2>&1 | head -120 || true`,
 			evidence,
 		};
 	}

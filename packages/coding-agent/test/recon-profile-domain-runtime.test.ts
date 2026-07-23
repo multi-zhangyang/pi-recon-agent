@@ -360,7 +360,7 @@ describe("REPI kernel profile domain runtime captures", () => {
 
 		expect(execCalls).toHaveLength(1);
 		expect(execCalls[0]?.args.join("\n")).toContain("REPI_ADAPTER_TARGET");
-		expect(execCalls[0]?.args.join("\n")).toContain("gdb -q");
+		expect(execCalls[0]?.args.join("\n")).toMatch(/(?:gdb -q|objdump -d)/);
 		const resultText = result.content[0]?.text ?? "";
 		expect(resultText).toContain("native_runtime:");
 		expect(resultText).toContain("mode: run");

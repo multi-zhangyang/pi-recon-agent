@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process";
+import { accessSync, constants, statSync } from "node:fs";
+import { delimiter, join } from "node:path";
 
 export type RepiToolPresenceIndex = Map<string, { present: boolean; path?: string }>;
 
@@ -41,12 +42,25 @@ export function repiHostToolPresent(
 		hostToolPresenceCache.set(cacheKey, probed);
 		return probed;
 	}
-	const result = spawnSync("bash", ["-lc", 'command -v "$1" >/dev/null 2>&1', "repi-tool-presence", name], {
-		timeout: 2000,
-		stdio: "ignore",
-		env: { ...process.env, PATH: pathEnv },
-	});
-	const present = result.status === 0;
+	const extensions =
+		process.platform === "win32" ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean) : [""];
+	let present = false;
+	for (const directory of pathEnv.split(delimiter)) {
+		if (!directory) continue;
+		for (const extension of extensions) {
+			const candidate = join(directory, `${name}${extension}`);
+			try {
+				accessSync(candidate, process.platform === "win32" ? constants.F_OK : constants.X_OK);
+				if (statSync(candidate).isFile()) {
+					present = true;
+					break;
+				}
+			} catch {
+				// Continue searching the remaining PATH entries.
+			}
+		}
+		if (present) break;
+	}
 	hostToolPresenceCache.set(cacheKey, present);
 	return present;
 }
