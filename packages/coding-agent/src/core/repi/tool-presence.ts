@@ -3,7 +3,14 @@ import { delimiter, join } from "node:path";
 
 export type RepiToolPresenceIndex = Map<string, { present: boolean; path?: string }>;
 
-const hostToolPresenceCache = new Map<string, boolean>();
+function executableFilePresent(path: string): boolean {
+	try {
+		accessSync(path, process.platform === "win32" ? constants.F_OK : constants.X_OK);
+		return statSync(path).isFile();
+	} catch {
+		return false;
+	}
+}
 
 export function repiToolIndexEntry(
 	index: RepiToolPresenceIndex,
@@ -32,16 +39,9 @@ export function repiHostToolPresent(
 ): boolean | undefined {
 	const name = tool.trim();
 	if (!/^[A-Za-z0-9_.:+-]+$/.test(name)) return undefined;
-	const lower = name.toLowerCase();
 	const pathEnv = options.pathEnv ?? process.env.PATH ?? "";
-	const cacheKey = `${lower}\0${pathEnv}`;
-	const cached = hostToolPresenceCache.get(cacheKey);
-	if (cached !== undefined) return cached;
 	const probed = options.probe?.(name);
-	if (probed !== undefined) {
-		hostToolPresenceCache.set(cacheKey, probed);
-		return probed;
-	}
+	if (probed !== undefined) return probed;
 	const extensions =
 		process.platform === "win32" ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean) : [""];
 	let present = false;
@@ -49,19 +49,13 @@ export function repiHostToolPresent(
 		if (!directory) continue;
 		for (const extension of extensions) {
 			const candidate = join(directory, `${name}${extension}`);
-			try {
-				accessSync(candidate, process.platform === "win32" ? constants.F_OK : constants.X_OK);
-				if (statSync(candidate).isFile()) {
-					present = true;
-					break;
-				}
-			} catch {
-				// Continue searching the remaining PATH entries.
+			if (executableFilePresent(candidate)) {
+				present = true;
+				break;
 			}
 		}
 		if (present) break;
 	}
-	hostToolPresenceCache.set(cacheKey, present);
 	return present;
 }
 
@@ -70,5 +64,9 @@ export function repiResolvedToolPresent(
 	tool: string,
 	options: { pathEnv?: string; probe?: (tool: string) => boolean | undefined } = {},
 ): boolean | undefined {
-	return repiIndexedToolPresent(index, tool) ?? repiHostToolPresent(tool, options);
+	const live = repiHostToolPresent(tool, options);
+	if (live !== undefined) return live;
+	const indexed = repiToolIndexEntry(index, tool);
+	if (indexed?.present && indexed.path && executableFilePresent(indexed.path)) return true;
+	return indexed?.present;
 }

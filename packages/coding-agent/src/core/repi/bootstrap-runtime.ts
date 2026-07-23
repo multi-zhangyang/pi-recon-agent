@@ -8,9 +8,9 @@ import { ensureReconStorage } from "./resources.ts";
 import type { RoutePlan } from "./routes.ts";
 import type { LaneCommand } from "./specialist-command-planner.ts";
 import { evidenceRunsDir, readTextFile, toolIndexPath, writePrivateTextFile } from "./storage.ts";
-import { escapeRegExp, shellQuote } from "./target.ts";
+import { shellQuote } from "./target.ts";
 import { compactStoredArtifact, truncateMiddle } from "./text.ts";
-import { repiIndexedToolPresent, repiResolvedToolPresent } from "./tool-presence.ts";
+import { repiResolvedToolPresent } from "./tool-presence.ts";
 import { REPI_TOOL_BOOTSTRAP_CATALOG, type RepiToolBootstrapCatalogEntry } from "./toolchain.ts";
 
 export type ToolIndexEntry = { present: boolean; path?: string };
@@ -80,14 +80,12 @@ export function formatBootstrapPlan(plan: BootstrapPlan[]): string {
 }
 
 function toolsFromCommand(command: string): string[] {
-	const tools = new Set<string>();
 	const withoutHeredocs = command.replace(
 		/<<-?\s*(["']?)([A-Za-z_][A-Za-z0-9_-]*)\1[^\n]*\n[\s\S]*?(?:^|\n)\s*\2\s*(?:\n|$)/gm,
 		"\n",
 	);
-	const segments = withoutHeredocs.split(/&&|\|\||[;|\n{}()]|\b(?:then|do|else|elif)\b/i);
 	const wrappers = new Set(["env", "exec", "nohup", "sudo", "timeout", "xargs"]);
-	for (const segment of segments) {
+	const firstCommandTool = (segment: string): string | undefined => {
 		const tokens = segment.trim().split(/\s+/).filter(Boolean);
 		while (tokens[0] && /^(?:if|while|until|for|case|then|do|else|elif|!)$/i.test(tokens[0])) tokens.shift();
 		while (tokens[0] && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0])) tokens.shift();
@@ -98,30 +96,29 @@ function toolsFromCommand(command: string): string[] {
 			while (tokens[0] && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0])) tokens.shift();
 		}
 		if (tokens[0]?.toLowerCase() === "command") {
-			if (tokens[1] === "-v" || tokens[1] === "-V") continue;
+			if (tokens[1] === "-v" || tokens[1] === "-V") return undefined;
 			tokens.shift();
 		}
-		const firstToken = tokens[0]?.replace(/['"`]/g, "");
-		if (!firstToken || SHELL_BUILTIN_OR_TEXT_TOOL.test(firstToken)) continue;
-		const tool = firstToken.split("/").pop();
+		const firstToken = tokens[0]?.replace(/['"]/g, "").replaceAll(String.fromCharCode(96), "");
+		if (!firstToken || SHELL_BUILTIN_OR_TEXT_TOOL.test(firstToken)) return undefined;
+		return firstToken.split("/").pop();
+	};
+	// Mask optional command occurrences instead of optional tool names. A later
+	// unguarded invocation of the same tool is still a hard dependency.
+	const requiredCommand = withoutHeredocs
+		.replace(/\bif\s+command\s+-v\s+([A-Za-z0-9_.:+-]+)\b[\s\S]*?\bthen\b[\s\S]*?\b\1\b[\s\S]*?\bfi\b/gim, " ")
+		.replace(
+			/\bcommand\s+-v\s+([A-Za-z0-9_.:+-]+)(?:\s+(?:\d*(?:>>?|<<?)(?:&\d+|[^\s;&|]+)))*\s*&&\s*\1\b[^;&|\n]*/gi,
+			" ",
+		)
+		.replace(/(^|&&|[;|\n{}()])\s*([^;&|\n{}()]+?)\s*\|\|\s*(?:true|:)(?=\s*(?:$|&&|[;|\n{}()]))/gim, "$1 ");
+	const segments = requiredCommand.split(/&&|\|\||[;|\n{}()]|\b(?:then|do|else|elif)\b/i);
+	const tools = new Set<string>();
+	for (const segment of segments) {
+		const tool = firstCommandTool(segment);
 		if (tool) tools.add(tool);
 	}
-	// A guarded probe or best-effort command is evidence-capable even when the
-	// optional utility is absent. Keep the enclosing command pack runnable so
-	// its portable portions (file/strings/readelf/etc.) still execute.
-	const optionalTools = new Set<string>();
-	for (const match of withoutHeredocs.matchAll(/\bcommand\s+-v\s+([A-Za-z0-9_.:+-]+)/gi)) {
-		optionalTools.add(match[1]!.toLowerCase());
-	}
-	for (const line of withoutHeredocs.split(/\r?\n/)) {
-		if (!/\|\|\s*(?:true|:)\s*(?:$|[;&])/i.test(line)) continue;
-		for (const tool of tools) {
-			if (new RegExp(`\\b${escapeRegExp(tool)}\\b`, "i").test(line)) {
-				optionalTools.add(tool.toLowerCase());
-			}
-		}
-	}
-	return Array.from(tools).filter((tool) => !optionalTools.has(tool.toLowerCase()));
+	return Array.from(tools);
 }
 
 export function recommendedToolsForRoute(route: RoutePlan, pack?: LaneCommandPack, map?: PassiveMapContext): string[] {
@@ -289,13 +286,24 @@ function fallbackForMissingTools(
 	const target = pack.target ? shellQuote(pack.target) : "<TARGET>";
 	const label = `${command.label}:fallback`;
 	const evidence = `${command.evidence}; fallback for missing tools: ${missingTools.join(", ")}`;
-	const hasReplacement = (tools: string[]) => tools.some((tool) => repiResolvedToolPresent(index, tool) === true);
-	if (missingTools.includes("checksec") && target !== "<TARGET>" && hasReplacement(["rabin2", "readelf"])) {
-		const rabin = repiIndexedToolPresent(index, "rabin2")
-			? `rabin2 -I ${target} 2>/dev/null | grep -Ei 'canary|nx|pic|relro|stripped|arch|bits' || true`
-			: "";
-		const readelf = `readelf -hW ${target}; readelf -lW ${target} 2>/dev/null | grep -Ei 'GNU_STACK|GNU_RELRO' || true`;
-		return { label, command: [rabin, readelf].filter(Boolean).join("; "), evidence };
+	const hasTool = (tool: string) => repiResolvedToolPresent(index, tool) === true;
+	const hasReplacement = (tools: string[]) => tools.some((tool) => hasTool(tool));
+	const filterOutput = (commandText: string, pattern: string) =>
+		hasTool("grep") ? `${commandText} | grep -iE '${pattern}'` : commandText;
+	const limitOutput = (commandText: string, lines: number) =>
+		hasTool("head") ? `${commandText} | head -${lines}` : commandText;
+	if (missingTools.includes("checksec") && target !== "<TARGET>") {
+		const commands: string[] = [];
+		if (hasTool("rabin2")) {
+			commands.push(filterOutput(`rabin2 -I ${target} 2>/dev/null`, "canary|nx|pic|relro|stripped|arch|bits"));
+		}
+		if (hasTool("readelf")) {
+			commands.push(
+				`readelf -hW ${target}`,
+				filterOutput(`readelf -lW ${target} 2>/dev/null`, "GNU_STACK|GNU_RELRO"),
+			);
+		}
+		if (commands.length > 0) return { label, command: commands.join("; "), evidence };
 	}
 	if (missingTools.includes("rg") && hasReplacement(["grep"])) {
 		return {
@@ -314,74 +322,122 @@ function fallbackForMissingTools(
 			};
 		}
 		if (repiResolvedToolPresent(index, "objdump")) {
+			const disassembly = filterOutput(
+				`objdump -d ${target} 2>/dev/null`,
+				"license|serial|key|valid|invalid|verify|strcmp|memcmp",
+			);
 			return {
 				label,
-				command: `objdump -d ${target} 2>/dev/null | grep -iE 'license|serial|key|valid|invalid|verify|strcmp|memcmp' -C 8 | head -220 || true`,
+				command: limitOutput(disassembly, 220),
 				evidence,
 			};
 		}
 	}
-	if (missingTools.includes("rabin2") && target !== "<TARGET>" && hasReplacement(["readelf", "objdump"])) {
-		return {
-			label,
-			command: `readelf -hW ${target}; readelf -sW ${target} 2>/dev/null | head -160; objdump -T ${target} 2>/dev/null | head -120`,
-			evidence,
-		};
+	if (missingTools.includes("rabin2") && target !== "<TARGET>") {
+		const commands: string[] = [];
+		if (hasTool("readelf")) {
+			commands.push(`readelf -hW ${target}`, limitOutput(`readelf -sW ${target} 2>/dev/null`, 160));
+		}
+		if (hasTool("objdump")) commands.push(limitOutput(`objdump -T ${target} 2>/dev/null`, 120));
+		if (commands.length > 0) return { label, command: commands.join("; "), evidence };
 	}
 	if (
 		(missingTools.includes("r2") || missingTools.includes("radare2")) &&
 		target !== "<TARGET>" &&
 		hasReplacement(["strings", "objdump", "readelf"])
 	) {
+		const commands: string[] = [];
+		if (hasTool("strings")) {
+			commands.push(
+				limitOutput(
+					filterOutput(
+						`strings -a -n 5 ${target}`,
+						"license|serial|key|valid|invalid|check|verify|strcmp|memcmp|flag|pass|fail",
+					),
+					160,
+				),
+			);
+		}
+		if (hasTool("objdump")) {
+			commands.push(
+				limitOutput(
+					filterOutput(
+						`objdump -d -Mintel ${target} 2>/dev/null`,
+						"strcmp|memcmp|strncmp|license|serial|key|valid|invalid",
+					),
+					220,
+				),
+			);
+		}
+		if (hasTool("readelf")) {
+			commands.push(
+				limitOutput(
+					filterOutput(`readelf -sW ${target} 2>/dev/null`, "main|strcmp|memcmp|license|verify|check"),
+					120,
+				),
+			);
+		}
+		if (commands.length === 0) return undefined;
 		return {
 			label,
-			command: [
-				`strings -a -n 5 ${target} | grep -iE 'license|serial|key|valid|invalid|check|verify|strcmp|memcmp|flag|pass|fail' | head -160`,
-				`objdump -d -Mintel ${target} 2>/dev/null | grep -iE 'strcmp|memcmp|strncmp|license|serial|key|valid|invalid' -C 8 | head -220 || true`,
-				`readelf -sW ${target} 2>/dev/null | grep -iE 'main|strcmp|memcmp|license|verify|check' | head -120 || true`,
-			].join("; "),
+			command: commands.join("; "),
 			evidence,
 		};
 	}
 	if (missingTools.includes("gdb") && target !== "<TARGET>" && hasReplacement(["objdump"])) {
 		return {
 			label,
-			command: `objdump -d -Mintel ${target} 2>/dev/null | head -260 || true`,
+			command: limitOutput(`objdump -d -Mintel ${target} 2>/dev/null`, 260),
 			evidence,
 		};
 	}
 	if (missingTools.includes("ltrace") && target !== "<TARGET>" && hasReplacement(["strace"])) {
 		return {
 			label,
-			command: `strace -f -e trace=read,write,openat,execve -s 256 ${target} 2>&1 | head -180 || true`,
+			command: limitOutput(`strace -f -e trace=read,write,openat,execve -s 256 ${target} 2>&1`, 180),
 			evidence,
 		};
 	}
 	if (missingTools.includes("ltrace") && target !== "<TARGET>") {
+		const commands = hasTool("ldd")
+			? [`ldd ${target} 2>/dev/null`, `${target} </dev/null 2>&1`]
+			: [`${target} </dev/null 2>&1`];
 		return {
 			label,
-			command: `ldd ${target} 2>/dev/null || true; ${target} </dev/null 2>&1 | head -120 || true`,
+			command: commands.join("; "),
 			evidence,
 		};
 	}
 	if (missingTools.includes("strace") && target !== "<TARGET>") {
+		const commands = hasTool("ldd")
+			? [`ldd ${target} 2>/dev/null`, `${target} </dev/null 2>&1`]
+			: [`${target} </dev/null 2>&1`];
 		return {
 			label,
-			command: `ldd ${target} 2>/dev/null || true; ${target} </dev/null 2>&1 | head -120 || true`,
+			command: commands.join("; "),
 			evidence,
 		};
 	}
-	if (missingTools.includes("aapt") && target !== "<TARGET>") {
+	if (missingTools.includes("aapt") && target !== "<TARGET>" && hasTool("unzip")) {
 		return {
 			label,
-			command: `unzip -l ${target} | head -180; unzip -p ${target} AndroidManifest.xml 2>/dev/null | head -80 || true`,
+			command: [
+				limitOutput(`unzip -l ${target}`, 180),
+				limitOutput(`unzip -p ${target} AndroidManifest.xml 2>/dev/null`, 80),
+			].join("; "),
 			evidence,
 		};
 	}
-	if (missingTools.includes("jadx") && target !== "<TARGET>") {
+	if (missingTools.includes("jadx") && target !== "<TARGET>" && hasTool("strings")) {
 		return {
 			label,
-			command: `strings -a -n 5 ${target} | grep -iE 'license|serial|key|valid|invalid|check|verify|root|debug|frida|token|secret' | head -220`,
+			command: limitOutput(
+				filterOutput(
+					`strings -a -n 5 ${target}`,
+					"license|serial|key|valid|invalid|check|verify|root|debug|frida|token|secret",
+				),
+				220,
+			),
 			evidence,
 		};
 	}

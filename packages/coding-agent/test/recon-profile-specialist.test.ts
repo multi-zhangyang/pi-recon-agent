@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -59,17 +59,27 @@ describe("REPI kernel profile self-heal and specialist routing", () => {
 		].join("\n");
 		expect(commandKnownTools(command)).not.toContain("binwalk");
 		expect(commandKnownTools(command)).toContain("file");
+		expect(commandKnownTools("command -v rg >/dev/null 2>&1; rg -n license .")).toContain("rg");
+		expect(commandKnownTools("file image.bin; rg -n license image.bin || true")).toEqual(["file"]);
+		expect(commandKnownTools("rg -n optional . || true; rg -n required .")).toEqual(["rg"]);
+		expect(commandKnownTools("if command -v rg; then rg -n optional .; fi; rg -n required .")).toEqual(["rg"]);
+		expect(commandKnownTools("command -v rg >/dev/null 2>&1 && rg -n optional .; file image.bin")).toEqual(["file"]);
 	});
 
 	it("selects an actually indexed disassembler for missing native analysis commands", () => {
 		const toolDir = join(agentDir, "recon", "tools");
+		const binDir = join(tempDir, "bin");
 		mkdirSync(toolDir, { recursive: true });
+		mkdirSync(binDir, { recursive: true });
+		const objdumpPath = join(binDir, "objdump");
+		writeFileSync(objdumpPath, "#!/bin/sh\nexit 0\n");
+		chmodSync(objdumpPath, 0o755);
 		writeFileSync(
 			join(toolDir, "tool-index.md"),
-			["| Tool | Present | Path |", "|---|---:|---|", "| objdump | yes | /usr/bin/objdump |", ""].join("\n"),
+			["| Tool | Present | Path |", "|---|---:|---|", `| objdump | yes | ${objdumpPath} |`, ""].join("\n"),
 		);
 		const previousPath = process.env.PATH;
-		process.env.PATH = "";
+		process.env.PATH = binDir;
 		let strategy: ReturnType<typeof autopilotExecutionStrategy>;
 		try {
 			strategy = autopilotExecutionStrategy(
@@ -101,6 +111,41 @@ describe("REPI kernel profile self-heal and specialist routing", () => {
 		expect(strategy.fallbacks).toHaveLength(2);
 		expect(strategy.fallbacks.every((fallback) => fallback.command.includes("objdump -d"))).toBe(true);
 		expect(strategy.fallbacks.every((fallback) => !/\br2\b|\bradare2\b/.test(fallback.command))).toBe(true);
+	});
+
+	it("builds multi-tool fallbacks only from tools that are actually available", () => {
+		const toolDir = join(agentDir, "recon", "tools");
+		const binDir = join(tempDir, "bin");
+		mkdirSync(toolDir, { recursive: true });
+		mkdirSync(binDir, { recursive: true });
+		const readelfPath = join(binDir, "readelf");
+		writeFileSync(readelfPath, "#!/bin/sh\nexit 0\n");
+		chmodSync(readelfPath, 0o755);
+		writeFileSync(
+			join(toolDir, "tool-index.md"),
+			["| Tool | Present | Path |", "|---|---:|---|", `| readelf | yes | ${readelfPath} |`, ""].join("\n"),
+		);
+		const previousPath = process.env.PATH;
+		process.env.PATH = binDir;
+		let strategy: ReturnType<typeof autopilotExecutionStrategy>;
+		try {
+			strategy = autopilotExecutionStrategy(
+				{
+					lane: "control-flow",
+					route: "native",
+					target: "./sample",
+					commands: [{ label: "r2 analysis", command: "r2 -A ./sample", evidence: "native analysis" }],
+					notes: [],
+				},
+				createBootstrapPlan(["r2"]),
+			);
+		} finally {
+			if (previousPath === undefined) delete process.env.PATH;
+			else process.env.PATH = previousPath;
+		}
+		expect(strategy.mode).toBe("degraded");
+		expect(strategy.fallbacks[0]?.command).toContain("readelf");
+		expect(strategy.fallbacks[0]?.command).not.toMatch(/\b(?:strings|objdump)\b/);
 	});
 
 	it("turns tool/runtime failures into repair matrix follow-ups", async () => {
