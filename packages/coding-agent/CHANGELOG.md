@@ -1,5 +1,7 @@
 # REPI Changelog
 
+## [Unreleased]
+
 REPI is a reverse-engineering / penetration-testing autonomous agent built on
 the [pi coding agent](https://github.com/earendil-works/pi) runtime. This
 changelog covers REPI-specific releases. The upstream pi changelog is preserved
