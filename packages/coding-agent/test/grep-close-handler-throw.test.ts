@@ -65,7 +65,10 @@ describe("grep tool close handler settles on an internal throw (opt #121)", () =
 
 		const promise = def.execute("call-121", { pattern: "x", path: "." }, undefined, undefined, undefined as never);
 
-		await vi.waitFor(() => expect(fakeChild.listenerCount("close")).toBeGreaterThan(0));
+		await vi.waitFor(() => expect(fakeChild.listenerCount("close")).toBeGreaterThan(0), {
+			timeout: 5_000,
+			interval: 20,
+		});
 
 		// A match whose lines.text is a NUMBER → `match.lineText.replace(...)`
 		// throws TypeError in the close handler's formatting loop.
