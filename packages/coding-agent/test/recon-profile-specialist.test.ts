@@ -1,6 +1,6 @@
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import { createReconExtensionFactory } from "../src/core/recon-profile.ts";
@@ -19,6 +19,7 @@ describe("REPI kernel profile self-heal and specialist routing", () => {
 	let agentDir: string;
 	let previousAgentDir: string | undefined;
 	let previousBranchId: string | undefined;
+	let previousPath: string | undefined;
 
 	beforeEach(() => {
 		tempDir = join(tmpdir(), `repi-profile-specialist-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -26,6 +27,7 @@ describe("REPI kernel profile self-heal and specialist routing", () => {
 		mkdirSync(agentDir, { recursive: true });
 		previousAgentDir = process.env[ENV_AGENT_DIR];
 		previousBranchId = process.env[ENV_BRANCH_ID];
+		previousPath = process.env.PATH;
 		process.env[ENV_AGENT_DIR] = agentDir;
 	});
 
@@ -40,6 +42,8 @@ describe("REPI kernel profile self-heal and specialist routing", () => {
 		} else {
 			process.env[ENV_BRANCH_ID] = previousBranchId;
 		}
+		if (previousPath === undefined) delete process.env.PATH;
+		else process.env.PATH = previousPath;
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 
@@ -62,6 +66,7 @@ describe("REPI kernel profile self-heal and specialist routing", () => {
 		expect(commandKnownTools("command -v rg >/dev/null 2>&1; rg -n license .")).toContain("rg");
 		expect(commandKnownTools("file image.bin; rg -n license image.bin || true")).toEqual(["file"]);
 		expect(commandKnownTools("rg -n optional . || true; rg -n required .")).toEqual(["rg"]);
+		expect(commandKnownTools("binwalk image.bin | head -20 || true; file image.bin")).toEqual(["file"]);
 		expect(commandKnownTools("if command -v rg; then rg -n optional .; fi; rg -n required .")).toEqual(["rg"]);
 		expect(commandKnownTools("command -v rg >/dev/null 2>&1 && rg -n optional .; file image.bin")).toEqual(["file"]);
 	});
@@ -297,6 +302,12 @@ describe("REPI kernel profile self-heal and specialist routing", () => {
 	it("closes tool-bootstrap lanes by refreshing tool-index and resuming the blocked source lane", async () => {
 		const tools = new Map<string, unknown>();
 		const execCalls: Array<{ command: string; args: string[] }> = [];
+		const binDir = join(tempDir, "bootstrap-bin");
+		mkdirSync(binDir, { recursive: true });
+		const rgPath = join(binDir, "rg");
+		writeFileSync(rgPath, "#!/bin/sh\nexit 0\n");
+		chmodSync(rgPath, 0o755);
+		process.env.PATH = [binDir, previousPath].filter(Boolean).join(delimiter);
 		const fakePi = {
 			registerCommand() {},
 			registerTool(tool: { name: string }) {
@@ -315,7 +326,7 @@ describe("REPI kernel profile self-heal and specialist routing", () => {
 						stdout: [
 							"| file | yes | /usr/bin/file | file |",
 							"| sha256sum | yes | /usr/bin/sha256sum | sha256sum |",
-							"| rg | yes | /usr/bin/rg | ripgrep |",
+							`| rg | yes | ${rgPath} | ripgrep |`,
 							"| python3 | yes | /usr/bin/python3 | Python |",
 							"",
 						].join("\n"),

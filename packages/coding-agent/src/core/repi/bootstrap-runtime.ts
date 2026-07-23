@@ -111,7 +111,7 @@ function toolsFromCommand(command: string): string[] {
 			/\bcommand\s+-v\s+([A-Za-z0-9_.:+-]+)(?:\s+(?:\d*(?:>>?|<<?)(?:&\d+|[^\s;&|]+)))*\s*&&\s*\1\b[^;&|\n]*/gi,
 			" ",
 		)
-		.replace(/(^|&&|[;|\n{}()])\s*([^;&|\n{}()]+?)\s*\|\|\s*(?:true|:)(?=\s*(?:$|&&|[;|\n{}()]))/gim, "$1 ");
+		.replace(/(^|&&|[;\n{}()])\s*([^;&\n{}()]+?)\s*\|\|\s*(?:true|:)(?=\s*(?:$|&&|[;|\n{}()]))/gim, "$1 ");
 	const segments = requiredCommand.split(/&&|\|\||[;|\n{}()]|\b(?:then|do|else|elif)\b/i);
 	const tools = new Set<string>();
 	for (const segment of segments) {
