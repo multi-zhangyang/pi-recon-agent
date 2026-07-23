@@ -65,6 +65,7 @@ import { buildReLaneSpecialistCommandPackGate } from "./repi/lane-specialist-pac
 import {
 	createMission,
 	type MissionState,
+	missionOperatorDirective,
 	readCurrentMission,
 	updateMissionCheckpoint,
 	writeCurrentMission,
@@ -848,6 +849,7 @@ function formatMission(mission: MissionState): string {
 		[
 			`mission_id: ${mission.id}`,
 			`task: ${truncateMiddle(mission.task, 320)}`,
+			`operator_directive: ${truncateMiddle(missionOperatorDirective(mission) ?? mission.task, 320)}`,
 			formatRoute(mission.route),
 			formatLaneQueue(mission),
 			"checkpoints:",

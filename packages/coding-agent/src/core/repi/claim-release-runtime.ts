@@ -199,6 +199,8 @@ export function createClaimReleaseRuntime(dependencies: ClaimReleaseRuntimeDepen
 					id: mission.id,
 					createdAt: mission.createdAt,
 					task: mission.task,
+					operatorDirective: mission.operatorDirective,
+					directiveRevision: mission.directiveRevision,
 					scope: mission.scope,
 					route: mission.route,
 				})

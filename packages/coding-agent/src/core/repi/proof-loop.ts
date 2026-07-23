@@ -104,13 +104,14 @@ export type RepiProofLoopRuntimeAdapterClosureRowV1 = {
 type RepiProofLoopMissionContext = {
 	route?: { domain?: string };
 	task?: string;
+	operatorDirective?: string;
 };
 
 export function repiProofLoopWorkerForText(
 	text: string,
 	mission?: RepiProofLoopMissionContext,
 ): RepiProofLoopDelegateWorker {
-	const haystack = `${mission?.route?.domain ?? ""}\n${mission?.task ?? ""}\n${text}`;
+	const haystack = `${mission?.route?.domain ?? ""}\n${mission?.operatorDirective ?? mission?.task ?? ""}\n${text}`;
 	if (
 		/web-authz|web|api|http|xhr|fetch|websocket|graphql|jwt|cookie|session|idor|bola|authz|csrf|cors/i.test(haystack)
 	)

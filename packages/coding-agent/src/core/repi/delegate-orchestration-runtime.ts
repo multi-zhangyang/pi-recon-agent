@@ -2,7 +2,12 @@ import { join } from "node:path";
 import type { ArtifactScopeFilterOptions } from "./artifact-scope.ts";
 import type { CampaignOperationRuntime, OperationStep } from "./campaign-operation-runtime.ts";
 import type { EvidenceRecord } from "./evidence.ts";
-import { type MissionCheckpointStatus, type MissionState, readCurrentMission } from "./mission.ts";
+import {
+	type MissionCheckpointStatus,
+	type MissionState,
+	missionOperatorDirective,
+	readCurrentMission,
+} from "./mission.ts";
 import type { createReconLaneRuntime } from "./recon-lane-runtime.ts";
 import { ensureReconStorage } from "./resources.ts";
 import { evidenceDelegationsDir, readTextFile as readText, writePrivateTextFile } from "./storage.ts";
@@ -13,7 +18,7 @@ import type {
 	DelegateWorker,
 } from "./swarm-runtime-types.ts";
 import type { SwarmSupervisorRuntime } from "./swarm-supervisor-runtime.ts";
-import { shellQuote } from "./target.ts";
+import { extractRepiTaskTarget, sanitizeTargetForCommand, shellQuote } from "./target.ts";
 import { slug, truncateMiddle } from "./text.ts";
 
 type CampaignOperationBoundary = Pick<CampaignOperationRuntime, "latestOrBuildOperation">;
@@ -399,7 +404,10 @@ export function createDelegateOrchestrationRuntime(dependencies: DelegateOrchest
 		const repeatedDispatcher = params.dispatcherDemotions.length;
 		const repeatedWorker = params.workerDemotions.length;
 		if (pressure < 3 && repeatedDispatcher < 3 && repeatedWorker < 3) return [];
-		const suffix = commandTargetSuffix(params.target ?? mission.task);
+		const directive = missionOperatorDirective(mission) ?? mission.task;
+		const suffix = commandTargetSuffix(
+			params.target ?? extractRepiTaskTarget(directive) ?? sanitizeTargetForCommand(directive),
+		);
 		return [
 			[
 				"demote_lane autonomous_budget",

@@ -1,4 +1,4 @@
-import type { MissionState } from "./mission.ts";
+import { type MissionState, missionOperatorDirective } from "./mission.ts";
 import { currentMissionPath } from "./storage.ts";
 import { commandTarget, sanitizeTargetForCommand } from "./target.ts";
 
@@ -273,7 +273,7 @@ function kernelStallRecovery(): string[] {
 }
 
 function kernelNextActions(mission: MissionState | undefined, target?: string): string[] {
-	const mappedTarget = commandTarget(target, mission?.task, ".");
+	const mappedTarget = commandTarget(target, missionOperatorDirective(mission) ?? mission?.task, ".");
 	if (!mission)
 		return [
 			`re_mission new ${mappedTarget}`,
@@ -317,7 +317,9 @@ export function buildKernelArtifact(options: {
 	sources: string[];
 }): KernelArtifact {
 	const mission = options.mission;
-	const safeTarget = sanitizeTargetForCommand(options.target) ?? sanitizeTargetForCommand(mission?.task);
+	const safeTarget =
+		sanitizeTargetForCommand(options.target) ??
+		sanitizeTargetForCommand(missionOperatorDirective(mission) ?? mission?.task);
 	const sources = options.sources;
 	const directives = kernelDirectives(mission, sources);
 	const directiveStack = directives

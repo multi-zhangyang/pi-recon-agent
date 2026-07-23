@@ -1,4 +1,4 @@
-import type { MissionState } from "./mission.ts";
+import { type MissionState, missionOperatorDirective } from "./mission.ts";
 
 export type NativeSpecialistCommandProviderDependencies = {
 	mission: MissionState;
@@ -41,7 +41,7 @@ export function createNativeSpecialistCommandProvider(dependencies: NativeSpecia
 	const nativeDeepAllowedDomain =
 		/Native reverse|Pwn \/ exploit|Mobile \/ Android|Mobile \/ iOS|CTF \/ sandbox/.test(domain) ||
 		/native|reverse|binary|elf|pe32|mach-o|wasm|pwn|rop|heap|crackme|license|serial|keygen|patch|symbolic|fuzz|二进制|逆向|反编译|反汇编/.test(
-			mission.task.toLowerCase(),
+			(missionOperatorDirective(mission) ?? mission.task).toLowerCase(),
 		);
 	const wantsNativeDeep =
 		nativeDeepAllowedDomain &&

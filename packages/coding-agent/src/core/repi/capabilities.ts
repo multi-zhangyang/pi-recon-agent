@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import type { ExtensionAPI } from "../extensions/types.ts";
-import { readCurrentSessionMission } from "./mission.ts";
+import { missionOperatorDirective, readCurrentSessionMission } from "./mission.ts";
 import { REPI_TOOL_NAMES } from "./profile.ts";
 import { isRepiContinuation, isRepiTask, type RoutePlan, routeRepiTask } from "./routes.ts";
 import { runMissionSessionScope } from "./session-scope.ts";
@@ -457,14 +457,14 @@ export function createRepiCapabilityActivationFactory(options: RepiCapabilityAct
 					allowWriteTools = false;
 				}
 				if (mission) {
-					carriedTask = mission.task;
+					carriedTask = missionOperatorDirective(mission);
 					carriedRoute = mission.route;
 				} else if (routedPrompt) {
 					carriedTask = event.prompt;
 					carriedRoute = routeRepiTask(event.prompt);
 				}
 
-				const task = mission?.task ?? carriedTask;
+				const task = missionOperatorDirective(mission) ?? carriedTask;
 				const route = mission?.route ?? carriedRoute;
 				if (!task || !route) {
 					routedProfiles = [];
@@ -477,7 +477,10 @@ export function createRepiCapabilityActivationFactory(options: RepiCapabilityAct
 
 				allowWriteTools =
 					allowWriteTools || repiPromptNeedsWriteTools(event.prompt) || repiPromptNeedsWriteTools(task);
-				routedProfiles = repiCapabilityProfilesForRoute(route, task);
+				const promptRoute = routedPrompt && !continuation ? routeRepiTask(event.prompt) : undefined;
+				const effectiveRoute =
+					promptRoute && promptRoute.domain !== "Reverse/Pentest general" ? promptRoute : route;
+				routedProfiles = repiCapabilityProfilesForRoute(effectiveRoute, promptRoute ? event.prompt : task);
 				const selected = applyProfiles(explicitProfiles ?? routedProfiles);
 				// The mission runtime already chose the routed profile. Keep capability
 				// activation available to standalone SDK/RPC users, but do not expose a

@@ -6,7 +6,7 @@ import type { BootstrapPlan } from "./autopilot-runtime.ts";
 import { type EvidenceRecord, parseEvidenceRecords } from "./evidence.ts";
 import { appendEvidence, buildContextEvidenceTail } from "./evidence-runtime.ts";
 import { type AttackGraphArtifact, formatAttackGraph, formatAttackGraphArtifactMarkdown } from "./graph.ts";
-import type { MissionLane, MissionState } from "./mission.ts";
+import { type MissionLane, type MissionState, missionOperatorDirective } from "./mission.ts";
 import type { DecisionCoreArtifact } from "./operator-orchestration-runtime.ts";
 import type { PassiveMapContext } from "./recon-lane-runtime.ts";
 import { ensureReconStorage } from "./resources.ts";
@@ -167,7 +167,7 @@ export function createEvidenceGraphRuntime(dependencies: EvidenceGraphRuntimeDep
 		lines.push(
 			"",
 			"## root objective",
-			mission?.task ?? "(no active mission — run re_route / re_kernel first)",
+			missionOperatorDirective(mission) ?? "(no active mission — run re_route / re_kernel first)",
 			`route: ${mission ? formatRoute(mission.route) : "(none)"}`,
 			"",
 			"## lanes (branches)",

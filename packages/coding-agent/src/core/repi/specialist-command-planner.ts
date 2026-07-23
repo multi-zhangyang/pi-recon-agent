@@ -1,4 +1,4 @@
-import type { MissionLane, MissionState } from "./mission.ts";
+import { type MissionLane, type MissionState, missionOperatorDirective } from "./mission.ts";
 import { createNativeSpecialistCommandProvider } from "./specialist-native-command-provider.ts";
 import { createWebSpecialistCommandProvider } from "./specialist-web-command-provider.ts";
 import { shellQuote } from "./target.ts";
@@ -23,6 +23,7 @@ export function appendSpecialistRuntimeCommands(
 	const domain = mission.route.domain;
 	const laneName = lane.name.toLowerCase();
 	const context = [
+		missionOperatorDirective(mission),
 		mission.task,
 		domain,
 		mission.route.intent,

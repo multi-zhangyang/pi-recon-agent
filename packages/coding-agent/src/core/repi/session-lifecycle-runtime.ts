@@ -1,14 +1,17 @@
 import { createHash } from "node:crypto";
 import type { ExtensionAPI, ToolCallEvent, ToolDefinition } from "../extensions/types.ts";
-import { repiCapabilityAwareCommand } from "./capabilities.ts";
+import { repiCapabilityAwareCommand, repiPromptNeedsWriteTools } from "./capabilities.ts";
 import { buildEvidenceClaimSummary } from "./evidence.ts";
 import { installRepiGoalMode } from "./goal.ts";
 import {
+	applyMissionDirective,
 	createMission,
 	type MissionRuntimeStats,
 	type MissionState,
+	missionOperatorDirective,
 	readCurrentMission,
 	readCurrentSessionMission,
+	updateMissionDirective,
 	updateMissionRuntimeStats,
 	writeCurrentMission,
 } from "./mission.ts";
@@ -70,9 +73,26 @@ function startsNewRepiMission(activeMission: MissionState | undefined, prompt: s
 	) {
 		return true;
 	}
-	const currentTarget = canonicalMissionTarget(extractRepiTaskTarget(activeMission.task));
+	const requestedRoute = routeRepiTask(prompt);
+	if (requestedRoute.domain !== "Reverse/Pentest general" && requestedRoute.domain !== activeMission.route.domain) {
+		return true;
+	}
+	const currentTarget = canonicalMissionTarget(
+		extractRepiTaskTarget(activeMission.operatorDirective ?? "") ?? extractRepiTaskTarget(activeMission.task),
+	);
 	const requestedTarget = canonicalMissionTarget(extractRepiTaskTarget(prompt));
 	return Boolean(currentTarget && requestedTarget && currentTarget !== requestedTarget);
+}
+
+/** Recognize an explicit operator action without treating ordinary conversation as a new directive. */
+function isOperatorDirectivePrompt(prompt: string): boolean {
+	return (
+		isRepiTask(prompt) ||
+		repiPromptNeedsWriteTools(prompt) ||
+		/\b(?:run|execute|inspect|check|analyze|focus|replay|verify|prove|trace|capture|map)\b|(?:执行|检查|分析|聚焦|回放|验证|证明|跟踪|抓取|映射)/i.test(
+			prompt,
+		)
+	);
 }
 
 function persistedReconStats(stats: ReconStats): MissionRuntimeStats {
@@ -158,7 +178,8 @@ function routedToolGuard(
 	stats: ReconStats,
 	mission: MissionState | undefined,
 ): string | undefined {
-	if (!stats.active || !mission || missionRequestsControlPlane(mission.task)) return undefined;
+	if (!stats.active || !mission || missionRequestsControlPlane(missionOperatorDirective(mission) ?? mission.task))
+		return undefined;
 	const { action, target, url } = customToolAction(event);
 	const explicitTarget = Boolean((target ?? url)?.trim());
 	if (event.toolName === "re_mission" && action === "new") {
@@ -180,7 +201,7 @@ function routedToolGuard(
 		event.toolName === "re_live_browser" &&
 		explicitTarget &&
 		(action === "plan" || action === "run") &&
-		!/(?:re_live_browser|cdp|persistent\s+browser|har)/i.test(mission.task)
+		!/(?:re_live_browser|cdp|persistent\s+browser|har)/i.test(missionOperatorDirective(mission) ?? mission.task)
 	) {
 		return "Use re_runtime_adapter run as the single DomainAdapter browser/network execution path; do not duplicate it with re_live_browser for the same routed target.";
 	}
@@ -290,13 +311,20 @@ export function installRepiSessionLifecycle(
 			const startNewMission = startsNewRepiMission(activeMission, event.prompt);
 			const carriedMission = startNewMission ? undefined : activeMission;
 			const continuation = Boolean(carriedMission) && isRepiContinuation(event.prompt);
+			const directiveUpdate = Boolean(carriedMission) && !continuation && isOperatorDirectivePrompt(event.prompt);
 			if (!carriedMission && !isRepiTask(event.prompt)) return;
 
 			const created = !carriedMission;
 			const route = carriedMission?.route ?? routeRepiTask(event.prompt);
-			const mission =
-				carriedMission ??
-				(noSession ? createMission(event.prompt, route) : writeCurrentMission(createMission(event.prompt, route)));
+			const mission = carriedMission
+				? !directiveUpdate
+					? carriedMission
+					: noSession
+						? applyMissionDirective(carriedMission, event.prompt)
+						: updateMissionDirective(event.prompt, carriedMission)
+				: noSession
+					? createMission(event.prompt, route)
+					: writeCurrentMission(createMission(event.prompt, route));
 			if (startNewMission) resetReconStats(stats);
 			stats.active = true;
 			stats.lastRoute = route;
@@ -319,20 +347,25 @@ export function installRepiSessionLifecycle(
 			const lane = mission.lanes.find((candidate) => candidate.status === "in_progress");
 			const claims = buildEvidenceClaimSummary({ missionId: mission.id, limit: 60 });
 			const fallbackCommand = dependencies.nextDecisionCommand(mission);
-			const target = extractRepiTaskTarget(mission.task);
-			const directCommand = target
-				? `re_runtime_adapter run ${JSON.stringify(redactSensitiveText(target))}`
-				: fallbackCommand;
-			const routedDirectCommand = repiCapabilityAwareCommand(route, mission.task, directCommand);
+			const directive = missionOperatorDirective(mission) ?? mission.task;
+			const target =
+				extractRepiTaskTarget(event.prompt) ??
+				extractRepiTaskTarget(missionOperatorDirective(mission) ?? mission.task);
+			const directExecutionRequested =
+				created || continuation || (isRepiTask(event.prompt) && Boolean(extractRepiTaskTarget(event.prompt)));
+			const directCommand =
+				directExecutionRequested && target
+					? `re_runtime_adapter run ${JSON.stringify(redactSensitiveText(target))}`
+					: fallbackCommand;
+			const routedDirectCommand = repiCapabilityAwareCommand(route, directive, directCommand);
 			const proposedCommand =
 				target && /^re_capabilities\s+activate\b/i.test(routedDirectCommand)
 					? fallbackCommand
 					: routedDirectCommand;
-			const nextCommand = truncateMiddle(proposedCommand.replace(/\s+/g, " "), 180);
+			const nextCommand = truncateMiddle(proposedCommand.replace(/\s+/g, " "), 180).replace(/\s+/g, " ");
 			const selfReviewDue = stats.selfReviewDue;
-			const packet = created
-				? `REPI state: mission=${mission.id}; domain=${route.domain}; lane=${lane?.name ?? "triage"}; next=${nextCommand}`
-				: `REPI state: mission=${mission.id}; lane=${lane?.name ?? "closure"}; claims=${claims.open.length}/${claims.proved.length}/${claims.contradicted.length}; next=${nextCommand}${continuation ? "; continuation=true" : ""}${selfReviewDue ? "; self_review=due" : ""}`;
+			const directiveHint = truncateMiddle(directive.replace(/\s+/g, " "), 120).replace(/\s+/g, " ");
+			const packet = `REPI state: mission=${mission.id}; domain=${route.domain}; lane=${lane?.name ?? "triage"}; directive=${directiveHint}; claims=${claims.open.length}/${claims.proved.length}/${claims.contradicted.length}; next=${nextCommand}${continuation ? "; continuation=true" : ""}${selfReviewDue ? "; self_review=due" : ""}`;
 			if (!created && !selfReviewDue && stats.lastInjectedState === packet) return;
 			stats.lastInjectedState = packet;
 			stats.selfReviewDue = false;

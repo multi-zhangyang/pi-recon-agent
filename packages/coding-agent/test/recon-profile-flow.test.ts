@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -168,6 +168,9 @@ describe("REPI kernel profile runtime adapter and evidence graph flows", () => {
 			"replay: timeout_ms=60000 command=re_runtime_adapter run web-cdp-network-adapter 'https://target.local/app'",
 		);
 		expect(webRun.content[0]?.text).not.toContain("adapter-web-cdp-network-runner");
+		const webArtifact = /^artifact:\s*(.+)$/m.exec(webRun.content[0]?.text ?? "")?.[1]?.trim();
+		expect(webArtifact).toBeDefined();
+		expect(statSync(webArtifact!).mode & 0o777).toBe(0o600);
 
 		const nativeAdapterDir = join(
 			agentDir,

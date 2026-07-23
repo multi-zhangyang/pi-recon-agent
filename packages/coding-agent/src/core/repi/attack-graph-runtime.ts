@@ -6,7 +6,7 @@ import type {
 	RuntimeAdapterGraphParserSummary,
 	RuntimeAdapterMitigationGraphEvidence,
 } from "./graph-artifacts.ts";
-import type { MissionState } from "./mission.ts";
+import { type MissionState, missionOperatorDirective } from "./mission.ts";
 import type { SwarmArtifact } from "./swarm-runtime-types.ts";
 
 export type AttackGraphPassiveMapContext = {
@@ -182,8 +182,9 @@ export function createAttackGraphRuntime(dependencies: AttackGraphRuntimeDepende
 			gaps.push("no active mission");
 		} else {
 			const missionId = `mission:${mission.id}`;
-			addNode({ id: missionId, kind: "mission", label: mission.task, status: "active" });
-			addTask({ id: missionId, kind: "mission", label: mission.task, status: "active", note: mission.route.domain });
+			const directive = missionOperatorDirective(mission) ?? mission.task;
+			addNode({ id: missionId, kind: "mission", label: directive, status: "active" });
+			addTask({ id: missionId, kind: "mission", label: directive, status: "active", note: mission.route.domain });
 			addNode({
 				id: `route:${slug(mission.route.domain)}`,
 				kind: "route",

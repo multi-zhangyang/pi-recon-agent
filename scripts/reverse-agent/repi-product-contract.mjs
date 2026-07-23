@@ -1026,7 +1026,7 @@ rows.push(
 				"function buildExecutionGate(",
 				"function writeExecutionArtifact(",
 				"async function runExecution(",
-				"createDomainAdapter(adapter)",
+				"new DomainAdapterRegistry(",
 				"domainAdapter.execute(",
 				"domainAdapter.verify(execution)",
 				"domainAdapter.replay(execution)",

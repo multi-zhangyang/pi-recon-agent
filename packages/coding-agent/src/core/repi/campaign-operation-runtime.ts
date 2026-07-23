@@ -3,7 +3,12 @@ import type { ExtensionAPI } from "../extensions/types.ts";
 import type { ArtifactScopeFilterOptions } from "./artifact-scope.ts";
 import type { EvidenceRecord } from "./evidence.ts";
 import type { AttackGraphArtifact } from "./graph.ts";
-import type { MissionCheckpointStatus, MissionLane, MissionState } from "./mission.ts";
+import {
+	type MissionCheckpointStatus,
+	type MissionLane,
+	type MissionState,
+	missionOperatorDirective,
+} from "./mission.ts";
 import { REPI_GENERIC_TASK, type RoutePlan } from "./routes.ts";
 import type { LaneCommand } from "./specialist-command-planner.ts";
 import { compactStoredArtifact, parseJsonCodeFence } from "./text.ts";
@@ -200,7 +205,13 @@ export function buildCampaignPhases(
 	toolGaps: string[],
 	sourceArtifacts: string[],
 ): CampaignPhase[] {
-	const taskText = [mission?.task, mission?.route.domain, target, map?.target, ...(map?.signals ?? [])].join("\n");
+	const taskText = [
+		missionOperatorDirective(mission),
+		mission?.route.domain,
+		target,
+		map?.target,
+		...(map?.signals ?? []),
+	].join("\n");
 	const targetRef = target ?? map?.target ?? "<target>";
 	const makePhase = (
 		name: string,
@@ -361,7 +372,7 @@ export function campaignPivotCandidates(
 	map: PassiveMapContext | undefined,
 ): string[] {
 	const text = [
-		mission?.task,
+		missionOperatorDirective(mission),
 		mission?.route.domain,
 		map?.signals.join("\n"),
 		phases.map((phase) => phase.name).join(" "),

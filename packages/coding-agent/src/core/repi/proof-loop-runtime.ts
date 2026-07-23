@@ -16,7 +16,12 @@ import { buildEvidenceClaimSummary, type EvidenceRecord } from "./evidence.ts";
 import type { FailureSignaturePriorityReport } from "./failure-runtime.ts";
 import type { AttackGraphArtifact } from "./graph.ts";
 import { runtimeAdapterMitigationEvidenceForGraph, runtimeAdapterParserSummaryForGraph } from "./graph-artifacts.ts";
-import { type MissionCheckpointStatus, missionRequiresParallel, readCurrentMission } from "./mission.ts";
+import {
+	type MissionCheckpointStatus,
+	missionOperatorDirective,
+	missionRequiresParallel,
+	readCurrentMission,
+} from "./mission.ts";
 import {
 	type CompilerArtifact,
 	type ProofCompilerClaimCheckInputs,
@@ -845,7 +850,7 @@ export function createProofLoopRuntime(dependencies: ProofLoopRuntimeDependencie
 
 	function proofLoopGapItems(target?: string): ProofLoopGapItem[] {
 		const mission = readCurrentMission();
-		const targetRef = target ?? artifactScopeDefaultOptions().target ?? mission?.task;
+		const targetRef = target ?? artifactScopeDefaultOptions().target ?? missionOperatorDirective(mission);
 		const items: Array<Omit<ProofLoopGapItem, "worker">> = [];
 		const add = (source: ProofLoopGapSource, text: string | undefined, sourceArtifacts: string[]) => {
 			const normalized = text?.replace(/\s+/g, " ").trim();
@@ -1362,11 +1367,11 @@ export function createProofLoopRuntime(dependencies: ProofLoopRuntimeDependencie
 			timestamp: new Date().toISOString(),
 			missionId: mission?.id,
 			route: mission?.route.domain,
-			target: options.target ?? artifactScopeDefaultOptions().target ?? mission?.task,
+			target: options.target ?? artifactScopeDefaultOptions().target ?? missionOperatorDirective(mission),
 			mode: options.mode ?? "plan",
 			maxSteps,
 			replaySteps,
-			steps: buildProofLoopSteps(options.target ?? mission?.task),
+			steps: buildProofLoopSteps(options.target ?? missionOperatorDirective(mission)),
 			executed: [],
 			verdict: "partial",
 			checkStatus: [],
@@ -1377,7 +1382,7 @@ export function createProofLoopRuntime(dependencies: ProofLoopRuntimeDependencie
 			quickPlanPhases: [],
 			quickPlanAssertions: [],
 			runtimeAdapterClosure: [],
-			autonomousBudget: autonomousExecutionBudget(options.target ?? mission?.task),
+			autonomousBudget: autonomousExecutionBudget(options.target ?? missionOperatorDirective(mission)),
 			dispatcherScoreDecay: [],
 			repeatedFailureDemotions: [],
 			highScorePromotions: [],

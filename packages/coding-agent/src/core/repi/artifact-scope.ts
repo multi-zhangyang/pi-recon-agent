@@ -1,4 +1,4 @@
-import { readCurrentMission } from "./mission.ts";
+import { missionOperatorDirective, readCurrentMission } from "./mission.ts";
 import { sanitizeTargetForCommand } from "./target.ts";
 import { metadataValue, parseJsonCodeFence } from "./text.ts";
 
@@ -30,7 +30,10 @@ export function artifactScopeDefaultOptions(
 	return {
 		missionId: options.missionId ?? mission?.id,
 		route: options.route ?? mission?.route.domain,
-		target: sanitizeTargetForCommand(options.target) ?? artifactScopeInferTarget(mission?.task),
+		target:
+			sanitizeTargetForCommand(options.target) ??
+			artifactScopeInferTarget(missionOperatorDirective(mission)) ??
+			artifactScopeInferTarget(mission?.task),
 		requestedBy: options.requestedBy ?? "latest_artifact",
 		scanLimit: options.scanLimit,
 		write: options.write,

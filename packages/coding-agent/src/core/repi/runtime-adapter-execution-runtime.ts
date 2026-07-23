@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "../extensions/types.ts";
 import { atomicWriteFileSync } from "../tools/atomic-write.ts";
 import { parseToolIndex } from "./bootstrap-runtime.ts";
-import { createDomainAdapter } from "./domain-adapter.ts";
+import { createDomainAdapter, DomainAdapterRegistry } from "./domain-adapter.ts";
 import type { EvidenceRecord } from "./evidence.ts";
 import { readCurrentMission } from "./mission.ts";
 import { ensureReconStorage } from "./resources.ts";
@@ -86,7 +86,10 @@ export function createRuntimeAdapterExecutionRuntime(dependencies: RuntimeAdapte
 			});
 			return `${formatRuntimeAdapterExecutionGate(report)}\n\nblocked: runner_unavailable adapter=${adapter.adapterId} native=${adapter.tool} fallback=${adapter.fallbackTool}\nevidence: runner_preflight_blocked_no_synthetic_success\nnext: re_bootstrap plan ${missingTools.join(" ")}`;
 		}
-		const domainAdapter = createDomainAdapter(adapter);
+		const domainAdapter = new DomainAdapterRegistry(report.adapters.map(createDomainAdapter)).get(adapter.adapterId);
+		if (!domainAdapter) {
+			return `runtime_adapter_execution:\nstatus: blocked\nreason: adapter_registry_miss adapter=${adapter.adapterId}`;
+		}
 		const timeout = Math.max(
 			5000,
 			Math.min(options.timeoutMs ?? Number(process.env.REPI_RUNTIME_ADAPTER_TIMEOUT_MS ?? 60000), 600000),
@@ -136,7 +139,7 @@ export function createRuntimeAdapterExecutionRuntime(dependencies: RuntimeAdapte
 		atomicWriteFileSync(
 			path,
 			`${JSON.stringify({ ...artifact, stdoutHead: truncateMiddle(result.stdout, 8000), stderrHead: truncateMiddle(result.stderr, 4000) }, null, 2)}\n`,
-			0o644,
+			0o600,
 		);
 		appendEvidence({
 			kind: "runtime",

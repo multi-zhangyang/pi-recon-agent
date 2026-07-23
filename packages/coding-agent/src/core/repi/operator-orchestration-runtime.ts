@@ -10,7 +10,13 @@ import {
 	type EvidenceRecord,
 	parseEvidenceRecords,
 } from "./evidence.ts";
-import { type MissionLane, type MissionState, missionRequiresParallel, readCurrentMission } from "./mission.ts";
+import {
+	type MissionLane,
+	type MissionState,
+	missionOperatorDirective,
+	missionRequiresParallel,
+	readCurrentMission,
+} from "./mission.ts";
 import {
 	createOperatorExecutionRuntime,
 	type OperatorExecutionRuntimeDependencies,
@@ -335,7 +341,7 @@ export function createOperatorOrchestrationRuntime(dependencies: OperatorOrchest
 		active: MissionLane | undefined,
 		target?: string,
 	): string[] {
-		const mappedTarget = commandTarget(target, mission?.task);
+		const mappedTarget = commandTarget(target, missionOperatorDirective(mission) ?? mission?.task);
 		if (!mission) {
 			const mapped = mappedTarget === "<target>" ? "<task-or-target>" : mappedTarget;
 			return [
@@ -350,7 +356,7 @@ export function createOperatorOrchestrationRuntime(dependencies: OperatorOrchest
 			.map((checkpoint) => checkpoint.name);
 		return [
 			`route=${mission.route.domain}`,
-			`task=${truncateMiddle(mission.task, 180)}`,
+			`task=${truncateMiddle(missionOperatorDirective(mission) ?? mission.task, 180)}`,
 			`active_lane=${active?.name ?? "none"}`,
 			`active_objective=${active?.objective ?? "select next lane"}`,
 			`target=${mappedTarget}`,
@@ -364,7 +370,7 @@ export function createOperatorOrchestrationRuntime(dependencies: OperatorOrchest
 		active: MissionLane | undefined,
 		target?: string,
 	): string[] {
-		const mappedTarget = commandTarget(target, mission?.task);
+		const mappedTarget = commandTarget(target, missionOperatorDirective(mission) ?? mission?.task);
 		if (!mission)
 			return [
 				`no_mission -> re_mission new ${mappedTarget}`,
@@ -434,7 +440,7 @@ export function createOperatorOrchestrationRuntime(dependencies: OperatorOrchest
 	function nextDecisionCommand(missionOverride?: MissionState): string {
 		const mission = missionOverride ?? readCurrentMission();
 		const active = mission ? activeLane(mission) : undefined;
-		const target = sanitizeTargetForCommand(mission?.task) ?? ".";
+		const target = sanitizeTargetForCommand(missionOperatorDirective(mission) ?? mission?.task) ?? ".";
 		const claims = buildEvidenceClaimSummary({ missionId: mission?.id, readText });
 		return (
 			decisionOperatorQueue(decisionRulesWithClaims(mission, active, target, claims))[0] ??
@@ -448,7 +454,10 @@ export function createOperatorOrchestrationRuntime(dependencies: OperatorOrchest
 		ensureReconStorage();
 		const mission = readCurrentMission();
 		const active = mission ? activeLane(mission) : undefined;
-		const target = sanitizeTargetForCommand(options.target) ?? sanitizeTargetForCommand(mission?.task) ?? ".";
+		const target =
+			sanitizeTargetForCommand(options.target) ??
+			sanitizeTargetForCommand(missionOperatorDirective(mission) ?? mission?.task) ??
+			".";
 		const scope: ArtifactScopeFilterOptions = {
 			missionId: mission?.id,
 			route: mission?.route.domain,
@@ -503,7 +512,7 @@ export function createOperatorOrchestrationRuntime(dependencies: OperatorOrchest
 				"stop_only_when: structured open claims are proved, contradicted, or explicitly blocked by a recorded evidence gap",
 				"stop_only_when: verifier/compiler/replayer outputs are bound to artifacts or explicit gaps",
 				"never_stop_on: missing target/tool/context without emitting a concrete closure command",
-				...(looksLikeNaturalLanguageTarget(options.target ?? mission?.task)
+				...(looksLikeNaturalLanguageTarget(options.target ?? missionOperatorDirective(mission) ?? mission?.task)
 					? [
 							"invalid_natural_language_target_sanitized: run re_map . 2 or pass an explicit URL/file/directory/package",
 						]
@@ -715,7 +724,10 @@ export function createOperatorOrchestrationRuntime(dependencies: OperatorOrchest
 	function buildOperator(options: { target?: string; mode?: OperatorArtifact["mode"] } = {}): OperatorArtifact {
 		ensureReconStorage();
 		const mission = readCurrentMission();
-		const target = sanitizeTargetForCommand(options.target) ?? sanitizeTargetForCommand(mission?.task) ?? ".";
+		const target =
+			sanitizeTargetForCommand(options.target) ??
+			sanitizeTargetForCommand(missionOperatorDirective(mission) ?? mission?.task) ??
+			".";
 		const feedback = latestOperatorFeedback(target);
 		const dispatcherCommands = operatorFeedbackDispatcherCommands(feedback.rows, target);
 		const dispatcherFallbackPlan = operatorFeedbackDispatchPlan(feedback.rows, target);

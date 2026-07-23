@@ -1,5 +1,5 @@
-import type { MissionState } from "./mission.ts";
-import { escapeRegExp } from "./target.ts";
+import { type MissionState, missionOperatorDirective } from "./mission.ts";
+import { escapeRegExp, extractRepiTaskTarget, sanitizeTargetForCommand } from "./target.ts";
 import type { ToolchainDomainStatus } from "./toolchain-runtime.ts";
 
 export type DomainProofExitClosureStatus = "passed" | "partial" | "blocked";
@@ -215,7 +215,11 @@ export function createDomainProofExitRules(dependencies: DomainProofExitRulesDep
 		const currentMission = mission ?? readCurrentMission();
 		const active = currentMission ? activeLane(currentMission) : undefined;
 		const lane = active?.name ?? (domainId === "pwn" ? "primitive" : domainId === "web-api" ? "state" : "prove");
-		const target = mission?.task && !/^reverse\/pentest task$/i.test(mission.task) ? mission.task : "<target>";
+		const directive = missionOperatorDirective(currentMission);
+		const target =
+			(directive && !/^reverse\/pentest task$/i.test(directive)
+				? (extractRepiTaskTarget(directive) ?? sanitizeTargetForCommand(directive))
+				: undefined) ?? "<target>";
 		const suffix = target ? ` ${target}` : "";
 		const commands = new Set<string>([
 			`re_toolchain_domain show ${domainId}`,

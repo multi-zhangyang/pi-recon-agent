@@ -46,6 +46,10 @@ export type MissionState = {
 	createdAt: string;
 	updatedAt: string;
 	task: string;
+	/** The latest explicit operator instruction for this mission. */
+	operatorDirective?: string;
+	/** Monotonic revision for cross-process directive conflict resolution. */
+	directiveRevision?: number;
 	/** Stable workspace scope; prevents a stale mission crossing cwd boundaries. */
 	scope?: string;
 	route: RoutePlan;
@@ -703,6 +707,8 @@ export function createMission(task: string, route: RoutePlan): MissionState {
 		createdAt: timestamp,
 		updatedAt: timestamp,
 		task: safeTask,
+		operatorDirective: safeTask,
+		directiveRevision: 1,
 		scope: missionScope(),
 		route,
 		lanes: initializeMissionLanes(missionLanesForRoute(route)),
@@ -734,7 +740,13 @@ export function normalizeMission(mission: MissionState): MissionState {
 		if (firstPending >= 0)
 			lanes[firstPending] = { ...lanes[firstPending], status: "in_progress", updatedAt: timestamp };
 	}
-	return { ...mission, task: redactSensitiveText(mission.task), scope: missionScope(), lanes };
+	const task = redactSensitiveText(mission.task);
+	const operatorDirective = mission.operatorDirective?.trim() ? redactSensitiveText(mission.operatorDirective) : task;
+	const directiveRevision =
+		Number.isSafeInteger(mission.directiveRevision) && (mission.directiveRevision ?? 0) > 0
+			? mission.directiveRevision
+			: 1;
+	return { ...mission, task, operatorDirective, directiveRevision, scope: missionScope(), lanes };
 }
 
 function parseMission(text: string | undefined): MissionState | undefined {
@@ -785,9 +797,14 @@ function mergeMissionItems<T extends { name: string; updatedAt?: string }>(curre
 function mergeConcurrentMission(current: MissionState | undefined, candidate: MissionState): MissionState {
 	const normalizedCurrent = normalizeStoredMission(current);
 	if (!normalizedCurrent || normalizedCurrent.id !== candidate.id) return candidate;
+	const currentRevision = normalizedCurrent.directiveRevision ?? 1;
+	const candidateRevision = candidate.directiveRevision ?? 1;
+	const directiveOwner = candidateRevision >= currentRevision ? candidate : normalizedCurrent;
 	return normalizeMission({
 		...candidate,
 		createdAt: normalizedCurrent.createdAt,
+		operatorDirective: directiveOwner.operatorDirective ?? directiveOwner.task,
+		directiveRevision: Math.max(currentRevision, candidateRevision),
 		lanes: mergeMissionItems(normalizedCurrent.lanes, candidate.lanes),
 		checkpoints: mergeMissionItems(normalizedCurrent.checkpoints, candidate.checkpoints),
 	});
@@ -841,6 +858,36 @@ export function updateMissionRuntimeStats(runtimeStats: MissionRuntimeStats): Mi
 			},
 		};
 	});
+}
+
+/** Persist the latest explicit operator instruction without creating a new mission. */
+export function updateMissionDirective(directive: string, fallbackMission?: MissionState): MissionState {
+	return withMissionLock((current) => {
+		if (isInactiveMission(current)) return current as MissionState;
+		const mission =
+			normalizeStoredMission(current) ??
+			(fallbackMission
+				? normalizeMission(fallbackMission)
+				: createMission(REPI_GENERIC_TASK, routeRepiTask(REPI_GENERIC_TASK)));
+		return applyMissionDirective(mission, directive);
+	});
+}
+
+/** Apply an operator instruction without persistence for no-session runtimes. */
+export function applyMissionDirective(mission: MissionState, directive: string): MissionState {
+	const safeDirective = redactSensitiveText(directive.trim());
+	if (!safeDirective) return normalizeMission(mission);
+	return normalizeMission({
+		...mission,
+		operatorDirective: safeDirective,
+		directiveRevision: (mission.directiveRevision ?? 1) + 1,
+		updatedAt: new Date().toISOString(),
+	});
+}
+
+/** Resolve the current instruction while retaining the root task as fallback context. */
+export function missionOperatorDirective(mission: MissionState | undefined): string | undefined {
+	return mission?.operatorDirective?.trim() || mission?.task?.trim() || undefined;
 }
 
 export function readCurrentMission(): MissionState | undefined {
