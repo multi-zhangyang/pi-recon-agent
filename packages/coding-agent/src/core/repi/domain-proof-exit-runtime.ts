@@ -175,15 +175,19 @@ export function createDomainProofExitRuntime(dependencies: DomainProofExitRuntim
 			evidenceByPath.set(path, evidence);
 			parts.push(`\n--- executed-artifact:${path} ---\n${truncateMiddle(evidence, 16000)}`);
 		}
-		for (const entry of recentRuntimeAdapterExecutionArtifacts(12)) {
-			if (!expectedTarget) continue;
+		for (const entry of recentRuntimeAdapterExecutionArtifacts(12, {
+			missionId: mission?.id,
+			target: expectedTarget,
+		})) {
+			if (!mission) continue;
 			if (expectedDomain && entry.artifact.domainId !== expectedDomain) continue;
 			if (
-				!entry.artifact.target ||
-				!artifactTargetMatches(
-					expectedTarget,
-					sanitizeTargetForCommand(entry.artifact.target) ?? entry.artifact.target,
-				)
+				expectedTarget &&
+				(!entry.artifact.target ||
+					!artifactTargetMatches(
+						expectedTarget,
+						sanitizeTargetForCommand(entry.artifact.target) ?? entry.artifact.target,
+					))
 			)
 				continue;
 			const evidence = runtimeAdapterProofEvidence(entry);
@@ -206,8 +210,12 @@ export function createDomainProofExitRuntime(dependencies: DomainProofExitRuntim
 		domainFilter?: string,
 	): DomainProofExitClosureV1 {
 		const routeDomain = mission?.route.domain;
-		const domainId = domainFilter || toolchainDomainIdForRoute(routeDomain);
-		const capability = domainId ? buildToolchainDomainCapability(domainId).domains[0] : undefined;
+		const requestedCapability = domainFilter
+			? buildToolchainDomainCapability(domainFilter.trim()).domains[0]
+			: undefined;
+		const domainId = requestedCapability?.domainId ?? toolchainDomainIdForRoute(routeDomain);
+		const capability =
+			requestedCapability ?? (domainId ? buildToolchainDomainCapability(domainId).domains[0] : undefined);
 		const corpus = domainProofExitArtifactCorpus(mission);
 		if (!mission || !domainId || !capability) {
 			return {

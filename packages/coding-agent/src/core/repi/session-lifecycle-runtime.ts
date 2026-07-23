@@ -4,7 +4,6 @@ import { repiCapabilityAwareCommand, repiPromptNeedsWriteTools } from "./capabil
 import { buildEvidenceClaimSummary } from "./evidence.ts";
 import { installRepiGoalMode } from "./goal.ts";
 import {
-	applyMissionDirective,
 	createMission,
 	type MissionRuntimeStats,
 	type MissionState,
@@ -319,12 +318,8 @@ export function installRepiSessionLifecycle(
 			const mission = carriedMission
 				? !directiveUpdate
 					? carriedMission
-					: noSession
-						? applyMissionDirective(carriedMission, event.prompt)
-						: updateMissionDirective(event.prompt, carriedMission)
-				: noSession
-					? createMission(event.prompt, route)
-					: writeCurrentMission(createMission(event.prompt, route));
+					: updateMissionDirective(event.prompt, carriedMission)
+				: writeCurrentMission(createMission(event.prompt, route));
 			if (startNewMission) resetReconStats(stats);
 			stats.active = true;
 			stats.lastRoute = route;

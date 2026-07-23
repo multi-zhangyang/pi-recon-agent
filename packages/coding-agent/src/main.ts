@@ -818,6 +818,16 @@ export async function main(args: string[], options?: MainOptions) {
 				}),
 				createRepiCapabilityActivationFactory({
 					preserveExplicitToolSelection,
+					readMissionWithoutSession: true,
+					routedExecutionTools: [
+						"re_mission",
+						"re_lane",
+						"re_evidence",
+						"re_domain_proof_exit",
+						"re_toolchain_domain",
+						"re_verifier",
+						"re_proof_loop",
+					],
 					// Tool schemas are the source of truth. A static capability packet
 					// becomes stale after re_capabilities changes the active profile.
 					injectPromptPacket: false,

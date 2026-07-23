@@ -69,4 +69,40 @@ describe("REPI lane evidence quality", () => {
 			harness.restore();
 		}
 	});
+
+	it("does not treat source text containing error phrases as a runtime failure", async () => {
+		const harness = createRegisteredReconHarness("repi-lane-error-text", {
+			exec: async () => ({
+				code: 0,
+				stdout: 'packages/example.ts: const note = "command not found";\n',
+				stderr: "",
+				killed: false,
+			}),
+		});
+		try {
+			const missionTool = harness.tools.get("re_mission") as {
+				execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
+			};
+			await missionTool.execute("tool-call-id", {
+				action: "new",
+				task: "audit prompt injection across an Agent/LLM tool boundary",
+			});
+			const laneTool = harness.tools.get("re_lane") as {
+				execute: (
+					toolCallId: string,
+					params: Record<string, unknown>,
+				) => Promise<{ content: Array<{ text: string }> }>;
+			};
+			const run = await laneTool.execute("tool-call-id", {
+				action: "run",
+				lane: "surface",
+				target: ".",
+			});
+			const text = run.content[0]?.text ?? "";
+			expect(text).not.toContain("tool/target/runtime error surfaced");
+			expect(text).not.toContain("tool-repair-matrix-scaffold");
+		} finally {
+			harness.restore();
+		}
+	});
 });

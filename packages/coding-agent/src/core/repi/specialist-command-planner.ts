@@ -7,6 +7,17 @@ export type LaneCommand = {
 	label: string;
 	command: string;
 	evidence: string;
+	/**
+	 * Structured execution metadata for the one professional runtime path.
+	 * The rendered command remains human-readable, while lane execution can
+	 * dispatch it without treating a `re_*` tool command as shell text.
+	 */
+	runtimeAdapter?: {
+		adapter: string;
+		target?: string;
+		timeoutMs?: number;
+		specialist?: string;
+	};
 };
 
 function pythonString(value: string): string {
@@ -45,9 +56,9 @@ export function appendSpecialistRuntimeCommands(
 		target && /\.(?:raw|vmem|mem|dmp|lime|core|crash|hiberfil|pagefile)(?:\..*)?$/i.test(target),
 	);
 	const specialists: string[] = [];
-	const add = (label: string, command: string, evidence: string) => {
+	const add = (label: string, command: string, evidence: string, runtimeAdapter?: LaneCommand["runtimeAdapter"]) => {
 		if (commands.some((existing) => existing.label === label && existing.command === command)) return;
-		commands.push({ label, command, evidence });
+		commands.push({ label, command, evidence, runtimeAdapter });
 	};
 	const nativeCommands = createNativeSpecialistCommandProvider({
 		mission,

@@ -64,7 +64,7 @@ export function createRuntimeAdapterExecutionRuntime(dependencies: RuntimeAdapte
 
 	async function runExecution(
 		pi: ExtensionAPI,
-		options: { adapter?: string; target?: string; timeoutMs?: number },
+		options: { adapter?: string; target?: string; timeoutMs?: number; specialist?: string },
 	): Promise<string> {
 		const inferredAdapter = options.adapter ?? detectRuntimeAdapterIds(options.target)[0];
 		const report = buildExecutionGate(inferredAdapter ?? options.target);
@@ -100,7 +100,19 @@ export function createRuntimeAdapterExecutionRuntime(dependencies: RuntimeAdapte
 				run: async (adapterCommand, timeoutMs) =>
 					pi.exec(
 						"bash",
-						["-lc", `set +e\nexport REPI_ADAPTER_TARGET=${shellQuote(options.target!)}\n${adapterCommand}`],
+						[
+							"-lc",
+							[
+								"set +e",
+								`export REPI_ADAPTER_TARGET=${shellQuote(options.target!)}`,
+								options.specialist
+									? `export REPI_LANE_SPECIALIST=${shellQuote(options.specialist)}`
+									: undefined,
+								adapterCommand,
+							]
+								.filter(Boolean)
+								.join("\n"),
+						],
 						{ timeout: timeoutMs },
 					),
 			},

@@ -274,7 +274,8 @@ describe("REPI kernel profile domain runtime captures", () => {
 		});
 
 		expect(execCalls).toHaveLength(1);
-		expect(execCalls[0]?.args.join("\n")).toContain("repi-web-authz-state.mjs");
+		expect(execCalls[0]?.args.join("\n")).toContain("REPI_ADAPTER_TARGET");
+		expect(execCalls[0]?.args.join("\n")).toContain("emitAuthorizationState");
 		expect(result.content[0]?.text).toContain("web_authz_state:");
 		expect(result.content[0]?.text).toContain("mode: run");
 		expect(result.content[0]?.text).toContain("executions:");
@@ -358,8 +359,8 @@ describe("REPI kernel profile domain runtime captures", () => {
 		});
 
 		expect(execCalls).toHaveLength(1);
-		expect(execCalls[0]?.args.join("\n")).toContain("repi-native-gdb.gdb");
-		expect(execCalls[0]?.args.join("\n")).toContain("repi-native-analyze.py");
+		expect(execCalls[0]?.args.join("\n")).toContain("REPI_ADAPTER_TARGET");
+		expect(execCalls[0]?.args.join("\n")).toContain("gdb -q");
 		const resultText = result.content[0]?.text ?? "";
 		expect(resultText).toContain("native_runtime:");
 		expect(resultText).toContain("mode: run");

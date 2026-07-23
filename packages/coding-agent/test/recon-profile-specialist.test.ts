@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import { createReconExtensionFactory } from "../src/core/recon-profile.ts";
+import { createBootstrapPlan } from "../src/core/repi/bootstrap-runtime.ts";
 import { readCurrentMission, writeCurrentMission } from "../src/core/repi/mission.ts";
 
 const ENV_AGENT_DIR = "REPI_CODING_AGENT_DIR";
@@ -36,6 +37,13 @@ describe("REPI kernel profile self-heal and specialist routing", () => {
 			process.env[ENV_BRANCH_ID] = previousBranchId;
 		}
 		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	it("falls back to host command discovery when the persisted tool index is empty", () => {
+		const plan = createBootstrapPlan(["rg", "python3"]);
+		expect(plan).toHaveLength(2);
+		expect(plan.find((item) => item.tool === "rg")?.present).toBe(true);
+		expect(plan.find((item) => item.tool === "python3")?.present).toBe(true);
 	});
 
 	it("turns tool/runtime failures into repair matrix follow-ups", async () => {

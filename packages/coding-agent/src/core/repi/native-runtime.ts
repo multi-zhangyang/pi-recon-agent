@@ -13,7 +13,7 @@ import {
 	writePrivateTextFile,
 } from "./storage.ts";
 import { shellQuote } from "./target.ts";
-import { interestingLines, parseJsonCodeFence, sha256Text, slug, truncateMiddle } from "./text.ts";
+import { interestingLines, parseJsonCodeFence, slug, truncateMiddle } from "./text.ts";
 
 export type NativeRuntimeExecution = {
 	label: string;
@@ -90,6 +90,10 @@ export type NativeRuntimeDependencies = {
 	appendEvidence: AppendEvidence;
 	runtimeCheckpointStatus: RuntimeCheckpointStatus;
 	updateMissionCheckpoint: UpdateMissionCheckpoint;
+	runRuntimeAdapterExecution: (
+		pi: ExtensionAPI,
+		options: { adapter?: string; target?: string; timeoutMs?: number; specialist?: string },
+	) => Promise<string>;
 };
 
 export function createNativeRuntime(dependencies: NativeRuntimeDependencies) {
@@ -102,8 +106,8 @@ export function createNativeRuntime(dependencies: NativeRuntimeDependencies) {
 		appendEvidence,
 		runtimeCheckpointStatus,
 		updateMissionCheckpoint,
+		runRuntimeAdapterExecution,
 	} = dependencies;
-	const replayHash = sha256Text;
 	const stripScriptIndent = (script: string): string => script.replace(/^\t/gm, "");
 	function latestNativeRuntimeArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
 		return latestScopedMarkdownArtifact("native_runtime", evidenceNativeRuntimeDir(), options);
@@ -372,6 +376,13 @@ export function createNativeRuntime(dependencies: NativeRuntimeDependencies) {
 					),
 					3,
 				),
+				"native binary inventory anchors",
+				"native mitigation/header anchors",
+				"native loader/libc anchors",
+				"native symbol/string anchors",
+				"native crash/register anchors",
+				"native GDB trace anchors",
+				"native analyzer anchors",
 				...rows("runtime_anchors", native.runtimeAnchors, 16),
 				...rows("next_actions", native.nextActions, 3),
 				`next_native_command: ${native.mode === "run" ? "re_verifier matrix" : `re_native_runtime run ${native.target ?? "<elf-or-so>"}`}`,
@@ -390,20 +401,27 @@ export function createNativeRuntime(dependencies: NativeRuntimeDependencies) {
 			`target: ${native.target ?? "<missing>"}`,
 			`timeout_ms: ${native.timeoutMs}`,
 			"binary_inventory:",
+			"- native binary inventory anchors",
 			...(native.binaryInventory.length ? native.binaryInventory.map((item) => `- ${item}`) : ["- none"]),
 			"mitigation_matrix:",
+			"- native mitigation/header anchors",
 			...(native.mitigationMatrix.length ? native.mitigationMatrix.map((item) => `- ${item}`) : ["- none"]),
 			"loader_libc:",
+			"- native loader/libc anchors",
 			...(native.loaderLibc.length ? native.loaderLibc.map((item) => `- ${item}`) : ["- none"]),
 			"symbol_map:",
+			"- native symbol/string anchors",
 			...(native.symbolMap.length ? native.symbolMap.map((item) => `- ${item}`) : ["- none"]),
 			"crash_plan:",
+			"- native crash/register anchors",
 			...(native.crashPlan.length ? native.crashPlan.map((item) => `- ${item}`) : ["- none"]),
 			"gdb_trace:",
+			"- native GDB trace anchors",
 			...(native.gdbTrace.length ? native.gdbTrace.map((item) => `- ${item}`) : ["- none"]),
 			"breakpoint_plan:",
 			...(native.breakpointPlan.length ? native.breakpointPlan.map((item) => `- ${item}`) : ["- none"]),
 			"exploit_scaffold:",
+			"- native analyzer anchors",
 			...(native.exploitScaffold.length ? native.exploitScaffold.map((item) => `- ${item}`) : ["- none"]),
 			"executions:",
 			...(native.executions.length
@@ -471,9 +489,29 @@ export function createNativeRuntime(dependencies: NativeRuntimeDependencies) {
 	): Promise<string> {
 		const target = inferNativeRuntimeTarget(options.target);
 		const timeoutMs = Math.max(3000, Math.min(180000, Math.floor(options.timeoutMs ?? 12000)));
-		const command = nativeRuntimeShellCommand(target, timeoutMs);
-		const result = await pi.exec("bash", ["-lc", command], { timeout: timeoutMs + 10000 });
-		const anchors = nativeRuntimeAnchors(result.stdout, result.stderr);
+		const adapter = /pwn|exploit|rop|ret2|heap|tcache|format[-_ ]?string|pwntools/i.test(
+			`${options.target ?? ""}\n${target ?? ""}`,
+		)
+			? "pwntools-local-verifier-adapter"
+			: "gdb-native-trace-adapter";
+		const command = `re_runtime_adapter run ${adapter} ${shellQuote(target ?? "<missing>")}`;
+		const adapterOutput = await runRuntimeAdapterExecution(pi, {
+			adapter,
+			target,
+			timeoutMs,
+			specialist: adapter === "pwntools-local-verifier-adapter" ? "pwn primitive" : "native runtime trace",
+		});
+		const exit = /(?:^|\n)exit:\s*(-?\d+)/m.exec(adapterOutput)?.[1];
+		const status = /(?:^|\n)blocked:/i.test(adapterOutput)
+			? ("blocked" as const)
+			: exit !== undefined && Number(exit) !== 0
+				? ("failed" as const)
+				: ("passed" as const);
+		const anchors = adapterOutput
+			.split(/\r?\n/)
+			.map((line) => line.trim().replace(/^[-*]\s+/, ""))
+			.filter((line) => /^\[/.test(line))
+			.slice(0, 80);
 		const native = buildNativeRuntimeArtifact({
 			...options,
 			target,
@@ -483,27 +521,18 @@ export function createNativeRuntime(dependencies: NativeRuntimeDependencies) {
 				{
 					label: "native-runtime-capture",
 					command,
-					status: /\[native-runtime-blocked\] reason=missing_target/i.test(`${result.stdout}\n${result.stderr}`)
-						? "blocked"
-						: result.code === 0
-							? "passed"
-							: "failed",
-					exit: result.code,
-					killed: result.killed,
-					stdoutHash: replayHash(result.stdout),
-					stderrHash: replayHash(result.stderr),
-					stdoutHead: truncateMiddle(result.stdout.trim(), 3000),
-					stderrHead: truncateMiddle(result.stderr.trim(), 2000),
+					status,
+					exit: exit === undefined ? undefined : Number(exit),
+					stdoutHash: /stdout_sha256:\s*(\S+)/i.exec(adapterOutput)?.[1],
+					stderrHash: /stderr_sha256:\s*(\S+)/i.exec(adapterOutput)?.[1],
+					stdoutHead: truncateMiddle(adapterOutput.trim(), 3000),
 				},
 			],
 			runtimeAnchors: anchors,
 		});
+		native.captureScript = command;
 		const path = writeNativeRuntimeArtifact(native);
-		return [
-			formatNativeRuntime(native, path),
-			result.stdout.trim() ? ["stdout:", "```", truncateMiddle(result.stdout.trim(), 1600), "```"].join("\n") : "",
-			result.stderr.trim() ? ["stderr:", "```", truncateMiddle(result.stderr.trim(), 800), "```"].join("\n") : "",
-		]
+		return [formatNativeRuntime(native, path), `adapter_execution:\n${truncateMiddle(adapterOutput, 2800)}`]
 			.filter(Boolean)
 			.join("\n");
 	}

@@ -109,4 +109,18 @@ describe("REPI domain proof exits require executed evidence", () => {
 		const audit = await tools.get("re_complete")!.execute("c-1", { action: "audit" });
 		expect(audit.content[0]?.text).toContain("domain_proof_exit_closure: agent-security status=blocked");
 	});
+
+	it("ignores an invalid model-supplied domain and keeps the mission route", async () => {
+		const tools = registerTools();
+		await tools.get("re_mission")!.execute("m-1", {
+			action: "new",
+			task: "audit prompt injection and MCP tool-call boundary",
+		});
+		const proof = await tools.get("re_domain_proof_exit")!.execute("p-1", {
+			action: "show",
+			domain: ".",
+		});
+		expect(proof.content[0]?.text).toContain("domain: agent-security");
+		expect(proof.content[0]?.text).not.toContain("domain: unmapped");
+	});
 });

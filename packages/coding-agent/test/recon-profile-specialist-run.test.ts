@@ -342,8 +342,8 @@ describe("REPI kernel profile specialist runtime evidence parsing", () => {
 		expect(webArtifact).toContain("browser/XHR/WS runtime anchors");
 		expect(webArtifact).toContain("websocket endpoint anchors");
 		expect(webArtifact).toContain("cookie/storage anchors");
-		expect(webArtifact).toContain("browser-xhr-ws-auth-diff-rerun");
-		expect(webArtifact).toContain("browser-xhr-ws-capture-rerun");
+		expect(webArtifact).toContain("browser-cdp-domain-adapter-rerun");
+		expect(webArtifact).toContain("browser-cdp-authz-replay-rerun");
 		expect(webArtifact).toContain("browser CDP artifact anchors");
 		expect(webArtifact).toContain("browser runtime artifact paths");
 		expect(webArtifact).toContain("browser replay evaluator anchors");
@@ -357,22 +357,10 @@ describe("REPI kernel profile specialist runtime evidence parsing", () => {
 		expect(webArtifact).toContain("web API static authz source anchors");
 		expect(webArtifact).toContain("web API schema/auth parameter anchors");
 		expect(webArtifact).toContain("web API state mutation source anchors");
-		expect(webArtifact).toContain("browser-cdp-artifact-rerun");
-		expect(webArtifact).toContain("browser-replay-eval-rerun");
-		expect(webArtifact).toContain("browser-route-graph-rerun");
-		expect(webArtifact).toContain("browser-auth-matrix-rerun");
-		expect(webArtifact).toContain("browser-idor-bola-probe-rerun");
-		expect(webArtifact).toContain("browser-authz-state-machine-rerun");
-		expect(webArtifact).toContain("browser-authz-sequence-replay-rerun");
-		expect(webArtifact).toContain("browser-authz-object-ownership-rerun");
-		expect(webArtifact).toContain("browser-authz-state-rollback-rerun");
+		expect(webArtifact).toContain("browser-cdp-artifact-replay");
 		expect(webArtifact).toContain("web-api-authz-static-rerun");
 		expect(webArtifact).toContain("web-api-schema-diff-rerun");
 		expect(webArtifact).toContain("web-api-state-source-rerun");
-		expect(webArtifact).toContain("browser-cdp-artifact-review");
-		expect(webArtifact).toContain("browser-replay-eval-artifact-rerun");
-		expect(webArtifact).toContain("browser-authz-report-scaffold");
-		expect(webArtifact).toContain("browser-authz-state-report-scaffold");
 		expect(webArtifact).toContain("## Evidence critic");
 		expect(webArtifact).toMatch(/verdict: (strong|partial)/);
 
@@ -383,10 +371,8 @@ describe("REPI kernel profile specialist runtime evidence parsing", () => {
 		expect(jsArtifact).toContain("JS signing normalized artifact anchors");
 		expect(jsArtifact).toContain("JS first-divergence anchors");
 		expect(jsArtifact).toContain("JS signing replay harness anchors");
-		expect(jsArtifact).toContain("js-signing-observed-rebuild");
-		expect(jsArtifact).toContain("js-signing-normalizer-rerun");
-		expect(jsArtifact).toContain("js-first-divergence-rerun");
-		expect(jsArtifact).toContain("js-signing-replay-harness-rerun");
+		expect(jsArtifact).toContain("js-signing-domain-adapter-rerun");
+		expect(jsArtifact).toContain("js-signing-replay-verifier");
 
 		const nativeRun = await runFor("ELF native reverse license patch symbolic fuzz", "control-flow", "./license");
 		const nativeArtifact = artifactFor(nativeRun);

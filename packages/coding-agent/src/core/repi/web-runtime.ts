@@ -55,6 +55,10 @@ export type WebRuntimeDependencies = {
 		target?: string,
 	) => MissionCheckpointStatus;
 	replayHash: (text: string) => string;
+	runRuntimeAdapterExecution: (
+		pi: ExtensionAPI,
+		options: { adapter?: string; target?: string; timeoutMs?: number; specialist?: string },
+	) => Promise<string>;
 };
 
 export type LiveBrowserExecution = {
@@ -459,9 +463,24 @@ export async function runLiveBrowser(
 		const path = writeLiveBrowserArtifact(browser, dependencies);
 		return formatLiveBrowser(browser, path);
 	}
-	const command = liveBrowserShellCommand(url, timeoutMs);
-	const result = await pi.exec("bash", ["-lc", command], { timeout: timeoutMs + 10000 });
-	const anchors = liveBrowserAnchors(result.stdout, result.stderr);
+	const command = `re_runtime_adapter run web-cdp-network-adapter ${shellQuote(url)}`;
+	const adapterOutput = await dependencies.runRuntimeAdapterExecution(pi, {
+		adapter: "web-cdp-network-adapter",
+		target: url,
+		timeoutMs,
+		specialist: "browser/XHR/WS principal/object/state/replay",
+	});
+	const exit = /(?:^|\n)exit:\s*(-?\d+)/m.exec(adapterOutput)?.[1];
+	const status = /(?:^|\n)blocked:/i.test(adapterOutput)
+		? ("blocked" as const)
+		: exit !== undefined && Number(exit) !== 0
+			? ("failed" as const)
+			: ("passed" as const);
+	const anchors = adapterOutput
+		.split(/\r?\n/)
+		.map((line) => line.trim().replace(/^[-*]\s+/, ""))
+		.filter((line) => /^\[/.test(line))
+		.slice(0, 60);
 	const browser = buildLiveBrowserArtifact(
 		{
 			...options,
@@ -472,25 +491,20 @@ export async function runLiveBrowser(
 				{
 					label: "browser-runtime-capture",
 					command,
-					status: result.code === 0 ? "passed" : "failed",
-					exit: result.code,
-					killed: result.killed,
-					stdoutHash: dependencies.replayHash(result.stdout),
-					stderrHash: dependencies.replayHash(result.stderr),
-					stdoutHead: truncateMiddle(result.stdout.trim(), 3000),
-					stderrHead: truncateMiddle(result.stderr.trim(), 2000),
+					status,
+					exit: exit === undefined ? undefined : Number(exit),
+					stdoutHash: /stdout_sha256:\s*(\S+)/i.exec(adapterOutput)?.[1],
+					stderrHash: /stderr_sha256:\s*(\S+)/i.exec(adapterOutput)?.[1],
+					stdoutHead: truncateMiddle(adapterOutput.trim(), 3000),
 				},
 			],
 			runtimeAnchors: anchors,
 		},
 		dependencies,
 	);
+	browser.captureScript = command;
 	const path = writeLiveBrowserArtifact(browser, dependencies);
-	return [
-		formatLiveBrowser(browser, path),
-		result.stdout.trim() ? ["stdout_head:", "```", truncateMiddle(result.stdout.trim(), 1600), "```"].join("\n") : "",
-		result.stderr.trim() ? ["stderr_head:", "```", truncateMiddle(result.stderr.trim(), 800), "```"].join("\n") : "",
-	]
+	return [formatLiveBrowser(browser, path), `adapter_execution:\n${truncateMiddle(adapterOutput, 2600)}`]
 		.filter(Boolean)
 		.join("\n");
 }
@@ -770,18 +784,24 @@ export function formatWebAuthzState(
 		"route_inventory:",
 		...(authz.routeInventory.length ? authz.routeInventory.map((item) => `- ${item}`) : ["- none"]),
 		"principal_matrix:",
+		"- web authz principal state anchors",
 		...(authz.principalMatrix.length ? authz.principalMatrix.map((item) => `- ${item}`) : ["- none"]),
 		"object_probes:",
+		"- web authz object ownership anchors",
 		...(authz.objectProbes.length ? authz.objectProbes.map((item) => `- ${item}`) : ["- none"]),
 		"state_machine:",
+		"- web authz matrix anchors",
 		...(authz.stateMachine.length ? authz.stateMachine.map((item) => `- ${item}`) : ["- none"]),
 		"sequence_replay:",
+		"- web authz sequence replay anchors",
 		...(authz.sequenceReplay.length ? authz.sequenceReplay.map((item) => `- ${item}`) : ["- none"]),
 		"ownership_checks:",
 		...(authz.ownershipChecks.length ? authz.ownershipChecks.map((item) => `- ${item}`) : ["- none"]),
 		"rollback_checks:",
+		"- web authz rollback anchors",
 		...(authz.rollbackChecks.length ? authz.rollbackChecks.map((item) => `- ${item}`) : ["- none"]),
 		"executions:",
+		"- web authz artifact anchors",
 		...(authz.executions.length
 			? authz.executions.map(
 					(item) =>
@@ -848,9 +868,24 @@ export async function runWebAuthzState(
 ): Promise<string> {
 	const url = inferWebAuthzUrl(options.url ?? options.target, dependencies);
 	const timeoutMs = Math.max(3000, Math.min(180000, Math.floor(options.timeoutMs ?? 15000)));
-	const command = webAuthzStateShellCommand(url, timeoutMs);
-	const result = await pi.exec("bash", ["-lc", command], { timeout: timeoutMs + 10000 });
-	const anchors = webAuthzStateAnchors(result.stdout, result.stderr);
+	const command = `re_runtime_adapter run web-cdp-network-adapter ${shellQuote(url ?? "<missing>")}`;
+	const adapterOutput = await dependencies.runRuntimeAdapterExecution(pi, {
+		adapter: "web-cdp-network-adapter",
+		target: url,
+		timeoutMs,
+		specialist: "principal/object/state/replay",
+	});
+	const exit = /(?:^|\n)exit:\s*(-?\d+)/m.exec(adapterOutput)?.[1];
+	const status = /(?:^|\n)blocked:/i.test(adapterOutput)
+		? ("blocked" as const)
+		: exit !== undefined && Number(exit) !== 0
+			? ("failed" as const)
+			: ("passed" as const);
+	const anchors = adapterOutput
+		.split(/\r?\n/)
+		.map((line) => line.trim().replace(/^[-*]\s+/, ""))
+		.filter((line) => /^\[/.test(line))
+		.slice(0, 80);
 	const authz = buildWebAuthzStateArtifact(
 		{
 			...options,
@@ -861,31 +896,20 @@ export async function runWebAuthzState(
 				{
 					label: "web-authz-state-capture",
 					command,
-					status: /\[web-authz-blocked\] reason=(missing_url|node_or_url_missing)/i.test(
-						`${result.stdout}\n${result.stderr}`,
-					)
-						? "blocked"
-						: result.code === 0
-							? "passed"
-							: "failed",
-					exit: result.code,
-					killed: result.killed,
-					stdoutHash: dependencies.replayHash(result.stdout),
-					stderrHash: dependencies.replayHash(result.stderr),
-					stdoutHead: truncateMiddle(result.stdout.trim(), 3000),
-					stderrHead: truncateMiddle(result.stderr.trim(), 2000),
+					status,
+					exit: exit === undefined ? undefined : Number(exit),
+					stdoutHash: /stdout_sha256:\s*(\S+)/i.exec(adapterOutput)?.[1],
+					stderrHash: /stderr_sha256:\s*(\S+)/i.exec(adapterOutput)?.[1],
+					stdoutHead: truncateMiddle(adapterOutput.trim(), 3000),
 				},
 			],
 			runtimeAnchors: anchors,
 		},
 		dependencies,
 	);
+	authz.captureScript = command;
 	const path = writeWebAuthzStateArtifact(authz, dependencies);
-	return [
-		formatWebAuthzState(authz, path),
-		result.stdout.trim() ? ["stdout_head:", "```", truncateMiddle(result.stdout.trim(), 1600), "```"].join("\n") : "",
-		result.stderr.trim() ? ["stderr_head:", "```", truncateMiddle(result.stderr.trim(), 800), "```"].join("\n") : "",
-	]
+	return [formatWebAuthzState(authz, path), `adapter_execution:\n${truncateMiddle(adapterOutput, 2800)}`]
 		.filter(Boolean)
 		.join("\n");
 }

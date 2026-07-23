@@ -92,11 +92,21 @@ export type ReconLaneRuntimeDependencies = {
 	commandKnownTools: (command: string) => string[];
 	laneExecutionStrategy: (pack: LaneCommandPack) => AutopilotExecutionStrategy;
 	formatAutopilotExecutionStrategy: (strategy: AutopilotExecutionStrategy) => string;
+	runRuntimeAdapterExecution: (
+		pi: ExtensionAPI,
+		options: { adapter?: string; target?: string; timeoutMs?: number; specialist?: string },
+	) => Promise<string>;
 };
 
 export function createReconLaneRuntime(dependencies: ReconLaneRuntimeDependencies) {
-	const { writeCurrentMission, routeReconTask, appendEvidence, commandKnownTools, laneExecutionStrategy } =
-		dependencies;
+	const {
+		writeCurrentMission,
+		routeReconTask,
+		appendEvidence,
+		commandKnownTools,
+		laneExecutionStrategy,
+		runRuntimeAdapterExecution,
+	} = dependencies;
 
 	function findLaneIndex(mission: MissionState, name?: string): number {
 		if (name) {
@@ -204,8 +214,19 @@ export function createReconLaneRuntime(dependencies: ReconLaneRuntimeDependencie
 		return !/no high-signal anchors parsed|tool\/target\/runtime error surfaced/.test(joined);
 	}
 
+	function runtimeErrorTranscript(result: { code: number; stdout: string; stderr: string }): string {
+		const structuredAdapterOutput = /(?:^|\n)### domain-adapter\b/.test(result.stdout);
+		return result.stderr.trim() || result.code !== 0 || structuredAdapterOutput
+			? `${result.stderr}\n${result.stdout}`
+			: "";
+	}
+
 	function followupNextItems(analysis: LaneRunAnalysis): string[] {
-		return [...analysis.followups, ...analysis.critic.selfHeal].map((command) =>
+		const commands =
+			analysis.critic.verdict === "strong"
+				? analysis.followups
+				: [...analysis.critic.selfHeal, ...analysis.followups];
+		return commands.map((command) =>
 			truncateMiddle(`[auto:${command.label}] ${command.command} # evidence: ${command.evidence}`, 900),
 		);
 	}
@@ -306,7 +327,7 @@ export function createReconLaneRuntime(dependencies: ReconLaneRuntimeDependencie
 			significantLaneFindings(params.analysis);
 		const timestamp = new Date().toISOString();
 		const followups = followupNextItems(params.analysis);
-		const selfHealCurrent = critic.verdict === "weak" || critic.score < 55;
+		const selfHealCurrent = critic.verdict !== "strong";
 		const lanes = mission.lanes.map((lane, index) => {
 			if (index === currentIndex) {
 				const next = [...lane.next];
@@ -1384,8 +1405,10 @@ export function createReconLaneRuntime(dependencies: ReconLaneRuntimeDependencie
 		nextLane?: string;
 	}): EvidenceCritic {
 		const combined = `${params.result.stdout}\n${params.result.stderr}`;
+		const runtimeErrors = runtimeErrorTranscript(params.result);
 		const deficits: string[] = [];
 		let score = 0;
+		const adapterProofGap = /parser_signal_summary:\s*matched=0\/\d+/i.test(combined);
 		if (params.result.code === 0) score += 20;
 		else deficits.push(`nonzero exit ${params.result.code}`);
 		if (params.result.killed) deficits.push("command killed or timed out");
@@ -1396,10 +1419,11 @@ export function createReconLaneRuntime(dependencies: ReconLaneRuntimeDependencie
 		else deficits.push("no concrete target bound to lane");
 		const toolOrTargetError =
 			/command not found|not found|no such file|cannot access|permission denied|trace\/breakpoint trap/i.test(
-				combined,
+				runtimeErrors,
 			);
 		if (toolOrTargetError) deficits.push("tool/target/runtime error present");
 		else score += 10;
+		if (adapterProofGap) deficits.push("runtime adapter returned no parser proof signals");
 		const highSignal = params.findings.some(
 			(finding) =>
 				!/no high-signal|tool\/target\/runtime error|command-pack exited|killed/i.test(finding) &&
@@ -1413,6 +1437,7 @@ export function createReconLaneRuntime(dependencies: ReconLaneRuntimeDependencie
 		else deficits.push("no follow-up commands generated");
 		if (params.nextLane) score += 8;
 		if (toolOrTargetError) score -= 15;
+		if (adapterProofGap) score -= 35;
 		if (params.result.killed) score -= 15;
 		score = Math.max(0, Math.min(100, score));
 		const verdict: EvidenceCritic["verdict"] = score >= 70 ? "strong" : score >= 45 ? "partial" : "weak";
@@ -1460,17 +1485,21 @@ export function createReconLaneRuntime(dependencies: ReconLaneRuntimeDependencie
 		return `cat > /tmp/repi-tool-repair.py <<'PY'\nimport json, pathlib, shutil\npayload=json.loads(${pythonString(JSON.stringify(payload))})\nalternatives={\n 'checksec':['rabin2','readelf','objdump','file'],\n 'r2':['rabin2','objdump','readelf','strings','ghidra'],\n 'radare2':['rabin2','objdump','readelf','strings','ghidra'],\n 'rabin2':['readelf','objdump','file'],\n 'gdb':['lldb','strace','ltrace','objdump'],\n 'ltrace':['strace','gdb'],\n 'strace':['ltrace','gdb','ldd'],\n 'binwalk':['unblob','unsquashfs','file','7z'],\n 'unblob':['binwalk','unsquashfs','file','7z'],\n 'unsquashfs':['binwalk','unblob','7z','file'],\n 'tshark':['tcpdump','capinfos','wireshark'],\n 'capinfos':['tshark','file'],\n 'tcpdump':['tshark','capinfos'],\n 'jadx':['apktool','unzip','strings'],\n 'apktool':['jadx','unzip','strings'],\n 'frida':['frida-ps','gdb','adb'],\n 'curl':['python3','node','wget'],\n 'jq':['python3','node'],\n 'node':['python3'],\n 'python3':['python','node'],\n 'ROPgadget':['ropper','objdump','rabin2'],\n 'ropper':['ROPgadget','objdump','rabin2'],\n 'nmap':['naabu','masscan','curl'],\n 'ffuf':['gobuster','wfuzz','curl'],\n 'gobuster':['ffuf','wfuzz','curl'],\n 'kubectl':['grep','rg'],\n 'aws':['env','grep'],\n 'az':['env','grep'],\n 'gcloud':['env','grep'],\n}\nitems=list(dict.fromkeys(payload.get('repairItems') or payload.get('commandTools') or []))\nprint('[tool-repair]', 'route='+payload.get('route',''), 'lane='+payload.get('lane',''), 'target='+(payload.get('target') or '<none>'), 'items='+(','.join(items) if items else 'none'))\nfor line in payload.get('errorLines', [])[:8]:\n    print('[tool-repair-error]', line[:240])\nfor item in items:\n    alts=alternatives.get(item, [])\n    present=[tool for tool in alts if shutil.which(tool)]\n    direct=shutil.which(item)\n    print('[tool-repair-candidate]', 'item='+item, 'present='+str(bool(direct)).lower(), 'direct='+(direct or ''), 'alternatives='+(','.join(present or alts) if alts else ''), 'bootstrap_hint=re_bootstrap plan '+item)\npathlib.Path('/tmp/repi-tool-repair.json').write_text(json.dumps({'payload':payload,'items':items}, indent=2))\nprint('[tool-repair-artifact]', '/tmp/repi-tool-repair.json')\nPY\npython3 /tmp/repi-tool-repair.py`;
 	}
 
-	function analyzeToolRepairEvidence(pack: LaneCommandPack, combined: string): SpecialistEvidenceAnalysis {
+	function analyzeToolRepairEvidence(
+		pack: LaneCommandPack,
+		result: { code: number; stdout: string; stderr: string },
+	): SpecialistEvidenceAnalysis {
+		const runtimeErrors = runtimeErrorTranscript(result);
 		const errorLines = interestingLines(
-			combined,
+			runtimeErrors,
 			/command not found|not recognized|No such file|cannot stat|cannot access|ModuleNotFoundError|ImportError|Cannot find module|ERR_MODULE_NOT_FOUND|permission denied|EACCES|ENOENT|ENOTFOUND|ECONNREFUSED|CERTIFICATE_VERIFY_FAILED|SSL|timeout|trace\/breakpoint trap/i,
 			18,
 		);
 		if (errorLines.length === 0) return { findings: [], followups: [] };
-		const repairItems = transcriptRepairItems(combined);
+		const repairItems = transcriptRepairItems(runtimeErrors);
 		const findings = [`tool repair anchors: ${errorLines.map((line) => truncateMiddle(line, 220)).join(" | ")}`];
 		if (repairItems.length > 0) findings.push(`tool repair missing dependency anchors: ${repairItems.join(", ")}`);
-		const matrixCommand = toolRepairMatrixScript({ pack, combined, repairItems, errorLines });
+		const matrixCommand = toolRepairMatrixScript({ pack, combined: runtimeErrors, repairItems, errorLines });
 		return {
 			findings,
 			followups: [
@@ -1604,6 +1633,7 @@ export function createReconLaneRuntime(dependencies: ReconLaneRuntimeDependencie
 		result: { code: number; stdout: string; stderr: string; killed?: boolean },
 	): LaneRunAnalysis {
 		const combined = `${result.stdout}\n${result.stderr}`;
+		const runtimeErrors = runtimeErrorTranscript(result);
 		const lowerRoute = pack.route.toLowerCase();
 		const lowerLane = pack.lane.toLowerCase();
 		const targetArg = pack.target ? shellQuote(pack.target) : "<TARGET>";
@@ -1619,7 +1649,7 @@ export function createReconLaneRuntime(dependencies: ReconLaneRuntimeDependencie
 		if (result.killed) addFinding("command-pack was killed or timed out");
 		if (
 			/command not found|not found|no such file|cannot access|permission denied|trace\/breakpoint trap/i.test(
-				combined,
+				runtimeErrors,
 			)
 		) {
 			addFinding("tool/target/runtime error surfaced; inspect stderr and run re_bootstrap or adjust target path");
@@ -1714,7 +1744,7 @@ export function createReconLaneRuntime(dependencies: ReconLaneRuntimeDependencie
 		}
 
 		const specialistNextHints = [
-			mergeSpecialistEvidenceAnalysis(analyzeToolRepairEvidence(pack, combined), findings, followups),
+			mergeSpecialistEvidenceAnalysis(analyzeToolRepairEvidence(pack, result), findings, followups),
 			mergeSpecialistEvidenceAnalysis(analyzeNativeDeepEvidence(pack, combined, targetArg), findings, followups),
 			mergeSpecialistEvidenceAnalysis(analyzeBrowserXhrWsEvidence(pack, combined, targetArg), findings, followups),
 			mergeSpecialistEvidenceAnalysis(analyzeWebScannerEvidence(pack, combined, targetArg), findings, followups),
@@ -1981,22 +2011,52 @@ export function createReconLaneRuntime(dependencies: ReconLaneRuntimeDependencie
 		const strategy = options.strategy ?? (options.applyStrategy === false ? undefined : laneExecutionStrategy(pack));
 		const effectivePack = strategy?.pack ?? pack;
 		const runnable = effectivePack.commands.filter(
-			(command) => !/[<][A-Z_]+[>]/.test(command.command) && !/^re_/.test(command.command),
+			(command) =>
+				Boolean(command.runtimeAdapter) ||
+				(!/[<][A-Z_]+[>]/.test(command.command) && !/^re_/.test(command.command)),
 		);
 		if (runnable.length === 0)
 			return {
 				executed: false,
 				text: formatUnexecutedLaneRunSummary(effectivePack, strategy),
 			};
+		const adapterRunnable = runnable.filter((command) => Boolean(command.runtimeAdapter));
+		const shellRunnable = adapterRunnable.length > 0 ? [] : runnable.filter((command) => !command.runtimeAdapter);
 		const script = [
 			"set -u",
-			...runnable.map((command, index) =>
+			...shellRunnable.map((command, index) =>
 				[`echo '### lane-command ${index + 1}: ${command.label.replace(/'/g, "'\\''")}'`, command.command].join(
 					"\n",
 				),
 			),
 		].join("\n");
-		const result = await pi.exec("bash", ["-lc", script], { timeout: 120000 });
+		const shellResult = shellRunnable.length
+			? await pi.exec("bash", ["-lc", script], { timeout: 120000 })
+			: { code: 0, stdout: "", stderr: "", killed: false };
+		const adapterOutputs: string[] = [];
+		let adapterCode = 0;
+		for (const command of adapterRunnable) {
+			const metadata = command.runtimeAdapter!;
+			try {
+				const output = await runRuntimeAdapterExecution(pi, {
+					adapter: metadata.adapter,
+					target: metadata.target ?? effectivePack.target,
+					timeoutMs: metadata.timeoutMs,
+					specialist: metadata.specialist,
+				});
+				adapterOutputs.push(`### domain-adapter ${command.label}\n${output}`);
+				if (/\b(?:status:\s*(?:blocked|failed)|blocked:)/i.test(output)) adapterCode = 1;
+			} catch (error) {
+				adapterCode = 1;
+				adapterOutputs.push(`### domain-adapter ${command.label}\nerror: ${String(error)}`);
+			}
+		}
+		const result = {
+			code: shellResult.code === 0 && adapterCode === 0 ? 0 : shellResult.code || adapterCode || 1,
+			stdout: [shellResult.stdout, ...adapterOutputs].filter(Boolean).join("\n"),
+			stderr: shellResult.stderr,
+			killed: Boolean(shellResult.killed),
+		};
 		const analysis = analyzeLaneRun(effectivePack, result);
 		const artifactPath = writeLaneRunArtifact({ pack: effectivePack, runnable, script, result, analysis });
 		const evidence = appendEvidence({

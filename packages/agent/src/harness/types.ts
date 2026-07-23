@@ -457,6 +457,25 @@ export interface JsonlSessionMetadata extends SessionMetadata {
 	parentSessionPath?: string;
 }
 
+/** Metadata for the canonical SQLite session backend. */
+export interface SqliteSessionMetadata extends SessionMetadata {
+	cwd: string;
+	path: string;
+	parentSessionPath?: string;
+}
+
+export interface SqliteSessionCreateOptions extends SessionCreateOptions {
+	cwd: string;
+	parentSessionPath?: string;
+}
+
+export interface SqliteSessionListOptions {
+	cwd?: string;
+}
+
+export interface SqliteSessionRepoApi
+	extends SessionRepo<SqliteSessionMetadata, SqliteSessionCreateOptions, SqliteSessionListOptions> {}
+
 export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetadata> {
 	getMetadata(): Promise<TMetadata>;
 	getLeafId(): Promise<string | null>;

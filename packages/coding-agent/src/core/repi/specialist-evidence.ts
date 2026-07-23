@@ -71,7 +71,7 @@ export function analyzeBrowserXhrWsEvidence(
 	if (websocketAnchors.length > 0) findings.push(`websocket endpoint anchors: ${websocketAnchors.join(", ")}`);
 	const storageAnchors = interestingLines(
 		combined,
-		/\[cookies\]|\[localStorage\]|\[sessionStorage\]|access_token|refresh_token|session|jwt/i,
+		/\[cookies\]|\[localStorage\]|\[sessionStorage\]|\[web-cookie-signal\]|\[storage-snapshot\]|access_token|refresh_token|session|jwt/i,
 		8,
 	);
 	if (storageAnchors.length > 0) {
@@ -85,7 +85,7 @@ export function analyzeBrowserXhrWsEvidence(
 	if (cdpLines.length > 0) {
 		findings.push(`browser CDP artifact anchors: ${cdpLines.map((line) => truncateMiddle(line, 180)).join(" | ")}`);
 	}
-	const artifactAnchors = uniqueMatches(combined, /\[browser-artifact\]\s+(\S+)/gi, 6);
+	const artifactAnchors = uniqueMatches(combined, /\[(?:web-)?browser-artifact\]\s+(?:har=)?(\S+)/gi, 6);
 	if (artifactAnchors.length > 0) findings.push(`browser runtime artifact paths: ${artifactAnchors.join(", ")}`);
 	const replayLines = interestingLines(combined, /\[replay-eval\]/i, 10);
 	if (replayLines.length > 0) {
@@ -163,72 +163,23 @@ export function analyzeBrowserXhrWsEvidence(
 	}
 	if (pack.target && /^https?:\/\//i.test(pack.target)) {
 		followups.push({
-			label: "browser-xhr-ws-auth-diff-rerun",
-			command: `[ -x /tmp/repi-auth-diff.sh ] && /tmp/repi-auth-diff.sh ${targetArg} "\${COOKIE_A:-}" "\${COOKIE_B:-}" || printf '%s\n' 'set COOKIE_A/COOKIE_B and rerun auth-diff scaffold for two principals'`,
-			evidence: "repeat browser/XHR/WS auth boundary diff with concrete principal cookies",
+			label: "browser-cdp-domain-adapter-rerun",
+			command: `re_runtime_adapter run web-cdp-network-adapter ${targetArg}`,
+			evidence: "repeat the single Playwright/CDP/HAR adapter and ingest its route, storage, and replay evidence",
 		});
 		followups.push({
-			label: "browser-xhr-ws-capture-rerun",
-			command: `[ -f /tmp/repi-browser-xhr-ws.mjs ] && node /tmp/repi-browser-xhr-ws.mjs ${targetArg} || printf '%s\n' 'rerun re_lane plan to regenerate Playwright capture scaffold'`,
-			evidence: "repeat browser runtime capture after route/auth hypotheses are narrowed",
-		});
-		followups.push({
-			label: "browser-cdp-artifact-rerun",
-			command: `[ -f /tmp/repi-browser-cdp-artifact.mjs ] && node /tmp/repi-browser-cdp-artifact.mjs ${targetArg} /tmp/repi-browser-artifact.json || printf '%s\n' 'rerun re_lane plan to regenerate CDP artifact scaffold'`,
-			evidence: "repeat CDP-backed browser artifact capture with request/response/WS/storage serialization",
-		});
-		followups.push({
-			label: "browser-replay-eval-rerun",
-			command: `[ -f /tmp/repi-replay-eval.mjs ] && [ -f /tmp/repi-browser-artifact.json ] && node /tmp/repi-replay-eval.mjs /tmp/repi-browser-artifact.json || printf '%s\n' 'capture /tmp/repi-browser-artifact.json before replay evaluation'`,
-			evidence: "evaluate whether captured browser request replays with matching status/body drift",
-		});
-		followups.push({
-			label: "browser-route-graph-rerun",
-			command: `[ -f /tmp/repi-route-graph.mjs ] && node /tmp/repi-route-graph.mjs /tmp/repi-browser-artifact.json ${targetArg} || printf '%s\n' 'rerun browser-route-graph-scaffold after CDP artifact capture'`,
-			evidence: "regenerate normalized route graph from latest browser artifact",
-		});
-		followups.push({
-			label: "browser-auth-matrix-rerun",
-			command: `[ -f /tmp/repi-auth-matrix.mjs ] && COOKIE_A="\${COOKIE_A:-}" COOKIE_B="\${COOKIE_B:-}" AUTH_A="\${AUTH_A:-}" AUTH_B="\${AUTH_B:-}" node /tmp/repi-auth-matrix.mjs ${targetArg} || printf '%s\n' 'rerun browser-auth-matrix-scaffold and set principal cookies/tokens'`,
-			evidence: "compare anonymous/principal-A/principal-B authorization boundaries per route",
-		});
-		followups.push({
-			label: "browser-idor-bola-probe-rerun",
-			command: `[ -f /tmp/repi-idor-bola-probe.mjs ] && REPI_IDOR_BASELINE="\${REPI_IDOR_BASELINE:-}" REPI_IDOR_ALT="\${REPI_IDOR_ALT:-}" COOKIE_A="\${COOKIE_A:-}" AUTH_A="\${AUTH_A:-}" node /tmp/repi-idor-bola-probe.mjs || printf '%s\n' 'generate route graph and set REPI_IDOR_BASELINE/REPI_IDOR_ALT for controlled object diff'`,
-			evidence: "rerun controlled IDOR/BOLA alternate-object probe using route graph candidates",
-		});
-		followups.push({
-			label: "browser-authz-state-machine-rerun",
-			command: `[ -f /tmp/repi-authz-state-machine.mjs ] && COOKIE_A="\${COOKIE_A:-}" COOKIE_B="\${COOKIE_B:-}" AUTH_A="\${AUTH_A:-}" AUTH_B="\${AUTH_B:-}" node /tmp/repi-authz-state-machine.mjs ${targetArg} || printf '%s\n' 'rerun browser-authz-state-machine-scaffold and attach principal cookies/tokens'`,
-			evidence: "rerun multi-principal authorization state machine across captured routes",
-		});
-		followups.push({
-			label: "browser-authz-sequence-replay-rerun",
-			command: `[ -f /tmp/repi-authz-sequence-replay.mjs ] && COOKIE_A="\${COOKIE_A:-}" COOKIE_B="\${COOKIE_B:-}" AUTH_A="\${AUTH_A:-}" AUTH_B="\${AUTH_B:-}" node /tmp/repi-authz-sequence-replay.mjs ${targetArg} || printf '%s\n' 'rerun browser-authz-sequence-replay-scaffold after route graph capture'`,
-			evidence: "rerun authorization-sensitive request sequence for status/body-hash drift",
-		});
-		followups.push({
-			label: "browser-authz-object-ownership-rerun",
-			command: `[ -f /tmp/repi-authz-object-ownership.mjs ] && REPI_OWNER_URL="\${REPI_OWNER_URL:-}" COOKIE_A="\${COOKIE_A:-}" COOKIE_B="\${COOKIE_B:-}" AUTH_A="\${AUTH_A:-}" AUTH_B="\${AUTH_B:-}" node /tmp/repi-authz-object-ownership.mjs ${targetArg} || printf '%s\n' 'set REPI_OWNER_URL plus principal cookies/tokens before ownership check'`,
-			evidence: "rerun owner-vs-alternate-principal object authorization check",
-		});
-		followups.push({
-			label: "browser-authz-state-rollback-rerun",
-			command: `[ -f /tmp/repi-authz-state-rollback.mjs ] && REPI_ROLLBACK_URL="\${REPI_ROLLBACK_URL:-}" REPI_ROLLBACK_BODY="\${REPI_ROLLBACK_BODY:-}" REPI_ROLLBACK_RESTORE_BODY="\${REPI_ROLLBACK_RESTORE_BODY:-}" COOKIE_A="\${COOKIE_A:-}" AUTH_A="\${AUTH_A:-}" node /tmp/repi-authz-state-rollback.mjs ${targetArg} || printf '%s\n' 'set rollback URL/body/restore body to prove state transition and cleanup'`,
-			evidence: "rerun state-changing authorization proof with before/after/rollback hashes",
+			label: "browser-cdp-authz-replay-rerun",
+			command: `REPI_AUTHZ_PRINCIPALS="\${REPI_AUTHZ_PRINCIPALS:-anon,A,B}" re_runtime_adapter run web-cdp-network-adapter ${targetArg}`,
+			evidence:
+				"repeat principal/object/state/replay closure; credentials and mutation fixtures stay in environment references",
 		});
 	}
 	if (artifactAnchors.length > 0) {
 		const artifactPath = artifactAnchors[0] ?? "/tmp/repi-browser-artifact.json";
 		followups.push({
-			label: "browser-cdp-artifact-review",
-			command: `python3 - <<'PY'\nimport json, pathlib\np = pathlib.Path(${pythonString(artifactPath)})\nprint('[browser-artifact-review]', p)\nobj = json.loads(p.read_text())\nprint('requests=', len(obj.get('requests', [])), 'responses=', len(obj.get('responses', [])), 'websockets=', len(obj.get('websockets', [])), 'wsFrames=', len(obj.get('wsFrames', [])), 'cookies=', len(obj.get('cookies', [])))\nfor req in obj.get('requests', [])[:12]:\n    print('REQ', req.get('method'), req.get('url'), 'type=' + str(req.get('resourceType')), 'initiator=' + str(req.get('initiator')))\nfor res in obj.get('responses', [])[:12]:\n    print('RES', res.get('status'), res.get('url'), res.get('mimeType'))\nprint('storage=', json.dumps(obj.get('storage', {}), ensure_ascii=False)[:1200])\nPY`,
-			evidence: "review serialized CDP artifact for replayable requests, auth/session storage, and websocket frames",
-		});
-		followups.push({
-			label: "browser-replay-eval-artifact-rerun",
-			command: `[ -f /tmp/repi-replay-eval.mjs ] && node /tmp/repi-replay-eval.mjs ${shellQuote(artifactPath)} || printf '%s\n' 'rerun browser-replay-evaluator-scaffold first'`,
-			evidence: "replay evaluator bound to captured browser artifact path",
+			label: "browser-cdp-artifact-replay",
+			command: `re_runtime_adapter run web-cdp-network-adapter ${targetArg}`,
+			evidence: `replay the adapter artifact ${artifactPath} through the canonical Web runtime`,
 		});
 	}
 	if (
@@ -245,40 +196,25 @@ export function analyzeBrowserXhrWsEvidence(
 	) {
 		followups.push({
 			label: "web-api-authz-static-rerun",
-			command:
-				"python3 - <<'PY'\nprint('[web-authz-static-rerun] rerun web-api-authz-static-scaffold via re_lane plan/run; then bind risky id lookup to browser auth matrix or source-level guard proof')\nPY",
+			command: `re_runtime_adapter run web-cdp-network-adapter ${targetArg}`,
 			evidence: "rerun or review static route/auth/owner scanner and bind risks to runtime authz probes",
 		});
 		followups.push({
 			label: "web-api-schema-diff-rerun",
-			command:
-				"python3 - <<'PY'\nprint('[web-schema-rerun] rerun web-api-schema-diff-scaffold; compare id_params/security rows with route graph and auth matrix')\nPY",
+			command: `re_runtime_adapter run web-cdp-network-adapter ${targetArg}`,
 			evidence: "rerun OpenAPI/GraphQL auth parameter scanner and compare with captured route graph",
 		});
 		followups.push({
 			label: "web-api-state-source-rerun",
-			command:
-				"python3 - <<'PY'\nprint('[web-state-source-rerun] rerun web-api-state-source-scaffold; prove one mutating route with before/after/rollback hashes')\nPY",
+			command: `REPI_AUTHZ_MUTATE="\${REPI_AUTHZ_MUTATE:-0}" re_runtime_adapter run web-cdp-network-adapter ${targetArg}`,
 			evidence: "rerun state mutation source scanner and bridge to rollback proof",
-		});
-		followups.push({
-			label: "browser-authz-report-scaffold",
-			command: `python3 - <<'PY'\nimport json, pathlib\nprint('[authz-report] inputs=/tmp/repi-route-graph.json /tmp/repi-browser-artifact.json')\nif pathlib.Path('/tmp/repi-route-graph.json').exists():\n    graph=json.loads(pathlib.Path('/tmp/repi-route-graph.json').read_text())\n    print('[authz-report] routes=', len(graph), 'idor_candidates=', sum(len(r.get('idorParams', [])) for r in graph))\n    for r in graph[:20]: print('ROUTE', r.get('method'), r.get('path'), 'auth=' + str(r.get('auth')), 'idor=' + ','.join(r.get('idorParams', [])))\nprint('Next: attach COOKIE_A/COOKIE_B or AUTH_A/AUTH_B, rerun browser-auth-matrix-rerun, then set REPI_IDOR_BASELINE/ALT for one candidate.')\nPY`,
-			evidence: "authz report scaffold consolidating route graph, auth matrix, and IDOR/BOLA candidates",
-		});
-		followups.push({
-			label: "browser-authz-state-report-scaffold",
-			command: `python3 - <<'PY'\nimport json, pathlib\npaths=[\n  '/tmp/repi-authz-state-machine.json',\n  '/tmp/repi-authz-sequence.json',\n  '/tmp/repi-authz-ownership.json',\n  '/tmp/repi-authz-rollback.json',\n]\nprint('[authz-state-report] inputs=' + ' '.join(paths))\nfor raw in paths:\n    p=pathlib.Path(raw)\n    print('[authz-state-report]', raw, 'exists=' + str(p.exists()))\n    if not p.exists(): continue\n    obj=json.loads(p.read_text())\n    if raw.endswith('state-machine.json'):\n        print('STATE_MACHINE principals=', ','.join(obj.get('principals', [])), 'routes=', len(obj.get('routes', [])), 'states=', len(obj.get('states', [])))\n    elif raw.endswith('sequence.json'):\n        print('SEQUENCE steps=', len(obj.get('sequence', [])), 'runs=', len(obj.get('runs', [])))\n    elif raw.endswith('ownership.json'):\n        print('OWNERSHIP route=', obj.get('route'), 'potential_bola=', obj.get('potentialBola'), 'sameBody=', obj.get('sameBody'))\n    elif raw.endswith('rollback.json'):\n        print('ROLLBACK method=', obj.get('method'), 'restored=', obj.get('restored'), 'before=', obj.get('before', {}).get('hash'), 'after=', obj.get('after', {}).get('hash'))\nprint('Next: promote confirmed authz-state/ownership/rollback deltas into a minimal repro script with principal fixtures.')\nPY`,
-			evidence:
-				"browser authz state report consolidating state machine, sequence, ownership, and rollback artifacts",
 		});
 	}
 	if (websocketAnchors.length > 0) {
-		const wsUrl = websocketAnchors[0] ?? "<WS_URL>";
 		followups.push({
-			label: "browser-xhr-ws-replay-scaffold",
-			command: `node - <<'NODE'\nconst url = ${pythonString(wsUrl)};\nconsole.log('[repi-ws-replay] target=', url);\nconsole.log('Use captured cookies/headers/subprotocols from browser-xhr-ws runtime anchors before replay.');\nNODE`,
-			evidence: "websocket replay scaffold seeded from captured runtime endpoint",
+			label: "browser-cdp-websocket-replay",
+			command: `REPI_BROWSER_CDP_URL="\${REPI_BROWSER_CDP_URL:-}" re_runtime_adapter run web-cdp-network-adapter ${targetArg}`,
+			evidence: `replay captured WebSocket endpoint ${websocketAnchors[0] ?? "<ws>"} through the canonical CDP adapter`,
 		});
 	}
 	return {
@@ -348,29 +284,15 @@ export function analyzeJsSigningEvidence(pack: LaneCommandPack, combined: string
 		replayHarnessLines.length > 0
 	) {
 		followups.push({
-			label: "js-signing-observed-rebuild",
-			command: `[ -f /tmp/repi-signing-rebuild.mjs ] && REPI_OBSERVED="\${REPI_OBSERVED:-{}}" node /tmp/repi-signing-rebuild.mjs || rg -n "sign|signature|nonce|timestamp|crypto|encrypt|decrypt|fetch\\(|XMLHttpRequest" . | head -260`,
-			evidence: "turn captured hook arguments into local Node signing rebuild",
+			label: "js-signing-domain-adapter-rerun",
+			command: `re_runtime_adapter run web-cdp-network-adapter ${shellQuote(pack.target ?? "<url>")}`,
+			evidence:
+				"repeat the canonical browser adapter with JS signing specialist metadata and preserve observed request fields",
 		});
 		followups.push({
-			label: "js-signing-hook-rerun",
-			command: `[ -f /tmp/repi-js-runtime-hooks.js ] && sed -n '1,260p' /tmp/repi-js-runtime-hooks.js || rg -n "fetch\\(|XMLHttpRequest|WebSocket|crypto\\.subtle|sign|nonce|timestamp" . | head -260`,
-			evidence: "rerun or review browser hooks around first-divergence point",
-		});
-		followups.push({
-			label: "js-signing-normalizer-rerun",
-			command: `[ -f /tmp/repi-js-normalize.mjs ] && REPI_JS_LOG="\${REPI_JS_LOG:-}" REPI_OBSERVED="\${REPI_OBSERVED:-{}}" node /tmp/repi-js-normalize.mjs || printf '%s\n' 'rerun js-signing-observation-normalizer after capturing hook logs'`,
-			evidence: "normalize captured fetch/XHR/crypto hook logs into observed signing artifact",
-		});
-		followups.push({
-			label: "js-first-divergence-rerun",
-			command: `[ -f /tmp/repi-js-first-divergence.mjs ] && REPI_OBSERVED="\${REPI_OBSERVED:-}" REPI_EXPECTED_SIGNATURE="\${REPI_EXPECTED_SIGNATURE:-}" REPI_CANDIDATE_SIGNATURE="\${REPI_CANDIDATE_SIGNATURE:-}" REPI_SECRET="\${REPI_SECRET:-}" node /tmp/repi-js-first-divergence.mjs || printf '%s\n' 'rerun js-signing-first-divergence-scaffold after observed artifact exists'`,
-			evidence: "compare rebuilt candidate signature against observed signature and identify first divergence",
-		});
-		followups.push({
-			label: "js-signing-replay-harness-rerun",
-			command: `[ -f /tmp/repi-js-replay-harness.mjs ] && REPI_REPLAY_URL="\${REPI_REPLAY_URL:-}" REPI_METHOD="\${REPI_METHOD:-GET}" REPI_HEADERS="\${REPI_HEADERS:-{}}" REPI_SIGNATURE_KEY="\${REPI_SIGNATURE_KEY:-}" REPI_SIGNATURE_VALUE="\${REPI_SIGNATURE_VALUE:-}" node /tmp/repi-js-replay-harness.mjs || printf '%s\n' 'rerun js-signing-replay-harness-scaffold and set replay env'`,
-			evidence: "validate rebuilt signature through signed request replay and response drift",
+			label: "js-signing-replay-verifier",
+			command: `REPI_AUTHZ_PRINCIPALS="\${REPI_AUTHZ_PRINCIPALS:-anon}" re_runtime_adapter run web-cdp-network-adapter ${shellQuote(pack.target ?? "<url>")}`,
+			evidence: "replay the signed request through the same adapter and compare response drift",
 		});
 	}
 	return {
@@ -534,24 +456,14 @@ export function analyzeWebScannerEvidence(
 		);
 	if (scopeLines.length || crawlLines.length || contentLines.length || templateLines.length || verifierLines.length) {
 		followups.push({
-			label: "web-scan-scope-rerun",
-			command: `[ -x /tmp/repi-web-scope.sh ] && /tmp/repi-web-scope.sh ${targetArg} || printf '%s\n' 'rerun web-scan-scope-baseline via re_lane plan/run'`,
-			evidence: "refresh web scope baseline before expanding scanner output",
+			label: "web-scan-domain-adapter-rerun",
+			command: `re_runtime_adapter run web-cdp-network-adapter ${targetArg}`,
+			evidence: "refresh Web scope, route, storage, and response evidence through the canonical adapter",
 		});
 		followups.push({
-			label: "web-scan-corpus-rerun",
-			command: `[ -x /tmp/repi-web-crawl.sh ] && /tmp/repi-web-crawl.sh ${targetArg} || printf '%s\n' 'rerun web-scan-crawl-corpus-scaffold'`,
-			evidence: "refresh crawl/route corpus for content discovery and replay verifier",
-		});
-		followups.push({
-			label: "web-scan-template-rerun",
-			command: `[ -x /tmp/repi-web-template-scan.sh ] && /tmp/repi-web-template-scan.sh ${targetArg} || printf '%s\n' 'rerun bounded template scan and keep JSONL artifact'`,
-			evidence: "rerun bounded nuclei/nikto/dalfox candidate finding queue",
-		});
-		followups.push({
-			label: "web-scan-manual-replay-rerun",
-			command: `[ -x /tmp/repi-web-verify.py ] && python3 /tmp/repi-web-verify.py ${targetArg} || printf '%s\n' 'rerun manual replay verifier after corpus/finding queue exists'`,
-			evidence: "replay scanner candidates with status/body hash before claiming vulnerability",
+			label: "web-scan-replay-verifier",
+			command: `re_runtime_adapter run web-cdp-network-adapter ${targetArg} && re_verifier matrix`,
+			evidence: "replay scanner candidates with adapter artifacts and verifier status/body hashes",
 		});
 	}
 	return {
@@ -764,7 +676,11 @@ export function analyzePwnPrimitiveEvidence(
 			`pwn primitive crash/control anchors: ${crashLines.map((line) => truncateMiddle(line, 180)).join(" | ")}`,
 		);
 	}
-	const crashRegisterValues = uniqueMatches(combined, /\b(?:RIP|EIP|PC)\s*[:=]?\s*(0x[0-9a-f]+)/gi, 8);
+	const crashRegisterValues = uniqueMatches(
+		combined,
+		/(?:\b(?:RIP|EIP|PC)\s*[:=]?\s*|\[pwn-offset\][^\n]*\bcrash_value=)(0x[0-9a-f]+)/gi,
+		8,
+	);
 	if (crashRegisterValues.length > 0) {
 		findings.push(`pwn crash register anchors: ${crashRegisterValues.join(", ")}`);
 	}

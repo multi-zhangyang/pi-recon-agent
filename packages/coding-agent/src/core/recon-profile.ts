@@ -302,6 +302,7 @@ const webRuntimeDependencies: WebRuntimeDependencies = {
 	updateMissionCheckpoint,
 	runtimeCheckpointStatus,
 	replayHash,
+	runRuntimeAdapterExecution,
 };
 
 function latestLiveBrowserArtifactPath(options: ArtifactScopeFilterOptions = {}): string | undefined {
@@ -381,6 +382,7 @@ const { latestNativeRuntimeArtifactPath, runNativeRuntime, buildNativeRuntimeOut
 	appendEvidence,
 	runtimeCheckpointStatus,
 	updateMissionCheckpoint,
+	runRuntimeAdapterExecution,
 });
 
 const {
@@ -403,6 +405,7 @@ const {
 	commandKnownTools,
 	laneExecutionStrategy,
 	formatAutopilotExecutionStrategy,
+	runRuntimeAdapterExecution,
 });
 
 const evidenceGraphRuntime = createEvidenceGraphRuntime({

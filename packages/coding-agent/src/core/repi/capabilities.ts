@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import type { ExtensionAPI } from "../extensions/types.ts";
-import { missionOperatorDirective, readCurrentSessionMission } from "./mission.ts";
+import { missionOperatorDirective, readCurrentMission, readCurrentSessionMission } from "./mission.ts";
 import { REPI_TOOL_NAMES } from "./profile.ts";
 import { isRepiContinuation, isRepiTask, type RoutePlan, routeRepiTask } from "./routes.ts";
 import { runMissionSessionScope } from "./session-scope.ts";
@@ -322,6 +322,10 @@ export function selectRepiCapabilityTools(options: {
 export interface RepiCapabilityActivationOptions {
 	preserveExplicitToolSelection?: boolean;
 	injectPromptPacket?: boolean;
+	/** Read the persistent mission blackboard when chat session persistence is disabled. */
+	readMissionWithoutSession?: boolean;
+	/** Additional execution tools for the routed production profile only. */
+	routedExecutionTools?: readonly string[];
 }
 
 export function createRepiCapabilityActivationFactory(options: RepiCapabilityActivationOptions = {}) {
@@ -336,17 +340,23 @@ export function createRepiCapabilityActivationFactory(options: RepiCapabilityAct
 
 		const applyProfiles = (profiles: readonly RepiCapabilityProfile[]): string[] => {
 			activeProfiles = [...new Set(profiles)];
+			const routedExecutionTools =
+				activeProfiles.includes("agent") && options.routedExecutionTools ? options.routedExecutionTools : [];
 			const selected = selectRepiCapabilityTools({
 				availableToolNames: pi.getAllTools().map((tool) => tool.name),
 				activeToolNames: pi.getActiveTools(),
 				profiles: activeProfiles,
 				allowWriteTools,
 			});
-			const current = pi.getActiveTools();
-			if (selected.length !== current.length || selected.some((name, index) => name !== current[index])) {
-				pi.setActiveTools(selected);
+			for (const name of routedExecutionTools) {
+				if (pi.getAllTools().some((tool) => tool.name === name)) selected.push(name);
 			}
-			return selected;
+			const deduplicated = [...new Set(selected)];
+			const current = pi.getActiveTools();
+			if (deduplicated.length !== current.length || deduplicated.some((name, index) => name !== current[index])) {
+				pi.setActiveTools(deduplicated);
+			}
+			return deduplicated;
 		};
 
 		const resetRuntime = (): void => {
@@ -441,7 +451,12 @@ export function createRepiCapabilityActivationFactory(options: RepiCapabilityAct
 			const sessionFile = ctx.sessionManager?.getSessionFile?.();
 			return runMissionSessionScope(sessionFile, () => {
 				if (options.preserveExplicitToolSelection) return;
-				const mission = readCurrentSessionMission(ctx);
+				const sessionFile = ctx.sessionManager?.getSessionFile?.();
+				const mission = sessionFile
+					? readCurrentSessionMission(ctx)
+					: options.readMissionWithoutSession
+						? readCurrentMission()
+						: undefined;
 				const routedPrompt = isRepiTask(event.prompt);
 				const continuation = isRepiContinuation(event.prompt);
 				if (mission?.id !== activeMissionId) {

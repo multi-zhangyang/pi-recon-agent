@@ -3,7 +3,7 @@ import { bootstrapCatalogFor, buildToolDigest, parseToolIndex } from "./bootstra
 import type { EvidenceRecord } from "./evidence.ts";
 import { ensureReconStorage, RECON_APPEND_SYSTEM_PROMPT, RECON_SYSTEM_PROMPT } from "./resources.ts";
 import { evidenceToolchainDir, toolIndexPath, writePrivateTextFile } from "./storage.ts";
-import { repiIndexedToolPresent } from "./tool-presence.ts";
+import { repiResolvedToolPresent } from "./tool-presence.ts";
 import {
 	buildProfessionalRuntimeBridgesGate,
 	buildToolchainDomainCapability,
@@ -40,7 +40,7 @@ export function createToolchainCapabilityRuntime(dependencies: ToolchainCapabili
 			generatedAt: new Date().toISOString(),
 			toolIndexPath: toolIndexPath(),
 			sourceCorpus,
-			toolPresent: (tool) => repiIndexedToolPresent(index, tool) === true,
+			toolPresent: (tool) => repiResolvedToolPresent(index, tool) === true,
 		});
 	}
 
@@ -81,7 +81,7 @@ export function createToolchainCapabilityRuntime(dependencies: ToolchainCapabili
 			generatedAt: new Date().toISOString(),
 			toolIndexPath: toolIndexPath(),
 			sourceCorpus,
-			toolPresent: (tool) => repiIndexedToolPresent(index, tool) === true,
+			toolPresent: (tool) => repiResolvedToolPresent(index, tool) === true,
 			bootstrapHint: (tool) =>
 				bootstrapCatalogFor(tool) ? `re_bootstrap plan ${tool}` : `manual_tool_review ${tool}`,
 		});

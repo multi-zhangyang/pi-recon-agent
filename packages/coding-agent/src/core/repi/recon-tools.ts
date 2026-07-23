@@ -972,7 +972,8 @@ export function createReconTools<TCompletionAudit, TPack extends ReconCommandLan
 						};
 					}
 					updateMissionCheckpoint("repro_commands_ready", "done", `lane-command-pack:${lane.name}`);
-					const pack = laneCommandPack(mission, lane, params.target);
+					const laneTarget = params.target ?? (mission.route.domain === "Agent / LLM boundary" ? "." : undefined);
+					const pack = laneCommandPack(mission, lane, laneTarget);
 					const text = params.action === "run" ? await runLaneCommandPack(pi, pack) : formatLaneCommandPack(pack);
 					return {
 						content: [{ type: "text" as const, text }],

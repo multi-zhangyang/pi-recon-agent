@@ -10,7 +10,7 @@ export const REPI_GENERIC_TASK = "general REPI investigation";
 
 export const REPI_TASK_PATTERNS = [
 	/\b(?:apk|android|ios|ipa|frida|objection|jadx|apktool|smali)\b|\.(?:apk|ipa)\b/i,
-	/ida|radare2|\br2\b|ghidra|gdb|lldb|checksec|readelf|objdump|crackme|revers(?:e|ing)(?:\s+engineering)?|binary|二进制|逆向|反编译|反汇编|elf|pe\b|dll|so\b|wasm|vmprotect|upx/i,
+	/ida|radare2|\br2\b|ghidra|gdb|lldb|checksec|readelf|objdump|crackme|revers(?:e|ing)(?:\s+engineering)?|binary|二进制|逆向|反编译|反汇编|\b(?:elf|pe|dll)\b|\.so\b|wasm|vmprotect|upx/i,
 	/\bctf\b|\bpwn\b|\brop\b|ret2libc|\bheap\b|tcache|fastbin|format[-_ ]?string|fmtstr|srop|sigreturn|ret2dlresolve|dlresolve|one_gadget|seccomp|seccomp[-_ ]?bpf|syscall filter|pwntools|漏洞利用|\bexploit\b/i,
 	/js\s*逆向|签名|加密参数|风控|webpack|sourcemap|hook|xhr|fetch|websocket/i,
 	/web\s*渗透|api\s*安全|漏洞扫描|目录扫描|\b(?:graphql|jwt|oauth|ssrf|idor|bola|xss|sqli|ssti|csrf|rce|waf|burp|nuclei|ffuf|gobuster|sqlmap|dalfox)\b/i,
@@ -65,7 +65,7 @@ export function routeRepiTask(text: string): RoutePlan {
 	// and routed the native binary as an LLM-boundary audit. Keep pure REPI QA
 	// tasks on the Agent lane, but let concrete ELF/binary/crackme wording win.
 	const nativeConcreteSignal =
-		/elf|pe\b|dll|so\b|binary|二进制|反编译|反汇编|ida|radare2|\br2\b|ghidra|gdb|lldb|checksec|readelf|objdump|wasm|\.exe\b|executable|compiled|\bcrackme\b|keygen|license[-_ ]?check|许可证校验/i.test(
+		/\b(?:elf|pe|dll)\b|\.so\b|binary|二进制|反编译|反汇编|ida|radare2|\br2\b|ghidra|gdb|lldb|checksec|readelf|objdump|wasm|\.exe\b|executable|compiled|\bcrackme\b|keygen|license[-_ ]?check|许可证校验/i.test(
 			lower,
 		);
 	// A user-facing bare reverse/reversing request is a real native route signal. Internal
@@ -84,7 +84,7 @@ export function routeRepiTask(text: string): RoutePlan {
 			lower,
 		);
 	const agentBoundarySpecific =
-		/prompt injection|system prompt|developer message|tool injection|tool-call|tool call|function call|mcp|model context protocol|agent\s*安全|llm\s*安全|rag|retrieval|memory poisoning|记忆投毒|工具滥用|越狱|jailbreak|indirect prompt|untrusted content|repi\s*(?:自身|self|harness|qa)|harness\s*qa|agent[-_ ]?thread|sub[-_ ]?agent|agent\s*(?:harness|runtime|orchestration|boundary)|env[-_ ]?only|model provider|print mode/.test(
+		/prompt injection|system prompt|developer message|tool injection|tool-call|tool call|function call|mcp|model context protocol|agent\s*安全|llm\s*安全|(?:agent|llm)[\s/_-]*(?:security|boundary|audit)|rag|retrieval|memory poisoning|记忆投毒|工具滥用|越狱|jailbreak|indirect prompt|untrusted content|repi\s*(?:自身|self|harness|qa)|harness\s*qa|agent[-_ ]?thread|sub[-_ ]?agent|agent\s*(?:harness|runtime|orchestration|boundary)|env[-_ ]?only|model provider|print mode/.test(
 			lower,
 		);
 	const exploitReliabilitySpecific =

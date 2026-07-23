@@ -76,7 +76,23 @@ export function createDomainAdapter(spec: RuntimeAdapterExecutionRowV1): DomainA
 			const result = await context.run(command, plan.timeoutMs);
 			const finishedAt = new Date().toISOString();
 			const parserSignals = parseRuntimeAdapterSignals(spec, `${result.stdout}\n${result.stderr}`);
-			const evidenceLines = parseRuntimeAdapterEvidenceLines(spec, `${result.stdout}\n${result.stderr}`);
+			const transcript = `${result.stdout}\n${result.stderr}`;
+			const evidenceLines = parseRuntimeAdapterEvidenceLines(spec, transcript, 64);
+			const errorLines = transcript
+				.split(/\r?\n/)
+				.map((line) => line.trim())
+				.filter(
+					(line) =>
+						line &&
+						/command not found|not found|no such file|cannot access|permission denied|ModuleNotFoundError|ImportError|ERR_MODULE_NOT_FOUND|EACCES|ENOENT|ENOTFOUND|ECONNREFUSED|timeout/i.test(
+							line,
+						),
+				)
+				.slice(0, 12)
+				.map((line) => `[adapter-error] ${line}`);
+			for (const line of errorLines) {
+				if (!evidenceLines.includes(line)) evidenceLines.push(line);
+			}
 			return {
 				adapter: spec,
 				targetProfile,

@@ -8,7 +8,7 @@ import { ensureReconStorage } from "./resources.ts";
 import type { RoutePlan } from "./routes.ts";
 import type { LaneCommand } from "./specialist-command-planner.ts";
 import { evidenceRunsDir, readTextFile, toolIndexPath, writePrivateTextFile } from "./storage.ts";
-import { escapeRegExp, shellQuote } from "./target.ts";
+import { shellQuote } from "./target.ts";
 import { compactStoredArtifact, truncateMiddle } from "./text.ts";
 import { repiIndexedToolPresent, repiResolvedToolPresent } from "./tool-presence.ts";
 import { REPI_TOOL_BOOTSTRAP_CATALOG, type RepiToolBootstrapCatalogEntry } from "./toolchain.ts";
@@ -17,84 +17,6 @@ export type ToolIndexEntry = { present: boolean; path?: string };
 
 const SHELL_BUILTIN_OR_TEXT_TOOL =
 	/^(set|echo|cat|sed|awk|grep|head|tail|find|for|if|then|else|fi|while|do|done|export|cd|pwd|ls|printf|case|esac)$/;
-
-const COMMAND_TOOL_PROBES = [
-	"file",
-	"sha256sum",
-	"readelf",
-	"strings",
-	"rabin2",
-	"r2",
-	"radare2",
-	"objdump",
-	"checksec",
-	"ghidra",
-	"strace",
-	"ltrace",
-	"gdb",
-	"ROPgadget",
-	"ropper",
-	"patchelf",
-	"jadx",
-	"apktool",
-	"aapt",
-	"adb",
-	"frida",
-	"frida-ps",
-	"objection",
-	"ios-deploy",
-	"class-dump",
-	"otool",
-	"nm",
-	"codesign",
-	"plutil",
-	"curl",
-	"rg",
-	"jq",
-	"python3",
-	"node",
-	"playwright",
-	"mitmproxy",
-	"nmap",
-	"ffuf",
-	"feroxbuster",
-	"gobuster",
-	"nikto",
-	"dalfox",
-	"arjun",
-	"nuclei",
-	"httpx",
-	"katana",
-	"burpsuite",
-	"tshark",
-	"capinfos",
-	"tcpdump",
-	"wireshark",
-	"volatility3",
-	"binwalk",
-	"foremost",
-	"unblob",
-	"unsquashfs",
-	"ubireader_extract_files",
-	"qemu-mips",
-	"qemu-arm",
-	"yara",
-	"capa",
-	"floss",
-	"clamscan",
-	"upx",
-	"docker",
-	"kubectl",
-	"aws",
-	"az",
-	"gcloud",
-	"ldapsearch",
-	"impacket-secretsdump",
-	"nxc",
-	"crackmapexec",
-	"bloodhound-python",
-	"certipy",
-] as const;
 
 export function buildToolDigest(): string {
 	ensureReconStorage();
@@ -123,10 +45,13 @@ export function createBootstrapPlan(tools: string[]): BootstrapPlan[] {
 	const index = parseToolIndex();
 	return tools.map((tool) => {
 		const indexed = index.get(tool);
+		const resolvedPresent = repiResolvedToolPresent(index, tool);
 		const catalog = bootstrapCatalogFor(tool);
 		return {
 			tool,
-			present: indexed?.present ?? false,
+			// A fresh profile has no persisted index yet. Resolve the host command
+			// before reporting a tool missing; refresh remains the evidence path.
+			present: resolvedPresent === true,
 			path: indexed?.path,
 			install: catalog?.install,
 			verify: catalog?.verify,
@@ -155,11 +80,31 @@ export function formatBootstrapPlan(plan: BootstrapPlan[]): string {
 }
 
 function toolsFromCommand(command: string): string[] {
-	const firstToken = command.trim().split(/\s+/)[0]?.replace(/['"`]/g, "");
 	const tools = new Set<string>();
-	if (firstToken && !SHELL_BUILTIN_OR_TEXT_TOOL.test(firstToken)) tools.add(firstToken);
-	for (const tool of COMMAND_TOOL_PROBES) {
-		if (new RegExp(`(^|[^A-Za-z0-9_.-])${escapeRegExp(tool)}([^A-Za-z0-9_.-]|$)`).test(command)) tools.add(tool);
+	const withoutHeredocs = command.replace(
+		/<<-?\s*(["']?)([A-Za-z_][A-Za-z0-9_-]*)\1[^\n]*\n[\s\S]*?(?:^|\n)\s*\2\s*(?:\n|$)/gm,
+		"\n",
+	);
+	const segments = withoutHeredocs.split(/&&|\|\||[;|\n{}()]|\b(?:then|do|else|elif)\b/i);
+	const wrappers = new Set(["env", "exec", "nohup", "sudo", "timeout", "xargs"]);
+	for (const segment of segments) {
+		const tokens = segment.trim().split(/\s+/).filter(Boolean);
+		while (tokens[0] && /^(?:if|while|until|for|case|then|do|else|elif|!)$/i.test(tokens[0])) tokens.shift();
+		while (tokens[0] && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0])) tokens.shift();
+		while (tokens[0] && wrappers.has(tokens[0].toLowerCase())) {
+			tokens.shift();
+			while (tokens[0] && (/^-[A-Za-z]+$/.test(tokens[0]) || /^\d+(?:\.\d+)?[smhd]?$/.test(tokens[0])))
+				tokens.shift();
+			while (tokens[0] && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0])) tokens.shift();
+		}
+		if (tokens[0]?.toLowerCase() === "command") {
+			if (tokens[1] === "-v" || tokens[1] === "-V") continue;
+			tokens.shift();
+		}
+		const firstToken = tokens[0]?.replace(/['"`]/g, "");
+		if (!firstToken || SHELL_BUILTIN_OR_TEXT_TOOL.test(firstToken)) continue;
+		const tool = firstToken.split("/").pop();
+		if (tool) tools.add(tool);
 	}
 	return Array.from(tools);
 }
@@ -406,19 +351,9 @@ export function autopilotExecutionStrategy(
 	bootstrapPlan: BootstrapPlan[],
 ): AutopilotExecutionStrategy {
 	const index = parseToolIndex();
-	const knownMissing = bootstrapPlan.filter((item) => item.known && !item.present).map((item) => item.tool);
-	if (index.size === 0) {
-		return {
-			mode: "tool-index-missing",
-			pack,
-			missingTools: knownMissing,
-			fallbacks: [],
-			skipped: [],
-			notes: [
-				"tool-index 为空：autopilot 不做破坏性安装，也不盲目裁剪命令；建议先 re_tool_index refresh 或 re_bootstrap plan。",
-			],
-		};
-	}
+	const knownMissing = bootstrapPlan
+		.filter((item) => item.known && repiResolvedToolPresent(index, item.tool) === false)
+		.map((item) => item.tool);
 	const nextCommands: LaneCommand[] = [];
 	const fallbacks: AutopilotExecutionStrategy["fallbacks"] = [];
 	const skipped: AutopilotExecutionStrategy["skipped"] = [];
@@ -454,11 +389,13 @@ export function autopilotExecutionStrategy(
 		fallbacks,
 		skipped,
 		notes: [
-			mode === "direct"
-				? "tool-index 覆盖当前命令包：直接执行。"
-				: mode === "blocked"
-					? "所有候选命令都依赖缺失工具且没有可用 fallback；先执行 next_bootstrap_command 或提供等价工具。"
-					: "已按 tool-index 将命令包降级：优先 fallback，无法替代的命令跳过。",
+			index.size === 0
+				? `tool-index 为空：已用主机命令探测执行，建议 re_tool_index refresh 固化路径${mode === "direct" ? "。" : "后再重试。"}`
+				: mode === "direct"
+					? "tool-index 覆盖当前命令包：直接执行。"
+					: mode === "blocked"
+						? "所有候选命令都依赖缺失工具且没有可用 fallback；先执行 next_bootstrap_command 或提供等价工具。"
+						: "已按 tool-index 将命令包降级：优先 fallback，无法替代的命令跳过。",
 		],
 	};
 }

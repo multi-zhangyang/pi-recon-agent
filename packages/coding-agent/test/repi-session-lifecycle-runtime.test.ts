@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
+import { readCurrentMission } from "../src/core/repi/mission.ts";
 import { installRepiSessionLifecycle } from "../src/core/repi/session-lifecycle-runtime.ts";
 
 type Handler = (event: Record<string, unknown>, ctx: Record<string, unknown>) => Promise<unknown> | unknown;
@@ -99,6 +100,42 @@ describe("REPI session lifecycle runtime", () => {
 				{},
 			),
 		).resolves.toBeUndefined();
+	});
+
+	it("persists the REPI mission blackboard even when chat session persistence is disabled", async () => {
+		runtimeDir = join(
+			tmpdir(),
+			`repi-session-runtime-no-session-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+		);
+		mkdirSync(runtimeDir, { recursive: true });
+		process.env.REPI_CODING_AGENT_DIR = runtimeDir;
+		const handlers = new Map<string, Handler[]>();
+		const fakePi = {
+			on(event: string, handler: Handler) {
+				handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+			},
+			getSessionFile: () => undefined,
+			getSessionName: () => undefined,
+			setSessionName() {},
+			registerCommand() {},
+			registerTool() {},
+		} as unknown as ExtensionAPI;
+		const context = {
+			hasUI: false,
+			ui: { setStatus() {}, notify() {} },
+			sessionManager: { getSessionFile: () => undefined, getBranch: () => [] },
+		};
+		installRepiSessionLifecycle(fakePi, {
+			nextDecisionCommand: () => "re_runtime_adapter run <target>",
+			installCommands() {},
+			installTools() {},
+		});
+		for (const handler of handlers.get("session_start") ?? []) await handler({}, context);
+		await handlers.get("before_agent_start")?.[0]?.(
+			{ prompt: "audit prompt injection across an Agent/LLM tool boundary", systemPrompt: "BASE" },
+			context,
+		);
+		expect(readCurrentMission()?.route.domain).toBe("Agent / LLM boundary");
 	});
 
 	it("skips routed control-plane preflights and keeps one DomainAdapter execution path", async () => {
