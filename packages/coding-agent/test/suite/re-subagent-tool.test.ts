@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AgentMessage } from "@pi-recon/repi-agent-core";
 import { fauxAssistantMessage, fauxToolCall } from "@pi-recon/repi-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BUILTIN_AGENT_THREAD_SPECS, createAgentThreadManager } from "../../src/core/agent-thread-manager.ts";
@@ -42,7 +43,7 @@ function makeTempAgentDir(prefix: string): string {
 	return dir;
 }
 
-function writeStubBin(): string {
+function writeStubBin(exitCode = 0): string {
 	const path = join(tmpdir(), `repi-stub-${Date.now()}-${Math.random().toString(36).slice(2)}.sh`);
 	writeFileSync(
 		path,
@@ -65,7 +66,7 @@ function writeStubBin(): string {
 			'  } > "$REPI_WORKER_HANDOFF_PATH"\n' +
 			"fi\n" +
 			"printf 'VERIFIER_HANDOFF_PROOF: claim verified\\nfindings: ok\\n'\n" +
-			"exit 0\n",
+			`exit ${exitCode}\n`,
 		"utf-8",
 	);
 	chmodSync(path, 0o755);
@@ -84,6 +85,14 @@ function getToolResultText(harness: Harness): string {
 		}
 	}
 	return "";
+}
+
+type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
+
+function getReSubagentToolResult(harness: Harness): ToolResultMessage | undefined {
+	return harness.session.messages.find(
+		(message): message is ToolResultMessage => message.role === "toolResult" && message.toolName === "re_subagent",
+	);
 }
 
 describe("re_subagent tool", () => {
@@ -273,6 +282,32 @@ describe("re_subagent tool", () => {
 
 			const resultText = getToolResultText(harness);
 			expect(resultText).toContain("status=complete");
+			const result = getReSubagentToolResult(harness);
+			expect(result?.isError).toBe(false);
+			expect(result?.details).toMatchObject({
+				kind: "RepiSubagentResultV1",
+				schemaVersion: 1,
+				status: "complete",
+				exitCode: 0,
+				runId: expect.any(String),
+				spec: "verifier",
+				task: "verify the claim",
+				taskSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+				missionId: null,
+				runRoot: expect.any(String),
+				mergePath: expect.any(String),
+				handoffPath: expect.any(String),
+				handoffPresent: true,
+				handoffRecovered: false,
+				handoffBytes: expect.any(Number),
+				handoffSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+				handoffRunId: expect.any(String),
+				handoffMissionId: null,
+				handoffLineageSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+				handoffLineageValid: true,
+				lineageSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+			});
+			expect((result?.details as { error?: unknown } | undefined)?.error).toBeUndefined();
 			// File-based handoff: the stub wrote handoff.md to
 			// $REPI_WORKER_HANDOFF_PATH; mergeRun must surface it as ## Worker handoff
 			// so the parent recovers the work even when stdout text is thin.
@@ -284,6 +319,51 @@ describe("re_subagent tool", () => {
 			expect(ledger).toContain("subagent-handoff-verifier-complete");
 			expect(ledger).toContain("stdout_sha256=");
 			expect(ledger).toContain("candidate: process-isolated lineage-bound handoff");
+		});
+
+		it("returns a structured failure result when the worker exits non-zero", async () => {
+			const agentDir = makeTempAgentDir("re-subagent-failure");
+			tempDirs.push(agentDir);
+			process.env[ENV_AGENT_DIR] = agentDir;
+			delete process.env[ENV_AGENT_THREAD];
+			const stubBin = writeStubBin(17);
+			tempDirs.push(stubBin);
+			process.env[ENV_BIN_PATH] = stubBin;
+
+			const harness = await createHarness({ extensionFactories: [createReconExtensionFactory()] });
+			harnesses.push(harness);
+			harness.setResponses([
+				fauxAssistantMessage(
+					[
+						fauxToolCall("re_subagent", {
+							spec: "operator",
+							task: "run the command",
+							inheritMcp: false,
+							timeoutMs: 5000,
+						}),
+					],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage("done"),
+			]);
+
+			await harness.session.prompt("run it");
+
+			const result = getReSubagentToolResult(harness);
+			expect(result?.isError).toBe(false);
+			expect(result?.details).toMatchObject({
+				kind: "RepiSubagentResultV1",
+				schemaVersion: 1,
+				status: "failed",
+				exitCode: 17,
+				runId: expect.any(String),
+				spec: "operator",
+				task: "run the command",
+				taskSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+				handoffPresent: true,
+				handoffLineageValid: true,
+				error: expect.any(String),
+			});
 		});
 	});
 });

@@ -256,8 +256,16 @@ function eventProgressLine(event: AgentSessionEvent): string | undefined {
 			return `tool_end name=${event.toolName} error=${event.isError ? "true" : "false"}`;
 		case "compaction_start":
 			return `compaction_start reason=${event.reason}`;
-		case "compaction_end":
-			return `compaction_end reason=${event.reason} aborted=${event.aborted ? "true" : "false"}`;
+		case "compaction_end": {
+			const outcome = event.aborted
+				? "aborted"
+				: event.result
+					? "compacted"
+					: event.errorMessage
+						? "failed"
+						: "noop";
+			return `compaction_end reason=${event.reason} outcome=${outcome} willRetry=${event.willRetry ? "true" : "false"}`;
+		}
 		case "auto_retry_start":
 			return `auto_retry_start attempt=${event.attempt}/${event.maxAttempts}`;
 		case "auto_retry_end":
@@ -731,6 +739,11 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 				} else if (mode === "text") {
 					writeLastAssistantText();
 				}
+			} else if (lastMessage) {
+				console.error(
+					`REPI print prompt ended without a terminal assistant response (last role: ${lastMessage.role}).`,
+				);
+				exitCode = 1;
 			}
 		}
 

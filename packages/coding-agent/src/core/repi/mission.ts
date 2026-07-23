@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { RepiSubagentResultV1 } from "./re-subagent-contract.ts";
 import { REPI_GENERIC_TASK, type RoutePlan, routeRepiTask } from "./routes.ts";
 import { mutateRepiState, readRepiStateEntry } from "./state-db.ts";
 import {
@@ -39,6 +40,27 @@ export type MissionRuntimeStats = {
 	lastCommands: string[];
 	selfReviewDue: boolean;
 	lastInjectedState?: string;
+	delegationGate?: DelegationGateState;
+};
+
+export type DelegationGateStatus = "inactive" | "required" | "dispatching" | "satisfied" | "blocked";
+
+/** Persisted runtime contract for mandatory research/delegation before execution. */
+export type DelegationGateState = {
+	status: DelegationGateStatus;
+	missionId: string;
+	directiveRevision: number;
+	reason: string;
+	spec: string;
+	task: string;
+	taskSha256: string;
+	attempts: number;
+	toolCallId?: string;
+	runId?: string;
+	handoffSha256?: string;
+	/** Full validated result retained so a restored satisfied gate can be rechecked. */
+	result?: RepiSubagentResultV1;
+	lastError?: string;
 };
 
 export type MissionState = {

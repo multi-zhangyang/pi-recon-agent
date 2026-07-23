@@ -10,6 +10,62 @@ import { createRegisteredReconHarness } from "./recon-profile-harness.ts";
 vi.setConfig({ testTimeout: 60_000 });
 
 describe("REPI kernel profile swarm flows", () => {
+	it("fails closed when real swarm execution has no cwd", async () => {
+		let execCalls = 0;
+		const harness = createRegisteredReconHarness("repi-profile-swarm-real-missing-cwd", {
+			exec: async () => {
+				execCalls += 1;
+				return { code: 0, stdout: "simulated\n", stderr: "", killed: false };
+			},
+		});
+
+		try {
+			const swarmTool = harness.tools.get("re_swarm") as {
+				execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
+			};
+			await expect(swarmTool.execute("tool-call-id", { action: "run", execution: "real" })).rejects.toThrow(
+				"RE_SWARM_REAL_CWD_REQUIRED",
+			);
+			expect(execCalls).toBe(0);
+		} finally {
+			harness.restore();
+		}
+	});
+
+	it("fails closed instead of simulating a recursive real swarm", async () => {
+		const previousAgentThread = process.env.REPI_AGENT_THREAD;
+		let execCalls = 0;
+		const harness = createRegisteredReconHarness("repi-profile-swarm-real-recursion", {
+			exec: async () => {
+				execCalls += 1;
+				return { code: 0, stdout: "simulated\n", stderr: "", killed: false };
+			},
+		});
+		process.env.REPI_AGENT_THREAD = "1";
+
+		try {
+			const swarmTool = harness.tools.get("re_swarm") as {
+				execute: (
+					toolCallId: string,
+					params: Record<string, unknown>,
+					signal?: AbortSignal,
+					onUpdate?: unknown,
+					ctx?: { cwd: string },
+				) => Promise<unknown>;
+			};
+			await expect(
+				swarmTool.execute("tool-call-id", { action: "run", execution: "real" }, undefined, undefined, {
+					cwd: harness.agentDir,
+				}),
+			).rejects.toThrow("RE_SWARM_REAL_RECURSION_BLOCKED");
+			expect(execCalls).toBe(0);
+		} finally {
+			harness.restore();
+			if (previousAgentThread === undefined) delete process.env.REPI_AGENT_THREAD;
+			else process.env.REPI_AGENT_THREAD = previousAgentThread;
+		}
+	});
+
 	it("propagates swarm worker timeout budgets into runtime manifests", async () => {
 		const previousTimeout = process.env.REPI_SWARM_WORKER_TIMEOUT_MS;
 		process.env.REPI_SWARM_WORKER_TIMEOUT_MS = "12345";
@@ -35,6 +91,7 @@ describe("REPI kernel profile swarm flows", () => {
 				target: "https://target.local/api/login",
 				maxWorkers: 1,
 				maxCommands: 1,
+				execution: "simulated",
 			});
 			expect(swarm.content[0]?.text).toContain("subagent_runtime_manifests:");
 			expect(swarm.content[0]?.text).toContain("timeoutMs=12345");
@@ -159,6 +216,7 @@ describe("REPI kernel profile swarm flows", () => {
 				action: "run",
 				maxWorkers: 1,
 				maxCommands: 1,
+				execution: "simulated",
 			});
 			const output = swarm.content[0]?.text ?? "";
 			expect(output).toContain("retry_execution:");

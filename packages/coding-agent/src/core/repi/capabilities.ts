@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import type { ExtensionAPI } from "../extensions/types.ts";
 import { missionOperatorDirective, readCurrentMission, readCurrentSessionMission } from "./mission.ts";
 import { REPI_TOOL_NAMES } from "./profile.ts";
-import { isRepiContinuation, isRepiTask, type RoutePlan, routeRepiTask } from "./routes.ts";
+import { isRepiContinuation, isRepiTask, type RoutePlan, repiTaskRequiresDelegation, routeRepiTask } from "./routes.ts";
 import { runMissionSessionScope } from "./session-scope.ts";
 
 export const REPI_CAPABILITY_PROFILE_NAMES = [
@@ -24,6 +24,10 @@ export type RepiCapabilityProfile = (typeof REPI_CAPABILITY_PROFILE_NAMES)[numbe
 
 /** Tools exposed for every automatically managed REPI turn. */
 export const REPI_CORE_TOOL_NAMES = ["read", "bash", "re_capabilities", "goal_complete"] as const;
+
+/** The only tool a knowledge-gap route may add without activating orchestration. */
+export const REPI_DELEGATION_TOOL_NAMES = ["re_subagent"] as const;
+export type RepiDelegationToolName = (typeof REPI_DELEGATION_TOOL_NAMES)[number];
 
 /** Runtime adapters write scoped evidence directly; routed turns need no control-plane preflight tools. */
 export const REPI_ROUTED_FOUNDATION_TOOL_NAMES = [] as const;
@@ -265,13 +269,23 @@ export function selectRepiCapabilityTools(options: {
 	profiles: readonly RepiCapabilityProfile[];
 	/** Whether automatically managed edit/write tools may be exposed. */
 	allowWriteTools?: boolean;
+	/** Narrow knowledge-gap capability; unknown names are ignored. */
+	additionalToolNames?: readonly string[];
+	/** Alias for callers which describe the tool as a runtime requirement. */
+	requiredToolNames?: readonly string[];
 }): string[] {
 	const available = new Set(options.availableToolNames);
 	const allowWriteTools = options.allowWriteTools === true;
+	const additionalToolNames = new Set(
+		[...(options.additionalToolNames ?? []), ...(options.requiredToolNames ?? [])].filter((name) =>
+			(REPI_DELEGATION_TOOL_NAMES as readonly string[]).includes(name),
+		),
+	);
 	const desiredManagedTools = new Set<string>([
 		...REPI_CORE_TOOL_NAMES,
 		...(allowWriteTools ? REPI_WRITE_TOOL_NAMES : []),
 	]);
+	for (const name of additionalToolNames) desiredManagedTools.add(name);
 	for (const profile of options.profiles) {
 		if (profile === "all") {
 			for (const name of options.availableToolNames) {
@@ -300,6 +314,9 @@ export function selectRepiCapabilityTools(options: {
 		for (const name of REPI_WRITE_TOOL_NAMES) {
 			if (available.has(name)) selected.add(name);
 		}
+	}
+	for (const name of additionalToolNames) {
+		if (available.has(name)) selected.add(name);
 	}
 
 	for (const profile of options.profiles) {
@@ -337,6 +354,7 @@ export function createRepiCapabilityActivationFactory(options: RepiCapabilityAct
 		let allowWriteTools = false;
 		let carriedTask: string | undefined;
 		let carriedRoute: RoutePlan | undefined;
+		let routedAdditionalToolNames: RepiDelegationToolName[] = [];
 
 		const applyProfiles = (profiles: readonly RepiCapabilityProfile[]): string[] => {
 			activeProfiles = [...new Set(profiles)];
@@ -347,6 +365,7 @@ export function createRepiCapabilityActivationFactory(options: RepiCapabilityAct
 				activeToolNames: pi.getActiveTools(),
 				profiles: activeProfiles,
 				allowWriteTools,
+				additionalToolNames: routedAdditionalToolNames,
 			});
 			for (const name of routedExecutionTools) {
 				if (pi.getAllTools().some((tool) => tool.name === name)) selected.push(name);
@@ -366,6 +385,7 @@ export function createRepiCapabilityActivationFactory(options: RepiCapabilityAct
 			allowWriteTools = false;
 			carriedTask = undefined;
 			carriedRoute = undefined;
+			routedAdditionalToolNames = [];
 			applyProfiles([]);
 		};
 
@@ -465,11 +485,21 @@ export function createRepiCapabilityActivationFactory(options: RepiCapabilityAct
 					allowWriteTools = false;
 					carriedTask = undefined;
 					carriedRoute = undefined;
+					routedAdditionalToolNames = [];
 				} else if (!mission && routedPrompt && !continuation && carriedTask && carriedTask !== event.prompt) {
 					// Capability-only SDK callers may not install the mission runtime.
 					// Treat a new routed prompt as a task boundary in that mode.
 					explicitProfiles = undefined;
 					allowWriteTools = false;
+					routedAdditionalToolNames = [];
+				} else if (!mission && !routedPrompt && !continuation && carriedTask) {
+					// A non-routed prompt is also a new task boundary when no mission
+					// runtime is installed; do not leak a prior delegation capability.
+					explicitProfiles = undefined;
+					allowWriteTools = false;
+					carriedTask = undefined;
+					carriedRoute = undefined;
+					routedAdditionalToolNames = [];
 				}
 				if (mission) {
 					carriedTask = missionOperatorDirective(mission);
@@ -483,6 +513,11 @@ export function createRepiCapabilityActivationFactory(options: RepiCapabilityAct
 				const route = mission?.route ?? carriedRoute;
 				if (!task || !route) {
 					routedProfiles = [];
+					if (!continuation) {
+						routedAdditionalToolNames = repiTaskRequiresDelegation(event.prompt)
+							? [...REPI_DELEGATION_TOOL_NAMES]
+							: [];
+					}
 					allowWriteTools = continuation
 						? allowWriteTools || repiPromptNeedsWriteTools(event.prompt)
 						: repiPromptNeedsWriteTools(event.prompt);
@@ -495,6 +530,14 @@ export function createRepiCapabilityActivationFactory(options: RepiCapabilityAct
 				const promptRoute = routedPrompt && !continuation ? routeRepiTask(event.prompt) : undefined;
 				const effectiveRoute =
 					promptRoute && promptRoute.domain !== "Reverse/Pentest general" ? promptRoute : route;
+				const delegationGateStatus = mission?.runtimeStats?.delegationGate?.status;
+				const classifierRequiresDelegation =
+					repiTaskRequiresDelegation(`${effectiveRoute.domain}\n${task}`) ||
+					repiTaskRequiresDelegation(`${effectiveRoute.domain}\n${event.prompt}`);
+				const requiresDelegationTool = delegationGateStatus
+					? delegationGateStatus === "required" || delegationGateStatus === "dispatching"
+					: classifierRequiresDelegation;
+				routedAdditionalToolNames = requiresDelegationTool ? [...REPI_DELEGATION_TOOL_NAMES] : [];
 				routedProfiles = repiCapabilityProfilesForRoute(effectiveRoute, promptRoute ? event.prompt : task);
 				const selected = applyProfiles(explicitProfiles ?? routedProfiles);
 				// The mission runtime already chose the routed profile. Keep capability

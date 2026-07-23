@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
+import { normalizeWorkerTask } from "../agent-thread-worker-runtime.ts";
 import type { ExtensionAPI, ToolCallEvent, ToolDefinition } from "../extensions/types.ts";
 import { repiCapabilityAwareCommand, repiPromptNeedsWriteTools } from "./capabilities.ts";
 import { buildEvidenceClaimSummary } from "./evidence.ts";
 import { installRepiGoalMode } from "./goal.ts";
 import {
 	createMission,
+	type DelegationGateState,
 	type MissionRuntimeStats,
 	type MissionState,
 	missionOperatorDirective,
@@ -14,8 +16,19 @@ import {
 	updateMissionRuntimeStats,
 	writeCurrentMission,
 } from "./mission.ts";
+import {
+	type RepiSubagentArtifactValidation,
+	validateRepiSubagentArtifact,
+} from "./repi-subagent-artifact-validation.ts";
 import { ensureReconStorage } from "./resources.ts";
-import { formatRepiRoute, isRepiContinuation, isRepiTask, type RoutePlan, routeRepiTask } from "./routes.ts";
+import {
+	formatRepiRoute,
+	isRepiContinuation,
+	isRepiTask,
+	type RoutePlan,
+	repiTaskRequiresDelegation,
+	routeRepiTask,
+} from "./routes.ts";
 import { runMissionSessionScope } from "./session-scope.ts";
 import { extractRepiTaskTarget } from "./target.ts";
 import { redactSensitiveText, truncateMiddle } from "./text.ts";
@@ -37,6 +50,7 @@ export type ReconStats = {
 	sessionFile?: string;
 	noSession?: boolean;
 	lastInjectedState?: string;
+	delegationGate?: DelegationGateState;
 };
 
 export type RepiSessionLifecycleOptions = {
@@ -104,6 +118,7 @@ function persistedReconStats(stats: ReconStats): MissionRuntimeStats {
 		lastCommands: stats.lastCommands.slice(-8),
 		selfReviewDue: stats.selfReviewDue,
 		lastInjectedState: stats.lastInjectedState,
+		delegationGate: stats.delegationGate ? { ...stats.delegationGate } : undefined,
 	};
 }
 
@@ -123,6 +138,9 @@ function restoreReconStats(stats: ReconStats, saved?: Partial<MissionRuntimeStat
 	}
 	stats.selfReviewDue = saved.selfReviewDue === true;
 	if (typeof saved.lastInjectedState === "string") stats.lastInjectedState = saved.lastInjectedState;
+	if (saved.delegationGate && typeof saved.delegationGate === "object") {
+		stats.delegationGate = { ...saved.delegationGate } as DelegationGateState;
+	}
 }
 
 function resetReconStats(stats: ReconStats): void {
@@ -136,6 +154,164 @@ function resetReconStats(stats: ReconStats): void {
 	stats.selfReviewNotified = false;
 	stats.toolingGapObserved = false;
 	stats.lastInjectedState = undefined;
+	stats.delegationGate = undefined;
+}
+
+function delegationSpecForRoute(route: RoutePlan): string {
+	if (/Native|Pwn|Firmware|Mobile|Malware|Exploit/.test(route.domain)) {
+		return "reverser";
+	}
+	if (/Web|Crypto|DFIR|Memory|Cloud|Identity|Agent/.test(route.domain)) return "explorer";
+	return "planner";
+}
+
+function delegationTaskForDirective(directive: string): string {
+	return normalizeWorkerTask(
+		`Research and verify the unfamiliar REPI technique or domain in this operator directive. Return a structured handoff with commands, artifacts, and unresolved gaps. Operator directive: ${directive}`,
+	);
+}
+
+function delegationTaskSha256(task: string): string {
+	return createHash("sha256").update(normalizeWorkerTask(task)).digest("hex");
+}
+
+const DELEGATION_MAX_ATTEMPTS = 2;
+
+function missionRequiresDelegation(route: RoutePlan, directive: string): boolean {
+	return repiTaskRequiresDelegation(`${route.domain}\n${directive}`);
+}
+
+function createDelegationGate(mission: MissionState, directive: string): DelegationGateState {
+	const task = delegationTaskForDirective(directive);
+	return {
+		status: "required",
+		missionId: mission.id,
+		directiveRevision: mission.directiveRevision ?? 1,
+		reason: "explicit knowledge gap or specialist delegation request",
+		spec: delegationSpecForRoute(mission.route),
+		task,
+		taskSha256: delegationTaskSha256(task),
+		attempts: 0,
+	};
+}
+
+function sameDelegationDirective(gate: DelegationGateState | undefined, mission: MissionState): boolean {
+	return Boolean(gate && gate.missionId === mission.id && gate.directiveRevision === (mission.directiveRevision ?? 1));
+}
+
+function recoverInterruptedDelegationGate(gate: DelegationGateState | undefined, reason: string): boolean {
+	if (!gate || gate.status !== "dispatching") return false;
+	gate.toolCallId = undefined;
+	gate.lastError = reason;
+	gate.status = gate.attempts >= DELEGATION_MAX_ATTEMPTS ? "blocked" : "required";
+	return true;
+}
+
+function clearDelegationArtifact(gate: DelegationGateState): void {
+	gate.toolCallId = undefined;
+	gate.runId = undefined;
+	gate.handoffSha256 = undefined;
+	gate.result = undefined;
+}
+
+async function revalidateSatisfiedDelegationGate(gate: DelegationGateState | undefined): Promise<boolean> {
+	if (!gate || gate.status !== "satisfied") return true;
+	const result = gate.result;
+	if (!result) {
+		gate.status = gate.attempts >= DELEGATION_MAX_ATTEMPTS ? "blocked" : "required";
+		gate.lastError = "restored satisfied gate has no persisted validated artifact";
+		clearDelegationArtifact(gate);
+		return false;
+	}
+	const validation = await validateRepiSubagentArtifact(result, {
+		missionId: gate.missionId,
+		spec: gate.spec,
+		task: gate.task,
+		taskSha256: gate.taskSha256,
+	});
+	if (validation.ok) {
+		gate.handoffSha256 = validation.result.handoffSha256 ?? undefined;
+		return true;
+	}
+	gate.status = gate.attempts >= DELEGATION_MAX_ATTEMPTS ? "blocked" : "required";
+	gate.lastError = `persisted delegation artifact failed revalidation: ${validation.error}`;
+	clearDelegationArtifact(gate);
+	return false;
+}
+
+function structuredDelegationResult(details: unknown): details is {
+	kind: "RepiSubagentResultV1";
+	schemaVersion: 1;
+	status: "complete";
+	exitCode: 0;
+	runId: string;
+	spec: string;
+	task: string;
+	taskSha256: string;
+	missionId: string;
+	handoffPresent: true;
+	handoffRecovered: false;
+	handoffLineageValid: true;
+	runRoot: string;
+	mergePath: string;
+	handoffPath: string;
+	handoffBytes: number;
+	handoffSha256: string;
+	handoffRunId: string;
+	handoffMissionId: string;
+	handoffLineageSha256: string;
+	lineageSha256: string;
+} {
+	if (!details || typeof details !== "object") return false;
+	const value = details as Record<string, unknown>;
+	return (
+		value.kind === "RepiSubagentResultV1" &&
+		value.schemaVersion === 1 &&
+		value.status === "complete" &&
+		value.exitCode === 0 &&
+		typeof value.runId === "string" &&
+		typeof value.spec === "string" &&
+		typeof value.task === "string" &&
+		typeof value.taskSha256 === "string" &&
+		typeof value.missionId === "string" &&
+		value.handoffPresent === true &&
+		value.handoffRecovered === false &&
+		value.handoffLineageValid === true &&
+		typeof value.runRoot === "string" &&
+		typeof value.mergePath === "string" &&
+		typeof value.handoffPath === "string" &&
+		typeof value.handoffBytes === "number" &&
+		value.handoffBytes > 0 &&
+		typeof value.handoffSha256 === "string" &&
+		/^[a-f0-9]{64}$/i.test(value.handoffSha256) &&
+		typeof value.handoffRunId === "string" &&
+		typeof value.handoffMissionId === "string" &&
+		typeof value.handoffLineageSha256 === "string" &&
+		typeof value.lineageSha256 === "string" &&
+		value.handoffLineageSha256 === value.lineageSha256
+	);
+}
+
+async function validateDelegationResult(
+	details: unknown,
+	gate: DelegationGateState,
+): Promise<RepiSubagentArtifactValidation> {
+	if (!structuredDelegationResult(details)) {
+		return { ok: false, error: "re_subagent returned no complete structured result" };
+	}
+	return validateRepiSubagentArtifact(details, {
+		missionId: gate.missionId,
+		spec: gate.spec,
+		task: gate.task,
+		taskSha256: gate.taskSha256,
+	});
+}
+
+function gateTerminalText(gate: DelegationGateState): string {
+	if (gate.status === "blocked") {
+		return `Delegation gate blocked: a real ${gate.spec} subagent handoff could not be validated after ${gate.attempts} attempt(s). ${gate.lastError ?? "No valid structured result was returned."}`;
+	}
+	return `Delegation gate required before execution. Call re_subagent with the bound ${gate.spec} task and return its real structured handoff; direct conclusions and unrelated tools are blocked.`;
 }
 
 function getBashCommand(event: ToolCallEvent): string | undefined {
@@ -242,8 +418,9 @@ export function installRepiSessionLifecycle(
 		selfReviewNotified: false,
 		toolingGapObserved: false,
 	};
+	let delegationDispatchedSinceAgentEnd = false;
 	const persistStats = (): void => {
-		if (!stats.active || stats.noSession || !stats.currentMissionId) return;
+		if (!stats.active || !stats.currentMissionId) return;
 		const current = readCurrentMission();
 		if (!current || current.id !== stats.currentMissionId) return;
 		stats.currentMission = updateMissionRuntimeStats(persistedReconStats(stats));
@@ -267,13 +444,19 @@ export function installRepiSessionLifecycle(
 			stats.currentMissionId = mission?.id;
 			stats.currentMission = mission;
 			restoreReconStats(stats, mission?.runtimeStats);
+			if (
+				recoverInterruptedDelegationGate(stats.delegationGate, "interrupted delegation recovered at session start")
+			) {
+				persistStats();
+			}
+			if (!(await revalidateSatisfiedDelegationGate(stats.delegationGate))) persistStats();
 			if (ctx.hasUI) ctx.ui.setStatus("repi", "REPI kernel profile ready");
 		});
 	});
 
 	pi.on("session_tree", (_event, ctx) => {
 		const sessionFile = ctx.sessionManager?.getSessionFile?.();
-		return runMissionSessionScope(sessionFile, () => {
+		return runMissionSessionScope(sessionFile, async () => {
 			const noSession = Boolean(ctx.sessionManager) && !sessionFile;
 			// A tree jump may land before this mission existed. Persisted branch state
 			// must win over the process-local fast path on the next turn.
@@ -286,6 +469,15 @@ export function installRepiSessionLifecycle(
 			stats.sessionFile = sessionFile;
 			stats.noSession = noSession;
 			restoreReconStats(stats, mission?.runtimeStats);
+			if (
+				recoverInterruptedDelegationGate(
+					stats.delegationGate,
+					"interrupted delegation recovered after session tree change",
+				)
+			) {
+				persistStats();
+			}
+			if (!(await revalidateSatisfiedDelegationGate(stats.delegationGate))) persistStats();
 			if (ctx.hasUI)
 				ctx.ui.setStatus("repi", mission ? formatRepiRoute(mission.route) : "REPI kernel profile ready");
 		});
@@ -310,7 +502,13 @@ export function installRepiSessionLifecycle(
 			const startNewMission = startsNewRepiMission(activeMission, event.prompt);
 			const carriedMission = startNewMission ? undefined : activeMission;
 			const continuation = Boolean(carriedMission) && isRepiContinuation(event.prompt);
-			const directiveUpdate = Boolean(carriedMission) && !continuation && isOperatorDirectivePrompt(event.prompt);
+			const delegationDirectiveUpdate = Boolean(
+				carriedMission && missionRequiresDelegation(carriedMission.route, event.prompt),
+			);
+			const directiveUpdate =
+				Boolean(carriedMission) &&
+				!continuation &&
+				(isOperatorDirectivePrompt(event.prompt) || delegationDirectiveUpdate);
 			if (!carriedMission && !isRepiTask(event.prompt)) return;
 
 			const created = !carriedMission;
@@ -320,6 +518,7 @@ export function installRepiSessionLifecycle(
 					? carriedMission
 					: updateMissionDirective(event.prompt, carriedMission)
 				: writeCurrentMission(createMission(event.prompt, route));
+			const directive = missionOperatorDirective(mission) ?? mission.task;
 			if (startNewMission) resetReconStats(stats);
 			stats.active = true;
 			stats.lastRoute = route;
@@ -327,6 +526,15 @@ export function installRepiSessionLifecycle(
 			stats.currentMission = mission;
 			stats.sessionFile = sessionFile;
 			stats.noSession = noSession;
+			if (process.env.REPI_AGENT_THREAD === "1") {
+				stats.delegationGate = undefined;
+			} else if (missionRequiresDelegation(route, directive)) {
+				if (!sameDelegationDirective(stats.delegationGate, mission)) {
+					stats.delegationGate = createDelegationGate(mission, directive);
+				}
+			} else if (!sameDelegationDirective(stats.delegationGate, mission)) {
+				stats.delegationGate = undefined;
+			}
 			if (created && !noSession) {
 				pi.appendEntry("repi-route", {
 					timestamp: Date.now(),
@@ -342,7 +550,6 @@ export function installRepiSessionLifecycle(
 			const lane = mission.lanes.find((candidate) => candidate.status === "in_progress");
 			const claims = buildEvidenceClaimSummary({ missionId: mission.id, limit: 60 });
 			const fallbackCommand = dependencies.nextDecisionCommand(mission);
-			const directive = missionOperatorDirective(mission) ?? mission.task;
 			const target =
 				extractRepiTaskTarget(event.prompt) ??
 				extractRepiTaskTarget(missionOperatorDirective(mission) ?? mission.task);
@@ -360,19 +567,66 @@ export function installRepiSessionLifecycle(
 			const nextCommand = truncateMiddle(proposedCommand.replace(/\s+/g, " "), 180).replace(/\s+/g, " ");
 			const selfReviewDue = stats.selfReviewDue;
 			const directiveHint = truncateMiddle(directive.replace(/\s+/g, " "), 120).replace(/\s+/g, " ");
-			const packet = `REPI state: mission=${mission.id}; domain=${route.domain}; lane=${lane?.name ?? "triage"}; directive=${directiveHint}; claims=${claims.open.length}/${claims.proved.length}/${claims.contradicted.length}; next=${nextCommand}${continuation ? "; continuation=true" : ""}${selfReviewDue ? "; self_review=due" : ""}`;
+			const gate = stats.delegationGate;
+			const gatePacket =
+				gate && gate.status !== "inactive" && gate.status !== "satisfied"
+					? `; delegation_gate=${gate.status}:${gate.spec}:${gate.attempts}`
+					: "";
+			const packet = `REPI state: mission=${mission.id}; domain=${route.domain}; lane=${lane?.name ?? "triage"}; directive=${directiveHint}; claims=${claims.open.length}/${claims.proved.length}/${claims.contradicted.length}; next=${nextCommand}${continuation ? "; continuation=true" : ""}${selfReviewDue ? "; self_review=due" : ""}${gatePacket}`;
 			if (!created && !selfReviewDue && stats.lastInjectedState === packet) return;
 			stats.lastInjectedState = packet;
 			stats.selfReviewDue = false;
 			stats.selfReviewNotified = false;
 			persistStats();
-			return { systemPrompt: `${event.systemPrompt}\n\n${packet}` };
+			const delegationPrompt =
+				gate && (gate.status === "required" || gate.status === "dispatching")
+					? `\n\n## REPI delegation gate\n${gateTerminalText(gate)}`
+					: "";
+			return { systemPrompt: `${event.systemPrompt}\n\n${packet}${delegationPrompt}` };
 		});
 	});
 
 	pi.on("tool_call", async (event) => {
 		return runMissionSessionScope(stats.sessionFile, async () => {
 			const mission = stats.noSession ? stats.currentMission : readCurrentMission();
+			const gate = stats.delegationGate;
+			if (gate?.status === "satisfied" && event.toolName !== "re_subagent") {
+				if (!(await revalidateSatisfiedDelegationGate(gate))) {
+					persistStats();
+					return { block: true, reason: `REPI delegation gate: ${gateTerminalText(gate)}` };
+				}
+			}
+			if (gate && gate.status !== "inactive" && gate.status !== "satisfied" && event.toolName !== "re_subagent") {
+				return { block: true, reason: `REPI delegation gate: ${gateTerminalText(gate)}` };
+			}
+			if (gate && event.toolName === "re_subagent") {
+				if (gate.status === "blocked") {
+					return { block: true, reason: `REPI delegation gate: ${gateTerminalText(gate)}` };
+				}
+				if (gate.status === "dispatching") {
+					return { block: true, reason: "REPI delegation gate: a subagent dispatch is already in flight." };
+				}
+				if (gate.status === "required") {
+					const input = event.input as Record<string, unknown>;
+					input.spec = gate.spec;
+					input.task = gate.task;
+					delete input.additionalPrompt;
+					delete input.timeoutMs;
+					input.inheritMcp = false;
+					input.mcpServers = [];
+					input.mcpTools = [];
+					// The gate owns execution reliability. Do not let the model
+					// choose a timeout that turns the required real dispatch into
+					// an avoidable timeout failure.
+					input.timeoutMs = 600000;
+					gate.status = "dispatching";
+					gate.attempts += 1;
+					gate.toolCallId = event.toolCallId;
+					gate.lastError = undefined;
+					delegationDispatchedSinceAgentEnd = true;
+					persistStats();
+				}
+			}
 			const routedGuard = routedToolGuard(event, stats, mission);
 			if (routedGuard) return { block: true, reason: `REPI routed execution guard: ${routedGuard}` };
 			const command = getBashCommand(event);
@@ -404,15 +658,94 @@ export function installRepiSessionLifecycle(
 		});
 	});
 
+	pi.on("message_end", async (event, ctx) => {
+		const gate = stats.delegationGate;
+		if (!gate || (gate.status !== "required" && gate.status !== "blocked")) return;
+		if (event.message.role !== "assistant") return;
+		const content = (event.message as { content?: unknown[] }).content;
+		if (Array.isArray(content) && content.some((block) => (block as { type?: unknown })?.type === "toolCall")) return;
+		if (ctx.hasPendingMessages()) return;
+		return {
+			message: {
+				...event.message,
+				content: [{ type: "text", text: gateTerminalText(gate) }],
+				stopReason: "stop",
+			} as typeof event.message,
+		};
+	});
+
+	pi.on("agent_end", async (_event, ctx) => {
+		return runMissionSessionScope(stats.sessionFile, async () => {
+			const gate = stats.delegationGate;
+			if (!gate || gate.status === "satisfied" || gate.status === "inactive") return;
+			const dispatchedSinceLastAgentEnd = delegationDispatchedSinceAgentEnd;
+			delegationDispatchedSinceAgentEnd = false;
+			if (recoverInterruptedDelegationGate(gate, "delegation turn ended without a valid structured tool result")) {
+				persistStats();
+			}
+			if (gate.status === "required" && !dispatchedSinceLastAgentEnd) {
+				gate.attempts += 1;
+				gate.lastError = "delegation-required turn ended without calling re_subagent";
+				persistStats();
+			}
+			if (gate.attempts >= DELEGATION_MAX_ATTEMPTS || gate.status === "blocked") {
+				if (gate.status !== "blocked") {
+					gate.status = "blocked";
+					gate.lastError ??= "delegation retry budget exhausted";
+					persistStats();
+				}
+				return;
+			}
+			if (ctx.hasPendingMessages()) return;
+			try {
+				await pi.sendUserMessage(
+					`继续：delegation gate still required. Call the real re_subagent tool now; do not answer the operator or use another tool until its structured handoff validates.`,
+					{ deliverAs: "followUp" },
+				);
+			} catch (error) {
+				gate.status = "blocked";
+				gate.lastError = `could not enqueue delegation retry: ${error instanceof Error ? error.message : "unknown error"}`;
+				persistStats();
+			}
+		});
+	});
+
 	pi.on("tool_result", async (event, ctx) => {
 		const sessionFile = ctx.sessionManager?.getSessionFile?.() ?? stats.sessionFile;
 		return runMissionSessionScope(sessionFile, async () => {
+			let forceError = false;
 			const text = event.content
 				.filter((block): block is { type: "text"; text: string } => block.type === "text")
 				.map((block) => block.text)
 				.join("\n");
+			const gate = stats.delegationGate;
+			if (
+				gate &&
+				event.toolName === "re_subagent" &&
+				gate.status === "dispatching" &&
+				event.toolCallId === gate.toolCallId
+			) {
+				const validation = await validateDelegationResult(event.details, gate);
+				if (!event.isError && validation.ok) {
+					gate.status = "satisfied";
+					gate.runId = validation.result.runId ?? undefined;
+					gate.handoffSha256 = validation.result.handoffSha256 ?? undefined;
+					gate.result = validation.result;
+					gate.lastError = undefined;
+					delegationDispatchedSinceAgentEnd = false;
+				} else {
+					gate.status = gate.attempts >= DELEGATION_MAX_ATTEMPTS ? "blocked" : "required";
+					gate.lastError = validation.ok
+						? "re_subagent tool result was marked as an error"
+						: `re_subagent artifact validation failed: ${validation.error}`;
+					clearDelegationArtifact(gate);
+					forceError = true;
+				}
+				gate.toolCallId = undefined;
+				persistStats();
+			}
 			stats.calls += 1;
-			if (event.isError) stats.failures += 1;
+			if (event.isError || forceError) stats.failures += 1;
 			if (
 				/runner_unavailable|command_tools_missing|missing[-_ ](?:runner|tool)|command not found|not recognized/i.test(
 					text,
@@ -438,6 +771,10 @@ export function installRepiSessionLifecycle(
 				}
 			}
 			persistStats();
+			if (forceError) {
+				event.isError = true;
+				return { isError: true };
+			}
 		});
 	});
 

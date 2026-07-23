@@ -465,6 +465,17 @@ export class AgentSessionCompactionRuntime {
 			estimate.lastUsageIndex === null ? calculateContextTokens(assistantMessage.usage) : estimate.tokens;
 		if (!shouldCompact(contextTokens, contextWindow, settings)) return false;
 
+		// Do not split the low-level agent loop unless compaction can actually
+		// discard history. A no-op followed by agent.continue() would start a new
+		// loop and reset its maxTurns budget on every high-usage tool turn.
+		const preparation = prepareCompaction(this.sessionManager.getBranch(), settings, contextWindow);
+		if (
+			!preparation ||
+			(preparation.messagesToSummarize.length === 0 && preparation.turnPrefixMessages.length === 0)
+		) {
+			return false;
+		}
+
 		this._resumeAfterTurnBoundaryCompaction = true;
 		return true;
 	}
@@ -575,6 +586,7 @@ export class AgentSessionCompactionRuntime {
 		const settings = this.settingsManager.getCompactionSettings();
 		const resumeAfterTurnBoundary = this._resumeAfterTurnBoundaryCompaction;
 		this._resumeAfterTurnBoundaryCompaction = false;
+		const resumeInterruptedTurn = (): boolean => resumeAfterTurnBoundary || this.agent.hasQueuedMessages();
 
 		this._emit({ type: "compaction_start", reason });
 		this._autoCompactionAbortController = new AbortController();
@@ -588,7 +600,7 @@ export class AgentSessionCompactionRuntime {
 					aborted: false,
 					willRetry: false,
 				});
-				return false;
+				return resumeInterruptedTurn();
 			}
 
 			let apiKey: string | undefined;
@@ -604,7 +616,7 @@ export class AgentSessionCompactionRuntime {
 						aborted: false,
 						willRetry: false,
 					});
-					return false;
+					return resumeInterruptedTurn();
 				}
 				apiKey = authResult.apiKey;
 				headers = authResult.headers;
@@ -624,7 +636,7 @@ export class AgentSessionCompactionRuntime {
 					aborted: false,
 					willRetry: false,
 				});
-				return false;
+				return resumeInterruptedTurn();
 			}
 
 			const hasSummarizableHistory =
@@ -637,7 +649,7 @@ export class AgentSessionCompactionRuntime {
 					aborted: false,
 					willRetry: false,
 				});
-				return false;
+				return resumeInterruptedTurn();
 			}
 
 			let extensionCompaction: CompactionResult | undefined;
@@ -794,7 +806,7 @@ export class AgentSessionCompactionRuntime {
 			// Continue once so queued messages are delivered. If the low-level loop
 			// stopped specifically to create a compaction boundary, continue even
 			// without queued user messages; this resumes the autonomous tool loop.
-			return resumeAfterTurnBoundary || this.agent.hasQueuedMessages();
+			return resumeInterruptedTurn();
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
 			// Detect abort the same way manual compact() does: an AbortError thrown

@@ -144,7 +144,7 @@ export interface AgentOptions {
 	afterToolCall?: (context: AfterToolCallContext, signal?: AbortSignal) => Promise<AfterToolCallResult | undefined>;
 	shouldStopAfterTurn?: (context: ShouldStopAfterTurnContext, signal?: AbortSignal) => boolean | Promise<boolean>;
 	/**
-	 * Optional hard cap on assistant turns per run. See {@link AgentLoopConfig.maxTurns}.
+	 * Optional hard cap on assistant turns per prompt, including internal continue() runs.
 	 * Non-positive / undefined = unbounded (default).
 	 */
 	maxTurns?: number;
@@ -192,6 +192,18 @@ type ActiveRun = {
 	abortController: AbortController;
 };
 
+type PromptTurnBudget = {
+	maxTurns: number;
+	turnsUsed: number;
+	noticeEmitted: boolean;
+};
+
+function normalizeMaxTurns(maxTurns: number | undefined): number {
+	return typeof maxTurns === "number" && Number.isFinite(maxTurns) && maxTurns > 0
+		? Math.max(1, Math.floor(maxTurns))
+		: 0;
+}
+
 /**
  * Stateful wrapper around the low-level agent loop.
  *
@@ -235,7 +247,7 @@ export class Agent {
 		context: ShouldStopAfterTurnContext,
 		signal?: AbortSignal,
 	) => boolean | Promise<boolean>;
-	/** Hard cap on assistant turns per run (undefined = unbounded). */
+	/** Hard cap on assistant turns per prompt, including internal continue() runs. */
 	public maxTurns?: number;
 	/** Whether maxTurns reserves a final tool-free synthesis request. */
 	public reserveFinalTurn?: boolean;
@@ -265,6 +277,8 @@ export class Agent {
 		signal?: AbortSignal,
 	) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
 	private activeRun?: ActiveRun;
+	private promptTurnBudget: PromptTurnBudget | undefined;
+	private promptTurnBudgetActive = false;
 	/** Session identifier forwarded to providers for cache-aware backends. */
 	public sessionId?: string;
 	/** Optional per-level thinking token budgets forwarded to the stream function. */
@@ -388,6 +402,11 @@ export class Agent {
 		return this.activeRun?.abortController.signal;
 	}
 
+	/** Whether the current explicit prompt has consumed its full assistant-turn budget. */
+	get isPromptTurnBudgetExhausted(): boolean {
+		return this.remainingPromptTurns() === 0;
+	}
+
 	/** Abort the current run, if one is active. */
 	abort(): void {
 		this.activeRun?.abortController.abort();
@@ -414,6 +433,8 @@ export class Agent {
 		this._state.errorMessage = undefined;
 		this.clearFollowUpQueue();
 		this.clearSteeringQueue();
+		this.promptTurnBudget = undefined;
+		this.promptTurnBudgetActive = false;
 	}
 
 	/** Start a new prompt from text, a single message, or a batch of messages. */
@@ -426,6 +447,7 @@ export class Agent {
 			);
 		}
 		const messages = this.normalizePromptInput(input, images);
+		this.beginPromptTurnBudget();
 		await this.runPromptMessages(messages);
 	}
 
@@ -439,8 +461,18 @@ export class Agent {
 		if (!lastMessage) {
 			throw new Error("No messages to continue from");
 		}
+		if (!this.promptTurnBudgetActive) this.beginPromptTurnBudget();
+
+		const budgetExhausted = this.remainingPromptTurns() === 0;
 
 		if (lastMessage.role === "assistant") {
+			if (!this.hasQueuedMessages()) {
+				throw new Error("Cannot continue from message role: assistant");
+			}
+			if (budgetExhausted) {
+				this.notifyPromptTurnBudgetExceeded();
+				return;
+			}
 			const queuedSteering = this.steeringQueue.drain();
 			if (queuedSteering.length > 0) {
 				await this.runPromptMessages(queuedSteering, { skipInitialSteeringPoll: true });
@@ -456,7 +488,35 @@ export class Agent {
 			throw new Error("Cannot continue from message role: assistant");
 		}
 
+		if (budgetExhausted) {
+			this.notifyPromptTurnBudgetExceeded();
+			return;
+		}
+
 		await this.runContinuation();
+	}
+
+	private beginPromptTurnBudget(): void {
+		const maxTurns = normalizeMaxTurns(this.maxTurns);
+		this.promptTurnBudget = maxTurns > 0 ? { maxTurns, turnsUsed: 0, noticeEmitted: false } : undefined;
+		this.promptTurnBudgetActive = true;
+	}
+
+	private remainingPromptTurns(): number | undefined {
+		if (!this.promptTurnBudget) return undefined;
+		return Math.max(0, this.promptTurnBudget.maxTurns - this.promptTurnBudget.turnsUsed);
+	}
+
+	/** Emit the prompt-budget notification once. Used by session runtimes that stop before another continue(). */
+	notifyPromptTurnBudgetExceeded(): void {
+		const budget = this.promptTurnBudget;
+		if (!budget || budget.noticeEmitted) return;
+		budget.noticeEmitted = true;
+		try {
+			this.onRunBudgetExceeded?.({ turns: budget.turnsUsed, maxTurns: budget.maxTurns });
+		} catch {
+			// Side-effect channel only; never interrupt loop settlement.
+		}
 	}
 
 	private normalizePromptInput(
@@ -528,6 +588,7 @@ export class Agent {
 
 	private createLoopConfig(options: { skipInitialSteeringPoll?: boolean } = {}): AgentLoopConfig {
 		let skipInitialSteeringPoll = options.skipInitialSteeringPoll === true;
+		const remainingTurns = this.remainingPromptTurns();
 		return {
 			model: this._state.model,
 			reasoning: this._state.thinkingLevel === "off" ? undefined : this._state.thinkingLevel,
@@ -538,10 +599,12 @@ export class Agent {
 			thinkingBudgets: this.thinkingBudgets,
 			maxRetryDelayMs: this.maxRetryDelayMs,
 			toolExecution: this.toolExecution,
-			maxTurns: this.maxTurns,
+			maxTurns: remainingTurns,
 			reserveFinalTurn: this.reserveFinalTurn,
 			finalTurnPrompt: this.finalTurnPrompt,
-			onRunBudgetExceeded: this.onRunBudgetExceeded,
+			onRunBudgetExceeded: this.promptTurnBudget
+				? () => this.notifyPromptTurnBudgetExceeded()
+				: this.onRunBudgetExceeded,
 			lengthContinueMaxTurns: this.lengthContinueMaxTurns,
 			lengthContinuePrompt: this.lengthContinuePrompt,
 			streamMaxRetries: this.streamMaxRetries,
@@ -782,6 +845,7 @@ export class Agent {
 				this.steeringQueue.acknowledge(event.message);
 				this.followUpQueue.acknowledge(event.message);
 				if (event.message.role === "assistant") {
+					if (this.promptTurnBudget) this.promptTurnBudget.turnsUsed++;
 					this.lastCommittedAssistant = event.message as AssistantMessage;
 					this.turnMessageEndEmitted = true;
 				}

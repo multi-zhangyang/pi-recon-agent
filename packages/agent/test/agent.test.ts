@@ -481,6 +481,43 @@ describe("Agent", () => {
 		expect(responseCount).toBe(2);
 	});
 
+	it("enforces maxTurns across stopped continuations and resets the budget on a new prompt", async () => {
+		let streamCalls = 0;
+		const budgetNotices: Array<{ turns: number; maxTurns: number }> = [];
+		const agent = new Agent({
+			maxTurns: 2,
+			shouldStopAfterTurn: () => true,
+			onRunBudgetExceeded: (info) => budgetNotices.push(info),
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				streamCalls++;
+				queueMicrotask(() => {
+					stream.push({
+						type: "done",
+						reason: "stop",
+						message: createAssistantMessage(`Response ${streamCalls}`),
+					});
+				});
+				return stream;
+			},
+		});
+
+		await agent.prompt("Initial prompt");
+		agent.followUp({ role: "user", content: "First continuation", timestamp: Date.now() });
+		await agent.continue();
+
+		agent.followUp({ role: "user", content: "Blocked continuation", timestamp: Date.now() });
+		await agent.continue();
+		await agent.continue();
+
+		expect(streamCalls).toBe(2);
+		expect(budgetNotices).toEqual([{ turns: 2, maxTurns: 2 }]);
+		expect(agent.hasQueuedMessages()).toBe(true);
+
+		await agent.prompt("Fresh prompt");
+		expect(streamCalls).toBe(3);
+	});
+
 	it("forwards sessionId to streamFn options", async () => {
 		let receivedSessionId: string | undefined;
 		const agent = new Agent({

@@ -533,6 +533,35 @@ describe("runPrintMode", () => {
 		errorSpy.mockRestore();
 	});
 
+	it("fails instead of silently succeeding when a prompt ends on a tool result", async () => {
+		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "" }));
+		const { session } = runtimeHost;
+		session.prompt.mockImplementation(async () => {
+			session.state.messages = [
+				{
+					role: "toolResult",
+					toolCallId: "tool-1",
+					toolName: "bash",
+					content: [{ type: "text", text: "partial evidence" }],
+					isError: false,
+					timestamp: Date.now(),
+				} as unknown as AssistantMessage,
+			];
+		});
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+			mode: "text",
+			initialMessage: "run a tool then finish",
+		});
+
+		expect(exitCode).toBe(1);
+		expect(errorSpy).toHaveBeenCalledWith(
+			"REPI print prompt ended without a terminal assistant response (last role: toolResult).",
+		);
+		errorSpy.mockRestore();
+	});
+
 	it("streams assistant text deltas live to stdout when REPI_PRINT_STREAM_TEXT is set", async () => {
 		// With live streaming on, text_delta events are written to stdout as they
 		// arrive and the final writeLastAssistantText is suppressed (no duplicate).

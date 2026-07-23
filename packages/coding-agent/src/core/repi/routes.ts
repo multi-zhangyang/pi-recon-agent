@@ -36,6 +36,33 @@ export function isRepiContinuation(text: string): boolean {
 	);
 }
 
+// Knowledge-gap signals are deliberately narrower than generic research words:
+// the latter describe ordinary investigation, while these signals say the
+// operator/model lacks the technique or asks for a specialist handoff.
+const REPI_DELEGATION_GAP_PATTERNS = [
+	/\b(?:i\s+)?(?:do\s+not|don't|dont|cannot|can't|unable\s+to)\s+(?:know|understand|identify|use|analy[sz]e|reverse|work\s+with)\b[\s\S]{0,96}/i,
+	/\b(?:not\s+sure|uncertain|unfamiliar(?:\s+with)?|new\s+to\s+me|never\s+(?:used|seen|worked\s+with))\b[\s\S]{0,96}/i,
+	/\b(?:unknown|unfamiliar|novel|unsupported)\s+(?:technology|technique|method|protocol|format|algorithm|tool(?:chain)?|runtime|framework|domain|area)\b/i,
+	/\b(?:need|needs|must|should|first)\s+(?:to\s+)?(?:research|study|look\s+up|search|consult|learn)\b[\s\S]{0,96}/i,
+	/\b(?:delegate|dispatch|spawn|hand\s*off|consult)\s+(?:a\s+)?(?:sub[-_ ]?agent|specialist|worker|expert)\b/i,
+	/(?:不会|不懂|不熟悉|不了解|不确定|没(?:接触过|用过)|未(?:接触过|使用过)|陌生)[^\n。！？]{0,48}(?:技术|技法|方法|协议|格式|算法|工具|工具链|运行时|框架|领域|知识|能力|东西|目标|对象|二进制|字节码|样本|怎么(?:做|分析|处理)?|如何(?:做|分析|处理)?)/i,
+	/(?:技术|技法|方法|协议|格式|算法|工具|工具链|运行时|框架|领域|知识|能力|东西|目标|对象|二进制|字节码|样本)[^\n。！？]{0,48}(?:不会|不懂|不熟悉|不了解|不确定|没(?:接触过|用过)|未(?:接触过|使用过)|陌生)/i,
+	/(?:未知|陌生)[^\n。！？]{0,16}(?:技术|技法|方法|协议|格式|算法|工具|工具链|运行时|框架|领域|知识|能力)/i,
+	/(?:需要|必须|先|请先)[^\n。！？]{0,24}(?:调研|研究|查资料|查文档|查文献|搜索资料|学习|找专家|派发(?:子代理|代理)|让专家)/i,
+	/(?:派发|委派|调用|启动|交给)[^\n。！？]{0,16}(?:子代理|代理|专家)/i,
+] as const;
+
+/**
+ * Return true only for a routed REPI task that explicitly exposes a knowledge
+ * gap or requests specialist research/dispatch. This is a classifier, not a
+ * general-purpose uncertainty detector: ordinary prompts must not gain the
+ * delegation tool merely because they contain "investigate" or "unknown".
+ */
+export function repiTaskRequiresDelegation(text: string): boolean {
+	if (!text.trim() || !isRepiTask(text)) return false;
+	return REPI_DELEGATION_GAP_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 export function routeRepiTask(text: string): RoutePlan {
 	const lower = text.toLowerCase();
 	// Web-target signal: a URL / web-site / HTTP-API reference makes this a Web task,

@@ -60,7 +60,10 @@ export type OperatorExecutionRuntimeDependencies = Pick<
 	};
 
 export type OperatorExecutionControl = {
-	dispatchOperatorQueue: (pi: ExtensionAPI, options: { target?: string; maxSteps?: number }) => Promise<string>;
+	dispatchOperatorQueue: (
+		pi: ExtensionAPI,
+		options: { target?: string; maxSteps?: number; cwd?: string },
+	) => Promise<string>;
 	buildOperatorOutput: (action?: "plan" | "show" | "verify" | "escalate", options?: { target?: string }) => string;
 };
 
@@ -93,6 +96,7 @@ export function createOperatorExecutionRuntime(dependencies: OperatorExecutionRu
 		step: OperatorExecutionStep,
 		target: string | undefined,
 		control: OperatorExecutionControl,
+		cwd?: string,
 	): Promise<OperationExecution> {
 		const command = step.command.trim().replace(/^\//, "");
 		const done = (output: string): OperationExecution => ({ stepId: step.id, command, status: "done", output });
@@ -176,7 +180,7 @@ export function createOperatorExecutionRuntime(dependencies: OperatorExecutionRu
 			const maxSteps = operatorMatch[3] ? Number(operatorMatch[3]) : 1;
 			return done(
 				action === "dispatch"
-					? await control.dispatchOperatorQueue(pi, { target: opTarget, maxSteps })
+					? await control.dispatchOperatorQueue(pi, { target: opTarget, maxSteps, cwd })
 					: control.buildOperatorOutput(action, { target: opTarget }),
 			);
 		}
@@ -197,7 +201,7 @@ export function createOperatorExecutionRuntime(dependencies: OperatorExecutionRu
 			const maxCommands = swarmMatch[4] ? Number(swarmMatch[4]) : undefined;
 			return done(
 				action === "run"
-					? await dependencies.runSwarm(pi, { target: swarmTarget, maxWorkers, maxCommands })
+					? await dependencies.runSwarm(pi, { target: swarmTarget, maxWorkers, maxCommands, cwd })
 					: dependencies.buildSwarmOutput(action, { target: swarmTarget }),
 			);
 		}

@@ -977,7 +977,10 @@ export class AgentSession {
 		try {
 			await this._extensionRunner.emit({ type: "agent_settled" });
 			continueQueuedMessages =
-				!this._disposed && abortGeneration === this._abortGeneration && this.agent.hasQueuedMessages();
+				!this._disposed &&
+				abortGeneration === this._abortGeneration &&
+				!this.agent.isPromptTurnBudgetExhausted &&
+				this.agent.hasQueuedMessages();
 			if (!continueQueuedMessages) {
 				this._emit({ type: "agent_settled" });
 			}
@@ -1587,7 +1590,7 @@ export class AgentSession {
 	}
 
 	private async _continueQueuedMessages(): Promise<void> {
-		if (this._disposed || !this.agent.hasQueuedMessages()) return;
+		if (this._disposed || this.agent.isPromptTurnBudgetExhausted || !this.agent.hasQueuedMessages()) return;
 		const abortGeneration = this._abortGeneration;
 		this._isAgentRunActive = true;
 		try {
@@ -1631,6 +1634,10 @@ export class AgentSession {
 		if (msg.stopReason === "error") this._retryRuntime.finishFailure(msg.errorMessage);
 
 		if (await this._compactionRuntime.checkCompaction(msg)) {
+			if (this.agent.isPromptTurnBudgetExhausted) {
+				this.agent.notifyPromptTurnBudgetExceeded();
+				return false;
+			}
 			return true;
 		}
 
@@ -1643,7 +1650,7 @@ export class AgentSession {
 
 		// The agent loop drains both queues before emitting agent_end. Any messages
 		// here were queued by agent_end extension handlers and need a continuation.
-		return this.agent.hasQueuedMessages();
+		return !this.agent.isPromptTurnBudgetExhausted && this.agent.hasQueuedMessages();
 	}
 
 	/**

@@ -968,16 +968,23 @@ export function createOperatorOrchestrationRuntime(dependencies: OperatorOrchest
 		pi: ExtensionAPI,
 		step: OperatorExecutionStep,
 		target?: string,
+		cwd = process.cwd(),
 	): Promise<OperationExecution> {
-		return operatorExecutionRuntime.executeOperatorStep(pi, step, target, {
-			dispatchOperatorQueue,
-			buildOperatorOutput,
-		});
+		return operatorExecutionRuntime.executeOperatorStep(
+			pi,
+			step,
+			target,
+			{
+				dispatchOperatorQueue,
+				buildOperatorOutput,
+			},
+			cwd,
+		);
 	}
 
 	async function dispatchOperatorQueue(
 		pi: ExtensionAPI,
-		options: { target?: string; maxSteps?: number } = {},
+		options: { target?: string; maxSteps?: number; cwd?: string } = {},
 	): Promise<string> {
 		const operator = buildOperator({ target: options.target, mode: "dispatch" });
 		const decision = buildDecisionCore({ target: operator.target, mode: "tick" });
@@ -988,7 +995,7 @@ export function createOperatorOrchestrationRuntime(dependencies: OperatorOrchest
 		const retryLimit = commanderBudgetValue(operator.commanderPolicy, "retry_limit_per_worker", 1);
 		let commanderFailures = 0;
 		for (const step of operator.steps.filter((item) => item.status === "ready").slice(0, maxSteps)) {
-			const result = await executeOperatorStep(pi, step, operator.target);
+			const result = await executeOperatorStep(pi, step, operator.target, options.cwd);
 			operator.executed.push(result);
 			recordDecisionClaimProbe(decision, step, result);
 			step.status = result.status === "blocked" ? "blocked" : "done";

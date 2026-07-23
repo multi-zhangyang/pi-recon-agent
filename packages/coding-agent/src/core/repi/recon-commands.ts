@@ -58,7 +58,7 @@ type TimeoutOptions = TargetOptions & { timeoutMs?: number };
 type MobileOptions = TimeoutOptions & { packageName?: string };
 type ExploitLabOptions = TimeoutOptions & { runs?: number };
 type OperationOptions = TargetOptions & { task?: string };
-type LaneRunOptions = { lane?: string; target?: string; maxSteps?: number };
+type LaneRunOptions = { lane?: string; target?: string; maxSteps?: number; cwd?: string };
 type AutopilotOptions = {
 	action?: "plan" | "run";
 	target?: string;
@@ -701,7 +701,7 @@ export function createReconCommands<
 		pi.registerCommand("re-swarm", {
 			description:
 				"Build/show/run/merge REPI multi-specialist swarm runtime packets plus ReconParallelPlanV1/planCoverage/releaseCheckMetadata: /re-swarm [plan|show|run|merge] [target] [max-workers] [max-commands]",
-			handler: async (args) => {
+			handler: async (args, ctx) => {
 				const parts = args.trim().split(/\s+/).filter(Boolean);
 				const first = parts[0];
 				const action =
@@ -713,7 +713,7 @@ export function createReconCommands<
 				const target = parts.join(" ") || undefined;
 				const text =
 					action === "run"
-						? await runSwarm(pi, { target, maxWorkers, maxCommands })
+						? await runSwarm(pi, { target, maxWorkers, maxCommands, cwd: ctx.cwd })
 						: buildSwarmOutput(action, { target });
 				sendDisplayMessage(pi, "REPI Swarm Plan", text);
 			},
@@ -732,7 +732,7 @@ export function createReconCommands<
 		pi.registerCommand("re-operator", {
 			description:
 				"Plan/dispatch/verify/escalate REPI operator queue: /re-operator [plan|show|dispatch|verify|escalate] [target] [max-steps]",
-			handler: async (args) => {
+			handler: async (args, ctx) => {
 				const parts = args.trim().split(/\s+/).filter(Boolean);
 				const first = parts[0];
 				const action =
@@ -745,7 +745,7 @@ export function createReconCommands<
 				const target = parts.join(" ") || undefined;
 				const text =
 					action === "dispatch"
-						? await dispatchOperatorQueue(pi, { target, maxSteps })
+						? await dispatchOperatorQueue(pi, { target, maxSteps, cwd: ctx.cwd })
 						: buildOperatorOutput(action, { target });
 				sendDisplayMessage(pi, "REPI Operator Queue", text);
 			},

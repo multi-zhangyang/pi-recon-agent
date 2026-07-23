@@ -14,6 +14,7 @@ import {
 	readCurrentMission,
 } from "./mission.ts";
 import type { ProfileCheckMode } from "./profile-check.ts";
+import { repiSubagentFailureResult, repiSubagentResultFromManifest } from "./re-subagent-contract.ts";
 import type { ReconCommandBootstrapPlan, ReconCommandLanePack } from "./recon-commands.ts";
 import { REPI_GENERIC_TASK, type RoutePlan } from "./routes.ts";
 import type { RuntimeAdapterExecutionCheckV1 } from "./runtime-adapter.ts";
@@ -40,7 +41,7 @@ type BrowserOptions = TargetOptions & { url?: string; timeoutMs?: number };
 type ExploitOptions = TargetOptions & { runs?: number; timeoutMs?: number };
 type MobileOptions = BrowserOptions & { packageName?: string };
 type OperationOptions = TargetOptions & { task?: string };
-type LaneRunOptions = TargetOptions & { lane?: string; maxSteps?: number };
+type LaneRunOptions = TargetOptions & { lane?: string; maxSteps?: number; cwd?: string };
 type AutopilotOptions = {
 	action?: "plan" | "run";
 	task?: string;
@@ -1313,7 +1314,7 @@ export function createReconTools<TCompletionAudit, TPack extends ReconCommandLan
 				"Call re_swarm plan after re_delegate plan/merge before broad multi-lane expansion.",
 				"Use worker_runtime_packets plus parallel_plan.workers as exact sub-agent handoff contracts with evidence requirements, artifactGlobs, limits, and merge keys.",
 				"Call re_swarm run with bounded maxWorkers/maxCommands to execute ready worker commands and produce worker_results/merge_digest.",
-				"Set execution=real to dispatch each ready worker as a real process-isolated re_subagent (spec mapped from worker role: reverser for native/pwn/firmware/mobile/malware, verifier for audit/report, explorer for web/cloud/identity/mapping, operator otherwise) in parallel within each group. execution=real is the DEFAULT; set execution=simulated explicitly for an in-process dispatcher. Real swarm is cwd-gated and recursion-bound, so it falls back to simulated inside worker threads and ctx-less calls.",
+				"Set execution=real to dispatch each ready worker as a real process-isolated re_subagent (spec mapped from worker role: reverser for native/pwn/firmware/mobile/malware, verifier for audit/report, explorer for web/cloud/identity/mapping, operator otherwise) in parallel within each group. execution=real is the DEFAULT; set execution=simulated explicitly for an in-process dispatcher. Real swarm fails closed when cwd is unavailable or recursive worker dispatch is forbidden; it never falls back to simulated execution.",
 				"Call re_swarm merge before re_supervisor review so conflicts, planCoverage gaps, and missing evidence become explicit.",
 			],
 			parameters: Type.Object({
@@ -1414,11 +1415,15 @@ export function createReconTools<TCompletionAudit, TPack extends ReconCommandLan
 				target: Type.Optional(Type.String()),
 				maxSteps: Type.Optional(Type.Number()),
 			}),
-			async execute(_toolCallId, params) {
+			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 				const action = params.action ?? "plan";
 				const text =
 					action === "dispatch"
-						? await dispatchOperatorQueue(pi, { target: params.target, maxSteps: params.maxSteps })
+						? await dispatchOperatorQueue(pi, {
+								target: params.target,
+								maxSteps: params.maxSteps,
+								cwd: ctx?.cwd,
+							})
 						: buildOperatorOutput(action, { target: params.target });
 				return {
 					content: [{ type: "text" as const, text }],
@@ -1935,6 +1940,7 @@ export function createReconTools<TCompletionAudit, TPack extends ReconCommandLan
 				async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 					const timeoutMs = Math.min(600000, Math.max(1000, params.timeoutMs ?? 600000));
 					const mgr = createAgentThreadManager({ cwd: ctx.cwd });
+					const missionId = readCurrentMission()?.id;
 					try {
 						const started = await mgr.spawnThread({
 							specName: params.spec,
@@ -1945,12 +1951,13 @@ export function createReconTools<TCompletionAudit, TPack extends ReconCommandLan
 							mcpServers: params.mcpServers,
 							mcpTools: params.mcpTools,
 							signal,
-							missionId: readCurrentMission()?.id,
+							missionId,
 						});
 						const final = await mgr.awaitRun(started.runId);
 						const merge = mgr.mergeRun(started.runId);
 						const mergedManifest = merge?.manifest ?? final;
 						const mergeText = merge?.text ?? "(no merge output)";
+						const resultDetails = repiSubagentResultFromManifest(mergedManifest);
 						appendAgentThreadEvidence(mergedManifest, {
 							title: `subagent-handoff-${params.spec}-${final.status}`,
 							fact: `AgentThread handoff run_id=${final.runId} spec=${final.specName} status=${final.status} exit_code=${final.exitCode ?? "n/a"} handoff_present=${mergedManifest.handoffPresent === true} handoff_recovered=${mergedManifest.handoffRecovered === true}`,
@@ -1982,15 +1989,16 @@ export function createReconTools<TCompletionAudit, TPack extends ReconCommandLan
 									text: `${summary}\nmerge_artifact: ${mergedManifest.mergePath ?? final.runRoot}\nhandoff_artifact: ${mergedManifest.handoffPath ?? `${final.runRoot}/handoff.md`}\n\n${compactAgentThreadMerge(mergeText)}`,
 								},
 							],
-							details: {
-								runId: final.runId,
-								spec: final.specName,
-								status: final.status,
-								exitCode: final.exitCode,
-							} as Record<string, unknown>,
+							details: resultDetails,
 						};
 					} catch (error) {
 						if (signal?.aborted) signal.throwIfAborted();
+						const resultDetails = await repiSubagentFailureResult({
+							spec: params.spec,
+							task: params.task,
+							missionId,
+							error: compactAgentThreadError(error),
+						});
 						return {
 							content: [
 								{
@@ -1998,7 +2006,7 @@ export function createReconTools<TCompletionAudit, TPack extends ReconCommandLan
 									text: `re_subagent blocked: ${compactAgentThreadError(error)}`,
 								},
 							],
-							details: { error: true } as Record<string, unknown>,
+							details: resultDetails,
 						};
 					}
 				},

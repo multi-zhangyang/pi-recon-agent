@@ -11,13 +11,14 @@ import {
 	REPI_CAPABILITY_PROFILE_NAMES,
 	REPI_CAPABILITY_TOOLS,
 	REPI_CORE_TOOL_NAMES,
+	REPI_DELEGATION_TOOL_NAMES,
 	REPI_ROUTE_CONTRACT_TOOL_NAMES,
 	repiCapabilityProfilesForRoute,
 	repiPromptNeedsWriteTools,
 	selectRepiCapabilityTools,
 } from "../src/core/repi/capabilities.ts";
 import { REPI_TOOL_NAMES } from "../src/core/repi/profile.ts";
-import { isRepiTask, routeRepiTask } from "../src/core/repi/routes.ts";
+import { isRepiTask, repiTaskRequiresDelegation, routeRepiTask } from "../src/core/repi/routes.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
@@ -149,6 +150,43 @@ describe("REPI progressive capability activation", () => {
 		harness.cleanup();
 	});
 
+	it("exposes re_subagent without the orchestration profile for an explicit knowledge gap", async () => {
+		const harness = await createHarness({
+			extensionFactories: [registerTestTools, createRepiCapabilityActivationFactory()],
+		});
+		await harness.session.bindExtensions({});
+
+		const turns: string[][] = [];
+		harness.setResponses([
+			(context) => {
+				turns.push(context.tools?.map((tool) => tool.name) ?? []);
+				return fauxAssistantMessage("researched");
+			},
+			(context) => {
+				turns.push(context.tools?.map((tool) => tool.name) ?? []);
+				return fauxAssistantMessage("known path");
+			},
+			(context) => {
+				turns.push(context.tools?.map((tool) => tool.name) ?? []);
+				return fauxAssistantMessage("ordinary path");
+			},
+		]);
+
+		await harness.session.prompt(
+			"Reverse ./mystery.elf; I do not know how to analyze its VM bytecode and need to research it",
+		);
+		await harness.session.prompt("Reverse ./known.elf with Ghidra and trace the comparison");
+		await harness.session.prompt("summarize this ordinary source tree");
+
+		expect(turns[0]).toEqual(expect.arrayContaining(["re_subagent", "re_exploit_lab", "re_runtime_adapter"]));
+		expect(turns[0]).not.toContain("re_delegate");
+		expect(turns[0]).not.toContain("re_swarm");
+		expect(turns[0]).not.toContain("re_supervisor");
+		expect(turns[1]).not.toContain("re_subagent");
+		expect(turns[2]).not.toContain("re_subagent");
+		harness.cleanup();
+	});
+
 	it("recognizes explicit English and Chinese read-only task signals", () => {
 		expect(isRepiReadOnlyTask("Perform a read-only source audit")).toBe(true);
 		expect(isRepiReadOnlyTask("Inspect this repository; do not modify any files")).toBe(true);
@@ -195,6 +233,59 @@ describe("REPI progressive capability activation", () => {
 			),
 		).toEqual(["web", "crypto", "forensics"]);
 		expect(repiCapabilityProfilesForRoute(routeRepiTask("inspect an unknown artifact"))).toEqual([]);
+	});
+
+	it("requires delegation only for explicit REPI knowledge gaps", () => {
+		const required = [
+			"Reverse ./mystery.elf; I do not know how to analyze its VM bytecode",
+			"Reverse ./mystery.elf; I do not know this VM format; do not research it",
+			"Need to research an unfamiliar Kerberos delegation technique before testing AD",
+			"对这个 APK 里的陌生协议先查资料再逆向",
+			"这个 ELF 我不懂怎么分析",
+			"Native reverse\n这个协议我不熟悉",
+			"Native reverse\n这个我不会，派发子代理查",
+			"Delegate a specialist to inspect the suspicious PCAP flow",
+		];
+		for (const task of required) expect(repiTaskRequiresDelegation(task), task).toBe(true);
+
+		const ordinary = [
+			"summarize this ordinary source tree; I do not know this framework",
+			"inspect an unknown artifact",
+			"research the API authorization flow",
+			"Reverse ./known.elf locally; do not research or delegate",
+		];
+		for (const task of ordinary) expect(repiTaskRequiresDelegation(task), task).toBe(false);
+	});
+
+	it("adds only re_subagent for a knowledge-gap route", () => {
+		const selected = selectRepiCapabilityTools({
+			availableToolNames: [
+				...REPI_CORE_TOOL_NAMES,
+				"re_exploit_lab",
+				"re_runtime_adapter",
+				"re_lane_specialist_pack",
+				"re_subagent",
+				"re_delegate",
+				"re_swarm",
+				"re_supervisor",
+			],
+			activeToolNames: [...REPI_CORE_TOOL_NAMES],
+			profiles: ["native"],
+			requiredToolNames: REPI_DELEGATION_TOOL_NAMES,
+		});
+
+		expect(selected).toEqual(
+			expect.arrayContaining([
+				...REPI_CORE_TOOL_NAMES,
+				"re_exploit_lab",
+				"re_runtime_adapter",
+				"re_lane_specialist_pack",
+				"re_subagent",
+			]),
+		);
+		expect(selected).not.toContain("re_delegate");
+		expect(selected).not.toContain("re_swarm");
+		expect(selected).not.toContain("re_supervisor");
 	});
 
 	it("activates route profiles without dropping initially active third-party tools", () => {

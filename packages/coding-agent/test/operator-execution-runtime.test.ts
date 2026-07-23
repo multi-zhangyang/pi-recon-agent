@@ -55,7 +55,30 @@ describe("operator execution runtime", () => {
 
 		expect(result.status).toBe("done");
 		expect(result.output).toBe("operator-dispatched");
-		expect(dispatchOperatorQueue).toHaveBeenCalledWith(pi, { target: "package.json", maxSteps: 2 });
+		expect(dispatchOperatorQueue).toHaveBeenCalledWith(pi, {
+			target: "package.json",
+			maxSteps: 2,
+			cwd: undefined,
+		});
+	});
+
+	it("passes the real cwd into swarm execution", async () => {
+		const runSwarm = vi.fn(async () => "swarm-dispatched");
+		const result = await runtimeWith({ runSwarm }).executeOperatorStep(
+			pi,
+			step("re_swarm run package.json 2 1"),
+			undefined,
+			controlWith(),
+			"/tmp/repi-workspace",
+		);
+
+		expect(result).toMatchObject({ status: "done", output: "swarm-dispatched" });
+		expect(runSwarm).toHaveBeenCalledWith(pi, {
+			target: "package.json",
+			maxWorkers: 2,
+			maxCommands: 1,
+			cwd: "/tmp/repi-workspace",
+		});
 	});
 
 	it("delegates unknown commands to the operation adapter and normalizes unsupported output", async () => {

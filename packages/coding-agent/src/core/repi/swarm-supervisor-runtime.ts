@@ -84,6 +84,21 @@ function swarmExecutionFailed(execution: SwarmWorkerExecution): boolean {
 	return !swarmExecutionSucceeded(execution);
 }
 
+export function resolveSwarmExecutionMode(options: {
+	execution: "simulated" | "real";
+	cwd?: string;
+	agentThread: boolean;
+}): "simulated" | "real" {
+	if (options.execution === "simulated") return "simulated";
+	if (!options.cwd?.trim()) {
+		throw new Error("RE_SWARM_REAL_CWD_REQUIRED: execution=real requires a non-empty cwd");
+	}
+	if (options.agentThread) {
+		throw new Error("RE_SWARM_REAL_RECURSION_BLOCKED: execution=real is forbidden when REPI_AGENT_THREAD=1");
+	}
+	return "real";
+}
+
 export function createSwarmSupervisorRuntime(dependencies: SwarmSupervisorRuntimeDependencies) {
 	const {
 		appendEvidence,
@@ -1293,14 +1308,18 @@ export function createSwarmSupervisorRuntime(dependencies: SwarmSupervisorRuntim
 
 	async function runSwarm(pi: ExtensionAPI, options: SwarmRunOptions = {}): Promise<string> {
 		options.signal?.throwIfAborted();
+		const execution = resolveSwarmExecutionMode({
+			execution: options.execution ?? autoModeDefaults().swarmExecution,
+			cwd: options.cwd,
+			agentThread: envBoolean("REPI_AGENT_THREAD") === true,
+		});
 		let swarm = buildSwarm({ target: options.target, task: options.task, mode: "run" });
 		swarm.claimLedgerPath = swarmClaimLedgerPath(swarm);
 		swarm.subagentRuntimeManifestPath = swarmSubagentRuntimeManifestIndexPath(swarm);
 		const maxWorkers = Math.max(1, Math.min(8, Math.floor(options.maxWorkers ?? 3)));
 		const maxCommands = Math.max(1, Math.min(5, Math.floor(options.maxCommands ?? 1)));
-		const execution = options.execution ?? autoModeDefaults().swarmExecution;
-		const realMode = execution === "real" && Boolean(options.cwd) && !envBoolean("REPI_AGENT_THREAD");
-		const retryLimit = swarmWorkerRetryLimit(realMode ? "real" : "simulated");
+		const realMode = execution === "real";
+		const retryLimit = swarmWorkerRetryLimit(execution);
 		const selected = new Set(
 			swarm.workers
 				.filter((worker) => worker.status === "ready")

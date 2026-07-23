@@ -398,6 +398,222 @@ describe("AgentSession compaction characterization", () => {
 		);
 	});
 
+	it("keeps a turn-boundary tool loop running when threshold compaction has no summarizable history", async () => {
+		const toolCalls: string[] = [];
+		const harness = await createHarness({
+			models: [{ id: "faux-1", contextWindow: 10_000 }],
+			settings: { compaction: { keepRecentTokens: 10_000, triggerPercent: 50 } },
+			tools: [
+				{
+					name: "echo",
+					label: "Echo",
+					description: "Echo a value",
+					parameters: Type.Object({ value: Type.String() }),
+					execute: async (_toolCallId, params) => {
+						const value =
+							typeof params === "object" && params !== null && "value" in params ? String(params.value) : "";
+						toolCalls.push(value);
+						return { content: [{ type: "text", text: `echo:${value}` }], details: {} };
+					},
+				},
+			],
+			initialActiveToolNames: ["echo"],
+		});
+		harnesses.push(harness);
+
+		const model = harness.getModel();
+		const responses: AssistantMessage[] = [
+			{
+				...fauxAssistantMessage([fauxToolCall("echo", { value: "one" })], { stopReason: "toolUse" }),
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage: createUsage(6_000),
+			},
+			{
+				...fauxAssistantMessage("continued after compact no-op"),
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage: createUsage(10),
+			},
+		];
+		let streamCalls = 0;
+		harness.session.agent.streamFn = (requestModel) => {
+			const stream = createAssistantMessageEventStream();
+			const message = responses[streamCalls++];
+			queueMicrotask(() => {
+				if (!message) {
+					const error = createAssistant(harness, { stopReason: "error", errorMessage: "unexpected stream call" });
+					stream.push({ type: "error", reason: "error", error });
+					stream.end(error);
+					return;
+				}
+				const finalMessage = { ...message, model: requestModel.id };
+				stream.push({
+					type: "done",
+					reason: finalMessage.stopReason === "toolUse" ? "toolUse" : "stop",
+					message: finalMessage,
+				});
+				stream.end(finalMessage);
+			});
+			return stream;
+		};
+
+		await harness.session.prompt("run one tool then finish");
+
+		expect(toolCalls).toEqual(["one"]);
+		expect(streamCalls).toBe(2);
+		expect(harness.sessionManager.getEntries().some((entry) => entry.type === "compaction")).toBe(false);
+		expect(harness.eventsOfType("compaction_start")).toHaveLength(0);
+		expect(
+			harness.session.messages.some((message) => getMessageText(message) === "continued after compact no-op"),
+		).toBe(true);
+	});
+
+	it("does not reset maxTurns when threshold compaction has no summarizable history", async () => {
+		const toolCalls: string[] = [];
+		const harness = await createHarness({
+			models: [{ id: "faux-1", contextWindow: 10_000 }],
+			settings: { compaction: { keepRecentTokens: 10_000, triggerPercent: 50 } },
+			tools: [
+				{
+					name: "echo",
+					label: "Echo",
+					description: "Echo a value",
+					parameters: Type.Object({ value: Type.String() }),
+					execute: async (_toolCallId, params) => {
+						const value =
+							typeof params === "object" && params !== null && "value" in params ? String(params.value) : "";
+						toolCalls.push(value);
+						return { content: [{ type: "text", text: `echo:${value}` }], details: {} };
+					},
+				},
+			],
+			initialActiveToolNames: ["echo"],
+		});
+		harnesses.push(harness);
+		harness.session.agent.maxTurns = 2;
+
+		const model = harness.getModel();
+		const responses: AssistantMessage[] = ["one", "two", "three"].map((value) => ({
+			...fauxAssistantMessage([fauxToolCall("echo", { value })], { stopReason: "toolUse" }),
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: createUsage(6_000),
+		}));
+		let streamCalls = 0;
+		harness.session.agent.streamFn = (requestModel) => {
+			const stream = createAssistantMessageEventStream();
+			const message = responses[streamCalls++];
+			queueMicrotask(() => {
+				if (!message) {
+					const error = createAssistant(harness, { stopReason: "error", errorMessage: "unexpected stream call" });
+					stream.push({ type: "error", reason: "error", error });
+					stream.end(error);
+					return;
+				}
+				const finalMessage = { ...message, model: requestModel.id };
+				stream.push({ type: "done", reason: "toolUse", message: finalMessage });
+				stream.end(finalMessage);
+			});
+			return stream;
+		};
+
+		await harness.session.prompt("respect the turn budget");
+
+		expect(toolCalls).toEqual(["one", "two"]);
+		expect(streamCalls).toBe(2);
+		expect(harness.sessionManager.getEntries().some((entry) => entry.type === "compaction")).toBe(false);
+	});
+
+	it("preserves maxTurns across real turn-boundary compaction continuations", async () => {
+		const toolCalls: string[] = [];
+		const harness = await createHarness({
+			models: [{ id: "faux-1", contextWindow: 10_000 }],
+			settings: { compaction: { keepRecentTokens: 1, triggerPercent: 50 } },
+			tools: [
+				{
+					name: "echo",
+					label: "Echo",
+					description: "Echo a value",
+					parameters: Type.Object({ value: Type.String() }),
+					execute: async (_toolCallId, params) => {
+						const value =
+							typeof params === "object" && params !== null && "value" in params ? String(params.value) : "";
+						toolCalls.push(value);
+						return { content: [{ type: "text", text: `echo:${value}` }], details: {} };
+					},
+				},
+			],
+			initialActiveToolNames: ["echo"],
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", async (event) => ({
+						compaction: {
+							summary: "bounded turn compacted",
+							firstKeptEntryId: event.preparation.firstKeptEntryId,
+							tokensBefore: event.preparation.tokensBefore,
+							details: {},
+						},
+					}));
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.session.agent.maxTurns = 2;
+
+		const model = harness.getModel();
+		const responses: AssistantMessage[] = ["one", "two"].map((value) => ({
+			...fauxAssistantMessage([fauxToolCall("echo", { value })], { stopReason: "toolUse" }),
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: createUsage(6_000),
+		}));
+		responses.push({
+			...fauxAssistantMessage("third turn must not run"),
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: createUsage(10),
+		});
+		let streamCalls = 0;
+		harness.session.agent.streamFn = (requestModel) => {
+			const stream = createAssistantMessageEventStream();
+			const message = responses[streamCalls++];
+			queueMicrotask(() => {
+				if (!message) {
+					const error = createAssistant(harness, { stopReason: "error", errorMessage: "unexpected stream call" });
+					stream.push({ type: "error", reason: "error", error });
+					stream.end(error);
+					return;
+				}
+				const finalMessage = { ...message, model: requestModel.id };
+				stream.push({
+					type: "done",
+					reason: finalMessage.stopReason === "toolUse" ? "toolUse" : "stop",
+					message: finalMessage,
+				});
+				stream.end(finalMessage);
+			});
+			return stream;
+		};
+		seedCompactableSession(harness);
+
+		await harness.session.prompt("compact without resetting the prompt budget");
+
+		expect(toolCalls).toEqual(["one", "two"]);
+		expect(streamCalls).toBe(2);
+		expect(harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction").length).toBeGreaterThan(
+			0,
+		);
+		expect(harness.session.messages.some((message) => getMessageText(message) === "third turn must not run")).toBe(
+			false,
+		);
+	});
+
 	it("does not retry overflow recovery more than once", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
