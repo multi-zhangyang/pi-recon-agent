@@ -143,9 +143,12 @@ describe("AgentThreadManager", () => {
 		const fakeRepi = join(tempRoot, "fake-repi.sh");
 		writeFileSync(
 			fakeRepi,
-			["#!/usr/bin/env bash", "printf 'allowed_servers=%s\\n' \"$" + '{REPI_MCP_ALLOWED_SERVERS:-unset}"', ""].join(
-				"\n",
-			),
+			[
+				"#!/usr/bin/env bash",
+				"printf 'mcp_disabled=%s\\n' \"$" + '{REPI_MCP_DISABLED:-unset}"',
+				"printf 'allowed_servers=%s\\n' \"$" + '{REPI_MCP_ALLOWED_SERVERS:-unset}"',
+				"",
+			].join("\n"),
 			"utf8",
 		);
 		chmodSync(fakeRepi, 0o700);
@@ -163,6 +166,7 @@ describe("AgentThreadManager", () => {
 		});
 		await waitFor(() => manager.getRun(manifest.runId)?.status === "complete");
 		const merged = manager.mergeRun(manifest.runId);
-		expect(merged?.text).toContain("allowed_servers=__repi_no_mcp_servers__");
+		expect(merged?.text).toContain("mcp_disabled=1");
+		expect(merged?.text).toContain("allowed_servers=unset");
 	});
 });

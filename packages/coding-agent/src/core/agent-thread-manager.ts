@@ -396,6 +396,9 @@ export class AgentThreadManager {
 					REPI_WORKER_LINEAGE_SHA256: lineageSha256,
 					REPI_WORKER_HANDOFF_PATH: join(runRoot, "handoff.md"),
 					REPI_WORKER_TOOL_INDEX: join(workerAgentDir, "recon", "tools", "tool-index.md"),
+					...(mcpInheritance.mcpDisabledEnv !== undefined
+						? { REPI_MCP_DISABLED: mcpInheritance.mcpDisabledEnv }
+						: {}),
 					...(mcpInheritance.serverAllowlistEnv !== undefined
 						? { REPI_MCP_ALLOWED_SERVERS: mcpInheritance.serverAllowlistEnv }
 						: {}),

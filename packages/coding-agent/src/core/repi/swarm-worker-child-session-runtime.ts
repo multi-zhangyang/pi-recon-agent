@@ -51,13 +51,13 @@ export function createSwarmWorkerChildSessionRuntime(dependencies: SwarmWorkerCh
 		manifest: SwarmSubagentRuntimeManifestRow,
 	): WorkerChildSessionRuntimeV1["provider"] {
 		return {
-			format: "local-openai",
-			name: "re_swarm-command-session",
-			modelId: manifest.model?.modelId || "command-level-worker",
-			baseUrlRef: "$LOCAL_OPENAI_BASE_URL",
-			apiKeyRef: "$LOCAL_OPENAI_API_KEY",
-			contextWindow: 128000,
-			maxTokens: 8192,
+			// AgentThread v1 persists the selected provider/model, but not API format,
+			// endpoint refs, context size, output limit, or exact provider-call count.
+			// Preserve only observed fields instead of manufacturing local-openai data.
+			format: "unknown",
+			name: manifest.model?.provider || "unknown",
+			modelId: manifest.model?.modelId || "unknown",
+			source: manifest.model?.source ?? "unknown",
 		};
 	}
 

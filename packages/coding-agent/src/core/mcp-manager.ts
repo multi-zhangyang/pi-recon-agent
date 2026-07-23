@@ -1066,6 +1066,7 @@ export class McpManager {
 	}
 
 	loadServers(): McpServerEntry[] {
+		if (process.env.REPI_MCP_DISABLED === "1") return [];
 		// Cache by {mtimeMs,size} of both config paths to avoid re-reading +
 		// re-parsing both mcp.json files on every MCP operation. Stat is cheap
 		// sync I/O vs full read+parse+Map+sort on every callTool/searchTools.

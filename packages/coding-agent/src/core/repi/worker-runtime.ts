@@ -297,7 +297,11 @@ export type RepiWorkerLeaseSchedulerV1 = {
 	};
 };
 
-export type RepiWorkerChildSessionProviderFormat = "openai-compatible" | "anthropic-compatible" | "local-openai";
+export type RepiWorkerChildSessionProviderFormat =
+	| "openai-compatible"
+	| "anthropic-compatible"
+	| "local-openai"
+	| "unknown";
 
 export type RepiWorkerChildSessionRuntimeStatus =
 	| "queued"
@@ -334,10 +338,12 @@ export type RepiWorkerChildSessionRuntimeV1 = {
 		format: RepiWorkerChildSessionProviderFormat;
 		name: string;
 		modelId: string;
-		baseUrlRef: string;
-		apiKeyRef: string;
-		contextWindow: number;
-		maxTokens: number;
+		/** Optional because AgentThread v1 does not persist endpoint/auth references. */
+		baseUrlRef?: string;
+		apiKeyRef?: string;
+		contextWindow?: number;
+		maxTokens?: number;
+		source?: "agent-thread-manifest" | "simulated-dispatcher" | "unknown";
 	};
 	runtime: {
 		status: RepiWorkerChildSessionRuntimeStatus;
@@ -1292,11 +1298,16 @@ export function verifyWorkerChildSessionRuntimeBatch(batch: RepiWorkerChildSessi
 	}
 	const sessionDirs = new Set<string>();
 	for (const session of batch.sessions) {
-		if (!session.provider.apiKeyRef.startsWith("$"))
+		if (session.provider.apiKeyRef !== undefined && !session.provider.apiKeyRef.startsWith("$"))
 			errors.push(`child_session_literal_api_key:${session.sessionId}`);
-		if (!session.provider.baseUrlRef.startsWith("$"))
+		if (session.provider.baseUrlRef !== undefined && !session.provider.baseUrlRef.startsWith("$"))
 			errors.push(`child_session_literal_base_url:${session.sessionId}`);
-		for (const ref of [session.provider.apiKeyRef, session.provider.baseUrlRef]) {
+		if (session.provider.format !== "unknown" && (!session.provider.apiKeyRef || !session.provider.baseUrlRef)) {
+			errors.push(`child_session_provider_refs_missing:${session.sessionId}`);
+		}
+		for (const ref of [session.provider.apiKeyRef, session.provider.baseUrlRef].filter(
+			(value): value is string => typeof value === "string",
+		)) {
 			const name = envRefName(ref);
 			if (!name) continue;
 			if (!batch.launchPolicy.envAllowlist.includes(name))

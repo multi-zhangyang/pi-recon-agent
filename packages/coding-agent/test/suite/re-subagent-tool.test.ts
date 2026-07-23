@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@pi-recon/repi-agent-core";
@@ -43,7 +43,7 @@ function makeTempAgentDir(prefix: string): string {
 	return dir;
 }
 
-function writeStubBin(exitCode = 0): string {
+function writeStubBin(exitCode = 0, forgedLineage = false, sleepSeconds = 0): string {
 	const path = join(tmpdir(), `repi-stub-${Date.now()}-${Math.random().toString(36).slice(2)}.sh`);
 	writeFileSync(
 		path,
@@ -54,7 +54,7 @@ function writeStubBin(exitCode = 0): string {
 			'if [ -n "$REPI_WORKER_HANDOFF_PATH" ]; then\n' +
 			'  mkdir -p "$(dirname "$REPI_WORKER_HANDOFF_PATH")"\n' +
 			"  {\n" +
-			'    printf \'run_id: %s\\nmission_id: %s\\nlineage_sha256: %s\\n\' "$REPI_WORKER_RUN_ID" "$REPI_WORKER_MISSION_ID" "$REPI_WORKER_LINEAGE_SHA256"\n' +
+			`    printf 'run_id: %s\\nmission_id: %s\\nlineage_sha256: %s\\n' "$REPI_WORKER_RUN_ID" "$REPI_WORKER_MISSION_ID" "${forgedLineage ? "forged" : "$REPI_WORKER_LINEAGE_SHA256"}"\n` +
 			"    cat <<'HOEOF'\n" +
 			"Outcome: claim verified\n" +
 			"Key Evidence: readelf -lW shows PIE; offset 0x40 controlled\n" +
@@ -66,6 +66,7 @@ function writeStubBin(exitCode = 0): string {
 			'  } > "$REPI_WORKER_HANDOFF_PATH"\n' +
 			"fi\n" +
 			"printf 'VERIFIER_HANDOFF_PROOF: claim verified\\nfindings: ok\\n'\n" +
+			(sleepSeconds > 0 ? `sleep ${sleepSeconds}\n` : "") +
 			`exit ${exitCode}\n`,
 		"utf-8",
 	);
@@ -319,6 +320,48 @@ describe("re_subagent tool", () => {
 			expect(ledger).toContain("subagent-handoff-verifier-complete");
 			expect(ledger).toContain("stdout_sha256=");
 			expect(ledger).toContain("candidate: process-isolated lineage-bound handoff");
+			const runDir = readdirSync(join(agentDir, "recon", "agent-threads"))[0];
+			const manifest = JSON.parse(
+				readFileSync(join(agentDir, "recon", "agent-threads", runDir, "manifest.json"), "utf8"),
+			) as { mcpInherited?: boolean; mcpServers?: string[]; mcpTools?: string[] };
+			expect(manifest).toMatchObject({ mcpInherited: false, mcpServers: [], mcpTools: [] });
+		});
+
+		it("blocks a forged handoff before recording candidate evidence", async () => {
+			const agentDir = makeTempAgentDir("re-subagent-forged");
+			tempDirs.push(agentDir);
+			process.env[ENV_AGENT_DIR] = agentDir;
+			delete process.env[ENV_AGENT_THREAD];
+			const stubBin = writeStubBin(0, true);
+			tempDirs.push(stubBin);
+			process.env[ENV_BIN_PATH] = stubBin;
+
+			const harness = await createHarness({ extensionFactories: [createReconExtensionFactory()] });
+			harnesses.push(harness);
+			harness.setResponses([
+				fauxAssistantMessage(
+					[fauxToolCall("re_subagent", { spec: "verifier", task: "verify forged handoff", timeoutMs: 5000 })],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage("done"),
+			]);
+
+			await harness.session.prompt("verify it");
+
+			const resultText = getToolResultText(harness);
+			expect(resultText).toContain("re_subagent blocked: artifact validation failed");
+			const result = getReSubagentToolResult(harness);
+			expect(result?.isError).toBe(true);
+			expect(result?.details).toMatchObject({
+				kind: "RepiSubagentResultV1",
+				status: "complete",
+				handoffLineageValid: false,
+				error: expect.stringContaining("artifact validation failed"),
+			});
+			const ledgerPath = join(agentDir, "recon", "evidence", "ledger.md");
+			if (existsSync(ledgerPath)) {
+				expect(readFileSync(ledgerPath, "utf8")).not.toContain("subagent-handoff-verifier-complete");
+			}
 		});
 
 		it("returns a structured failure result when the worker exits non-zero", async () => {
@@ -350,7 +393,10 @@ describe("re_subagent tool", () => {
 			await harness.session.prompt("run it");
 
 			const result = getReSubagentToolResult(harness);
-			expect(result?.isError).toBe(false);
+			expect(result?.isError).toBe(true);
+			expect(getMessageText(result)).toContain("terminal status=failed exitCode=17");
+			expect(getMessageText(result)).not.toContain("Outcome: claim verified");
+			expect(getMessageText(result)).not.toContain("handoff_artifact:");
 			expect(result?.details).toMatchObject({
 				kind: "RepiSubagentResultV1",
 				schemaVersion: 1,
@@ -364,6 +410,53 @@ describe("re_subagent tool", () => {
 				handoffLineageValid: true,
 				error: expect.any(String),
 			});
+		});
+
+		it("rejects a valid handoff when the worker times out", async () => {
+			const agentDir = makeTempAgentDir("re-subagent-timeout");
+			tempDirs.push(agentDir);
+			process.env[ENV_AGENT_DIR] = agentDir;
+			delete process.env[ENV_AGENT_THREAD];
+			const stubBin = writeStubBin(0, false, 2);
+			tempDirs.push(stubBin);
+			process.env[ENV_BIN_PATH] = stubBin;
+
+			const harness = await createHarness({ extensionFactories: [createReconExtensionFactory()] });
+			harnesses.push(harness);
+			harness.setResponses([
+				fauxAssistantMessage(
+					[fauxToolCall("re_subagent", { spec: "verifier", task: "verify before timeout", timeoutMs: 1000 })],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage("done"),
+			]);
+
+			await harness.session.prompt("verify it");
+
+			const result = getReSubagentToolResult(harness);
+			const resultText = getMessageText(result);
+			expect(result?.isError).toBe(true);
+			expect(resultText).toContain("terminal status=timeout");
+			expect(resultText).toContain("handoff was not accepted");
+			expect(resultText).not.toContain("Outcome: claim verified");
+			expect(resultText).not.toContain("VERIFIER_HANDOFF_PROOF");
+			expect(resultText).not.toContain("merge_artifact:");
+			expect(resultText).not.toContain("handoff_artifact:");
+			expect(result?.details).toMatchObject({
+				kind: "RepiSubagentResultV1",
+				schemaVersion: 1,
+				status: "timeout",
+				exitCode: null,
+				spec: "verifier",
+				task: "verify before timeout",
+				handoffPresent: true,
+				handoffLineageValid: true,
+				error: expect.any(String),
+			});
+			const ledgerPath = join(agentDir, "recon", "evidence", "ledger.md");
+			if (existsSync(ledgerPath)) {
+				expect(readFileSync(ledgerPath, "utf8")).not.toContain("subagent-handoff-verifier-timeout");
+			}
 		});
 	});
 });

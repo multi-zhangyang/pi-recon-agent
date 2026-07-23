@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { discoverSwarmRuns } from "../../../scripts/reverse-agent/lib/swarm-run-catalog.mjs";
@@ -63,6 +63,144 @@ describe("REPI kernel profile swarm flows", () => {
 			harness.restore();
 			if (previousAgentThread === undefined) delete process.env.REPI_AGENT_THREAD;
 			else process.env.REPI_AGENT_THREAD = previousAgentThread;
+		}
+	});
+
+	it("executes a real isolated worker and records only observed child identity", async () => {
+		const previousBin = process.env.REPI_BIN_PATH;
+		const previousProvider = process.env.REPI_SUBAGENT_PROVIDER;
+		const previousModel = process.env.REPI_SUBAGENT_MODEL;
+		const harness = createRegisteredReconHarness("repi-profile-swarm-real-child");
+		const workerBin = join(harness.tempDir, "real-worker.sh");
+		writeFileSync(
+			workerBin,
+			[
+				"#!/bin/sh",
+				'mkdir -p "$(dirname "$REPI_WORKER_HANDOFF_PATH")"',
+				`printf 'run_id: %s\\nmission_id: %s\\nlineage_sha256: %s\\nOutcome: verified\\nVerification: process-isolated worker\\n' "$REPI_WORKER_RUN_ID" "$REPI_WORKER_MISSION_ID" "$REPI_WORKER_LINEAGE_SHA256" > "$REPI_WORKER_HANDOFF_PATH"`,
+				"printf 'real worker process\\n'",
+				"exit 0",
+				"",
+			].join("\n"),
+			"utf8",
+		);
+		chmodSync(workerBin, 0o700);
+		process.env.REPI_BIN_PATH = workerBin;
+		process.env.REPI_SUBAGENT_PROVIDER = "fixture-provider";
+		process.env.REPI_SUBAGENT_MODEL = "fixture-model";
+		try {
+			const swarmTool = harness.tools.get("re_swarm") as {
+				execute: (
+					toolCallId: string,
+					params: Record<string, unknown>,
+					signal?: AbortSignal,
+					onUpdate?: unknown,
+					ctx?: { cwd: string },
+				) => Promise<{ content: Array<{ text: string }> }>;
+			};
+			const result = await swarmTool.execute(
+				"tool-call-id",
+				{
+					action: "run",
+					target: "https://target.local/api/login",
+					maxWorkers: 1,
+					maxCommands: 1,
+					execution: "real",
+				},
+				undefined,
+				undefined,
+				{ cwd: harness.agentDir },
+			);
+			const text = result.content[0]?.text ?? "";
+			expect(text).toContain("parallel_mode=real_subagent");
+			expect(text).toContain("provider=fixture-provider");
+			expect(text).toContain("model=fixture-model");
+			expect(text).toContain("mcp_inherited=false");
+			expect(text).not.toContain("local-openai");
+			expect(text).not.toContain("command-level-worker");
+			const artifactPath = /swarm_artifact: (.+)/.exec(text)?.[1]?.trim();
+			expect(artifactPath).toBeDefined();
+			const artifact = parseJsonCodeFence(readFileSync(artifactPath!, "utf8")) as {
+				executions: Array<{
+					executionMode: string;
+					artifactValidation: string;
+					mcpInherited: boolean;
+					provider: string;
+					modelId: string;
+				}>;
+				subagentRuntimeManifests: Array<{
+					model: { provider: string; modelId: string; source: string; modelCalls: number | null };
+				}>;
+			};
+			expect(artifact.executions[0]).toMatchObject({
+				executionMode: "real_subagent",
+				artifactValidation: "passed",
+				mcpInherited: false,
+				provider: "fixture-provider",
+				modelId: "fixture-model",
+			});
+			expect(artifact.subagentRuntimeManifests[0]?.model).toMatchObject({
+				provider: "fixture-provider",
+				modelId: "fixture-model",
+				source: "agent-thread-manifest",
+				modelCalls: null,
+			});
+
+			writeFileSync(
+				workerBin,
+				[
+					"#!/bin/sh",
+					`printf 'run_id: %s\\nmission_id: %s\\nlineage_sha256: forged\\nOutcome: unverified\\n' "$REPI_WORKER_RUN_ID" "$REPI_WORKER_MISSION_ID" > "$REPI_WORKER_HANDOFF_PATH"`,
+					"exit 0",
+					"",
+				].join("\n"),
+				"utf8",
+			);
+			const blockedResult = await swarmTool.execute(
+				"tool-call-invalid-handoff",
+				{
+					action: "run",
+					target: "https://target.local/api/login",
+					maxWorkers: 1,
+					maxCommands: 1,
+					execution: "real",
+				},
+				undefined,
+				undefined,
+				{ cwd: harness.agentDir },
+			);
+			const blockedText = blockedResult.content[0]?.text ?? "";
+			const blockedArtifactPath = /swarm_artifact: (.+)/.exec(blockedText)?.[1]?.trim();
+			expect(blockedArtifactPath).toBeDefined();
+			const blockedArtifact = parseJsonCodeFence(readFileSync(blockedArtifactPath!, "utf8")) as {
+				executions: Array<{
+					status: string;
+					executionMode: string;
+					artifactValidation: string;
+					exitCode: number;
+					sourceArtifacts: string[];
+				}>;
+			};
+			expect(blockedArtifact.executions[0]).toMatchObject({
+				status: "blocked",
+				executionMode: "real_subagent",
+				artifactValidation: "blocked",
+				exitCode: 1,
+			});
+			expect(blockedArtifact.executions[0]?.sourceArtifacts).not.toEqual(
+				expect.arrayContaining([expect.stringMatching(/(?:handoff|merge)\.(?:md|json)$/)]),
+			);
+			expect(blockedText).toContain("merge_handoff=withheld");
+			expect(blockedText).not.toContain("Outcome: unverified");
+			expect(blockedText).not.toContain("simulated_sequential_for_internal_repi_commands");
+		} finally {
+			harness.restore();
+			if (previousBin === undefined) delete process.env.REPI_BIN_PATH;
+			else process.env.REPI_BIN_PATH = previousBin;
+			if (previousProvider === undefined) delete process.env.REPI_SUBAGENT_PROVIDER;
+			else process.env.REPI_SUBAGENT_PROVIDER = previousProvider;
+			if (previousModel === undefined) delete process.env.REPI_SUBAGENT_MODEL;
+			else process.env.REPI_SUBAGENT_MODEL = previousModel;
 		}
 	});
 

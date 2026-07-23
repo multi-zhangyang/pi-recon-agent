@@ -145,6 +145,14 @@ export type SwarmWorkerExecution = {
 	timedOut?: boolean;
 	cancelledAt?: string;
 	retryAttempt?: number;
+	executionMode?: "real_subagent" | "simulated_dispatcher";
+	/** Exact child identity from AgentThread's persisted manifest when real mode ran. */
+	agentThreadRunId?: string;
+	provider?: string;
+	modelId?: string;
+	modelCalls?: number | null;
+	mcpInherited?: boolean;
+	artifactValidation?: "passed" | "blocked" | "not_applicable";
 	sourceArtifacts: string[];
 };
 
@@ -153,9 +161,11 @@ export type SwarmRuntimeState = RepiSwarmRuntimeState;
 export type SwarmRuntimeModelSummary = {
 	provider: string;
 	modelId: string;
-	modelCalls: number;
+	modelCalls: number | null;
 	toolCalls: number;
 	toolResults: number;
+	source: "agent-thread-manifest" | "simulated-dispatcher" | "unknown";
+	mcpInherited: boolean | null;
 };
 
 export type SwarmRuntimeRetryBudget = RepiSwarmRuntimeRetryBudget;

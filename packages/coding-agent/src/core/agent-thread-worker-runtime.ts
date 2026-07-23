@@ -31,6 +31,7 @@ export interface WorkerMcpInheritance {
 	allowedTools: string[];
 	toolFilterActive: boolean;
 	runtimeToolNames: string[];
+	mcpDisabledEnv?: "1";
 	serverAllowlistEnv?: string;
 	toolAllowlistEnv?: string;
 }
@@ -56,7 +57,6 @@ export function prepareWorkerMcp(options: {
 	spec: AgentThreadSpec;
 	spawn: SpawnAgentThreadOptions;
 }): WorkerMcpInheritance {
-	const noMcpSentinel = "__repi_no_mcp_servers__";
 	const noToolSentinel = "__repi_no_mcp_tools__";
 	const inherit = options.spawn.inheritMcp ?? options.spec.mcp?.inherit ?? false;
 	if (!inherit) {
@@ -66,7 +66,7 @@ export function prepareWorkerMcp(options: {
 			allowedTools: [],
 			toolFilterActive: false,
 			runtimeToolNames: [],
-			serverAllowlistEnv: noMcpSentinel,
+			mcpDisabledEnv: "1",
 		};
 	}
 
@@ -110,7 +110,8 @@ export function prepareWorkerMcp(options: {
 		allowedTools,
 		toolFilterActive,
 		runtimeToolNames,
-		serverAllowlistEnv: serverIds.length > 0 ? serverIds.join(",") : serverFilterActive ? noMcpSentinel : undefined,
+		...(serverIds.length === 0 && serverFilterActive ? { mcpDisabledEnv: "1" as const } : {}),
+		serverAllowlistEnv: serverIds.length > 0 ? serverIds.join(",") : undefined,
 		toolAllowlistEnv:
 			allowedTools.length > 0 ? allowedTools.join(",") : toolFilterActive ? noToolSentinel : undefined,
 	};

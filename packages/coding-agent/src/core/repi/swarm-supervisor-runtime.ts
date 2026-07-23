@@ -2,9 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createAgentThreadManager } from "../agent-thread-manager.ts";
+import { normalizeWorkerTask } from "../agent-thread-worker-runtime.ts";
 import type { ExtensionAPI } from "../extensions/types.ts";
 import { atomicWriteFileSync } from "../tools/atomic-write.ts";
 import type { ArtifactScopeFilterOptions } from "./artifact-scope.ts";
+import { repiSubagentResultFromManifest } from "./re-subagent-contract.ts";
+import { validateRepiSubagentArtifact } from "./repi-subagent-artifact-validation.ts";
 import { ensureReconStorage } from "./resources.ts";
 import {
 	evidenceLedgerPath,
@@ -614,18 +617,20 @@ export function createSwarmSupervisorRuntime(dependencies: SwarmSupervisorRuntim
 		signal?: AbortSignal,
 	): Promise<SwarmWorkerExecution[]> {
 		const spec = swarmWorkerSpec(worker.worker);
-		const task = [
-			`You are a REPI ${spec} subagent executing a swarm worker packet. Return ONLY a distilled handoff: Outcome, Key Evidence (command/path/hash/offset/request-response), Verification, Next Step, and unresolved gaps. No raw logs.`,
-			`objective: ${worker.objective}`,
-			`worker: ${worker.worker}`,
-			swarm.target ? `target: ${swarm.target}` : "",
-			`evidence_contract: ${worker.evidenceContract.join(" | ") || "(none)"}`,
-			`merge_keys: ${worker.mergeKeys.join(" | ") || "(none)"}`,
-			`suggested_commands: ${worker.commands.join(" || ") || "(none)"}`,
-			...(worker.spawnPrompt.length ? ["", "## spawn_prompt", ...worker.spawnPrompt] : []),
-		]
-			.filter(Boolean)
-			.join("\n");
+		const task = normalizeWorkerTask(
+			[
+				`You are a REPI ${spec} subagent executing a swarm worker packet. Return ONLY a distilled handoff: Outcome, Key Evidence (command/path/hash/offset/request-response), Verification, Next Step, and unresolved gaps. No raw logs.`,
+				`objective: ${worker.objective}`,
+				`worker: ${worker.worker}`,
+				swarm.target ? `target: ${swarm.target}` : "",
+				`evidence_contract: ${worker.evidenceContract.join(" | ") || "(none)"}`,
+				`merge_keys: ${worker.mergeKeys.join(" | ") || "(none)"}`,
+				`suggested_commands: ${worker.commands.join(" || ") || "(none)"}`,
+				...(worker.spawnPrompt.length ? ["", "## spawn_prompt", ...worker.spawnPrompt] : []),
+			]
+				.filter(Boolean)
+				.join("\n"),
+		);
 		const mgr = createAgentThreadManager({ cwd });
 		const startedAt = new Date().toISOString();
 		const startMs = Date.now();
@@ -634,19 +639,37 @@ export function createSwarmSupervisorRuntime(dependencies: SwarmSupervisorRuntim
 				specName: spec,
 				task,
 				timeoutMs,
-				inheritMcp: true,
+				// Real swarm workers use the same MCP-off boundary as the mandatory
+				// delegation gate. The worker packet is already explicit; ambient MCP
+				// servers would add an untracked execution surface.
+				inheritMcp: false,
+				mcpServers: [],
+				mcpTools: [],
 				signal,
 				missionId: swarm.missionId,
 			});
 			const final = await mgr.awaitRun(started.runId);
 			const merge = mgr.mergeRun(started.runId);
 			const mergeText = merge?.text ?? "(no merge output)";
+			const mergedManifest = merge?.manifest ?? final;
+			const resultDetails = repiSubagentResultFromManifest(mergedManifest);
+			const validation = await validateRepiSubagentArtifact(resultDetails, {
+				missionId: swarm.missionId,
+				spec,
+				task,
+				taskSha256: createHash("sha256").update(task).digest("hex"),
+				requireMcpDisabled: true,
+				timeoutMs,
+			});
 			const endedMs = Date.now();
 			const elapsedMs = Math.max(0, endedMs - startMs);
 			const timedOut =
-				elapsedMs > timeoutMs || /timeout|timed out/i.test(final.error ?? "") || final.signal === "SIGTERM";
+				final.status === "timeout" || /timeout|timed out/i.test(final.error ?? "") || final.signal === "SIGTERM";
 			const status: OperationStepStatus =
-				final.status === "complete" && final.exitCode === 0 && merge?.manifest.handoffLineageValid === true
+				final.status === "complete" &&
+				final.exitCode === 0 &&
+				validation.ok &&
+				mergedManifest.handoffLineageValid === true
 					? "done"
 					: "blocked";
 			const execution: SwarmWorkerExecution = {
@@ -658,28 +681,43 @@ export function createSwarmSupervisorRuntime(dependencies: SwarmSupervisorRuntim
 					"parallel_mode=real_subagent",
 					"isolation=process-agent-home",
 					`spec=${spec}`,
+					`provider=${mergedManifest.provider ?? "unknown"}`,
+					`model=${mergedManifest.model ?? "unknown"}`,
+					`mcp_inherited=${typeof mergedManifest.mcpInherited === "boolean" ? mergedManifest.mcpInherited : "unknown"}`,
+					`artifact_validation=${validation.ok ? "passed" : `blocked:${validation.error}`}`,
 					`timeout_ms=${timeoutMs} timed_out=${timedOut} retry_attempt=${attempt}`,
 					`run_id=${final.runId}`,
-					mergeText,
+					validation.ok ? mergeText : "merge_handoff=withheld",
 				].join("\n"),
-				stdout: mergeText,
-				stderr: final.error ?? "",
-				stdoutSha256: swarmExecutionDigest(mergeText),
-				stderrSha256: swarmExecutionDigest(final.error ?? ""),
+				stdout: validation.ok ? mergeText : "",
+				stderr: final.error ?? (validation.ok ? "" : validation.error),
+				stdoutSha256: swarmExecutionDigest(validation.ok ? mergeText : ""),
+				stderrSha256: swarmExecutionDigest(final.error ?? (validation.ok ? "" : validation.error)),
 				startedAt,
 				endedAt: new Date(endedMs).toISOString(),
 				elapsedMs,
 				pid: final.pid ?? null,
 				parentPid: null,
-				exitCode: final.exitCode ?? (status === "done" ? 0 : 1),
+				exitCode: status === "done" ? 0 : final.exitCode === 0 ? 1 : (final.exitCode ?? 1),
 				signal: timedOut ? "SIGTERM" : (final.signal ?? null),
 				timeoutMs,
 				timedOut,
 				cancelledAt: timedOut ? new Date(endedMs).toISOString() : undefined,
 				retryAttempt: attempt,
+				executionMode: "real_subagent",
+				agentThreadRunId: final.runId,
+				provider: mergedManifest.provider,
+				modelId: mergedManifest.model,
+				modelCalls: null,
+				mcpInherited: mergedManifest.mcpInherited,
+				artifactValidation: validation.ok ? "passed" : "blocked",
 				sourceArtifacts: Array.from(
 					new Set(
-						[final.runRoot, final.manifestPath, final.mergePath].filter((item): item is string => Boolean(item)),
+						[
+							final.runRoot,
+							final.manifestPath,
+							...(validation.ok ? [final.mergePath, final.handoffPath] : []),
+						].filter((item): item is string => Boolean(item)),
 					),
 				),
 			};
@@ -712,9 +750,14 @@ export function createSwarmSupervisorRuntime(dependencies: SwarmSupervisorRuntim
 					timedOut,
 					cancelledAt: timedOut ? new Date(endedMs).toISOString() : undefined,
 					retryAttempt: attempt,
+					executionMode: "real_subagent",
+					modelCalls: null,
+					artifactValidation: "blocked",
 					sourceArtifacts: worker.sourceArtifacts,
 				},
 			];
+		} finally {
+			mgr.dispose("repi_swarm_worker_complete");
 		}
 	}
 
@@ -737,6 +780,7 @@ export function createSwarmSupervisorRuntime(dependencies: SwarmSupervisorRuntim
 			const stderr = execution.stderr ?? "";
 			return {
 				...execution,
+				executionMode: execution.executionMode ?? "simulated_dispatcher",
 				stdout,
 				stderr,
 				stdoutSha256: execution.stdoutSha256 ?? swarmExecutionDigest(stdout),
@@ -1117,12 +1161,32 @@ export function createSwarmSupervisorRuntime(dependencies: SwarmSupervisorRuntim
 	}
 
 	function swarmRuntimeModel(executions: SwarmWorkerExecution[]): SwarmRuntimeModelSummary {
+		const real = executions.filter((execution) => execution.executionMode === "real_subagent");
+		const simulated = executions.filter((execution) => execution.executionMode === "simulated_dispatcher");
+		const unknown = executions.filter((execution) => execution.executionMode === undefined);
+		const providers = Array.from(new Set(real.map((execution) => execution.provider).filter(Boolean)));
+		const models = Array.from(new Set(real.map((execution) => execution.modelId).filter(Boolean)));
+		const source: SwarmRuntimeModelSummary["source"] = real.length
+			? simulated.length || unknown.length
+				? "unknown"
+				: "agent-thread-manifest"
+			: simulated.length && !unknown.length
+				? "simulated-dispatcher"
+				: "unknown";
 		return {
-			provider: "re_swarm",
-			modelId: "command-level-worker",
-			modelCalls: 0,
+			provider: providers.length ? providers.join(",") : source === "simulated-dispatcher" ? "none" : "unknown",
+			modelId: models.length ? models.join(",") : source === "simulated-dispatcher" ? "none" : "unknown",
+			// AgentThread's v1 manifest records the selected provider/model but not
+			// provider turn counts. Never claim zero for a real child run.
+			modelCalls: source === "simulated-dispatcher" ? 0 : null,
 			toolCalls: executions.length,
 			toolResults: executions.length,
+			source,
+			mcpInherited: real.some((execution) => execution.mcpInherited === true)
+				? true
+				: real.length > 0 && real.every((execution) => execution.mcpInherited === false)
+					? false
+					: null,
 		};
 	}
 
@@ -1493,16 +1557,20 @@ export function createSwarmSupervisorRuntime(dependencies: SwarmSupervisorRuntim
 						`- source=${swarm.parallelPlan.source}`,
 						`- workers=${swarm.parallelPlan.workers.length}`,
 						`- parallel_mode=${
-							swarm.executions.some((execution) => /^re[-_]/i.test(execution.command))
-								? "simulated_sequential_for_internal_repi_commands"
-								: "child_process_for_shell_commands"
+							swarm.executions.some((execution) => execution.executionMode === "real_subagent")
+								? "real_subagent_parallel_groups"
+								: swarm.executions.some((execution) => /^re[-_]/i.test(execution.command))
+									? "simulated_sequential_for_internal_repi_commands"
+									: "child_process_for_shell_commands"
 						}`,
 						`- isolation=${
-							swarm.executions.some((execution) =>
-								/isolation=shared-process-internal-dispatch/i.test(execution.output),
-							)
-								? "shared-process-internal-dispatch"
-								: "subprocess-shell"
+							swarm.executions.some((execution) => execution.executionMode === "real_subagent")
+								? "process-agent-home"
+								: swarm.executions.some((execution) =>
+											/isolation=shared-process-internal-dispatch/i.test(execution.output),
+										)
+									? "shared-process-internal-dispatch"
+									: "subprocess-shell"
 						}`,
 						`- merge=${swarm.parallelPlan.merge.strategy}`,
 					]

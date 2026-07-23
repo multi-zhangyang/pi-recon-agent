@@ -7,10 +7,13 @@ import { handoffManifestPatchFromSnapshot, readHandoffSnapshot, sha256 } from ".
 import type { RepiSubagentResultV1 } from "./re-subagent-contract.ts";
 
 export interface RepiSubagentArtifactExpectation {
-	missionId: string;
+	missionId?: string;
 	spec: string;
 	task: string;
 	taskSha256: string;
+	/** Require the child manifest to prove that no MCP server/tool was inherited. */
+	requireMcpDisabled?: boolean;
+	timeoutMs?: number;
 }
 
 export interface RepiSubagentArtifactValidationSuccess {
@@ -44,7 +47,7 @@ function sameString(value: unknown, expected: string): boolean {
 }
 
 function sameNullableString(value: unknown, expected: string | undefined): boolean {
-	return value === (expected ?? null);
+	return value === (expected?.trim() || null);
 }
 
 function reject(error: string): RepiSubagentArtifactValidationFailure {
@@ -92,6 +95,18 @@ function manifestMatchesExpectation(
 	if (manifest.task !== expected.task) return "manifest task does not match the delegation gate";
 	if (manifest.missionId !== expected.missionId) return "manifest mission does not match the delegation gate";
 	if (manifest.taskSha256 !== expected.taskSha256) return "manifest task hash does not match the delegation gate";
+	if (expected.timeoutMs !== undefined && manifest.timeoutMs !== expected.timeoutMs) {
+		return "manifest timeout does not match the delegation contract";
+	}
+	if (
+		expected.requireMcpDisabled === true &&
+		(manifest.mcpInherited !== false ||
+			manifest.mcpToolFilterActive !== false ||
+			(manifest.mcpServers?.length ?? 0) > 0 ||
+			(manifest.mcpTools?.length ?? 0) > 0)
+	) {
+		return "manifest does not prove that MCP inheritance and MCP tools were disabled";
+	}
 	if (!manifest.taskSha256 || !/^[a-f0-9]{64}$/i.test(manifest.taskSha256)) {
 		return "manifest task hash is not a SHA-256 digest";
 	}
@@ -113,6 +128,11 @@ function rawManifestPathsMatch(paths: ReturnType<typeof fixedRunPaths>): string 
 	}
 	if (!isRecord(raw) || raw.kind !== "repi-agent-thread-run" || raw.schemaVersion !== 1) {
 		return "raw manifest has an unsupported contract";
+	}
+	for (const field of ["tools", "mcpServers", "mcpTools"] as const) {
+		if (!Array.isArray(raw[field]) || !raw[field].every((value) => typeof value === "string")) {
+			return `raw manifest ${field} is not a string array`;
+		}
 	}
 	for (const [field, expected] of [
 		["runRoot", paths.runRoot],
@@ -187,7 +207,12 @@ function snapshotMatches(
 	manifest: AgentThreadRunManifest,
 	paths: ReturnType<typeof fixedRunPaths>,
 ): string | undefined {
-	if (!manifest.handoffBytes || !manifest.handoffSha256 || !manifest.handoffRunId || !manifest.handoffMissionId) {
+	if (
+		!manifest.handoffBytes ||
+		!manifest.handoffSha256 ||
+		!manifest.handoffRunId ||
+		manifest.handoffMissionId === undefined
+	) {
 		return "manifest handoff metadata is incomplete";
 	}
 	if (!manifest.handoffLineageSha256 || manifest.handoffLineageSha256 !== manifest.lineageSha256) {
@@ -210,7 +235,7 @@ function snapshotMatches(
 	}
 	if (!sameString(details.handoffRunId, manifest.handoffRunId))
 		return "details handoff run id does not match manifest";
-	if (!sameString(details.handoffMissionId, manifest.handoffMissionId)) {
+	if (!sameNullableString(details.handoffMissionId, manifest.handoffMissionId)) {
 		return "details handoff mission does not match manifest";
 	}
 	if (!sameString(details.handoffLineageSha256, manifest.handoffLineageSha256)) {
@@ -244,7 +269,7 @@ export async function validateRepiSubagentArtifact(
 	expected: RepiSubagentArtifactExpectation,
 	options: { agentDir?: string; fallbackCwd?: string } = {},
 ): Promise<RepiSubagentArtifactValidation> {
-	if (!expected.missionId || !expected.spec || !expected.task) {
+	if (!expected.spec || !expected.task) {
 		return reject("delegation gate expectation is incomplete");
 	}
 	if (!isRecord(details)) return reject("re_subagent details are not an object");
@@ -259,7 +284,7 @@ export async function validateRepiSubagentArtifact(
 	if (!runId || !isSafeRunId(runId)) return reject("re_subagent run id is missing or unsafe");
 	if (!sameString(details.spec, expected.spec)) return reject("re_subagent spec does not match the delegation gate");
 	if (!sameString(details.task, expected.task)) return reject("re_subagent task does not match the delegation gate");
-	if (!sameString(details.missionId, expected.missionId))
+	if (!sameNullableString(details.missionId, expected.missionId))
 		return reject("re_subagent mission does not match the delegation gate");
 	if (!sameString(details.taskSha256, expected.taskSha256))
 		return reject("re_subagent task hash does not match the delegation gate");
@@ -307,23 +332,7 @@ export async function validateRepiSubagentArtifact(
 	const snapshotError = snapshotMatches(details, manifest, paths);
 	if (snapshotError) return reject(snapshotError);
 	const latest = readAgentThreadRunManifest(paths.runsRoot, runId, options.fallbackCwd ?? process.cwd());
-	if (
-		!latest ||
-		latest.status !== manifest.status ||
-		latest.exitCode !== manifest.exitCode ||
-		latest.specName !== manifest.specName ||
-		latest.task !== manifest.task ||
-		latest.taskSha256 !== manifest.taskSha256 ||
-		latest.missionId !== manifest.missionId ||
-		latest.promptSha256 !== manifest.promptSha256 ||
-		latest.handoffBytes !== manifest.handoffBytes ||
-		latest.handoffSha256 !== manifest.handoffSha256 ||
-		latest.handoffRunId !== manifest.handoffRunId ||
-		latest.handoffMissionId !== manifest.handoffMissionId ||
-		latest.handoffLineageSha256 !== manifest.handoffLineageSha256 ||
-		latest.lineageSha256 !== manifest.lineageSha256 ||
-		rawManifestPathsMatch(paths) !== undefined
-	) {
+	if (!latest || JSON.stringify(latest) !== JSON.stringify(manifest) || rawManifestPathsMatch(paths) !== undefined) {
 		return reject("AgentThread manifest changed during artifact validation");
 	}
 	const latestSnapshotError = snapshotMatches(details, latest, paths);

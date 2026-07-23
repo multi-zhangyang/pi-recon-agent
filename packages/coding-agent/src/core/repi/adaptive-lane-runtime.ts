@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import { createAgentThreadManager } from "../agent-thread-manager.ts";
+import { normalizeWorkerTask } from "../agent-thread-worker-runtime.ts";
 import type { ExtensionAPI } from "../extensions/types.ts";
 import type { BootstrapPlan } from "./autopilot-runtime.ts";
 import {
@@ -8,7 +10,9 @@ import {
 	type MissionLane,
 	type MissionState,
 } from "./mission.ts";
+import { repiSubagentResultFromManifest } from "./re-subagent-contract.ts";
 import type { LaneCommandPack, LaneCommandPackRun } from "./recon-lane-runtime.ts";
+import { validateRepiSubagentArtifact } from "./repi-subagent-artifact-validation.ts";
 import type { LaneCommand } from "./specialist-command-planner.ts";
 import { readTextFile as readText, toolIndexPath } from "./storage.ts";
 import { shellQuote } from "./target.ts";
@@ -456,35 +460,55 @@ export function createAdaptiveLaneRuntime(dependencies: AdaptiveLaneRuntimeDepen
 		signal?: AbortSignal;
 	}): Promise<RunAutoDecision> {
 		const snapshot = buildTaskTreeSnapshot({ target: options.target });
-		const task = [
-			"You are the REPI step-planner. Given the Pentesting Task Tree snapshot and the last lane-run transcript, decide the next action for the autopilot loop.",
-			"Return exactly these lines and nothing else:",
-			"action: continue_current | continue_next | stop",
-			"nextLane: <lane name or none>",
-			"verdict: strong | partial | weak",
-			"quality: <integer 0-100>",
-			"reason: <one line>",
-			"Rules: continue_current = re-run the same lane with adjusted commands; continue_next = advance to a different lane (set nextLane); stop = no productive next step. Prefer stop over repeating a failing lane.",
-			"",
-			`active_lane: ${options.lane.name}`,
-			"",
-			"## PTT snapshot",
-			snapshot.text,
-			"",
-			"## last lane-run transcript",
-			compactLaneRunTranscript(options.text, 4000),
-		].join("\n");
+		const task = normalizeWorkerTask(
+			[
+				"You are the REPI step-planner. Given the Pentesting Task Tree snapshot and the last lane-run transcript, decide the next action for the autopilot loop.",
+				"Return exactly these lines and nothing else:",
+				"action: continue_current | continue_next | stop",
+				"nextLane: <lane name or none>",
+				"verdict: strong | partial | weak",
+				"quality: <integer 0-100>",
+				"reason: <one line>",
+				"Rules: continue_current = re-run the same lane with adjusted commands; continue_next = advance to a different lane (set nextLane); stop = no productive next step. Prefer stop over repeating a failing lane.",
+				"",
+				`active_lane: ${options.lane.name}`,
+				"",
+				"## PTT snapshot",
+				snapshot.text,
+				"",
+				"## last lane-run transcript",
+				compactLaneRunTranscript(options.text, 4000),
+			].join("\n"),
+		);
 		const manager = createAgentThreadManager({ cwd: options.cwd });
-		const started = await manager.spawnThread({
-			specName: "planner",
-			task,
-			timeoutMs: 180000,
-			inheritMcp: true,
-			signal: options.signal,
-			missionId: options.mission?.id,
-		});
-		await manager.awaitRun(started.runId);
-		return parsePlannerDecision(manager.mergeRun(started.runId)?.text ?? "");
+		const timeoutMs = 180000;
+		try {
+			const started = await manager.spawnThread({
+				specName: "planner",
+				task,
+				timeoutMs,
+				inheritMcp: false,
+				mcpServers: [],
+				mcpTools: [],
+				signal: options.signal,
+				missionId: options.mission?.id,
+			});
+			const final = await manager.awaitRun(started.runId);
+			const merge = manager.mergeRun(started.runId);
+			const mergedManifest = merge?.manifest ?? final;
+			const validation = await validateRepiSubagentArtifact(repiSubagentResultFromManifest(mergedManifest), {
+				missionId: options.mission?.id,
+				spec: "planner",
+				task,
+				taskSha256: createHash("sha256").update(task).digest("hex"),
+				requireMcpDisabled: true,
+				timeoutMs,
+			});
+			if (!validation.ok) throw new Error(`llm-step-planner artifact validation failed: ${validation.error}`);
+			return parsePlannerDecision(merge?.text ?? "");
+		} finally {
+			manager.dispose("repi_lane_planner_complete");
+		}
 	}
 
 	async function dispatchLaneSpecialist(options: {
@@ -493,43 +517,66 @@ export function createAdaptiveLaneRuntime(dependencies: AdaptiveLaneRuntimeDepen
 		mission: MissionState;
 		target?: string;
 		signal?: AbortSignal;
-	}): Promise<{ text: string; decision: RunAutoDecision; spec: string; note: string } | undefined> {
-		if (envBoolean("REPI_AGENT_THREAD")) return undefined;
+	}): Promise<{ text: string; decision: RunAutoDecision; spec: string; note: string }> {
+		if (envBoolean("REPI_AGENT_THREAD")) {
+			throw new Error("RE_LANE_SPECIALIST_RECURSION_BLOCKED: specialist dispatch is forbidden in an agent thread");
+		}
 		const spec = laneSpec(options.lane, options.mission.route);
-		if (!spec) return undefined;
+		if (!spec) throw new Error(`RE_LANE_SPECIALIST_UNAVAILABLE: no specialist owns lane ${options.lane.name}`);
 		const snapshot = buildTaskTreeSnapshot({ target: options.target });
-		const task = [
-			`You are the REPI ${spec} specialist. Own this mission lane end to end using your doctrine.`,
-			`Lane: ${options.lane.name}`,
-			`Objective: ${options.lane.objective}`,
-			`Next steps queued: ${options.lane.next.join(", ") || "none"}`,
-			options.target ? `Target: ${options.target}` : "",
-			"Produce concrete evidence (commands run + output, offsets, artifact refs). Write your handoff to $REPI_WORKER_HANDOFF_PATH as your last action.",
-			"Then emit: action, nextLane, and reason for the autopilot loop.",
-			"",
-			"## PTT snapshot",
-			truncateMiddle(snapshot.text, 5000),
-		]
-			.filter(Boolean)
-			.join("\n");
+		const task = normalizeWorkerTask(
+			[
+				`You are the REPI ${spec} specialist. Own this mission lane end to end using your doctrine.`,
+				`Lane: ${options.lane.name}`,
+				`Objective: ${options.lane.objective}`,
+				`Next steps queued: ${options.lane.next.join(", ") || "none"}`,
+				options.target ? `Target: ${options.target}` : "",
+				"Produce concrete evidence (commands run + output, offsets, artifact refs). Write your handoff to $REPI_WORKER_HANDOFF_PATH as your last action.",
+				"Then emit: action, nextLane, and reason for the autopilot loop.",
+				"",
+				"## PTT snapshot",
+				truncateMiddle(snapshot.text, 5000),
+			]
+				.filter(Boolean)
+				.join("\n"),
+		);
 		const manager = createAgentThreadManager({ cwd: options.cwd });
-		const started = await manager.spawnThread({
-			specName: spec,
-			task,
-			timeoutMs: spec === "reverser" ? 360000 : 240000,
-			inheritMcp: true,
-			signal: options.signal,
-			missionId: options.mission.id,
-		});
-		await manager.awaitRun(started.runId);
-		const merge = manager.mergeRun(started.runId);
-		const text = merge?.text ?? "";
-		return {
-			text,
-			decision: parsePlannerDecision(text),
-			spec,
-			note: `specialist_dispatch: spec=${spec} status=${merge?.manifest.status ?? "unknown"}`,
-		};
+		const timeoutMs = spec === "reverser" ? 360000 : 240000;
+		try {
+			const started = await manager.spawnThread({
+				specName: spec,
+				task,
+				timeoutMs,
+				inheritMcp: false,
+				mcpServers: [],
+				mcpTools: [],
+				signal: options.signal,
+				missionId: options.mission.id,
+			});
+			const final = await manager.awaitRun(started.runId);
+			const merge = manager.mergeRun(started.runId);
+			const mergedManifest = merge?.manifest ?? final;
+			const validation = await validateRepiSubagentArtifact(repiSubagentResultFromManifest(mergedManifest), {
+				missionId: options.mission.id,
+				spec,
+				task,
+				taskSha256: createHash("sha256").update(task).digest("hex"),
+				requireMcpDisabled: true,
+				timeoutMs,
+			});
+			if (!validation.ok) {
+				throw new Error(`specialist artifact validation failed: ${validation.error}`);
+			}
+			const text = merge?.text ?? "";
+			return {
+				text,
+				decision: parsePlannerDecision(text),
+				spec,
+				note: `specialist_dispatch: spec=${spec} status=${validation.manifest.status}`,
+			};
+		} finally {
+			manager.dispose("repi_lane_specialist_complete");
+		}
 	}
 
 	async function runAutoLaneChain(pi: ExtensionAPI, params: RunAutoLaneOptions): Promise<string> {
@@ -552,7 +599,21 @@ export function createAdaptiveLaneRuntime(dependencies: AdaptiveLaneRuntimeDepen
 				stopReason = "no_active_lane";
 				break;
 			}
-			if (params.dispatch === "specialist" && params.cwd && !envBoolean("REPI_AGENT_THREAD")) {
+			if (params.dispatch === "specialist") {
+				if (!params.cwd?.trim()) {
+					outputs.push(
+						`## run-auto step ${step + 1}: ${lane.name} (specialist_dispatch_blocked: cwd is required)`,
+					);
+					stopReason = "specialist_dispatch_blocked:cwd_required";
+					break;
+				}
+				if (envBoolean("REPI_AGENT_THREAD")) {
+					outputs.push(
+						`## run-auto step ${step + 1}: ${lane.name} (specialist_dispatch_blocked: recursive worker dispatch)`,
+					);
+					stopReason = "specialist_dispatch_blocked:recursion";
+					break;
+				}
 				try {
 					const specialist = await dispatchLaneSpecialist({
 						cwd: params.cwd,
@@ -561,49 +622,49 @@ export function createAdaptiveLaneRuntime(dependencies: AdaptiveLaneRuntimeDepen
 						target: params.target,
 						signal: params.signal,
 					});
-					if (specialist) {
-						let decision = specialist.decision;
-						const sections = [
-							`## run-auto step ${step + 1}: ${lane.name} (specialist:${specialist.spec})`,
-							compactLaneRunTranscript(specialist.text, 900),
-							specialist.note,
-						];
-						const bootstrapClosure = await runToolBootstrapClosure(pi, { lane, text: specialist.text });
-						if (bootstrapClosure) {
-							decision = bootstrapClosure.decision;
-							sections.push(`## tool-bootstrap-closure step ${step + 1}\n${bootstrapClosure.text}`);
-						}
-						decisions.push(decision);
-						sections.push(formatRunAutoDecision(decision));
-						outputs.push(sections.join("\n"));
-						if (shouldEscalateAdaptiveDecision(decisions)) {
-							const plan = applyAdaptiveMultiLanePlan({
-								lane,
-								decision,
-								text: specialist.text,
-								target: params.target,
-							});
-							outputs.push(`## multi-lane-planner step ${step + 1}\n${formatMultiLanePlan(plan)}`);
-							stopReason = `multi_lane_plan:${plan.lane ?? "none"}:${decision.reason}`;
-							break;
-						}
-						if (decision.action === "continue_current" || decision.action === "continue_next") {
-							requestedLane =
-								decision.action === "continue_current" ? (decision.nextLane ?? lane.name) : decision.nextLane;
-							stopReason =
-								step + 1 >= maxSteps
-									? `max_steps_reached_after:${decision.reason}`
-									: `adaptive_${decision.action}`;
-							continue;
-						}
-						stopReason = decision.reason;
+					let decision = specialist.decision;
+					const sections = [
+						`## run-auto step ${step + 1}: ${lane.name} (specialist:${specialist.spec})`,
+						compactLaneRunTranscript(specialist.text, 900),
+						specialist.note,
+					];
+					const bootstrapClosure = await runToolBootstrapClosure(pi, { lane, text: specialist.text });
+					if (bootstrapClosure) {
+						decision = bootstrapClosure.decision;
+						sections.push(`## tool-bootstrap-closure step ${step + 1}\n${bootstrapClosure.text}`);
+					}
+					decisions.push(decision);
+					sections.push(formatRunAutoDecision(decision));
+					outputs.push(sections.join("\n"));
+					if (shouldEscalateAdaptiveDecision(decisions)) {
+						const plan = applyAdaptiveMultiLanePlan({
+							lane,
+							decision,
+							text: specialist.text,
+							target: params.target,
+						});
+						outputs.push(`## multi-lane-planner step ${step + 1}\n${formatMultiLanePlan(plan)}`);
+						stopReason = `multi_lane_plan:${plan.lane ?? "none"}:${decision.reason}`;
 						break;
 					}
+					if (decision.action === "continue_current" || decision.action === "continue_next") {
+						requestedLane =
+							decision.action === "continue_current" ? (decision.nextLane ?? lane.name) : decision.nextLane;
+						stopReason =
+							step + 1 >= maxSteps
+								? `max_steps_reached_after:${decision.reason}`
+								: `adaptive_${decision.action}`;
+						continue;
+					}
+					stopReason = decision.reason;
+					break;
 				} catch (error) {
 					if (params.signal?.aborted) params.signal.throwIfAborted();
 					outputs.push(
-						`## run-auto step ${step + 1}: ${lane.name} (specialist_dispatch_failed: ${truncateMiddle(String((error as Error).message ?? error), 160)} - falling back to inline)`,
+						`## run-auto step ${step + 1}: ${lane.name} (specialist_dispatch_blocked: ${truncateMiddle(String((error as Error).message ?? error), 160)})`,
 					);
+					stopReason = "specialist_dispatch_blocked:worker_failure";
+					break;
 				}
 			}
 			const { commands, rawItems } = autoCommandsForLane(lane, maxCommandsPerStep);
@@ -637,10 +698,32 @@ export function createAdaptiveLaneRuntime(dependencies: AdaptiveLaneRuntimeDepen
 			if (run.executed) removeLaneNextItems(lane.name, rawItems);
 			let decision = parseLaneRunDecision(text, lane.name);
 			let llmNote = "";
-			if (params.reasoning === "llm" && params.cwd && !envBoolean("REPI_AGENT_THREAD")) {
+			let llmBlocked = "";
+			if (params.reasoning === "llm") {
+				const cwd = params.cwd?.trim();
+				if (!cwd) {
+					const sections = [
+						`## run-auto step ${step + 1}: ${lane.name}`,
+						compactLaneRunTranscript(text),
+						"llm-step-planner blocked: cwd is required",
+					];
+					outputs.push(sections.join("\n"));
+					stopReason = "llm_step_planner_blocked:cwd_required";
+					break;
+				}
+				if (envBoolean("REPI_AGENT_THREAD")) {
+					const sections = [
+						`## run-auto step ${step + 1}: ${lane.name}`,
+						compactLaneRunTranscript(text),
+						"llm-step-planner blocked: recursive worker dispatch",
+					];
+					outputs.push(sections.join("\n"));
+					stopReason = "llm_step_planner_blocked:recursion";
+					break;
+				}
 				try {
 					decision = await llmLaneRunDecision({
-						cwd: params.cwd,
+						cwd,
 						text,
 						lane,
 						mission,
@@ -650,7 +733,15 @@ export function createAdaptiveLaneRuntime(dependencies: AdaptiveLaneRuntimeDepen
 					llmNote = "llm-step-planner: applied";
 				} catch (error) {
 					if (params.signal?.aborted) params.signal.throwIfAborted();
-					llmNote = `llm-step-planner: fallback_to_regex (${truncateMiddle(String((error as Error).message ?? error), 160)})`;
+					llmBlocked = `llm-step-planner blocked: ${truncateMiddle(String((error as Error).message ?? error), 160)}`;
+					const sections = [
+						`## run-auto step ${step + 1}: ${lane.name}`,
+						compactLaneRunTranscript(text),
+						llmBlocked,
+					];
+					outputs.push(sections.join("\n"));
+					stopReason = "llm_step_planner_blocked:worker_failure";
+					break;
 				}
 			}
 			const sections = [`## run-auto step ${step + 1}: ${lane.name}`, compactLaneRunTranscript(text)];

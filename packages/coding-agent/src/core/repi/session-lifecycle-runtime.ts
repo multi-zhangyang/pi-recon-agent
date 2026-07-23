@@ -64,6 +64,13 @@ export type RepiSessionLifecycleDependencies = {
 	installTools: (pi: ExtensionAPI) => void;
 };
 
+function isRejectedRepiSubagentResult(value: unknown): boolean {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const result = value as Record<string, unknown>;
+	if (result.kind !== "RepiSubagentResultV1" || result.schemaVersion !== 1) return false;
+	return result.status !== "complete" || result.exitCode !== 0 || result.error !== undefined;
+}
+
 function canonicalMissionTarget(target: string | undefined): string | undefined {
 	if (!target) return undefined;
 	try {
@@ -228,6 +235,8 @@ async function revalidateSatisfiedDelegationGate(gate: DelegationGateState | und
 		spec: gate.spec,
 		task: gate.task,
 		taskSha256: gate.taskSha256,
+		requireMcpDisabled: true,
+		timeoutMs: 600000,
 	});
 	if (validation.ok) {
 		gate.handoffSha256 = validation.result.handoffSha256 ?? undefined;
@@ -304,6 +313,8 @@ async function validateDelegationResult(
 		spec: gate.spec,
 		task: gate.task,
 		taskSha256: gate.taskSha256,
+		requireMcpDisabled: true,
+		timeoutMs: 600000,
 	});
 }
 
@@ -743,6 +754,13 @@ export function installRepiSessionLifecycle(
 				}
 				gate.toolCallId = undefined;
 				persistStats();
+			}
+			// A process result that did not complete successfully must never remain a
+			// normal tool observation. The re_subagent tool withholds its merge/handoff
+			// in this case; mark the result as an error in every session, not only when
+			// a mandatory delegation gate happens to be active.
+			if (event.toolName === "re_subagent" && !event.isError && isRejectedRepiSubagentResult(event.details)) {
+				forceError = true;
 			}
 			stats.calls += 1;
 			if (event.isError || forceError) stats.failures += 1;

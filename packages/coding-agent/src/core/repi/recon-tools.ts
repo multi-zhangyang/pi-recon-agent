@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { Type } from "typebox";
 import { type AgentThreadRunManifest, createAgentThreadManager } from "../agent-thread-manager.ts";
+import { normalizeWorkerTask } from "../agent-thread-worker-runtime.ts";
 import type { ExtensionAPI } from "../extensions/types.ts";
 import type { ArtifactScopeFilterOptions } from "./artifact-scope.ts";
 import type { EvidenceRecord } from "./evidence.ts";
@@ -16,6 +18,7 @@ import {
 import type { ProfileCheckMode } from "./profile-check.ts";
 import { repiSubagentFailureResult, repiSubagentResultFromManifest } from "./re-subagent-contract.ts";
 import type { ReconCommandBootstrapPlan, ReconCommandLanePack } from "./recon-commands.ts";
+import { validateRepiSubagentArtifact } from "./repi-subagent-artifact-validation.ts";
 import { REPI_GENERIC_TASK, type RoutePlan } from "./routes.ts";
 import type { RuntimeAdapterExecutionCheckV1 } from "./runtime-adapter.ts";
 import { currentMissionPath, evidenceLedgerPath, evidenceMapsDir, toolIndexPath } from "./storage.ts";
@@ -1031,7 +1034,7 @@ export function createReconTools<TCompletionAudit, TPack extends ReconCommandLan
 				"Use action=run with maxAutoSteps bounded to prove one path before expanding sideways.",
 				"Inspect the returned map/run artifacts before final claims.",
 				"Set reasoning=llm to let a real planner subagent reason over the PTT snapshot and last run transcript to pick each run-auto step's next action (regex remains an explicit deterministic option). reasoning=llm is the DEFAULT.",
-				"Set dispatch=specialist to hand each run-auto lane to the real specialist subagent that owns it (reverser for pwn/firmware/malware/native/mobile lanes, explorer for mapping/web/cloud, operator for execution, verifier for proof/report); specialist falls back to inline when no spec owns the lane or the dispatch fails. dispatch=specialist is the DEFAULT; set dispatch=inline for the deterministic command-pack path.",
+				"Set dispatch=specialist to hand each run-auto lane to the real specialist subagent that owns it (reverser for pwn/firmware/malware/native/mobile lanes, explorer for mapping/web/cloud, operator for execution, verifier for proof/report). Specialist mode fails closed when dispatch or artifact validation fails; set dispatch=inline explicitly for the deterministic command-pack path.",
 			],
 			parameters: Type.Object({
 				action: Type.Optional(Type.Union([Type.Literal("plan"), Type.Literal("run")])),
@@ -1932,36 +1935,64 @@ export function createReconTools<TCompletionAudit, TPack extends ReconCommandLan
 					task: Type.String(),
 					timeoutMs: Type.Optional(Type.Number()),
 					additionalPrompt: Type.Optional(Type.String()),
-					inheritMcp: Type.Optional(Type.Boolean()),
-					mcpServers: Type.Optional(Type.Array(Type.String())),
-					mcpTools: Type.Optional(Type.Array(Type.String())),
 				}),
 				executionMode: "parallel",
 				async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 					const timeoutMs = Math.min(600000, Math.max(1000, params.timeoutMs ?? 600000));
 					const mgr = createAgentThreadManager({ cwd: ctx.cwd });
 					const missionId = readCurrentMission()?.id;
+					const task = normalizeWorkerTask(params.task);
 					try {
 						const started = await mgr.spawnThread({
 							specName: params.spec,
-							task: params.task,
+							task,
 							additionalPrompt: params.additionalPrompt,
 							timeoutMs,
-							inheritMcp: params.inheritMcp ?? true,
-							mcpServers: params.mcpServers,
-							mcpTools: params.mcpTools,
+							inheritMcp: false,
+							mcpServers: [],
+							mcpTools: [],
 							signal,
 							missionId,
 						});
 						const final = await mgr.awaitRun(started.runId);
 						const merge = mgr.mergeRun(started.runId);
 						const mergedManifest = merge?.manifest ?? final;
-						const mergeText = merge?.text ?? "(no merge output)";
 						const resultDetails = repiSubagentResultFromManifest(mergedManifest);
+						if (final.status !== "complete" || final.exitCode !== 0) {
+							return {
+								content: [
+									{
+										type: "text" as const,
+										text: `re_subagent blocked: terminal status=${final.status} exitCode=${final.exitCode ?? "n/a"}; handoff was not accepted`,
+									},
+								],
+								details: resultDetails,
+							};
+						}
+						const validation = await validateRepiSubagentArtifact(resultDetails, {
+							missionId,
+							spec: params.spec,
+							task,
+							taskSha256: createHash("sha256").update(task).digest("hex"),
+							requireMcpDisabled: true,
+							timeoutMs,
+						});
+						if (!validation.ok) {
+							return {
+								content: [
+									{
+										type: "text" as const,
+										text: `re_subagent blocked: artifact validation failed: ${validation.error}`,
+									},
+								],
+								details: { ...resultDetails, error: `artifact validation failed: ${validation.error}` },
+							};
+						}
+						const mergeText = merge?.text ?? "(no merge output)";
 						appendAgentThreadEvidence(mergedManifest, {
 							title: `subagent-handoff-${params.spec}-${final.status}`,
 							fact: `AgentThread handoff run_id=${final.runId} spec=${final.specName} status=${final.status} exit_code=${final.exitCode ?? "n/a"} handoff_present=${mergedManifest.handoffPresent === true} handoff_recovered=${mergedManifest.handoffRecovered === true}`,
-							command: `re_subagent spec=${params.spec} task=${params.task}`,
+							command: `re_subagent spec=${params.spec} task=${task}`,
 							confidence:
 								final.status === "complete" && mergedManifest.handoffLineageValid === true
 									? "candidate: process-isolated lineage-bound handoff; parent verifier must promote concrete claims"
@@ -1995,7 +2026,7 @@ export function createReconTools<TCompletionAudit, TPack extends ReconCommandLan
 						if (signal?.aborted) signal.throwIfAborted();
 						const resultDetails = await repiSubagentFailureResult({
 							spec: params.spec,
-							task: params.task,
+							task,
 							missionId,
 							error: compactAgentThreadError(error),
 						});
@@ -2008,6 +2039,8 @@ export function createReconTools<TCompletionAudit, TPack extends ReconCommandLan
 							],
 							details: resultDetails,
 						};
+					} finally {
+						mgr.dispose("repi_subagent_complete");
 					}
 				},
 			});
@@ -2029,7 +2062,6 @@ export function createReconTools<TCompletionAudit, TPack extends ReconCommandLan
 					target: Type.Optional(Type.String()),
 					focus: Type.Optional(Type.String()),
 					timeoutMs: Type.Optional(Type.Number()),
-					inheritMcp: Type.Optional(Type.Boolean()),
 				}),
 				executionMode: "parallel",
 				async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -2037,27 +2069,58 @@ export function createReconTools<TCompletionAudit, TPack extends ReconCommandLan
 					const snapshot = buildPentestingTaskTreeSnapshot({ target: params.target, focus: params.focus });
 					if (mode === "planner") {
 						const timeoutMs = Math.min(600000, Math.max(1000, params.timeoutMs ?? 300000));
-						const task = [
-							"You are reasoning over a REPI Pentesting Task Tree snapshot. Produce the next-step plan.",
-							params.focus ? `focus question: ${params.focus}` : "",
-							"Return: assessment (one line), ranked hypotheses (each with a falsifying observation), distinguishing_probe, next_action (runnable command/tool + rationale), what_to_verify (falsification probe + who verifies), abandon_candidates, ptt_update (node status changes).",
-							"",
-							truncateMiddle(snapshot.text, 6000),
-						]
-							.filter(Boolean)
-							.join("\n");
+						const task = normalizeWorkerTask(
+							[
+								"You are reasoning over a REPI Pentesting Task Tree snapshot. Produce the next-step plan.",
+								params.focus ? `focus question: ${params.focus}` : "",
+								"Return: assessment (one line), ranked hypotheses (each with a falsifying observation), distinguishing_probe, next_action (runnable command/tool + rationale), what_to_verify (falsification probe + who verifies), abandon_candidates, ptt_update (node status changes).",
+								"",
+								truncateMiddle(snapshot.text, 6000),
+							]
+								.filter(Boolean)
+								.join("\n"),
+						);
 						const mgr = createAgentThreadManager({ cwd: ctx.cwd });
+						const missionId = readCurrentMission()?.id;
 						try {
 							const started = await mgr.spawnThread({
 								specName: "planner",
 								task,
 								timeoutMs,
-								inheritMcp: params.inheritMcp ?? true,
+								inheritMcp: false,
+								mcpServers: [],
+								mcpTools: [],
 								signal,
-								missionId: readCurrentMission()?.id,
+								missionId,
 							});
 							const final = await mgr.awaitRun(started.runId);
 							const merge = mgr.mergeRun(started.runId);
+							const mergedManifest = merge?.manifest ?? final;
+							const resultDetails = repiSubagentResultFromManifest(mergedManifest);
+							const validation = await validateRepiSubagentArtifact(resultDetails, {
+								missionId,
+								spec: "planner",
+								task,
+								taskSha256: createHash("sha256").update(task).digest("hex"),
+								requireMcpDisabled: true,
+								timeoutMs,
+							});
+							if (!validation.ok) {
+								return {
+									content: [
+										{
+											type: "text" as const,
+											text: `re_reason planner blocked: artifact validation failed: ${validation.error}`,
+										},
+									],
+									details: {
+										...resultDetails,
+										mode,
+										artifactValidation: "blocked",
+										error: validation.error,
+									} as unknown as Record<string, unknown>,
+								};
+							}
 							const mergeText = merge?.text ?? "(no merge output)";
 							const summary = [
 								`re_reason: mode=planner status=${final.status} exitCode=${final.exitCode ?? "n/a"}`,
@@ -2071,11 +2134,10 @@ export function createReconTools<TCompletionAudit, TPack extends ReconCommandLan
 									},
 								],
 								details: {
+									...validation.result,
 									mode,
-									runId: final.runId,
-									spec: final.specName,
-									status: final.status,
-								} as Record<string, unknown>,
+									artifactValidation: "passed",
+								} as unknown as Record<string, unknown>,
 							};
 						} catch (error) {
 							if (signal?.aborted) signal.throwIfAborted();
@@ -2083,11 +2145,13 @@ export function createReconTools<TCompletionAudit, TPack extends ReconCommandLan
 								content: [
 									{
 										type: "text" as const,
-										text: `re_reason planner blocked: ${compactAgentThreadError(error)}\n\n${truncateMiddle(snapshot.text, 2400)}`,
+										text: `re_reason planner blocked: ${compactAgentThreadError(error)}`,
 									},
 								],
 								details: { mode, error: true } as Record<string, unknown>,
 							};
+						} finally {
+							mgr.dispose("repi_reason_planner_complete");
 						}
 					}
 					const scaffold = [
@@ -2131,47 +2195,71 @@ export function createReconTools<TCompletionAudit, TPack extends ReconCommandLan
 					reproCommand: Type.Optional(Type.String()),
 					target: Type.Optional(Type.String()),
 					timeoutMs: Type.Optional(Type.Number()),
-					inheritMcp: Type.Optional(Type.Boolean()),
 				}),
 				executionMode: "parallel",
 				async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 					const timeoutMs = Math.min(600000, Math.max(1000, params.timeoutMs ?? 300000));
-					const task = [
-						"You are an independent REPI verifier. Your job is to FALSIFY the claim below. Treat it as a hypothesis, not a fact.",
-						"- Re-run the minimal repro (if provided) and compare observations to the claim.",
-						"- Actively search for counter-evidence: alternative explanations, contradictory observations, repro failure, flakiness, environment drift.",
-						"- Default to refuted or inconclusive if you cannot reproduce or find supporting evidence; return proved only if the repro is stable and no counter-evidence exists.",
-						"Return exactly one verdict line `verdict: proved | refuted | inconclusive`, then `repro: <command + result>`, `counter_evidence: <observations or none>`, `notes: <one line>`.",
-						"",
-						`claim: ${params.claim}`,
-						params.evidence ? `evidence: ${params.evidence}` : "",
-						params.reproCommand ? `repro_command: ${params.reproCommand}` : "",
-						params.target ? `target: ${params.target}` : "",
-					]
-						.filter(Boolean)
-						.join("\n");
+					const task = normalizeWorkerTask(
+						[
+							"You are an independent REPI verifier. Your job is to FALSIFY the claim below. Treat it as a hypothesis, not a fact.",
+							"- Re-run the minimal repro (if provided) and compare observations to the claim.",
+							"- Actively search for counter-evidence: alternative explanations, contradictory observations, repro failure, flakiness, environment drift.",
+							"- Default to refuted or inconclusive if you cannot reproduce or find supporting evidence; return proved only if the repro is stable and no counter-evidence exists.",
+							"Return exactly one verdict line `verdict: proved | refuted | inconclusive`, then `repro: <command + result>`, `counter_evidence: <observations or none>`, `notes: <one line>`.",
+							"",
+							`claim: ${params.claim}`,
+							params.evidence ? `evidence: ${params.evidence}` : "",
+							params.reproCommand ? `repro_command: ${params.reproCommand}` : "",
+							params.target ? `target: ${params.target}` : "",
+						]
+							.filter(Boolean)
+							.join("\n"),
+					);
 					const mgr = createAgentThreadManager({ cwd: ctx.cwd });
+					const missionId = readCurrentMission()?.id;
 					try {
 						const started = await mgr.spawnThread({
 							specName: "verifier",
 							task,
 							timeoutMs,
-							inheritMcp: params.inheritMcp ?? true,
+							inheritMcp: false,
+							mcpServers: [],
+							mcpTools: [],
 							signal,
-							missionId: readCurrentMission()?.id,
+							missionId,
 						});
 						const final = await mgr.awaitRun(started.runId);
 						const merge = mgr.mergeRun(started.runId);
 						const mergedManifest = merge?.manifest ?? final;
+						const resultDetails = repiSubagentResultFromManifest(mergedManifest);
+						const validation = await validateRepiSubagentArtifact(resultDetails, {
+							missionId,
+							spec: "verifier",
+							task,
+							taskSha256: createHash("sha256").update(task).digest("hex"),
+							requireMcpDisabled: true,
+							timeoutMs,
+						});
+						if (!validation.ok) {
+							return {
+								content: [
+									{
+										type: "text" as const,
+										text: `re_challenge blocked: artifact validation failed: ${validation.error}\nverdict: inconclusive`,
+									},
+								],
+								details: {
+									...resultDetails,
+									verdict: "inconclusive",
+									artifactValidation: "blocked",
+									error: validation.error,
+								} as unknown as Record<string, unknown>,
+							};
+						}
 						const mergeText = merge?.text ?? "(no merge output)";
 						const verdictMatch = mergeText.match(/verdict:\s*(proved|refuted|inconclusive)/i);
 						const parsedVerdict = verdictMatch ? verdictMatch[1].toLowerCase() : "inconclusive";
-						// Never accept a proved line from a failed/timed-out worker. Runtime
-						// completion and a zero exit are part of the verifier contract.
-						const verdict =
-							final.status === "complete" && final.exitCode === 0 && mergedManifest.handoffLineageValid === true
-								? parsedVerdict
-								: "inconclusive";
+						const verdict = parsedVerdict;
 						appendAgentThreadEvidence(mergedManifest, {
 							title: `challenge-${verdict}`,
 							fact: `Independent verifier verdict=${verdict} run_id=${final.runId} status=${final.status} exit_code=${final.exitCode ?? "n/a"} claim=${params.claim}`,
@@ -2199,11 +2287,10 @@ export function createReconTools<TCompletionAudit, TPack extends ReconCommandLan
 								},
 							],
 							details: {
+								...validation.result,
 								verdict,
-								runId: final.runId,
-								spec: final.specName,
-								status: final.status,
-							} as Record<string, unknown>,
+								artifactValidation: "passed",
+							} as unknown as Record<string, unknown>,
 						};
 					} catch (error) {
 						if (signal?.aborted) signal.throwIfAborted();
@@ -2216,6 +2303,8 @@ export function createReconTools<TCompletionAudit, TPack extends ReconCommandLan
 							],
 							details: { verdict: "inconclusive", error: true } as Record<string, unknown>,
 						};
+					} finally {
+						mgr.dispose("repi_challenge_complete");
 					}
 				},
 			});

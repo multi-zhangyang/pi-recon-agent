@@ -13,6 +13,27 @@ describe("McpManager", () => {
 		tempRoot = undefined;
 	});
 
+	it("honors the explicit MCP deny gate even when a config id matches the retired sentinel", () => {
+		tempRoot = mkdtempSync(join(tmpdir(), "repi-mcp-disabled-"));
+		const agentDir = join(tempRoot, "agent");
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(
+			join(agentDir, "mcp.json"),
+			JSON.stringify({
+				mcpServers: { __repi_no_mcp_servers__: { transport: "stdio", command: "node" } },
+			}),
+		);
+		const previous = process.env.REPI_MCP_DISABLED;
+		try {
+			process.env.REPI_MCP_DISABLED = "1";
+			const manager = createMcpManager({ cwd: tempRoot, agentDir });
+			expect(manager.loadServers()).toEqual([]);
+		} finally {
+			if (previous === undefined) delete process.env.REPI_MCP_DISABLED;
+			else process.env.REPI_MCP_DISABLED = previous;
+		}
+	});
+
 	it("loads configs from REPI home and redacts config display", () => {
 		tempRoot = mkdtempSync(join(tmpdir(), "repi-mcp-"));
 		const agentDir = join(tempRoot, "agent");

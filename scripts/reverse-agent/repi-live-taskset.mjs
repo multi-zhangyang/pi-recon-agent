@@ -264,15 +264,34 @@ function filesBelow(path) {
 	});
 }
 
-function countCompactions() {
+function countSessionCompactions(sessionId) {
 	return filesBelow(sessionDir)
 		.filter((path) => path.endsWith(".jsonl"))
 		.reduce((total, path) => {
-			const count = readFileSync(path, "utf8")
+			const rows = readFileSync(path, "utf8")
 				.split(/\r?\n/)
-				.filter((line) => line.includes('"type":"compaction"')).length;
-			return total + count;
+				.filter(Boolean)
+				.flatMap((line) => {
+					try {
+						return [JSON.parse(line)];
+					} catch {
+						return [];
+					}
+				});
+			if (!rows.some((row) => row?.type === "session" && row.id === sessionId)) return total;
+			return total + rows.filter((row) => row?.type === "compaction").length;
 		}, 0);
+}
+
+function reconcileCompactionResult(result, persistedCompactions, automaticCompactionDelta) {
+	if (result.ok) return { ...result, source: "rpc", persistedCompactions };
+	if (
+		automaticCompactionDelta > 0 &&
+		/Nothing to compact|Already compacted/i.test(String(result.error ?? ""))
+	) {
+		return { ok: true, source: "automatic", persistedCompactions, automaticCompactionDelta, rpc: result };
+	}
+	return { ...result, source: "rpc", persistedCompactions, automaticCompactionDelta };
 }
 
 function inspectPersistedSession(sessionId, nonce) {
@@ -394,23 +413,35 @@ try {
 			}
 			return `Continue the same benchmark at turn ${turn}. Preserve the original nonce and reply exactly REPI_TURN_${String(turn).padStart(2, "0")}_OK.${ballast}`;
 		});
-		const sessionId = "019c1234-5678-7000-8000-000000000001";
-		const first = await runCli([
+			const sessionId = "019c1234-5678-7000-8000-000000000001";
+			const firstCompactionsBeforeRun = countSessionCompactions(sessionId);
+			const first = await runCli([
 		...common,
 		"--session-id",
 		sessionId,
 		"--no-tools",
 			...prompts.slice(0, restartAfter),
-		]);
-		const firstCompaction = await runRpcCompaction(sessionId, "compact-1");
-		const second = await runCli([
+			]);
+			const firstCompactionsBeforeRpc = countSessionCompactions(sessionId);
+			const firstCompaction = reconcileCompactionResult(
+				await runRpcCompaction(sessionId, "compact-1"),
+				countSessionCompactions(sessionId),
+				Math.max(0, firstCompactionsBeforeRpc - firstCompactionsBeforeRun),
+			);
+			const secondCompactionsBeforeRun = countSessionCompactions(sessionId);
+			const second = await runCli([
 		...common,
 		"--session-id",
 		sessionId,
 		"--no-tools",
 			...prompts.slice(restartAfter),
 		]);
-		const secondCompaction = await runRpcCompaction(sessionId, "compact-2");
+			const secondCompactionsBeforeRpc = countSessionCompactions(sessionId);
+			const secondCompaction = reconcileCompactionResult(
+				await runRpcCompaction(sessionId, "compact-2"),
+				countSessionCompactions(sessionId),
+				Math.max(0, secondCompactionsBeforeRpc - secondCompactionsBeforeRun),
+			);
 		const turns = [...first.events, ...second.events].filter((event) => event?.type === "agent_end").length;
 		const providerFailures = summarizeProviderFailures([...first.events, ...second.events]);
 		const compactionEvents = [...first.events, ...second.events].filter(
@@ -420,7 +451,7 @@ try {
 			.filter((event) => event?.type === "compaction_end" && !event.result)
 			.map((event) => String(event.errorMessage || "no-result"))
 			.slice(0, 5);
-		const compactions = countCompactions();
+			const compactions = countSessionCompactions(sessionId);
 		const recovered = assistantText(second.events).includes(longSpec.expectedText);
 		const persistedSession = inspectPersistedSession(sessionId, nonce);
 		const automaticContinuations = Math.max(0, persistedSession.assistantTurns - turnsToRun);

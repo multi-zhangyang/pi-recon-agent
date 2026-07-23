@@ -1,6 +1,10 @@
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { createAgentThreadManager } from "../agent-thread-manager.ts";
+import { normalizeWorkerTask } from "../agent-thread-worker-runtime.ts";
 import type { ArtifactScopeFilterOptions } from "./artifact-scope.ts";
+import { repiSubagentResultFromManifest } from "./re-subagent-contract.ts";
+import { validateRepiSubagentArtifact } from "./repi-subagent-artifact-validation.ts";
 import type {
 	DelegateArtifact,
 	DelegatePacket,
@@ -713,39 +717,56 @@ export function createSwarmCommanderRuntime(dependencies: SwarmCommanderRuntimeD
 		if (!options.cwd || envBoolean("REPI_AGENT_THREAD")) return undefined;
 		const timeoutMs = 240000;
 		const baseReview = formatSupervisor(supervisor);
-		const payload = [
-			"You are the REPI supervisor critic (Reflexion-style adversarial review).",
-			"Below is a rule-based supervisor review of specialist worker packets and swarm executions.",
-			"Your job is to ADVERSARIALLY critique it: find what the rule score missed.",
-			"Identify (a) contradictions or weak evidence that passed as 'done',",
-			"(b) worker handoffs that are attempted-as-proved without a real proof-exit (no repro, no counter-evidence check),",
-			"(c) the single highest-leverage next action,",
-			"(d) any worker whose claim should be re-dispatched to an independent verifier/reverser subagent for falsification.",
-			"Default to a stricter verdict than the rule score when evidence is thin.",
-			"Output EXACTLY these lines (no prose before/after):",
-			"supervisor_verdict: <one of pass|watch|repair|blocked>",
-			"critique: <one line, the most important failure the rule score missed>",
-			"repair_queue: <comma-separated concrete re_* actions, or none>",
-			"redispatch: <spec=verifier|reverser|operator; task=<one short task>> or none",
-			"notes: <one line>",
-			"",
-			"--- rule-based supervisor review ---",
-			truncateMiddle(baseReview, 5000),
-			...(options.target ? [`target: ${options.target}`] : []),
-			...(options.task ? [`task: ${options.task}`] : []),
-		].join("\n");
+		const payload = normalizeWorkerTask(
+			[
+				"You are the REPI supervisor critic (Reflexion-style adversarial review).",
+				"Below is a rule-based supervisor review of specialist worker packets and swarm executions.",
+				"Your job is to ADVERSARIALLY critique it: find what the rule score missed.",
+				"Identify (a) contradictions or weak evidence that passed as 'done',",
+				"(b) worker handoffs that are attempted-as-proved without a real proof-exit (no repro, no counter-evidence check),",
+				"(c) the single highest-leverage next action,",
+				"(d) any worker whose claim should be re-dispatched to an independent verifier/reverser subagent for falsification.",
+				"Default to a stricter verdict than the rule score when evidence is thin.",
+				"Output EXACTLY these lines (no prose before/after):",
+				"supervisor_verdict: <one of pass|watch|repair|blocked>",
+				"critique: <one line, the most important failure the rule score missed>",
+				"repair_queue: <comma-separated concrete re_* actions, or none>",
+				"redispatch: <spec=verifier|reverser|operator; task=<one short task>> or none",
+				"notes: <one line>",
+				"",
+				"--- rule-based supervisor review ---",
+				truncateMiddle(baseReview, 5000),
+				...(options.target ? [`target: ${options.target}`] : []),
+				...(options.task ? [`task: ${options.task}`] : []),
+			].join("\n"),
+		);
 		const mgr = createAgentThreadManager({ cwd: options.cwd });
 		try {
 			const started = await mgr.spawnThread({
 				specName: "verifier",
 				task: payload,
 				timeoutMs,
-				inheritMcp: true,
+				inheritMcp: false,
+				mcpServers: [],
+				mcpTools: [],
 				signal: options.signal,
 				missionId: supervisor.missionId,
 			});
 			const final = await mgr.awaitRun(started.runId);
 			const merge = mgr.mergeRun(started.runId);
+			const mergedManifest = merge?.manifest ?? final;
+			const resultDetails = repiSubagentResultFromManifest(mergedManifest);
+			const validation = await validateRepiSubagentArtifact(resultDetails, {
+				missionId: supervisor.missionId,
+				spec: "verifier",
+				task: payload,
+				taskSha256: createHash("sha256").update(payload).digest("hex"),
+				requireMcpDisabled: true,
+				timeoutMs,
+			});
+			if (!validation.ok) {
+				return `spec=verifier; status=blocked; artifact_validation_failed: ${validation.error}`;
+			}
 			const mergeText = merge?.text ?? `(no merge output; status=${final.status})`;
 			const parsed = parseSupervisorCritique(mergeText);
 			return [
@@ -755,6 +776,8 @@ export function createSwarmCommanderRuntime(dependencies: SwarmCommanderRuntimeD
 		} catch (error) {
 			if (options.signal?.aborted) options.signal.throwIfAborted();
 			return `spec=verifier; status=blocked; llm-supervisor: ${truncateMiddle(String((error as Error).message ?? error), 240)}`;
+		} finally {
+			mgr.dispose("repi_supervisor_critique_complete");
 		}
 	}
 

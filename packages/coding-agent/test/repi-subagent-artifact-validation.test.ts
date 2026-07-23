@@ -84,6 +84,11 @@ function createFixture(agentDir: string): {
 		missionId,
 		lineageSha256,
 		tools: ["read"],
+		timeoutMs: 600000,
+		mcpServers: [],
+		mcpTools: [],
+		mcpToolFilterActive: false,
+		mcpInherited: false,
 	};
 	writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 	return {
@@ -140,6 +145,50 @@ describe("re_subagent artifact validation", () => {
 		});
 	});
 
+	it("enforces the persisted MCP-off and timeout contract", async () => {
+		const value = fixture();
+		const expected = { ...value.expected, requireMcpDisabled: true, timeoutMs: 600000 };
+		await expect(validateRepiSubagentArtifact(value.details, expected)).resolves.toMatchObject({ ok: true });
+
+		writeFileSync(
+			value.manifest.manifestPath,
+			`${JSON.stringify({ ...value.manifest, mcpInherited: true, mcpServers: ["ambient"] }, null, 2)}\n`,
+			"utf8",
+		);
+		await expect(validateRepiSubagentArtifact(value.details, expected)).resolves.toEqual({
+			ok: false,
+			error: "manifest does not prove that MCP inheritance and MCP tools were disabled",
+		});
+	});
+
+	it("rejects malformed MCP arrays instead of normalizing them to MCP-off", async () => {
+		const value = fixture();
+		writeFileSync(
+			value.manifest.manifestPath,
+			`${JSON.stringify({ ...value.manifest, mcpServers: "ambient" }, null, 2)}\n`,
+			"utf8",
+		);
+		await expect(
+			validateRepiSubagentArtifact(value.details, { ...value.expected, requireMcpDisabled: true }),
+		).resolves.toEqual({
+			ok: false,
+			error: "persisted AgentThread manifest is missing or invalid",
+		});
+	});
+
+	it("rejects malformed success error fields instead of dropping them", async () => {
+		const value = fixture();
+		writeFileSync(
+			value.manifest.manifestPath,
+			`${JSON.stringify({ ...value.manifest, error: 42 }, null, 2)}\n`,
+			"utf8",
+		);
+		await expect(validateRepiSubagentArtifact(value.details, value.expected)).resolves.toEqual({
+			ok: false,
+			error: "persisted AgentThread manifest is missing or invalid",
+		});
+	});
+
 	it("accepts artifacts produced and merged by AgentThreadManager", async () => {
 		agentDir = join(tmpdir(), `repi-subagent-manager-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		process.env.REPI_CODING_AGENT_DIR = agentDir;
@@ -170,6 +219,54 @@ describe("re_subagent artifact validation", () => {
 				{ missionId, spec: "verifier", task, taskSha256: digest(task) },
 			);
 			expect(validation).toMatchObject({ ok: true, manifest: { runId: final.runId } });
+		} finally {
+			manager.dispose("test_complete");
+		}
+	});
+
+	it("validates a missionless AgentThread handoff without weakening lineage checks", async () => {
+		agentDir = join(tmpdir(), `repi-subagent-missionless-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		process.env.REPI_CODING_AGENT_DIR = agentDir;
+		mkdirSync(agentDir, { recursive: true });
+		const worker = join(agentDir, "worker.sh");
+		writeFileSync(
+			worker,
+			[
+				"#!/bin/sh",
+				'mkdir -p "$(dirname "$REPI_WORKER_HANDOFF_PATH")"',
+				`printf 'run_id: %s\nmission_id: %s\nlineage_sha256: %s\nOutcome: verified\n' "$REPI_WORKER_RUN_ID" "$REPI_WORKER_MISSION_ID" "$REPI_WORKER_LINEAGE_SHA256" > "$REPI_WORKER_HANDOFF_PATH"`,
+				"exit 0",
+				"",
+			].join("\n"),
+			"utf8",
+		);
+		chmodSync(worker, 0o700);
+		const task = "verify missionless manager artifact";
+		const manager = createAgentThreadManager({ cwd: agentDir, agentDir, repiBinPath: worker });
+		try {
+			const started = await manager.spawnThread({
+				specName: "verifier",
+				task,
+				timeoutMs: 5000,
+				inheritMcp: false,
+				mcpServers: [],
+				mcpTools: [],
+			});
+			const final = await manager.awaitRun(started.runId);
+			const merged = manager.mergeRun(final.runId);
+			expect(merged).toBeDefined();
+			const validation = await validateRepiSubagentArtifact(
+				repiSubagentResultFromManifest(merged?.manifest ?? final),
+				{
+					spec: "verifier",
+					task,
+					taskSha256: digest(task),
+					requireMcpDisabled: true,
+					timeoutMs: 5000,
+				},
+			);
+			expect(validation).toMatchObject({ ok: true });
+			if (validation.ok) expect(validation.result.missionId).toBeNull();
 		} finally {
 			manager.dispose("test_complete");
 		}

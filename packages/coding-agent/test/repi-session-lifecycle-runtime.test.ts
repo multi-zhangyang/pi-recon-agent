@@ -343,7 +343,10 @@ describe("REPI session lifecycle runtime", () => {
 				specName: gate?.spec,
 				task: gate?.task ?? "",
 				missionId: mission?.id,
-				timeoutMs: 5000,
+				timeoutMs: 600000,
+				inheritMcp: false,
+				mcpServers: [],
+				mcpTools: [],
 			});
 			const final = await manager.awaitRun(started.runId);
 			const merged = manager.mergeRun(final.runId);
