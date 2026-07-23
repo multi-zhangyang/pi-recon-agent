@@ -6,7 +6,7 @@ changelog covers REPI-specific releases. The upstream pi changelog is preserved
 in `CHANGELOG.upstream.md` for reference.
 
 
-## [Unreleased]
+## [0.1.4] - 2026-07-23
 
 ### Changed
 
