@@ -132,9 +132,9 @@ function addUnreleasedSection() {
 	for (const changelog of changelogs) {
 		const content = readFileSync(changelog, "utf-8");
 
-		// Insert after "# Changelog\n\n"
+		// Insert after the package changelog heading.
 		const updated = content.replace(
-			/^(# Changelog\n\n)/,
+			/^(#(?: REPI)? Changelog\n\n)/,
 			`$1${unreleasedSection}`
 		);
 		writeFileSync(changelog, updated);
