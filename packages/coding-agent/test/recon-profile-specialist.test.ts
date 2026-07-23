@@ -61,7 +61,7 @@ describe("REPI kernel profile self-heal and specialist routing", () => {
 		expect(commandKnownTools(command)).toContain("file");
 	});
 
-	it("selects an actually indexed disassembler for a missing Ghidra command", () => {
+	it("selects an actually indexed disassembler for missing native analysis commands", () => {
 		const toolDir = join(agentDir, "recon", "tools");
 		mkdirSync(toolDir, { recursive: true });
 		writeFileSync(
@@ -83,18 +83,24 @@ describe("REPI kernel profile self-heal and specialist routing", () => {
 							command: "ghidra --headless ./sample",
 							evidence: "native analysis",
 						},
+						{
+							label: "gdb analysis",
+							command: "gdb --batch ./sample",
+							evidence: "native runtime analysis",
+						},
 					],
 					notes: [],
 				},
-				createBootstrapPlan(["ghidra"]),
+				createBootstrapPlan(["ghidra", "gdb"]),
 			);
 		} finally {
 			if (previousPath === undefined) delete process.env.PATH;
 			else process.env.PATH = previousPath;
 		}
 		expect(strategy.mode).toBe("degraded");
-		expect(strategy.fallbacks[0]?.command).toContain("objdump -d");
-		expect(strategy.fallbacks[0]?.command).not.toMatch(/\br2\b|\bradare2\b/);
+		expect(strategy.fallbacks).toHaveLength(2);
+		expect(strategy.fallbacks.every((fallback) => fallback.command.includes("objdump -d"))).toBe(true);
+		expect(strategy.fallbacks.every((fallback) => !/\br2\b|\bradare2\b/.test(fallback.command))).toBe(true);
 	});
 
 	it("turns tool/runtime failures into repair matrix follow-ups", async () => {

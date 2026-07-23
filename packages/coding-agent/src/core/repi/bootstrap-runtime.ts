@@ -343,6 +343,13 @@ function fallbackForMissingTools(
 			evidence,
 		};
 	}
+	if (missingTools.includes("gdb") && target !== "<TARGET>" && hasReplacement(["objdump"])) {
+		return {
+			label,
+			command: `objdump -d -Mintel ${target} 2>/dev/null | head -260 || true`,
+			evidence,
+		};
+	}
 	if (missingTools.includes("ltrace") && target !== "<TARGET>" && hasReplacement(["strace"])) {
 		return {
 			label,
